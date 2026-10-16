@@ -316,6 +316,8 @@ export interface LiveChatSession {
   endedReason: string | null;
   conversationId: string | null;
   transcript: LiveChatLine[];
+  /** A reply Keo is ready to send (waiting for the user to pause, or for "Send now"). */
+  draft: string | null;
 }
 
 export interface NavigationGrant {
@@ -352,7 +354,7 @@ export interface Presence {
   wake: { enabled: boolean; listening: boolean; muted: boolean; status: 'off' | 'starting' | 'listening' | 'capturing' | 'error' | 'unavailable'; message: string | null; phrase: string | null };
   grants: number;
   /** Live chats: how many are running and how many wait for the user. */
-  liveChats: { active: number; waiting: number; firstWaiting: string | null };
+  liveChats: { active: number; waiting: number; firstWaiting: string | null; ready: number; firstReady: { id: string; contact: string } | null };
   autonomy: AutonomyLevel;
   updatedAt: ISODate;
 }

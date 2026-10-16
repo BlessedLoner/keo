@@ -74,6 +74,19 @@ function LiveChatCard({ s }: { s: LiveChatSession }) {
           {s.question}
         </div>
       )}
+      {s.draft && live && (
+        <div className="banner info small" style={{ marginTop: 8 }}>
+          <span className="grow">
+            <strong>Reply ready:</strong> “{s.draft}” — Keo sends it when you pause.
+          </span>
+          <button className="btn sm primary" onClick={() => void invoke('livechat:sendNow', { id: s.id })}>
+            Send now
+          </button>
+          <button className="btn sm ghost" onClick={() => void invoke('livechat:discardDraft', { id: s.id })}>
+            Discard
+          </button>
+        </div>
+      )}
       {live && (s.status === 'waiting_user' || s.status === 'paused' || s.status === 'active') && (
         <div className="row" style={{ marginTop: 8 }}>
           <input

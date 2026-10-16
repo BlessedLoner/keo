@@ -24,7 +24,7 @@ export class PresenceService {
   private wake: WakeStatus = { enabled: false, listening: false, muted: false, status: 'off', message: null, phrase: null };
   private approvals: { count: number; first: { capabilityId: string; app: string | null } | null } = { count: 0, first: null };
   private grants = 0;
-  private live: Presence['liveChats'] = { active: 0, waiting: 0, firstWaiting: null };
+  private live: Presence['liveChats'] = { active: 0, waiting: 0, firstWaiting: null, ready: 0, firstReady: null };
   private autonomy: AutonomyLevel = 'always_ask';
   private transient: { state: 'cancelled' | 'error'; until: number } | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -127,6 +127,9 @@ export class PresenceService {
     } else if (this.live.waiting > 0) {
       state = 'awaiting_approval';
       activity = this.live.firstWaiting ? `${this.live.firstWaiting} needs your answer` : 'A live chat needs your answer';
+    } else if (this.live.ready > 0) {
+      state = 'awaiting_approval';
+      activity = this.live.firstReady ? `Reply to ${this.live.firstReady.contact} ready: Send now?` : 'A reply is ready';
     } else if (this.voice.recording || this.wake.status === 'capturing') {
       state = 'listening';
       activity = 'Listening…';
@@ -164,7 +167,7 @@ export class PresenceService {
       runningSteps: this.steps.size,
       wake: { ...this.wake },
       grants: this.grants,
-      liveChats: { ...this.live },
+      liveChats: { ...this.live, firstReady: this.live.firstReady ? { ...this.live.firstReady } : null },
       autonomy: this.autonomy,
       updatedAt: new Date(t).toISOString(),
     };

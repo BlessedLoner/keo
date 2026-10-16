@@ -161,6 +161,8 @@ export const invokeSchemas = {
   'livechat:pause': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'livechat:resume': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'livechat:stop': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/).optional() }).strict(),
+  'livechat:sendNow': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
+  'livechat:discardDraft': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
@@ -257,6 +259,8 @@ export interface InvokeOutputs {
   'livechat:pause': LiveChatSession;
   'livechat:resume': LiveChatSession;
   'livechat:stop': { stopped: number };
+  'livechat:sendNow': LiveChatSession;
+  'livechat:discardDraft': LiveChatSession;
   'diagnostics:logs': LogEvent[];
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };

@@ -87,6 +87,8 @@ export const INVOKE_CHANNELS = [
   'livechat:pause',
   'livechat:resume',
   'livechat:stop',
+  'livechat:sendNow',
+  'livechat:discardDraft',
   'diagnostics:logs',
   'diagnostics:audit',
   'data:backup',

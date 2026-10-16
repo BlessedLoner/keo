@@ -199,8 +199,14 @@ export const SettingsSchema = z
         maxReplies: z.number().int().min(1).max(300).default(40),
         /** End a session after this long without any new message. */
         quietMinutes: z.number().int().min(5).max(240).default(30),
-        /** Keo types only after the user has not used keyboard/mouse for this long. */
+        /** "Idle" = no keyboard/mouse input for this long. */
         idleSeconds: z.number().int().min(0).max(60).default(4),
+        /**
+         * When a reply is ready while the user is busy: 'ask' = show it with
+         * Send now (and send when they pause), 'when_idle' = send when they
+         * pause, 'immediately' = send at once (Keo takes the screen briefly).
+         */
+        sendMode: z.enum(['ask', 'when_idle', 'immediately']).default('ask'),
         /** Extra words/phrases that always make Keo pause and ask (besides the built-in topics). */
         attentionTopics: z.array(z.string().trim().min(2).max(60)).max(40).default([]),
         /** Show a Windows notification when a contact needs the user. */

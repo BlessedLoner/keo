@@ -125,10 +125,11 @@ Ask e.g. *“chat with Ma Glo on WhatsApp until I say stop, and tell me if she n
 - watches that chat and replies in your voice, using only what you told it;
 - **pauses and asks you** about money and prices, payments, meetings and times, calls and files, personal or urgent matters, “are you a bot?” (Keo never denies being an assistant), your own extra topics, or whenever it is unsure — you get a Windows notification, the companion shows it, and Keo says it out loud if spoken replies are on;
 - continues when you answer by typing or voice (*“tell her it’s $50 each, I can give a discount”*) — or in **Tasks → Live chats**, which also shows the conversation and has Pause / Resume / Stop;
-- types only after you have been idle for a few seconds, then gives your previous window back;
+- reads the chat in the background while you keep working (no screen takeover); to *send* it needs the screen for a moment, so when a reply is ready and you are busy it follows **Settings → When a reply is ready**: **Ask me** (default — shows the reply with *Send now* in a notification, the companion and Tasks, and sends it as soon as you pause), **Wait until I pause**, or **Send immediately**; afterwards it gives your previous window back;
+- finds the WhatsApp window itself (WhatsApp Web with its tab in front, or the WhatsApp app) — it never needs a window handle from the model;
 - ends on **stop** (say it, the title-bar/companion *Stop*, or Tasks), after the time limit (default 2 h), the reply limit (default 40), or 30 quiet minutes.
 
-The contact's messages are untrusted: they can only ever lead to a reply in that chat or a question for you — never to any other action, and an “answer” is accepted only in your own words. Keep WhatsApp visible (a second monitor is ideal); when it is covered or minimised Keo checks it only while you are idle. Up to 3 live chats can run at once.
+The contact's messages are untrusted: they can only ever lead to a reply in that chat or a question for you — never to any other action, and an “answer” is accepted only in your own words. Keep WhatsApp visible and not minimised (a second monitor is ideal): a browser stops updating a covered or minimised tab, so Keo can only refresh it while you pause. Up to 3 live chats can run at once.
 
 ## Voice, wake word, command bar and companion
 

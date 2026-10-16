@@ -153,7 +153,7 @@ export class Services {
       audit: this.audit,
       log: this.log,
       conversations: this.conversations,
-      alert: (session, text) => this.liveChatAlert(session, text),
+      alert: (session, text, kind) => this.liveChatAlert(session, text, kind),
       changed: () => {
         this.presence?.setLiveChats(this.live.counts());
         this.push('livechat:changed', { sessions: this.live.list() });
@@ -259,13 +259,14 @@ export class Services {
 
   /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
   /** A live chat needs the user: note in its conversation, Windows notification, spoken line. */
-  private liveChatAlert(session: LiveChatSession, text: string): void {
+  private liveChatAlert(session: LiveChatSession, text: string, kind: 'question' | 'draft'): void {
     const st = this.settings.get().liveChat;
-    if (session.conversationId && this.conversations.get(session.conversationId)) {
+    // Questions also go into the conversation (so a typed or spoken answer can follow); drafts don't.
+    if (kind === 'question' && session.conversationId && this.conversations.get(session.conversationId)) {
       this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `💬 **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
       this.push('conversations:changed', { conversationId: session.conversationId });
     }
-    if (st.notify) this.ui.notify(`${session.contact} needs you`, text);
+    if (st.notify) this.ui.notify(kind === 'draft' ? `Reply to ${session.contact} ready` : `${session.contact} needs you`, text);
     if (st.speak) this.push('presence:command', { type: 'announce', text });
   }
 

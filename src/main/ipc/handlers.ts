@@ -368,6 +368,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'livechat:pause': ({ id }) => s.live.pause(id),
     'livechat:resume': ({ id }) => s.live.resume(id),
     'livechat:stop': ({ id }) => ({ stopped: id ? (s.live.stop(id) ? 1 : 0) : s.live.stopAll() }),
+    'livechat:sendNow': ({ id }) => s.live.sendDraftNow(id),
+    'livechat:discardDraft': ({ id }) => s.live.discardDraft(id),
     'grants:list': () => s.grants.list(),
     'grants:revoke': ({ id }) => ({ revoked: s.grants.revoke(id) }),
     'grants:revokeAll': () => ({ revoked: s.grants.revokeAll() }),

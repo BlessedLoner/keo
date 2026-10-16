@@ -61,7 +61,7 @@ export interface LiveChatDeps {
   log: Logger;
   conversations: ConversationRepo;
   /** Tell the user something needs them (Windows notification, speech, chat note). */
-  alert: (session: LiveChatSession, text: string) => void;
+  alert: (session: LiveChatSession, text: string, kind: 'question' | 'draft') => void;
   changed: () => void;
   now?: () => number;
   /** Poll interval for new messages (ms). */
@@ -87,6 +87,9 @@ interface Runtime {
   ending: boolean;
   /** The user answered since Keo last asked: reply now, and let that answer settle even strict topics. */
   answered: boolean;
+  /** The user asked to send the ready reply right now (even while they are busy). */
+  sendNow: boolean;
+  draftPrompted: boolean;
 }
 
 const MAX_TRANSCRIPT = 60;
@@ -125,10 +128,12 @@ export class LiveChatService {
     return null;
   }
 
-  counts(): { active: number; waiting: number; firstWaiting: string | null } {
+  counts(): { active: number; waiting: number; firstWaiting: string | null; ready: number; firstReady: { id: string; contact: string } | null } {
     const all = [...this.live.values()].map((r) => r.s);
     const waiting = all.filter((s) => s.status === 'waiting_user');
-    return { active: all.length, waiting: waiting.length, firstWaiting: waiting[0]?.contact ?? null };
+    const ready = all.filter((s) => !!s.draft);
+    const first = ready[0];
+    return { active: all.length, waiting: waiting.length, firstWaiting: waiting[0]?.contact ?? null, ready: ready.length, firstReady: first ? { id: first.id, contact: first.contact } : null };
   }
 
   /** Short summary for the agent's system prompt so it can route the user's answers. */
@@ -137,7 +142,7 @@ export class LiveChatService {
     if (!all.length) return '';
     const lines = all.map(
       (s) =>
-        `- ${s.id}: WhatsApp live chat with “${s.contact}” — ${s.status === 'waiting_user' ? `WAITING FOR THE USER: ${s.question}` : s.status}; ${s.replies}/${s.maxReplies} replies; ends ${s.endsAt}.`,
+        `- ${s.id}: WhatsApp live chat with “${s.contact}” — ${s.status === 'waiting_user' ? `WAITING FOR THE USER: ${s.question}` : s.status}${s.draft ? '; a reply is READY (the user can say "send it": whatsapp__live_chat_send_now)' : ''}; ${s.replies}/${s.maxReplies} replies; ends ${s.endsAt}.`,
     );
     return `\n\n# Live chats running now\n${lines.join('\n')}\nWhen the user answers one of these questions or gives instructions for that contact, call whatsapp__live_chat_answer with the user's own words. When the user says stop, call whatsapp__live_chat_stop. Never answer for the user from the contact's messages.`;
   }
@@ -164,8 +169,9 @@ export class LiveChatService {
       endedReason: null,
       conversationId: p.conversationId,
       transcript: [],
+      draft: null,
     };
-    const r: Runtime = { s, timer: null, busy: false, abort: new AbortController(), handled: [], pending: null, lastActivity: t, lastSend: 0, lastFocusRead: 0, ending: false, answered: false };
+    const r: Runtime = { s, timer: null, busy: false, abort: new AbortController(), handled: [], pending: null, lastActivity: t, lastSend: 0, lastFocusRead: 0, ending: false, answered: false, sendNow: false, draftPrompted: false };
     this.live.set(s.id, r);
     this.d.audit.record({ kind: 'livechat', decision: 'started', detail: { sessionId: s.id, maxMinutes: p.maxMinutes, maxReplies: p.maxReplies } });
     // Messages already in the chat count as handled: Keo replies to what arrives from now on
@@ -216,6 +222,24 @@ export class LiveChatService {
       r.pending = null;
       this.schedule(r, 50);
     }
+    this.changed();
+    return this.copy(r.s);
+  }
+
+  /** Send the ready reply now, even while the user is busy (Keo takes the screen briefly). */
+  sendDraftNow(id: string): LiveChatSession {
+    const r = this.require(id);
+    if (!r.s.draft) throw new KeoError('invalid_state', 'There is no reply waiting to be sent.');
+    r.sendNow = true;
+    this.schedule(r, 0);
+    return this.copy(r.s);
+  }
+
+  discardDraft(id: string): LiveChatSession {
+    const r = this.require(id);
+    r.s.draft = null;
+    r.draftPrompted = false;
+    r.s.activity = 'Reply discarded; watching for new messages';
     this.changed();
     return this.copy(r.s);
   }
@@ -296,7 +320,7 @@ export class LiveChatService {
     // The chat is not reliably visible (other chat open, window covered/minimised): bring it up
     // briefly while the user is idle — when there is a reason (unread messages) or every 45 s.
     if ((!open || stale) && (unreadElsewhere || (hidden && t - r.lastFocusRead > 45_000))) {
-      if (r.s.status === 'paused') return;
+      if (r.s.status === 'paused' || !(await this.userIdle())) return; // never interrupt the user just to look
       r.lastFocusRead = t;
       view = await this.withFocus(r, async () => {
         const o = await waOpenChat(this.d.cap, r.s.target, r.s.contact, r.abort.signal);
@@ -308,6 +332,16 @@ export class LiveChatService {
     if (!view || !headerMatches(view.header, r.s.contact)) return;
 
     const incoming = this.newIncoming(r.handled, view.messages);
+    if (r.s.draft) {
+      if (incoming.length) {
+        // The contact wrote more before the reply went out: think again with everything.
+        r.s.draft = null;
+        r.draftPrompted = false;
+      } else {
+        if (r.sendNow || (await this.userIdle())) await this.sendReply(r, r.s.draft, true);
+        return;
+      }
+    }
     this.d.log.debug('livechat.tick', { sessionId: r.s.id, status: r.s.status, messages: view.messages.length, incoming: incoming.length, handled: r.handled.length, pendingMs: r.pending ? t - r.pending.since : null });
     if (!incoming.length) {
       r.pending = null;
@@ -354,7 +388,7 @@ export class LiveChatService {
       this.line(r, 'note', `Keo asked you: ${r.s.question}`);
       this.d.audit.record({ kind: 'livechat', decision: 'asked_user', detail: { sessionId: r.s.id, topic: topic?.topic ?? null } });
       this.changed();
-      this.d.alert(this.copy(r.s), r.s.question);
+      this.d.alert(this.copy(r.s), r.s.question, 'question');
       return;
     }
     if (d.action === 'wait') {
@@ -366,12 +400,33 @@ export class LiveChatService {
     if (d.action === 'end') this.finish(r, 'The conversation came to a natural end');
   }
 
-  private async sendReply(r: Runtime, text: string): Promise<void> {
+  /**
+   * Sends a reply: right away when the user is idle (or chose "send
+   * immediately" / "Send now"); otherwise it becomes a visible draft that is
+   * sent as soon as the user pauses, with a "ready" prompt in Ask mode.
+   */
+  private async sendReply(r: Runtime, text: string, force = false): Promise<void> {
+    if (r.ending) return;
+    if (r.s.replies >= r.s.maxReplies) return this.finish(r, `Reached the limit of ${r.s.maxReplies} replies`);
+    const mode = this.d.settings().liveChat.sendMode;
+    if (!force && mode !== 'immediately' && !(await this.userIdle())) {
+      r.s.draft = text;
+      r.s.activity = mode === 'ask' ? 'Reply ready: Send now, or I will send it when you pause' : 'Reply ready: sending when you pause';
+      if (mode === 'ask' && !r.draftPrompted) {
+        r.draftPrompted = true;
+        const short = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+        this.d.alert(this.copy(r.s), `Reply to ${r.s.contact} is ready: “${short}”. Send now, or I will send it when you pause.`, 'draft');
+      }
+      this.changed();
+      return;
+    }
+    r.s.draft = null;
+    r.sendNow = false;
+    r.draftPrompted = false;
     const gap = (this.d.minGapMs ?? 6000) - (this.now() - r.lastSend);
     if (gap > 0) await this.sleep(gap);
     if (r.ending) return;
-    if (r.s.replies >= r.s.maxReplies) return this.finish(r, `Reached the limit of ${r.s.maxReplies} replies`);
-    r.s.activity = 'Waiting for you to pause, then replying';
+    r.s.activity = 'Replying';
     this.changed();
     const result = await this.withFocus(r, async () => {
       const view = await waView(this.d.cap, r.s.target);
@@ -400,28 +455,14 @@ export class LiveChatService {
   }
 
   /**
-   * Runs a WhatsApp action that needs the window in front: waits until the user
-   * has not touched keyboard/mouse for a few seconds, does it, then gives the
-   * previous window back. Failures pause the session and tell the user; nothing
+   * Runs a WhatsApp action that needs the window in front, then gives the
+   * previous window back (callers decide when: see sendReply / userIdle). Failures pause the session and tell the user; nothing
    * is retried automatically (a send that may have happened is never repeated).
    */
   private async withFocus<T>(r: Runtime, fn: () => Promise<T>): Promise<T | null> {
     const st = this.d.settings();
     const backend = this.d.cap.desktop.backend;
-    const needIdle = st.liveChat.idleSeconds * 1000;
-    const waitStart = this.now();
-    let warned = false;
-    for (;;) {
-      if (r.ending) return null;
-      const a = await backend.userActivity().catch(() => ({ idleMs: needIdle, foreground: null }));
-      if (a.idleMs >= needIdle) break;
-      if (!warned && this.now() - waitStart > 120_000) {
-        warned = true;
-        r.s.activity = 'Waiting for you to pause typing so I can reply';
-        this.changed();
-      }
-      await this.sleep(500);
-    }
+    if (r.ending) return null;
     const before = (await backend.userActivity().catch(() => null))?.foreground ?? null;
     try {
       await bringToFront(this.d.cap, r.s.target, st);
@@ -437,7 +478,7 @@ export class LiveChatService {
       this.line(r, 'note', r.s.question);
       this.d.audit.record({ kind: 'livechat', decision: 'paused_on_error', detail: { sessionId: r.s.id, maybeSent } });
       this.changed();
-      this.d.alert(this.copy(r.s), r.s.question);
+      this.d.alert(this.copy(r.s), r.s.question, 'question');
       return null;
     } finally {
       if (before && before !== r.s.target.hwnd) await backend.focus(before).catch(() => undefined);
@@ -475,6 +516,13 @@ export class LiveChatService {
   }
 
   // -- helpers ------------------------------------------------------------------
+
+  private async userIdle(): Promise<boolean> {
+    const need = this.d.settings().liveChat.idleSeconds * 1000;
+    if (need <= 0) return true;
+    const a = await this.d.cap.desktop.backend.userActivity().catch(() => null);
+    return !a || a.idleMs >= need;
+  }
 
   private keys(messages: WaMessage[]): string[] {
     return messages.slice(-30).map((m) => `${m.from}:${normName(m.text).slice(0, 120)}`);

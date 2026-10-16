@@ -18,6 +18,8 @@ const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'grants:revokeAll',
   'livechat:list',
   'livechat:stop',
+  'livechat:sendNow',
+  'livechat:discardDraft',
   'settings:get',
 ]);
 

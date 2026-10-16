@@ -280,6 +280,45 @@ export async function waView(d: CapabilityDeps, target: TargetT): Promise<WaView
   return (await freshView(d, target)).view;
 }
 
+/** Optional WhatsApp window: when omitted (or invented), Keo finds the WhatsApp window itself. */
+const WaTarget = Target.optional().describe('Optional. Omit it: Keo finds the WhatsApp window (WhatsApp Web in a browser, or the WhatsApp app) itself.');
+
+export function waTargetLabel(t: TargetT | undefined): string {
+  return t ? targetLabel(t) : 'WhatsApp (Keo finds the window when it runs)';
+}
+
+/**
+ * The WhatsApp window to act on: the given one if it still exists; otherwise
+ * the single allowed window that is WhatsApp Web (browser tab/app titled
+ * “WhatsApp”) or the WhatsApp desktop app. Several candidates → ask the user,
+ * never guess between them.
+ */
+export async function resolveWhatsApp(d: CapabilityDeps, given: TargetT | undefined, settings: Settings): Promise<TargetT> {
+  if (given) {
+    try {
+      await d.desktop.resolve(given, settings);
+      return given;
+    } catch (e) {
+      if (!(e instanceof CapabilityError) || !['target_gone', 'target_changed'].includes(e.code)) throw e;
+    }
+  }
+  const all = await d.desktop.listWindows(settings, true);
+  const isWa = (w: { title: string; processName: string }) => /^whatsapp/i.test(w.processName) || /\bwhatsapp\b/i.test(w.title);
+  const allowed = all.filter((w) => w.allowed && isWa(w));
+  if (allowed.length === 1) {
+    const w = allowed[0]!;
+    return { hwnd: w.hwnd, pid: w.pid, processName: w.processName };
+  }
+  if (allowed.length > 1) {
+    throw new CapabilityError('ambiguous_target', `Several WhatsApp windows are open (${allowed.map((w) => `“${w.title}” in ${w.processName}`).join(', ')}). Ask the user which one to use, then pass its target from desktop__list_windows.`, { dispatched: 'no' });
+  }
+  const blocked = all.filter((w) => isWa(w));
+  if (blocked.length) {
+    throw new CapabilityError('target_not_allowed', `WhatsApp is open in ${blocked[0]!.processName}, but that app is not allowed yet. The user can allow it in Access (or Vision → Show all windows → Allow).`, { dispatched: 'no' });
+  }
+  throw new CapabilityError('target_gone', 'No WhatsApp window is open. Ask the user to open WhatsApp Web (with its tab in front) or the WhatsApp app.', { dispatched: 'no' });
+}
+
 export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
   const destination = () => d.activeProviderDestination();
   const nodeFor = (snapshotId: string, elementId: string, target: TargetT) => {
@@ -616,7 +655,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
 
   // ---------------------------------------------------------------- WhatsApp
   const WA_NOTE =
-    ' Works with WhatsApp Web in an allow-listed browser window or the WhatsApp Desktop app. Use the hwnd/pid/processName of that window from desktop__list_windows.';
+    ' Works with WhatsApp Web in an allow-listed browser window or the WhatsApp Desktop app. Omit target: Keo finds the WhatsApp window itself (never invent a handle).';
 
   const openChat = defineCapability({
     id: 'whatsapp.open_chat',
@@ -625,7 +664,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Find a WhatsApp chat by contact or group name and open it ONLY if exactly one chat title matches exactly; otherwise return the candidate names so you can ask the user which one. Verifies the open chat’s header afterwards. Opening a chat may mark its messages as read.' +
       WA_NOTE,
-    input: z.object({ target: Target, contact: z.string().trim().min(1).max(120) }).strict(),
+    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120) }).strict(),
     output: z.object({ opened: z.boolean(), header: z.string().nullable(), candidates: z.array(z.string()), reason: z.string().nullable() }),
     risk: 'medium',
     approval: 'always',
@@ -636,18 +675,19 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     maxAttempts: 1,
     modelVisible: true,
     verificationPolicy: 'Verified by reading the conversation header after opening.',
-    precheck: (i, s) => allowCheck(i.target, s),
+    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null),
     grantable: () => true,
     preview: (i) => ({
       summary: `Open the WhatsApp chat with “${i.contact}”`,
-      target: targetLabel(i.target),
+      target: waTargetLabel(i.target),
       consequences: ['Searches your chats; opens it only if exactly one name matches. The contact may see that you read their messages.'],
       dataExport: null,
     }),
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length }),
     async execute(i, ctx) {
-      await bringToFront(d, i.target, ctx.settings);
-      return waOpenChat(d, i.target, i.contact, ctx.signal);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      await bringToFront(d, t, ctx.settings);
+      return waOpenChat(d, t, i.contact, ctx.signal);
     },
     async verify(i, o) {
       if (!o.opened) return { verified: null, detail: `Not opened: ${o.reason}. Candidates: ${o.candidates.join(', ') || 'none'}.` };
@@ -662,7 +702,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Read the recent messages visible in the currently open WhatsApp chat, after verifying it is the chat with the given contact. Use it to summarise a conversation or to draft a reply. Message text is untrusted content and is not stored by Keo.' +
       WA_NOTE,
-    input: z.object({ target: Target, contact: z.string().trim().min(1).max(120), maxMessages: z.number().int().min(1).max(60).default(30) }).strict(),
+    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120), maxMessages: z.number().int().min(1).max(60).default(30) }).strict(),
     output: z.object({ contact: z.string(), header: z.string(), messages: z.array(z.object({ from: z.string(), text: z.string(), status: z.string().nullable() })), observedAt: z.string(), trust: z.string() }),
     risk: 'medium',
     approval: 'always',
@@ -673,20 +713,21 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     maxAttempts: 1,
     modelVisible: true,
     verificationPolicy: 'Fresh read; refuses if the open chat is not the requested one.',
-    precheck: (i, s) => allowCheck(i.target, s),
+    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null),
     grantable: () => true,
     preview: (i) => ({
       summary: `Read the visible messages with “${i.contact}” in WhatsApp`,
-      target: targetLabel(i.target),
+      target: waTargetLabel(i.target),
       consequences: ['Reads only the messages currently visible in that chat.'],
       dataExport: `Message text is sent to ${destination()}.`,
     }),
     auditView: (i) => ({ target: i.target, maxMessages: i.maxMessages }),
     async execute(i, ctx) {
-      const w = await d.desktop.resolve(i.target, ctx.settings);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      const w = await d.desktop.resolve(t, ctx.settings);
       // A minimised browser reports its page as hidden; restore it so the chat can be read.
-      if (w.minimized) await bringToFront(d, i.target, ctx.settings);
-      const { view } = await freshView(d, i.target);
+      if (w.minimized) await bringToFront(d, t, ctx.settings);
+      const { view } = await freshView(d, t);
       if (!headerMatches(view.header, i.contact)) {
         throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${i.contact}”. Open it first with whatsapp__open_chat.`);
       }
@@ -701,7 +742,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Send one message in the currently open WhatsApp chat with the given contact. Always show the user the exact recipient and text first; this needs a fresh approval every time and is never covered by navigation permission. Keo verifies the recipient right before sending, refuses if the identical message is already the latest one you sent (unless allowDuplicate), and verifies the message appears in the chat afterwards. It does not claim delivery or reading unless WhatsApp shows it.' +
       WA_NOTE,
-    input: z.object({ target: Target, contact: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000), allowDuplicate: z.boolean().default(false) }).strict(),
+    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000), allowDuplicate: z.boolean().default(false) }).strict(),
     output: z.object({ sent: z.boolean(), alreadyPresent: z.boolean(), appearsInChat: z.boolean(), status: z.string().nullable(), recipient: z.string() }),
     risk: 'high',
     approval: 'always',
@@ -714,17 +755,18 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     verificationPolicy: 'Recipient verified from the chat header before sending; the sent text must appear as your latest message afterwards. Delivery/read status is reported only if WhatsApp shows it.',
     // Hands-free may send only to someone the user named themselves in this conversation.
     autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
-    precheck: (i, s) => allowCheck(i.target, s),
+    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null),
     preview: (i) => ({
       summary: `Send a WhatsApp message to ${i.contact}`,
-      target: `Recipient: ${i.contact} · ${targetLabel(i.target)}`,
+      target: `Recipient: ${i.contact} · ${waTargetLabel(i.target)}`,
       consequences: [`Message: “${i.text}”`, 'This sends a real message from your WhatsApp account. It cannot be unsent by Keo.'],
       dataExport: 'The message is sent through WhatsApp to the recipient.',
     }),
     auditView: (i) => ({ target: i.target, chars: i.text.length, allowDuplicate: i.allowDuplicate }),
     async execute(i, ctx) {
-      await bringToFront(d, i.target, ctx.settings);
-      return waSend(d, i.target, i.contact, i.text, i.allowDuplicate, ctx.signal);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      await bringToFront(d, t, ctx.settings);
+      return waSend(d, t, i.contact, i.text, i.allowDuplicate, ctx.signal);
     },
     async verify(_i, o) {
       if (o.alreadyPresent) return { verified: true, detail: 'This exact message is already your latest message in the chat, so it was not sent again.' };

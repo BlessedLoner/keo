@@ -85,6 +85,16 @@ export function CompanionApp() {
               <button className="cbtn" aria-label="Open Keo" title="Open Keo" onClick={() => void invoke('presence:openMain', { view: p?.pendingApprovals ? 'tasks' : 'chat' })}>
                 <Icon name="window" size={14} />
               </button>
+              {p?.liveChats.firstReady && (
+                <button
+                  className="cbtn primary"
+                  aria-label={`Send the reply to ${p.liveChats.firstReady.contact} now`}
+                  title={`Send the reply to ${p.liveChats.firstReady.contact} now`}
+                  onClick={() => void invoke('livechat:sendNow', { id: p.liveChats.firstReady!.id })}
+                >
+                  <Icon name="send" size={14} />
+                </button>
+              )}
               <button className="cbtn" aria-label="Command bar" title="Command bar" onClick={() => void invoke('commandBar:show')}>
                 <Icon name="chat" size={14} />
               </button>

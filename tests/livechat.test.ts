@@ -174,21 +174,56 @@ describe('live chat sessions', () => {
     expect(wa.sent).toHaveLength(1);
   });
 
-  it('waits until the user is idle before typing, then gives their window back', async () => {
+  it('while the user is busy, shows the reply ready with Send now, then sends when they pause', async () => {
     const { wa } = await startWithMum();
     h.desktop.windows.push(win('9999', 1234, 'notepad', 'My document')); // what the user is working in
     h.desktop.idleMs = 0; // the user is typing elsewhere
     h.desktop.foreground = '9999';
     brain.push(decision({ action: 'reply', message: 'Talk soon!' }));
     incoming(wa, 'Mum', 'Hi there');
-    await waitFor(() => brainCalls.length === 1, 5000);
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => session().draft === 'Talk soon!', 5000);
     expect(wa.sent).toEqual([]);
-    h.desktop.idleMs = 60_000;
-    h.desktop.foreground = '9999';
+    expect(notified.at(-1)).toMatch(/ready: “Talk soon!”/);
+    expect(h.services.presence.get().liveChats).toMatchObject({ ready: 1, firstReady: { contact: 'Mum' } });
+    h.desktop.idleMs = 60_000; // the user pauses
     await waitFor(() => wa.sent.length === 1, 5000);
+    expect(session().draft).toBeNull();
     // After sending (and verifying), the user's own window is brought back.
     await waitFor(() => h.desktop.calls.filter((c) => c.op === 'focus').at(-1)?.args[0] === '9999', 5000);
+  });
+
+  it('“Send now” sends the ready reply at once, even while the user is busy', async () => {
+    const { wa } = await startWithMum();
+    h.desktop.idleMs = 0;
+    brain.push(decision({ action: 'reply', message: 'Yes, I am here' }));
+    incoming(wa, 'Mum', 'Are you there?');
+    await waitFor(() => !!session().draft, 5000);
+    h.services.live.sendDraftNow(session().id);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('Yes, I am here');
+  });
+
+  it('“Send immediately” mode does not wait for the user', async () => {
+    const { wa } = await startWithMum();
+    h.services.settings.update({ liveChat: { sendMode: 'immediately' } });
+    h.desktop.idleMs = 0;
+    brain.push(decision({ action: 'reply', message: 'On it!' }));
+    incoming(wa, 'Mum', 'Can you hear me');
+    await waitFor(() => wa.sent.length === 1, 5000);
+  });
+
+  it('a newer message from the contact replaces a draft that was not sent yet', async () => {
+    const { wa } = await startWithMum();
+    h.desktop.idleMs = 0;
+    brain.push(decision({ action: 'reply', message: 'Good morning!' }));
+    incoming(wa, 'Mum', 'Good morning');
+    await waitFor(() => session().draft === 'Good morning!', 5000);
+    brain.push(decision({ action: 'reply', message: 'Good morning! Yes, lunch sounds lovely' }));
+    incoming(wa, 'Mum', 'Lunch later?');
+    await waitFor(() => session().draft === 'Good morning! Yes, lunch sounds lovely', 5000);
+    h.desktop.idleMs = 60_000;
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('Good morning! Yes, lunch sounds lovely');
   });
 
   it('accepts an answer only in the user’s own words', async () => {
@@ -216,6 +251,29 @@ describe('live chat sessions', () => {
     expect(parseDecision('```json\n{"action":"reply","message":"hi"}\n```')).toMatchObject({ action: 'reply', message: 'hi' });
     expect(parseDecision('{"action":"launch_missiles"}')).toBeNull();
     expect(parseDecision('no json')).toBeNull();
+  });
+});
+
+describe('finding the WhatsApp window', () => {
+  it('works without a target, and ignores an invented handle', async () => {
+    const { wa, conv } = setup();
+    userSays(conv.id, 'open my chat with Mum on WhatsApp');
+    const r = await run('whatsapp.open_chat', { contact: 'Mum' }, conv.id);
+    expect(r.step!.state).toBe('succeeded');
+    expect(wa.open).toBe('Mum');
+    const invented = await run('whatsapp.read_chat', { target: { hwnd: '123456', pid: 12345, processName: 'chrome' }, contact: 'Mum' }, conv.id);
+    expect(invented.step!.state).toBe('succeeded');
+  });
+
+  it('asks which one when several WhatsApp windows are open, and explains when the app is not allowed', async () => {
+    const { conv } = setup();
+    h.desktop.windows.push(win('4002', 889, 'msedge', 'WhatsApp - Microsoft Edge'));
+    h.services.settings.update({ permissions: { allowedApps: [{ processName: 'chrome', label: 'Chrome' }, { processName: 'msedge', label: 'Edge' }] } });
+    const two = await run('whatsapp.open_chat', { contact: 'Mum' }, conv.id);
+    expect(two.step!.errorCode).toBe('ambiguous_target');
+    h.services.settings.update({ permissions: { allowedApps: [] } });
+    const none = await run('whatsapp.open_chat', { contact: 'Mum' }, conv.id);
+    expect(none.step!.errorCode).toBe('target_not_allowed');
   });
 });
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { waOpenChat } from './advanced';
-import { allowCheck, bringToFront, Target, targetLabel, type CapabilityDeps } from './builtins';
+import { resolveWhatsApp, waOpenChat, waTargetLabel } from './advanced';
+import { allowCheck, bringToFront, Target, type CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 import type { LiveChatService } from '../livechat/liveChatService';
 
@@ -35,10 +35,10 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     version: '1.0.0',
     title: 'Chat live on WhatsApp',
     description:
-      'Start a LIVE WhatsApp chat with one contact: Keo keeps reading new messages and replying for the user until the user says stop (or the time/reply limit is reached). Keo pauses and asks the user about money, prices, payments, meetings, personal matters, "are you a bot?" and anything it cannot answer from the instructions. Use for requests like "chat with Ma Glo until I say stop" or "reply to John and keep the conversation going". Put the user\'s purpose in goal and any facts/rules they gave in instructions (their own words). opening = first message to send now (optional); replyToLatest = answer the contact\'s latest unanswered message right away. Take target from desktop__list_windows.',
+      'Start a LIVE WhatsApp chat with one contact: Keo keeps reading new messages and replying for the user until the user says stop (or the time/reply limit is reached). Keo pauses and asks the user about money, prices, payments, meetings, personal matters, "are you a bot?" and anything it cannot answer from the instructions. Use for requests like "chat with Ma Glo until I say stop" or "reply to John and keep the conversation going". Put the user\'s purpose in goal and any facts/rules they gave in instructions (their own words). opening = first message to send now (optional); replyToLatest = answer the contact\'s latest unanswered message right away. Omit target: Keo finds the WhatsApp window itself.',
     input: z
       .object({
-        target: Target,
+        target: Target.optional(),
         contact: z.string().trim().min(1).max(120),
         goal: z.string().trim().min(1).max(600),
         instructions: z.array(z.string().trim().min(1).max(400)).max(10).default([]),
@@ -58,7 +58,7 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     maxAttempts: 1,
     modelVisible: true,
     verificationPolicy: 'The chat is opened and its header verified before the session starts; every reply is verified in the chat.',
-    precheck: (i, s) => allowCheck(i.target, s),
+    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null),
     // Hands-free may start it only for a contact the user named themselves.
     autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
     preview: (i, s) => {
@@ -66,7 +66,7 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
       const replies = i.maxReplies ?? s.liveChat.maxReplies;
       return {
         summary: `Chat live with “${i.contact}” on WhatsApp until you say stop`,
-        target: targetLabel(i.target),
+        target: waTargetLabel(i.target),
         consequences: [
           `Goal: ${i.goal}`,
           ...(i.instructions.length ? [`Your instructions: ${i.instructions.join(' · ')}`] : []),
@@ -81,15 +81,16 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length, instructions: i.instructions.length, opening: !!i.opening, replyToLatest: i.replyToLatest }),
     async execute(i, ctx) {
-      await bringToFront(d, i.target, ctx.settings);
-      const o = await waOpenChat(d, i.target, i.contact, ctx.signal);
+      const target = await resolveWhatsApp(d, i.target, ctx.settings);
+      await bringToFront(d, target, ctx.settings);
+      const o = await waOpenChat(d, target, i.contact, ctx.signal);
       if (!o.opened) {
         throw new CapabilityError('not_opened', `Could not open the chat with “${i.contact}”: ${o.reason ?? 'not found'}.${o.candidates.length ? ` Candidates: ${o.candidates.join(', ')}.` : ''} Ask the user which one they mean.`, {
           dispatched: 'no',
         });
       }
       const s = await d.live.start({
-        target: i.target,
+        target,
         contact: i.contact,
         goal: i.goal,
         instructions: i.instructions,
@@ -158,6 +159,29 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
   });
 
+  const sendNow = defineCapability({
+    id: 'whatsapp.live_chat_send_now',
+    version: '1.0.0',
+    title: 'Send the ready live-chat reply now',
+    description: 'When a live chat has a reply ready (waiting for the user to pause), send it right now. Use when the user says "send it", "send now" or similar.',
+    input: z.object({ sessionId: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
+    output: Session,
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The reply goes through the session’s verified send.',
+    preview: () => ({ summary: 'Send the ready reply now', target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ sessionId: i.sessionId }),
+    async execute(i) {
+      return view(d.live.sendDraftNow(i.sessionId));
+    },
+  });
+
   const status = defineCapability({
     id: 'whatsapp.live_chat_status',
     version: '1.0.0',
@@ -181,5 +205,5 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
   });
 
-  return [start, answer, stop, status] as AnyCapability[];
+  return [start, answer, stop, sendNow, status] as AnyCapability[];
 }

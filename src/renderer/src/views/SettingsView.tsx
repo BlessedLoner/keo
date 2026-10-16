@@ -303,11 +303,33 @@ function ApprovalsAndLiveChat({ s, patch }: { s: Settings; patch: Patch }) {
         <p className="muted small">
           Say e.g. “chat with Ma Glo on WhatsApp until I say stop” or “reply to John and keep the conversation going”. You approve once; Keo then reads new messages and replies in your voice. It pauses and asks you about prices and money, payments, meetings and times, calls and files, personal or urgent matters, and when someone asks whether they are talking to a bot — Keo never denies being an assistant. Answer by typing or speaking (“tell her it’s $50”), or in Tasks → Live chats.
         </p>
+        <div className="field">
+          <span className="field-label">When a reply is ready while I’m using the computer</span>
+          <div className="choice-list" role="radiogroup" aria-label="When a reply is ready">
+            {(
+              [
+                ['ask', 'Ask me', 'Shows the reply with Send now (notification, companion, Tasks). If you don’t answer, it is sent as soon as you pause.'],
+                ['when_idle', 'Wait until I pause', 'Sends as soon as you stop typing/clicking for a moment — no prompt.'],
+                ['immediately', 'Send immediately', 'Fastest: Keo briefly takes the screen, keyboard focus and clipboard, then gives your window back.'],
+              ] as Array<[Settings['liveChat']['sendMode'], string, string]>
+            ).map(([id, title, text]) => (
+              <label key={id} className={`choice ${lc.sendMode === id ? 'selected' : ''}`}>
+                <input type="radio" name="sendMode" checked={lc.sendMode === id} onChange={() => void patch({ liveChat: { sendMode: id } })} />
+                <span>
+                  <strong>{title}</strong>
+                  <span className="muted small" style={{ display: 'block' }}>
+                    {text}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
         <div className="grid-2">
           {num('maxMinutes', 'Longest session (minutes)', 5, 720, 'A session ends after this, even if you forget to stop it.')}
           {num('maxReplies', 'Most replies per session', 1, 300, 'Keo stops after this many messages.')}
           {num('quietMinutes', 'End after quiet minutes', 5, 240, 'Ends when nobody writes for this long.')}
-          {num('idleSeconds', 'Type only after I am idle (seconds)', 0, 60, 'Keo waits until you stop typing/clicking, sends, then gives your window back.')}
+          {num('idleSeconds', '“Paused” means idle for (seconds)', 0, 60, 'No keyboard/mouse input for this long. Keo then sends, and gives your window back.')}
         </div>
         <div className="field" style={{ marginTop: 8 }}>
           <span className="field-label">Also always ask me about</span>
@@ -340,7 +362,7 @@ function ApprovalsAndLiveChat({ s, patch }: { s: Settings; patch: Patch }) {
           <Toggle checked={lc.speak} onChange={(v) => void patch({ liveChat: { speak: v } })} label="Say it out loud (when spoken replies are on)" />
         </div>
         <p className="muted small">
-          Keo reads the chat through Windows accessibility. Keep WhatsApp open (a second monitor is ideal); if it is covered or minimised Keo checks it only while you are idle. Keo works through the visible app — a WhatsApp redesign can make it pause and tell you it cannot read the chat.
+          Keo reads the chat through Windows accessibility while you keep working — no screen takeover. Keep WhatsApp visible (a second monitor is ideal): a browser stops updating a covered or minimised tab, so Keo can only refresh it while you pause. Works with WhatsApp Web (tab in front) and the WhatsApp app; a WhatsApp redesign can make Keo pause and say it cannot read the chat.
         </p>
       </section>
     </>
