@@ -373,6 +373,8 @@ describe('WhatsApp workflows', () => {
     expect(headerMatches('Ma Glo, online', 'ma glo')).toBe(true);
     expect(headerMatches('Ma Glo last seen today at 10:02', 'Ma Glo')).toBe(true);
     expect(headerMatches('Ma Glory click here for contact info', 'Ma Glo')).toBe(false);
+    expect(headerMatches('Ma Glo Business Account', 'Ma Glo')).toBe(true);
+    expect(headerMatches('Ma Glo, Business Account, online', 'Ma Glo')).toBe(true);
     const wa = new FakeWhatsApp();
     wa.open = 'Mum';
     const nodes = wa.nodes().map((n) => (n.rid === 'rid.header' ? { ...n, name: 'Mum click here for contact info' } : n));

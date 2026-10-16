@@ -44,14 +44,15 @@ export const normName = (s: string): string =>
 
 /**
  * The contact/group name from a header label: WhatsApp appends screen-reader
- * hints and presence (“click here for contact info”, “online”, “typing…”,
- * “last seen today at 10:02”) to the same element.
+ * hints, presence and labels (“click here for contact info”, “Business
+ * Account”, “online”, “typing…”, “last seen today at 10:02”) to the same element.
  */
 export function cleanHeader(name: string): string {
   let t = name.replace(/\s+/g, ' ').trim();
   for (let k = 0; k < 3; k++) {
     t = t
       .replace(/[\s,.]*(click|tap) here for (contact|group) info\s*$/i, '')
+      .replace(/[\s,.·-]*(official\s+)?business\s+account\s*$/i, '')
       .replace(/[\s,.]*(online|typing(…|\.\.\.)?|recording audio(…|\.\.\.)?|last seen\b.*)\s*$/i, '')
       .trim();
   }

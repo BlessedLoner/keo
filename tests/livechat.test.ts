@@ -21,11 +21,16 @@ const decision = (o: Record<string, unknown>) => JSON.stringify(o);
 let brain: Array<string | ((req: ChatRequest) => string)> = [];
 let brainCalls: ChatRequest[] = [];
 let notified: string[] = [];
+/** Scripted main-agent turns (n = call number within the turn). */
+let agentCalls = 0;
+let agentScript: ((req: ChatRequest, n: number) => ChatResult) | null = null;
 
 function setup(level: 'always_ask' | 'important_only' | 'hands_free' = 'always_ask') {
   brain = [];
   brainCalls = [];
   notified = [];
+  agentScript = null;
+  agentCalls = 0;
   h = makeHarness({
     script: (req) => {
       if (isBrain(req)) {
@@ -33,7 +38,8 @@ function setup(level: 'always_ask' | 'important_only' | 'hands_free' = 'always_a
         const next = brain.shift();
         return reply(typeof next === 'function' ? next(req) : (next ?? decision({ action: 'wait' })));
       }
-      return reply('ok');
+      agentCalls++;
+      return agentScript ? agentScript(req, agentCalls) : reply('ok');
     },
     liveChatTiming: { pollMs: 15, debounceMs: 0, minGapMs: 0, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) },
   });
@@ -163,6 +169,65 @@ describe('live chat sessions', () => {
     await waitFor(() => session().status === 'waiting_user', 5000);
     expect(session().question).toMatch(/money or prices/);
     expect(wa.sent.map((m) => m.text)).toEqual(['Hi Mum!']);
+  });
+
+  it('“help me explain …” is answered after the user says to explain it — and the send is reported truthfully', async () => {
+    const { wa, conv } = await startWithMum('Chat with Mum');
+    brain.push(decision({ action: 'ask_user', question_for_user: 'Mum asks what a variable is in Python. What should I tell her?' }));
+    incoming(wa, 'Mum', 'Can you help me explain what variable means in python?');
+    await waitFor(() => session().status === 'waiting_user', 5000);
+    brain.push((req) => {
+      expect(req.system).toContain('Explain what a variable is in Python for her');
+      expect(req.system).toMatch(/you may use your own knowledge/);
+      expect(JSON.stringify(req.messages)).toMatch(/just answered or instructed/);
+      // covered_by_guidance is not needed: the user's answer settles the question.
+      return decision({ action: 'reply', message: 'A variable is a name that stores a value, e.g. age = 30.' });
+    });
+    h.services.live.answer(session().id, 'Explain what a variable is in Python for her', true);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toMatch(/A variable is a name/);
+    await waitFor(() => h.services.conversations.messages(conv.id).some((m) => m.content.includes('Sent to Mum')), 5000);
+  });
+
+  it('acts on an instruction even when the contact wrote nothing new', async () => {
+    const { wa } = await startWithMum('Chat with Mum');
+    brain.push(decision({ action: 'reply', message: 'I will call you at 7pm!' }));
+    h.services.live.answer(session().id, 'tell her I will call at 7pm', true);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('I will call you at 7pm!');
+  });
+
+  it('researches when the user says to, and gives the results to the reply as untrusted data', async () => {
+    const { wa } = await startWithMum('Chat with Mum');
+    const deps = (h.services.live as unknown as { d: { research?: (q: string) => Promise<unknown> } }).d;
+    const queries: string[] = [];
+    deps.research = async (q: string) => {
+      queries.push(q);
+      return [{ title: 'Python variables', url: 'https://docs.python.org/3/tutorial/', description: 'A variable names a value.' }];
+    };
+    brain.push(decision({ action: 'ask_user', question_for_user: 'Mum asks about Python variables.' }));
+    incoming(wa, 'Mum', 'What is a variable in python?');
+    await waitFor(() => session().status === 'waiting_user', 5000);
+    brain.push((req) => {
+      expect(JSON.stringify(req.messages)).toContain('web_research');
+      return decision({ action: 'reply', message: 'A variable names a value (see docs.python.org).' });
+    });
+    h.services.live.answer(session().id, 'research it and send her the answer', true);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(queries[0]).toMatch(/variable in python/);
+  });
+
+  it('the chat agent relays the user’s own words (it only passes the session id)', async () => {
+    const { wa, conv } = await startWithMum('Chat with Mum');
+    const id = session().id;
+    agentScript = (req, n) =>
+      n === 1
+        ? { text: '', toolCalls: [{ id: 'a1', name: 'whatsapp__live_chat_answer', input: { sessionId: id, answer: 'A paraphrase the model made up' } }], stopReason: 'tool_use', usage: null, model: 'keo-test-1', native: undefined }
+        : reply('Passed on.');
+    brain.push(decision({ action: 'reply', message: 'Sure, a variable stores a value.' }));
+    await h.services.agent.send(conv.id, 'Explain what variable is in Python programming for her').done;
+    expect(session().guidance.at(-1)).toBe('Explain what variable is in Python programming for her');
+    await waitFor(() => wa.sent.length === 1, 5000);
   });
 
   it('stops after the reply limit', async () => {

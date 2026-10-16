@@ -154,6 +154,11 @@ export class Services {
       log: this.log,
       conversations: this.conversations,
       alert: (session, text, kind) => this.liveChatAlert(session, text, kind),
+      research: async (query, signal) => {
+        const st = getSettings();
+        if (!st.permissions.webSearchEnabled || !this.web.hasKey()) return null;
+        return this.web.search(query, { count: 5, safesearch: st.web.safesearch }, signal);
+      },
       changed: () => {
         this.presence?.setLiveChats(this.live.counts());
         this.push('livechat:changed', { sessions: this.live.list() });
@@ -163,7 +168,14 @@ export class Services {
     for (const cap of [
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
-      ...liveChatCapabilities({ ...capDeps, live: this.live }),
+      ...liveChatCapabilities({
+        ...capDeps,
+        live: this.live,
+        userMessage: (id) => {
+          const m = id ? this.conversations.getMessage(id) : null;
+          return m && m.role === 'user' ? m.content : null;
+        },
+      }),
     ]) {
       this.registry.register(cap);
     }
@@ -259,13 +271,15 @@ export class Services {
 
   /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
   /** A live chat needs the user: note in its conversation, Windows notification, spoken line. */
-  private liveChatAlert(session: LiveChatSession, text: string, kind: 'question' | 'draft'): void {
+  private liveChatAlert(session: LiveChatSession, text: string, kind: 'question' | 'draft' | 'sent'): void {
     const st = this.settings.get().liveChat;
-    // Questions also go into the conversation (so a typed or spoken answer can follow); drafts don't.
-    if (kind === 'question' && session.conversationId && this.conversations.get(session.conversationId)) {
-      this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `💬 **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
+    // Questions and confirmed sends go into the conversation (so answers can follow, and nothing is claimed
+    // before it happened); ready drafts only notify.
+    if (kind !== 'draft' && session.conversationId && this.conversations.get(session.conversationId)) {
+      this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `${kind === 'sent' ? '✅' : '💬'} **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
       this.push('conversations:changed', { conversationId: session.conversationId });
     }
+    if (kind === 'sent') return;
     if (st.notify) this.ui.notify(kind === 'draft' ? `Reply to ${session.contact} ready` : `${session.contact} needs you`, text);
     if (st.speak) this.push('presence:command', { type: 'announce', text });
   }
