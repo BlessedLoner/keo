@@ -203,9 +203,11 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   const want = normName(contact);
   const titles = [...new Set(view.chats.map((c) => c.title))];
   const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
-  const exact = view.chats.filter((c) => normName(c.title) === want);
-  if (exact.length !== 1) {
-    return { opened: false, header: view.header, candidates, reason: exact.length > 1 ? 'several chats have this exact name' : candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
+  // Search results list the same person several times (under Chats, Contacts and Messages);
+  // an exact name match is taken from the top of the list. The header is verified afterwards.
+  const exact = view.chats.filter((c) => normName(c.title) === want).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+  if (!exact.length) {
+    return { opened: false, header: view.header, candidates, reason: candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
   }
   const chat = exact[0]!;
   await step(`opening the “${chat.title}” entry`, async () => {
@@ -220,8 +222,8 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   view = (await freshView(d, target)).view;
   if (!headerMatches(view.header, contact)) {
     // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
-    const again = view.chats.filter((c) => normName(c.title) === want);
-    if (again.length === 1) {
+    const again = view.chats.filter((c) => normName(c.title) === want).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+    if (again.length) {
       const entry = again[0]!;
       await step(`clicking the “${entry.title}” entry`, async () => {
         const c = await centerOf(d, target, entry.titleNode ?? entry.node);
@@ -662,7 +664,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Open a WhatsApp chat',
     description:
-      'Find a WhatsApp chat by contact or group name and open it ONLY if exactly one chat title matches exactly; otherwise return the candidate names so you can ask the user which one. Verifies the open chat’s header afterwards. Opening a chat may mark its messages as read.' +
+      'Find a WhatsApp chat by contact or group name and open it when a chat title matches the name exactly (the top match, since search lists the same person under Chats, Contacts and Messages); with no exact match it returns the candidate names so you can ask the user which one. Verifies the open chat’s header afterwards. Opening a chat may mark its messages as read.' +
       WA_NOTE,
     input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120) }).strict(),
     output: z.object({ opened: z.boolean(), header: z.string().nullable(), candidates: z.array(z.string()), reason: z.string().nullable() }),
@@ -680,7 +682,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     preview: (i) => ({
       summary: `Open the WhatsApp chat with “${i.contact}”`,
       target: waTargetLabel(i.target),
-      consequences: ['Searches your chats; opens it only if exactly one name matches. The contact may see that you read their messages.'],
+      consequences: ['Searches your chats and opens the top chat with exactly this name (checked in the header). The contact may see that you read their messages.'],
       dataExport: null,
     }),
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length }),

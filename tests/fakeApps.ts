@@ -127,6 +127,8 @@ export class FakeWhatsApp implements FakeUiaApp {
    * chat entries nested row › name with screen-reader prefixes.
    */
   inBrowser = false;
+  /** Search results also list matching people under "Contacts" (duplicates of the chats). */
+  searchListsContacts = false;
   /** Accept accessibility value writes without the page noticing (rich web editors). */
   ignoreValueWrites = false;
   focused: 'search' | 'compose' | null = null;
@@ -154,6 +156,16 @@ export class FakeWhatsApp implements FakeUiaApp {
         { key: `chat.${c.title}.time`, parentKey: `chat.${c.title}`, role: 'text', name: `10:4${i}`, x: 320, y: 125 + i * 70, w: 40, h: 20 },
       );
     });
+    // Like WhatsApp search results: the same people again under a "Contacts" heading.
+    if (this.search && this.searchListsContacts) {
+      visible.forEach((c, i) => {
+        const y = 120 + (visible.length + 1 + i) * 70;
+        s.push(
+          { key: `chat.${c.title}.contact`, parentKey: 'list', role: 'listitem', name: c.title, x: 0, y, w: 380, h: 68, patterns: ['select', 'invoke'] },
+          { key: `chat.${c.title}.contact.title`, parentKey: `chat.${c.title}.contact`, role: 'text', name: c.title, x: 70, y: y + 5, w: 200, h: 20 },
+        );
+      });
+    }
     const chat = this.chats.find((c) => c.title === this.open);
     if (chat) {
       s.push({ key: 'header', parentKey: 'root', role: 'button', name: chat.title, x: 460, y: 15, w: 300, h: 40, patterns: ['invoke'] });

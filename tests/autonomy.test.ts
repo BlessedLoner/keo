@@ -254,6 +254,15 @@ describe('WhatsApp workflows', () => {
     expect(wa.open).toBeNull();
   });
 
+  it('opens the top match when search lists the same person under Chats and Contacts', async () => {
+    const { wa } = setup();
+    wa.searchListsContacts = true;
+    const r = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(r.step?.result).toMatchObject({ opened: true, header: 'Mum' });
+    expect(r.step?.verification).toBe('verified');
+    expect(wa.open).toBe('Mum');
+  });
+
   it('reads the open chat only after verifying the recipient', async () => {
     const { wa } = setup();
     wa.open = 'Mum';
