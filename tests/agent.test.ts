@@ -129,7 +129,8 @@ describe('tool safety', () => {
     expect(step.requiresApproval).toBe(true);
     h.services.tasks.approveStep(step.id, step.inputHash);
     const msg = await run.done;
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['type']);
+    // Typing first brings the target to the front (approval happened in Keo's window).
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
     expect(msg.meta.tools?.[0]?.outcome).toBe('executed');
     expect(msg.content).toContain('succeeded');
   });
@@ -197,6 +198,7 @@ describe('tool safety', () => {
 
   it('memory proposals from the model are recorded as unconfirmed with evidence', async () => {
     h = makeHarness({ script: (req, n) => (n === 0 ? toolCall('memory__propose', { kind: 'preference', content: 'Prefers metric units', evidence: 'use metric please', subject: 'units' }) : reply('Noted — confirm it in Memory.')) });
+    h.services.settings.update({ memory: { learning: 'ask' } });
     const c = h.services.conversations.create();
     const msg = await h.services.agent.send(c.id, 'use metric please').done;
     const [m] = h.services.memory.list('all');
@@ -232,7 +234,7 @@ describe('tool safety', () => {
     expect(h.desktop.inputCalls()).toHaveLength(0);
     h.services.tasks.approvePlan(task!.id, Object.fromEntries(task!.steps.map((s) => [s.id, s.inputHash])));
     await waitFor(() => h.services.tasks.get(task!.id)!.state === 'completed');
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'focus', 'type']);
   });
 
   it('rejects plans containing unknown capabilities', async () => {

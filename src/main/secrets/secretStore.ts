@@ -9,7 +9,7 @@ export interface SecretCipher {
   decrypt(cipher: Buffer): string;
 }
 
-export type SecretName = 'anthropic' | 'openai' | 'openrouter' | 'local';
+export type SecretName = 'anthropic' | 'openai' | 'openrouter' | 'local' | 'brave';
 
 /**
  * Stores provider credentials as OS-encrypted blobs in Keo's own profile.

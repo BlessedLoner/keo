@@ -57,6 +57,8 @@ export interface Capability<I = unknown, O = unknown> {
   modelVisible: boolean;
   /** Verification policy, surfaced in the UI. */
   verificationPolicy: string;
+  /** Capability-wide prerequisite (e.g. a missing API key). Unavailable capabilities are hidden from the model. */
+  unavailableReason?(settings: Settings): string | null;
   /** Extra admission checks (allow-lists, prerequisites). Return an error message to reject. */
   precheck?(input: I, settings: Settings): string | null;
   /** Human-readable approval preview: target, operation and material consequences. */

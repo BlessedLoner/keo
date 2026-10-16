@@ -9,9 +9,14 @@ export interface TargetRef {
   processName: string;
 }
 
+/** "Notepad", "notepad" and "notepad.exe" all name the same process. */
+export function normalizeProcess(name: string): string {
+  return name.trim().toLowerCase().replace(/\.exe$/, '');
+}
+
 export function isAllowedProcess(processName: string, s: Settings): boolean {
-  const n = processName.toLowerCase().replace(/\.exe$/, '');
-  return s.permissions.allowedApps.some((a) => a.processName.toLowerCase().replace(/\.exe$/, '') === n);
+  const n = normalizeProcess(processName);
+  return s.permissions.allowedApps.some((a) => normalizeProcess(a.processName) === n);
 }
 
 export function toTarget(w: RawWindow, s: Settings): WindowTarget {
@@ -56,9 +61,9 @@ export class DesktopService {
       throw new CapabilityError('target_not_allowed', `${ref.processName} is not in the allowed applications list.`);
     }
     const w = await this.backend.info(ref.hwnd);
-    if (!w) throw new CapabilityError('target_gone', 'The target window no longer exists. Keo will not act on a different window.');
-    if (w.pid !== ref.pid || w.processName.toLowerCase() !== ref.processName.toLowerCase()) {
-      throw new CapabilityError('target_changed', 'The window handle now belongs to a different process. Keo will not act on it.');
+    if (!w) throw new CapabilityError('target_gone', 'No window with that handle exists (it was closed, or the handle was not taken from a current window list). Keo will not act on a different window. Use desktop__list_windows for current handles.');
+    if (w.pid !== ref.pid || normalizeProcess(w.processName) !== normalizeProcess(ref.processName)) {
+      throw new CapabilityError('target_changed', 'That window handle belongs to a different process than requested. Keo will not act on it. Use desktop__list_windows for current handles.');
     }
     if (!isAllowedProcess(w.processName, s)) throw new CapabilityError('target_not_allowed', `${w.processName} is not allow-listed.`);
     return w;

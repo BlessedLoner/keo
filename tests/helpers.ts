@@ -9,6 +9,7 @@ import { TestProvider, type Script } from '../src/main/providers/testProvider';
 import type { SecretCipher } from '../src/main/secrets/secretStore';
 import { Services } from '../src/main/services';
 import type { CaptureOutcome, ImageTools, WindowCaptureSource } from '../src/main/vision/visionService';
+import type { WebService } from '../src/main/web/webService';
 
 export function tempDir(prefix = 'keo-test-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -63,8 +64,11 @@ export class FakeDesktop implements DesktopBackend {
     }
     return fn();
   }
+  /** When false, focus requests are refused like Windows' foreground lock would. */
+  focusAllowed = true;
   focus(hwnd: string) {
     return this.act('focus', [hwnd], () => {
+      if (!this.focusAllowed) return { foreground: false };
       for (const w of this.windows) w.foreground = w.hwnd === hwnd;
       return { foreground: true };
     });
@@ -114,7 +118,7 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export function makeHarness(opts: { dir?: string; script?: Script | null; delayMs?: number } = {}): Harness {
+export function makeHarness(opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService } = {}): Harness {
   const dir = opts.dir ?? tempDir();
   const profile = resolveProfile(dir, { KEO_USER_DATA_DIR: dir }, false);
   const provider = new TestProvider(opts.script ?? null, opts.delayMs ?? 0);
@@ -129,6 +133,8 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
     imageTools: passthroughImages,
     testProvider: provider,
     logger: new Logger(profile.logsDir, false),
+    focusSettleMs: 0,
+    ...(opts.web ? { web: opts.web } : {}),
   });
   return {
     dir,

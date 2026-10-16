@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ProviderDiagnostic, ProviderInfo } from '@shared/domain';
+import type { WebStatus } from '@shared/ipc';
 import type { Settings } from '@shared/settings';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, type EmblemState } from '../components/KeoEmblem';
@@ -7,7 +8,7 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 
-type Section = 'providers' | 'voice' | 'agent' | 'appearance' | 'data';
+type Section = 'providers' | 'web' | 'voice' | 'agent' | 'appearance' | 'data';
 
 export function SettingsView() {
   const app = useApp();
@@ -28,6 +29,7 @@ export function SettingsView() {
           {(
             [
               ['providers', 'Providers'],
+              ['web', 'Web search'],
               ['voice', 'Voice'],
               ['agent', 'Agent'],
               ['appearance', 'Appearance'],
@@ -47,6 +49,8 @@ export function SettingsView() {
           </div>
         ) : section === 'providers' ? (
           <Providers s={s} patch={patch} />
+        ) : section === 'web' ? (
+          <WebSearch s={s} patch={patch} />
         ) : section === 'voice' ? (
           <Voice s={s} patch={patch} />
         ) : section === 'agent' ? (
@@ -314,6 +318,110 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
+function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
+  const ui = useUi();
+  const app = useApp();
+  const [status, setStatus] = useState<WebStatus | null>(null);
+  const [key, setKey] = useState('');
+  const [test, setTest] = useState<{ ok: boolean; message: string; sample: Array<{ title: string; url: string }> } | null>(null);
+  const [testing, setTesting] = useState(false);
+  useEffect(() => {
+    void invoke('web:status').then(setStatus, (e) => ui.error(errText(e)));
+  }, [ui, s]);
+  const save = async () => {
+    try {
+      setStatus(await invoke('web:setKey', { apiKey: key }));
+      setKey('');
+      ui.toast('Brave Search key saved (encrypted)', 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <>
+      <section className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>Brave Search</h2>
+          {status?.hasKey ? <span className="chip ok">Key stored</span> : <span className="chip warn">No key</span>}
+          {status && (status.searchEnabled ? <span className="chip ok">Search on</span> : <span className="chip">Search off</span>)}
+        </div>
+        <p className="muted small">
+          Lets Keo research with live web results. Queries go to api.search.brave.com using your key and plan quota. The key is encrypted with Windows (DPAPI) and never shown again.
+        </p>
+        <div className="field">
+          <label htmlFor="brave-key">API key</label>
+          <div className="row">
+            <input id="brave-key" className="input" type="password" autoComplete="off" spellCheck={false} placeholder={status?.hasKey ? 'Replace stored key…' : 'Paste your Brave Search API key'} value={key} onChange={(e) => setKey(e.target.value)} />
+            <button className="btn primary" disabled={key.trim().length < 8} onClick={() => void save()}>
+              Save
+            </button>
+            {status?.hasKey && (
+              <button className="btn ghost" onClick={() => void invoke('web:clearKey').then(setStatus, (e) => ui.error(errText(e)))}>
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+        {status && !status.searchEnabled && (
+          <div className="banner info small" style={{ marginBottom: 10 }}>
+            <Icon name="shield" size={15} />
+            <div className="grow">Web search and page reading are switched on separately in Access.</div>
+            <button className="btn sm" onClick={() => app.setView('capabilities')}>
+              Open Access
+            </button>
+          </div>
+        )}
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="safe">Safe search</label>
+            <select id="safe" className="select" value={s.web.safesearch} onChange={(e) => void patch({ web: { safesearch: e.target.value } })}>
+              <option value="strict">Strict</option>
+              <option value="moderate">Moderate</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="rps">Results per search</label>
+            <input id="rps" className="input" type="number" min={1} max={20} defaultValue={s.web.resultsPerSearch} onBlur={(e) => void patch({ web: { resultsPerSearch: Number(e.target.value) } })} />
+          </div>
+        </div>
+        <div className="row">
+          <button
+            className="btn"
+            disabled={!status?.hasKey || testing}
+            onClick={async () => {
+              setTesting(true);
+              try {
+                setTest(await invoke('web:test'));
+              } catch (e) {
+                ui.error(errText(e));
+              } finally {
+                setTesting(false);
+              }
+            }}
+          >
+            {testing ? <span className="spinner" /> : <Icon name="search" size={14} />} Test search
+          </button>
+          <span className="muted small">Runs one real query (counts toward your Brave quota).</span>
+        </div>
+        {test && (
+          <div className={`banner ${test.ok ? 'info' : 'danger'} small`} style={{ marginTop: 10 }}>
+            <Icon name={test.ok ? 'check' : 'warn'} size={15} />
+            <div className="grow">
+              {test.message}
+              {test.sample.map((r) => (
+                <div key={r.url} className="muted">
+                  {r.title} — {r.url}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
 function Agent({ s, patch }: { s: Settings; patch: Patch }) {
   const a = s.agent;
   const num = (k: keyof typeof a, label: string, hint: string, min: number, max: number) => (
@@ -327,6 +435,16 @@ function Agent({ s, patch }: { s: Settings; patch: Patch }) {
     <section className="card">
       <h2>Agent behaviour</h2>
       <Toggle checked={a.toolsEnabled} onChange={(v) => void patch({ agent: { toolsEnabled: v } })} label="Let the model propose capabilities (tools)" />
+      <div className="field" style={{ marginTop: 14, maxWidth: 520 }}>
+        <label htmlFor="mem-learning">Memory learning</label>
+        <select id="mem-learning" className="select" value={s.memory.learning} onChange={(e) => void patch({ memory: { learning: e.target.value } })}>
+          <option value="from_user_words">Remember what I tell Keo about myself automatically</option>
+          <option value="ask">Ask me before remembering anything</option>
+        </select>
+        <span className="hint">
+          Automatic saving only happens when Keo can quote your own words from the chat; anything else waits for your confirmation. Everything stays editable and deletable in Memory, and passwords or keys are never stored.
+        </span>
+      </div>
       <div className="grid-2" style={{ marginTop: 12 }}>
         {num('contextMessageLimit', 'Recent messages in context', 'Upper bound on history sent per request.', 2, 200)}
         {num('contextCharBudget', 'History character budget', 'Older messages beyond this are left out.', 2000, 400000)}

@@ -3,7 +3,8 @@
 Keo is a personal AI agent for Windows: a desktop app that talks with you, remembers what you confirm, tracks your projects, and acts on your computer **only through registered capabilities and only with your approval**.
 
 - **Conversation** — streaming replies, history, rename/delete/search, stop, retry, interruption recovery.
-- **Memory** — source-attributed, versioned memory. The model can only *propose*; you confirm, correct, supersede or delete. Conflicts are flagged, never silently resolved.
+- **Memory** — source-attributed, versioned memory. Keo learns durable facts you tell it in chat (your name, where you live, work, people, preferences) and saves them automatically **only when it can quote your own words**; anything else waits for your confirmation. You can correct, supersede or delete everything; conflicts are flagged, never silently resolved.
+- **Research** — web search through Brave Search and reading of public web pages, with cited sources (opt-in).
 - **Projects** — objectives, decisions, blockers, open questions and progress, each marked with who stated it.
 - **Capabilities** — a typed registry (16 built-ins) with strict schemas, risk levels, timeouts and audit records.
 - **Tasks** — a validated lifecycle with approvals bound to exact inputs, dependencies, cancellation, bounded retries, execution receipts, honest *outcome uncertain* states and safe restart recovery.
@@ -58,6 +59,17 @@ Open **Settings → Providers** (or click the provider chip in the title bar):
 
 Keys are encrypted with Windows DPAPI (Electron `safeStorage`) and never shown again or logged. Keo does not reuse any other application's credentials.
 
+## Web research (Brave Search)
+
+1. **Settings → Web search**: paste your Brave Search API key (stored encrypted). *Test search* runs one real query.
+2. **Access → Web research**: turn on *Web search* and, for deeper research, *Read web pages*.
+
+Keo then searches and reads pages on its own when you ask for research or current information, and cites the URLs it used. Page reading refuses anything on your computer or local network.
+
+## Memory learning
+
+**Settings → Agent → Memory learning** chooses between *remember what I tell Keo about myself automatically* (default) and *ask me first*. Learned items show as “Learned from your words in chat” in **Memory**, with the quoted sentence and a link to the conversation. Your name and other `user.*` facts are included in every reply's context.
+
 ## Enabling computer interaction
 
 Everything is off by default. In **Access**:
@@ -66,7 +78,9 @@ Everything is off by default. In **Access**:
 2. Optionally turn on *Desktop control* (focus, move, type, keys, click) and/or *Application launch* (register executables with *Add application…*).
 3. To let the model look at a window, enable *Screen-content export* for the provider that should receive screenshots.
 
-Every action shows a preview (target, operation, consequences, data leaving the PC) and needs **Approve once** — in the chat or in **Tasks**.
+Every action shows a preview (target, operation, consequences, data leaving the PC) and needs **Approve once** — in the chat or in **Tasks**. Typing, key presses and clicks bring their target window to the front themselves after you approve (approving happens in Keo's window), and send nothing if Windows refuses the switch.
+
+Quick start for Notepad: **Access → Launchable applications → + Notepad** registers Notepad, allows its windows and turns on launching. Then ask Keo to open Notepad and write something.
 
 ## Voice
 

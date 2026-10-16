@@ -142,9 +142,11 @@ export type MemoryStatus = 'proposed' | 'confirmed' | 'superseded' | 'rejected';
 /**
  * user_authored  – typed directly by the user (memory view or "remember" action)
  * user_confirmed – proposed by the model, then explicitly accepted by the user
+ * user_stated    – extracted by the model from the user's own words and saved
+ *                  automatically, because a verbatim quote of the user was verified
  * model_inferred – proposed by the model and NOT yet accepted
  */
-export type MemoryProvenance = 'user_authored' | 'user_confirmed' | 'model_inferred';
+export type MemoryProvenance = 'user_authored' | 'user_confirmed' | 'user_stated' | 'model_inferred';
 
 export interface MemoryItem {
   id: string;
@@ -211,7 +213,7 @@ export interface ProjectItem {
 // ---------------------------------------------------------------------------
 
 export type RiskLevel = 'read' | 'low' | 'medium' | 'high';
-export type PermissionKey = 'desktop.observe' | 'desktop.control' | 'desktop.launch' | 'vision.export';
+export type PermissionKey = 'desktop.observe' | 'desktop.control' | 'desktop.launch' | 'vision.export' | 'web.search' | 'web.fetch';
 
 export interface CapabilityInfo {
   id: string;

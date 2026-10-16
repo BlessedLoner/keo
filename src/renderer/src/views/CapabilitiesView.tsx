@@ -13,7 +13,7 @@ export function CapabilitiesView() {
   const s = app.settings.data;
   const patch = (p: Record<string, unknown>) => invoke('settings:update', { patch: p }).catch((e) => ui.error(errText(e)));
 
-  const enableWithConfirm = async (key: 'observationEnabled' | 'desktopControlEnabled' | 'launchEnabled', on: boolean, what: string) => {
+  const enableWithConfirm = async (key: keyof typeof PERMISSION_TEXT, on: boolean, what: string) => {
     if (on && !(await ui.confirm({ title: `Enable ${what}?`, body: PERMISSION_TEXT[key], confirmLabel: 'Enable' }))) return;
     await patch({ permissions: { [key]: on } });
   };
@@ -29,6 +29,12 @@ export function CapabilitiesView() {
               <Toggle checked={s.permissions.observationEnabled} onChange={(v) => void enableWithConfirm('observationEnabled', v, 'window observation')} label={<PermLabel title="Window observation" text="List windows of allow-listed apps and capture one window at a time (each capture by Keo needs approval)." />} />
               <Toggle checked={s.permissions.desktopControlEnabled} onChange={(v) => void enableWithConfirm('desktopControlEnabled', v, 'desktop control')} label={<PermLabel title="Desktop control" text="Focus, move, type, press keys and click in allow-listed windows. Every single action requires your approval." />} />
               <Toggle checked={s.permissions.launchEnabled} onChange={(v) => void enableWithConfirm('launchEnabled', v, 'application launch')} label={<PermLabel title="Application launch" text="Start applications you registered below. Each launch requires approval." />} />
+            </div>
+
+            <div className="section-title">Web research</div>
+            <div className="card stack">
+              <Toggle checked={s.permissions.webSearchEnabled} onChange={(v) => void enableWithConfirm('webSearchEnabled', v, 'web search')} label={<PermLabel title="Web search (Brave)" text="Keo may send search queries to Brave Search with your key, without asking each time. Needs a key in Settings → Web search." />} />
+              <Toggle checked={s.permissions.webFetchEnabled} onChange={(v) => void enableWithConfirm('webFetchEnabled', v, 'web page reading')} label={<PermLabel title="Read web pages" text="Keo may download public web pages as text to research an answer. Pages on this computer or your local network are always refused." />} />
             </div>
 
             <div className="section-title">Screen-content export</div>
@@ -64,6 +70,8 @@ const PERMISSION_TEXT = {
   observationEnabled: 'Keo will be able to list windows of applications you allow-list and, with your approval, capture them. Captures are stored locally under the retention policy.',
   desktopControlEnabled: 'Keo will be able to propose keyboard, mouse and window actions in allow-listed applications. Each action shows a preview and runs only after you approve it.',
   launchEnabled: 'Keo will be able to propose starting applications from your launch list. Each launch requires approval.',
+  webSearchEnabled: 'Keo will be able to send search queries to Brave Search (using your API key and quota) whenever it decides a search helps, without asking each time. Results are treated as untrusted.',
+  webFetchEnabled: 'Keo will be able to download public web pages to read them. Websites see requests from your computer. Local and private-network addresses are always refused.',
 } as const;
 
 function PermLabel({ title, text }: { title: string; text: string }) {
@@ -111,6 +119,30 @@ function AllowedApps({ s, patch }: { s: Settings; patch: (p: Record<string, unkn
 
 function LaunchableApps({ s, patch }: { s: Settings; patch: (p: Record<string, unknown>) => Promise<unknown> }) {
   const ui = useUi();
+  const common = useInvoke('desktop:commonApps', {});
+  const quickAdd = async (a: { id: string; label: string; path: string; processName: string }) => {
+    const alreadyAllowed = s.permissions.allowedApps.some((x) => x.processName.toLowerCase() === a.processName.toLowerCase());
+    const ok = await ui.confirm({
+      title: `Let Keo launch ${a.label}?`,
+      body: (
+        <>
+          Adds <span className="mono">{a.path}</span> to your launch list{alreadyAllowed ? '' : <> and allows Keo to work with <strong>{a.processName}</strong> windows</>}
+          {s.permissions.launchEnabled ? '' : ', and turns on Application launch'}. Every launch, keystroke and click still needs your approval.
+        </>
+      ),
+      confirmLabel: 'Add',
+    });
+    if (!ok) return;
+    let id = a.id;
+    while (s.permissions.launchableApps.some((x) => x.id === id)) id = `${id}-2`;
+    await patch({
+      permissions: {
+        launchEnabled: true,
+        launchableApps: [...s.permissions.launchableApps, { id, label: a.label, path: a.path }],
+        ...(alreadyAllowed ? {} : { allowedApps: [...s.permissions.allowedApps, { processName: a.processName, label: a.label }] }),
+      },
+    });
+  };
   const add = async () => {
     try {
       const r = await invoke('desktop:pickLaunchable');
@@ -141,9 +173,18 @@ function LaunchableApps({ s, patch }: { s: Settings; patch: (p: Record<string, u
             </button>
           </div>
         ))}
-        <button className="btn sm" style={{ marginTop: 6 }} onClick={() => void add()}>
-          <Icon name="plus" size={14} /> Add application…
-        </button>
+        <div className="row wrap" style={{ marginTop: 6 }}>
+          {(common.data ?? [])
+            .filter((a) => a.available && !s.permissions.launchableApps.some((x) => x.path.toLowerCase() === a.path.toLowerCase()))
+            .map((a) => (
+              <button key={a.id} className="btn sm" onClick={() => void quickAdd(a)}>
+                <Icon name="plus" size={14} /> {a.label}
+              </button>
+            ))}
+          <button className="btn sm" onClick={() => void add()}>
+            <Icon name="plus" size={14} /> Other application…
+          </button>
+        </div>
       </div>
     </>
   );

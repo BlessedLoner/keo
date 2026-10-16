@@ -41,6 +41,8 @@ const PERMISSION_LABEL: Record<PermissionKey, string> = {
   'desktop.control': 'Desktop control',
   'desktop.launch': 'Application launch',
   'vision.export': 'Screen-content export',
+  'web.search': 'Web search',
+  'web.fetch': 'Web page reading',
 };
 
 export function permissionEnabled(p: PermissionKey, s: Settings): boolean {
@@ -51,6 +53,10 @@ export function permissionEnabled(p: PermissionKey, s: Settings): boolean {
       return s.permissions.desktopControlEnabled;
     case 'desktop.launch':
       return s.permissions.launchEnabled;
+    case 'web.search':
+      return s.permissions.webSearchEnabled;
+    case 'web.fetch':
+      return s.permissions.webFetchEnabled;
     case 'vision.export':
       // Checked per destination provider at execution time.
       return true;
@@ -97,8 +103,10 @@ export class CapabilityRegistry {
 
   availability(cap: AnyCapability, s: Settings): { available: boolean; reason: string | null } {
     for (const p of cap.permissions) {
-      if (!permissionEnabled(p, s)) return { available: false, reason: `${PERMISSION_LABEL[p]} is turned off in Capabilities.` };
+      if (!permissionEnabled(p, s)) return { available: false, reason: `${PERMISSION_LABEL[p]} is turned off in Access.` };
     }
+    const extra = cap.unavailableReason?.(s) ?? null;
+    if (extra) return { available: false, reason: extra };
     return { available: true, reason: null };
   }
 

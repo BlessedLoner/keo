@@ -99,7 +99,7 @@ export class ContextBuilder {
             .map((r) => {
               const m = r.item;
               const when = (m.confirmedAt ?? m.createdAt).slice(0, 10);
-              const how = m.provenance === 'user_authored' ? 'written by the user' : 'confirmed by the user';
+              const how = m.provenance === 'user_authored' ? 'written by the user' : m.provenance === 'user_stated' ? 'stated by the user in chat' : 'confirmed by the user';
               const conflict = m.conflictsWith.length ? ' [CONFLICTS with another confirmed memory on the same subject]' : '';
               return `- (${m.kind}${m.subject ? `, ${m.subject}` : ''}; ${how} ${when}) ${m.content}${conflict}`;
             })

@@ -112,6 +112,12 @@ export const invokeSchemas = {
 
   'desktop:listWindows': z.object({ includeAll: z.boolean().default(false) }).strict(),
   'desktop:pickLaunchable': empty,
+  'desktop:commonApps': empty,
+
+  'web:status': empty,
+  'web:setKey': z.object({ apiKey: z.string().trim().min(8).max(200) }).strict(),
+  'web:clearKey': empty,
+  'web:test': empty,
 
   'vision:capture': z.object({ hwnd: z.string().regex(/^\d{1,20}$/), pid: z.number().int().positive() }).strict(),
   'vision:list': z.object({ limit: z.number().int().min(1).max(200).default(50) }).strict(),
@@ -185,6 +191,11 @@ export interface InvokeOutputs {
   'tasks:reconcileStep': Task;
   'desktop:listWindows': { supported: boolean; reason: string | null; windows: WindowTarget[] };
   'desktop:pickLaunchable': { path: string | null };
+  'desktop:commonApps': Array<{ id: string; label: string; path: string; processName: string; available: boolean }>;
+  'web:status': WebStatus;
+  'web:setKey': WebStatus;
+  'web:clearKey': WebStatus;
+  'web:test': { ok: boolean; message: string; sample: Array<{ title: string; url: string }> };
   'vision:capture': Observation;
   'vision:list': Observation[];
   'vision:image': { dataUrl: string | null; reason: string | null };
@@ -208,6 +219,13 @@ type _Exhaustive = [InvokeChannel] extends [keyof InvokeOutputs]
 export const _contractIsExhaustive: _Exhaustive = true;
 
 export { pushChannels, INVOKE_PREFIX, type PushChannel } from './channels';
+
+export interface WebStatus {
+  hasKey: boolean;
+  searchEnabled: boolean;
+  fetchEnabled: boolean;
+  secretStorage: boolean;
+}
 
 /** Errors crossing IPC are serialised to this shape; never raw stacks. */
 export interface IpcErrorShape {

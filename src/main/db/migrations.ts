@@ -7,6 +7,8 @@ export interface Migration {
   version: number;
   name: string;
   sql: string;
+  /** Table rebuilds must run with foreign keys off so dependent rows are not cascaded away. */
+  foreignKeysOff?: boolean;
 }
 
 export const MIGRATIONS: Migration[] = [
@@ -185,6 +187,36 @@ export const MIGRATIONS: Migration[] = [
         output_tokens INTEGER NOT NULL,
         correlation_id TEXT
       );
+    `,
+  },
+  {
+    version: 2,
+    name: 'memory_user_stated_provenance',
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE memory_items_v2 (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('fact','preference','instruction','person','context')),
+        subject TEXT,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('proposed','confirmed','superseded','rejected')),
+        provenance TEXT NOT NULL CHECK (provenance IN ('user_authored','user_confirmed','user_stated','model_inferred')),
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+        source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        source_excerpt TEXT,
+        superseded_by TEXT REFERENCES memory_items(id) ON DELETE SET NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_at TEXT
+      );
+      INSERT INTO memory_items_v2 SELECT id, kind, subject, content, status, provenance, project_id, source_conversation_id,
+        source_message_id, source_excerpt, superseded_by, version, created_at, updated_at, confirmed_at FROM memory_items;
+      DROP TABLE memory_items;
+      ALTER TABLE memory_items_v2 RENAME TO memory_items;
+      CREATE INDEX idx_memory_status ON memory_items(status);
+      CREATE INDEX idx_memory_subject ON memory_items(subject);
     `,
   },
 ];

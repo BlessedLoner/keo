@@ -128,6 +128,10 @@ export class MemoryRepo {
       // A model interpretation must never become a confirmed fact on its own.
       throw new KeoError('invalid_state', 'Model-inferred memories must be confirmed by the user.');
     }
+    if (input.provenance === 'user_stated' && (!input.sourceMessageId || !input.sourceExcerpt)) {
+      // Auto-saved memories must point at the user's own message and quote it.
+      throw new KeoError('invalid_state', 'A memory learned from the user needs its source message and quote.');
+    }
     const id = newId();
     const now = nowIso();
     this.db.run(
@@ -174,6 +178,16 @@ export class MemoryRepo {
       ]);
     });
     return this.require(id);
+  }
+
+  /** An existing confirmed/proposed memory with the same normalised content (and subject, if given). */
+  findSame(content: string, subject: string | null): MemoryItem | null {
+    const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const target = norm(content);
+    const subj = normalizeSubject(subject);
+    const rows = this.db.all<Row>("SELECT * FROM memory_items WHERE status IN ('confirmed','proposed') ORDER BY updated_at DESC LIMIT 2000");
+    const hit = rows.find((r) => norm(r.content) === target && (!subj || r.subject === subj));
+    return hit ? this.toItem(hit) : null;
   }
 
   confirm(id: string): MemoryItem {
@@ -253,7 +267,8 @@ export class MemoryRepo {
       }
       const subj = d.r.subject ?? '';
       if (subj && qTerms.some((q) => subj.includes(q))) s += 0.5;
-      const isProfile = d.r.kind === 'preference' || d.r.kind === 'instruction';
+      // Standing preferences/instructions and the user's own profile facts (user.*) are always weakly relevant.
+      const isProfile = d.r.kind === 'preference' || d.r.kind === 'instruction' || (d.r.subject ?? '').startsWith('user.');
       if (s === 0 && !isProfile) continue;
       if (s === 0 && isProfile) s = 0.05; // standing preferences are always weakly relevant
       if (opts.projectId && d.r.project_id === opts.projectId) s *= 1.3;

@@ -3,6 +3,7 @@ import type { InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc
 import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
 import type { Services } from '../services';
+import fs from 'node:fs';
 import path from 'node:path';
 
 export type Handler<C extends InvokeChannel> = (input: ParsedInput<C>) => Promise<InvokeOutputs[C]> | InvokeOutputs[C];
@@ -23,6 +24,10 @@ export interface HostHooks {
 export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const changed = (channel: string, payload: unknown) => s.emit(channel, payload);
   const abortAfter = (ms: number) => AbortSignal.timeout(ms);
+  const webStatus = () => {
+    const st = s.settings.get();
+    return { hasKey: s.secrets.has('brave'), searchEnabled: st.permissions.webSearchEnabled, fetchEnabled: st.permissions.webFetchEnabled, secretStorage: s.secrets.available() };
+  };
 
   return {
     'app:info': () => ({
@@ -42,6 +47,9 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       p('observationEnabled', before.permissions.observationEnabled, next.permissions.observationEnabled);
       p('desktopControlEnabled', before.permissions.desktopControlEnabled, next.permissions.desktopControlEnabled);
       p('launchEnabled', before.permissions.launchEnabled, next.permissions.launchEnabled);
+      p('webSearchEnabled', before.permissions.webSearchEnabled, next.permissions.webSearchEnabled);
+      p('webFetchEnabled', before.permissions.webFetchEnabled, next.permissions.webFetchEnabled);
+      p('memoryLearning', before.memory.learning, next.memory.learning);
       for (const k of ['anthropic', 'openai', 'openrouter', 'local'] as const) p(`visionExport.${k}`, before.permissions.visionExport[k], next.permissions.visionExport[k]);
       p('audioExportConsent', before.voice.audioExportConsent, next.voice.audioExportConsent);
       if (next.activeProvider && !s.providers.has(next.activeProvider)) {
@@ -216,6 +224,33 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { supported: true, reason: null, windows: await s.desktop.listWindows(settings, includeAll) };
     },
     'desktop:pickLaunchable': async () => ({ path: await host.pickExecutable() }),
+    'desktop:commonApps': () => {
+      const sys = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+      return [
+        { id: 'notepad', label: 'Notepad', path: path.join(sys, 'notepad.exe'), processName: 'Notepad' },
+        { id: 'paint', label: 'Paint', path: path.join(sys, 'mspaint.exe'), processName: 'mspaint' },
+      ].map((a) => ({ ...a, available: fs.existsSync(a.path) }));
+    },
+
+    'web:status': () => webStatus(),
+    'web:setKey': ({ apiKey }) => {
+      s.secrets.set('brave', apiKey.trim());
+      s.log.info('web.key_set', {});
+      return webStatus();
+    },
+    'web:clearKey': () => {
+      s.secrets.delete('brave');
+      s.log.info('web.key_cleared', {});
+      return webStatus();
+    },
+    'web:test': async () => {
+      try {
+        const r = await s.web.search('Keo desktop assistant test', { count: 3, safesearch: 'moderate' }, abortAfter(20000));
+        return { ok: true, message: `Brave Search answered with ${r.length} result(s). This used one query from your plan.`, sample: r.slice(0, 3).map((x) => ({ title: x.title, url: x.url })) };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e), sample: [] };
+      }
+    },
 
     'vision:capture': async ({ hwnd, pid }) => {
       const settings = s.settings.get();

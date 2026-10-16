@@ -106,6 +106,10 @@ export const SettingsSchema = z
         observationEnabled: z.boolean().default(false),
         desktopControlEnabled: z.boolean().default(false),
         launchEnabled: z.boolean().default(false),
+        /** Send search queries to Brave Search with the user's key. */
+        webSearchEnabled: z.boolean().default(false),
+        /** Download public web pages as text (private networks always refused). */
+        webFetchEnabled: z.boolean().default(false),
         allowedApps: z.array(AllowedApp).max(100).default([]),
         launchableApps: z.array(LaunchableApp).max(50).default([]),
         visionExport: z
@@ -131,6 +135,24 @@ export const SettingsSchema = z
         speakResponses: z.boolean().default(false),
         /** Explicit consent to send recorded audio to the configured STT provider. */
         audioExportConsent: z.boolean().default(false),
+      })
+      .strict()
+      .prefault({}),
+    web: z
+      .object({
+        safesearch: z.enum(['off', 'moderate', 'strict']).default('moderate'),
+        resultsPerSearch: z.number().int().min(1).max(20).default(8),
+      })
+      .strict()
+      .prefault({}),
+    memory: z
+      .object({
+        /**
+         * from_user_words: when the model proposes a memory whose evidence is a
+         * verified verbatim quote of the user, save it as confirmed (provenance
+         * user_stated). ask: always leave proposals for the user to confirm.
+         */
+        learning: z.enum(['from_user_words', 'ask']).default('from_user_words'),
       })
       .strict()
       .prefault({}),

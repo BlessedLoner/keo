@@ -12,6 +12,7 @@ type Tab = 'confirmed' | 'proposed' | 'superseded' | 'rejected';
 const PROVENANCE: Record<MemoryItem['provenance'], string> = {
   user_authored: 'Written by you',
   user_confirmed: 'Proposed by Keo · confirmed by you',
+  user_stated: 'Learned from your words in chat',
   model_inferred: 'Inferred by Keo · not confirmed',
 };
 

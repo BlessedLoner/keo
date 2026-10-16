@@ -59,7 +59,7 @@ Execution (`TaskOrchestrator`):
 - Only windows of **allow-listed process names** are listed to the model or can be targeted.
 - Targets are `{hwnd, pid, processName}`. Immediately before every action `DesktopService.resolve` re-reads the window and fails with `target_gone` / `target_changed` / `target_not_allowed`. It never substitutes another window.
 - The helper refuses keyboard and click input unless the target is the foreground window at that instant, refuses clicks outside the client area, and refuses clicks where another window covers the point. These refusals report `dispatched: no`.
-- Key combinations exclude the Windows key. Text and key presses require approval every time.
+- Key combinations exclude the Windows key. Text and key presses require approval every time. Because approval is given in Keo's own window, input actions first bring the re-validated target to the front as part of the approved operation, confirm it is the foreground window, and only then send input; if Windows refuses the switch the step fails with `focus_failed` and nothing is sent.
 - Launch is limited to executables the user registered through a file picker; no arguments, no shell (`shell: false`).
 - The helper is a fixed script embedded in Keo, rewritten from the bundle at each start and run with `-ExecutionPolicy Bypass` **for that child process only** (no system policy change). It is not a shell for the model.
 - Not implemented on purpose: privilege elevation, UI Automation of other processes' internals, credential entry, stealth/background input, remote control.
@@ -73,6 +73,13 @@ Execution (`TaskOrchestrator`):
 - Images are retained for a configurable number of hours (default 24) and then deleted; metadata stays for provenance. Image bytes never enter logs or the audit trail.
 - Screen text and analyses are labelled untrusted when returned to the model.
 
+## 5a. Web research
+
+- `web.search` sends the query (only) to `api.search.brave.com` with the user's Brave key; `web.fetch_page` downloads public pages. Both are off by default (Access → Web research) and need no per-call approval once enabled; the search capability is hidden from the model until a key is stored.
+- Page fetching accepts only `http`/`https`, refuses embedded credentials, `localhost`, `.local`/`.internal` names, and any host that resolves to loopback, private (RFC 1918), CGNAT, link-local (incl. cloud metadata 169.254.169.254), multicast, ULA or unspecified addresses. Redirects are followed manually (max 4) and every hop is re-checked. Responses are limited to 2 MB and text-like content types, converted to plain text (scripts/styles removed, nothing executed) and capped at 20,000 characters.
+- Residual risk: DNS rebinding between the check and the connection is not fully prevented.
+- Search results and page text are returned to the model marked `untrusted_external_content`.
+
 ## 6. Prompt-injection posture
 
 - The system prompt instructs the model that tool outputs, window titles, screenshots and documents are data, not instructions.
@@ -83,7 +90,7 @@ Execution (`TaskOrchestrator`):
 
 - API keys (Anthropic, OpenAI, OpenRouter) are encrypted with Electron `safeStorage` (Windows DPAPI, per user) and stored in Keo's profile, one slot per provider. If OS encryption is unavailable, Keo refuses to store keys. Keys are never returned to the renderer.
 - Logs (`src/main/logging`) redact credential patterns and drop content-bearing fields (`prompt`, `content`, `text`, `image`, `audio`, `apiKey`, `authorization`, …). Conversations, prompts, screenshots and audio are not logged; message sizes and ids are.
-- Memory refuses content that looks like a credential. Model-inferred memories cannot be stored as confirmed.
+- Memory refuses content that looks like a credential. Model-inferred memories cannot be stored as confirmed. With memory learning on, a model proposal is saved directly only if its evidence is found word-for-word in one of the user's recent messages in that conversation (provenance `user_stated`, linked to that message); otherwise it stays a proposal. Learning can be switched to *ask first*.
 - Audio: push-to-talk only, kept in memory, sent only to the configured STT provider after explicit consent; the microphone stream is released when recording stops.
 
 ## 8. Data

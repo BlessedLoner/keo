@@ -301,6 +301,9 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   }
   await js(`document.querySelector('nav.rail button[title^="Settings"]')?.click();`);
   await wait(400);
+  await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Web search'))?.click();`);
+  await wait(700);
+  fs.writeFileSync(path.join(dir, 'settings-web.png'), (await win.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Appearance'))?.click();`);
   await wait(900);
   fs.writeFileSync(path.join(dir, 'appearance.png'), (await win.webContents.capturePage()).toPNG());

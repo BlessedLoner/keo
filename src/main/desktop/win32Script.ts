@@ -54,6 +54,8 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -108,7 +110,23 @@ public static class KeoWin {
     Send(new List<INPUT> { Key(0x12, 0, 0), Key(0x12, 0, 2) });
     BringWindowToTop(h);
     SetForegroundWindow(h);
-    Thread.Sleep(120);
+    Thread.Sleep(100);
+    if (GetForegroundWindow() != h) {
+      // Fallback: share input state with the current foreground thread, which
+      // Windows permits to hand over the foreground.
+      uint pidUnused;
+      uint fgThread = GetWindowThreadProcessId(GetForegroundWindow(), out pidUnused);
+      uint targetThread = GetWindowThreadProcessId(h, out pidUnused);
+      uint me = GetCurrentThreadId();
+      AttachThreadInput(me, fgThread, true);
+      AttachThreadInput(me, targetThread, true);
+      BringWindowToTop(h);
+      ShowWindow(h, 5);
+      SetForegroundWindow(h);
+      AttachThreadInput(me, targetThread, false);
+      AttachThreadInput(me, fgThread, false);
+      Thread.Sleep(150);
+    }
     return GetForegroundWindow() == h;
   }
 

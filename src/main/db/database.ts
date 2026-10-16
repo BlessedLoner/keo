@@ -81,14 +81,24 @@ export class Database {
     }
     for (const m of migrations) {
       if (m.version <= from) continue;
-      this.tx(() => {
-        this.db.exec(m.sql);
-        this.run('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
-          m.version,
-          m.name,
-          nowIso(),
-        ]);
-      });
+      // PRAGMA foreign_keys is a no-op inside a transaction, so toggle it outside.
+      if (m.foreignKeysOff) this.db.exec('PRAGMA foreign_keys = OFF;');
+      try {
+        this.tx(() => {
+          this.db.exec(m.sql);
+          if (m.foreignKeysOff) {
+            const broken = this.all('PRAGMA foreign_key_check');
+            if (broken.length) throw new KeoError('migration_failed', `Migration ${m.version} would break ${broken.length} references.`);
+          }
+          this.run('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
+            m.version,
+            m.name,
+            nowIso(),
+          ]);
+        });
+      } finally {
+        if (m.foreignKeysOff) this.db.exec('PRAGMA foreign_keys = ON;');
+      }
     }
     return { from, to: this.schemaVersion() };
   }

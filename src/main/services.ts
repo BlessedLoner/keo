@@ -23,6 +23,8 @@ import { TaskOrchestrator } from './tasks/orchestrator';
 import { KeoError } from './util/errors';
 import { VisionService, type ImageTools, type WindowCaptureSource } from './vision/visionService';
 import { VoiceService } from './voice/voiceService';
+import { WebService } from './web/webService';
+import { findQuote } from './agent/quotes';
 import type { AgentEvent } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
@@ -33,6 +35,9 @@ export interface ServiceDeps {
   captureSource: WindowCaptureSource;
   imageTools: ImageTools;
   testProvider?: TestProvider | null;
+  /** Override the web service (tests inject fake fetch/DNS). */
+  web?: WebService;
+  focusSettleMs?: number;
   logEcho?: boolean;
   logger?: Logger;
 }
@@ -57,6 +62,7 @@ export class Services {
   readonly desktop: DesktopService;
   readonly vision: VisionService;
   readonly voice: VoiceService;
+  readonly web: WebService;
   readonly agent: AgentService;
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
@@ -82,6 +88,7 @@ export class Services {
     this.desktop = new DesktopService(d.desktopBackend);
     this.vision = new VisionService(this.observations, this.desktop, d.captureSource, d.imageTools, this.providers, d.profile.observationsDir, this.log);
     this.voice = new VoiceService(this.providers.openai, getSettings, () => this.secrets.has('openai'), this.log);
+    this.web = d.web ?? new WebService(() => this.secrets.get('brave'), this.log);
 
     for (const cap of builtinCapabilities({
       memory: this.memory,
@@ -95,6 +102,13 @@ export class Services {
       },
       activeProviderId: () => getSettings().activeProvider,
       proposePlan: (plan, ctx) => this.proposePlan(plan, ctx),
+      web: this.web,
+      findUserQuote: (conversationId, quote) => {
+        const msgs = this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user');
+        const hit = findQuote(msgs.map((m) => ({ id: m.id, text: m.content })), quote);
+        return hit ? { messageId: hit } : null;
+      },
+      focusSettleMs: d.focusSettleMs,
     })) {
       this.registry.register(cap);
     }

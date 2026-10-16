@@ -46,13 +46,14 @@ All commands below were run in this repository on Windows 11 (10.0.22621) with N
 |---|---|
 | `npm run typecheck` (main+preload+shared, renderer) | pass, 0 errors |
 | `npm run lint` | pass, 0 problems |
-| `npm test` (Vitest) | **82/82 passed** in 7 files |
+| `npm test` (Vitest) | **98/98 passed** in 8 files |
 | `npm run build` | pass (main 233 kB, preload 2.7 kB with only `require("electron")`, renderer 320 kB minified) |
 | `npm run smoke` — real Electron, disposable profile, two launches | **17/17 passed** |
 | Same smoke hooks under `electron-vite dev` (dev server + HMR CSP) | all checks passed |
 | Same smoke hooks against packaged `release/win-unpacked/Keo.exe` | all checks passed (profile `default`) |
 | `electron-builder --win --dir` and `--win` | unpacked app and `release/Keo-Setup-0.1.0.exe` built; version resources set; **NotSigned** |
 | Win32 helper, read-only: `ping`, `list` | helper compiled (~11 s first start), listed windows with all fields; an input command to a non-existent window was refused with `target_gone` before sending anything |
+| Real Windows focus → type check | With two windows owned by the check itself: typing into the background window was refused (`not_foreground`, the error first reported from use), the helper brought it to the front, and the typed text arrived exactly |
 | Visual review | screenshots of every view captured from the real app with synthetic data and reviewed; two UI bugs found and fixed (pending approvals not persisted on the message; memory badge not refreshed) |
 | `npm audit --omit=dev` | 0 vulnerabilities in shipped dependencies |
 
@@ -63,6 +64,7 @@ What the automated suites cover:
 - **Tasks:** invalid transitions rejected; approval required and hash-bound; denial skips dependents; plan approval requires every reviewed hash; dependency failure propagation; bounded retries; consequential timeout ⇒ uncertain and never retried; cancellation (consequential ⇒ uncertain, safe ⇒ cancelled); duplicate prevention via receipts; finished-receipt reuse; reconciliation; retry needs fresh approval; restart recovery (uncertain / re-authorize / safe requeue).
 - **Agent & security:** streaming + usage; bounded context; missing provider ⇒ honest error; empty response ⇒ error; cancel + retry; unknown capability / extra params / malformed args rejected and audited; model text claiming approval cannot bypass it; denied actions never run; prompt-injected window titles cannot authorize or target non-allow-listed apps; untrusted-output marking; disabled permissions hide tools; truncated tool calls not executed; memory proposals carry evidence; plans validated and non-executable until approved; cancelling a turn cancels its pending approvals; IPC sender/origin/frame validation; unknown channels and invalid inputs rejected; keys never returned to the renderer; permission changes audited; registry contract completeness; consequential-without-approval registration refused; redaction; **log files contain no keys or message text**; production CSP; loopback-only local provider.
 - **Vision/desktop:** identity revalidation (gone / changed pid / not allowed / hwnd reuse); fresh captures distinct with provenance; failed captures create no observation; minimized and disabled observation refused; stored observations marked `fresh:false`; export permission per destination; retention purge keeps metadata; blank-frame detection. **No real input is sent in any automated test** (fake backend records calls; assertions check it stays empty).
+- **Desktop/web/memory additions:** focus-before-input (and nothing sent when focus is refused), `notepad.exe`≡`Notepad`, launch errors list registered ids, invented handles reported clearly; Brave query/header/parse, auth/quota/no-key errors, private-destination refusal incl. DNS and redirects, text extraction, capability hidden until key + permission; memory saved only from verbatim user quotes, proposals otherwise, *ask first* setting, duplicate detection, profile facts always in context; v1→v2 migration preserves memories/revisions and keeps foreign keys enforced.
 - **Providers (no network):** OpenRouter (separate https-only provider with its own key; `max_tokens`, no `stream_options`; tool-call assembly; usage; `/key` check; reported capabilities never override declared ones); Anthropic request construction (model, effort, tools with eager streaming, refusal fallback beta, no disabled thinking), streaming deltas/phases, usage incl. cache tokens, native content (thinking blocks) echoed unchanged, tool-result mapping; SDK error mapping (auth, rate limit, quota, network, cancel, malformed) for Anthropic and OpenAI.
 
 ## 4. Integrations that require configuration (not live-verified)
@@ -71,6 +73,7 @@ What the automated suites cover:
 |---|---|
 | Anthropic API | Implemented with the official SDK; request shape tested with a fake client. **No live call was made** (no key here; live paid calls were out of scope). Add a key in Settings → Providers and use *Test connection* (free model listing). |
 | OpenAI chat | Implemented with the official SDK; not live-tested. Model id and capabilities are user-declared. |
+| Brave Search / page reading | Implemented; request shape, error mapping, SSRF guards, redirects, HTML-to-text and untrusted marking tested with fake fetch/DNS. **Not live-tested** (no key used here). |
 | OpenRouter | Implemented; request body, streaming/tool-call assembly, usage and the key check are tested with a fake client. **Not live-tested.** OpenRouter-reported model capabilities are shown as hints only. |
 | Local OpenAI-compatible server | Implemented; not tested against a running Ollama/LM Studio here. |
 | Speech-to-text (OpenAI) | Implemented, consent-gated; not live-tested; microphone capture not exercised automatically. |
