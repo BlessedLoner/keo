@@ -347,3 +347,21 @@ html.companion-root body, html.command-root body { overflow: hidden; }
 .command-input { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
 .command-input textarea { flex: 1; resize: none; border: 1px solid var(--line-strong); background: var(--bg-elev); border-radius: 10px; padding: 9px 11px; outline: none; max-height: 120px; }
 .command-input textarea:focus { border-color: rgba(61, 214, 255, 0.6); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ---- approval levels & live chats ---- */
+.choice-list { display: flex; flex-direction: column; gap: 8px; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; background: var(--bg-elev); }
+.choice:hover { background: var(--bg-hover); }
+.choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+.choice input { margin-top: 3px; accent-color: var(--accent); }
+.livechat { margin-bottom: 8px; }
+.livechat.waiting_user { border-color: rgba(255, 191, 71, 0.55); }
+.livechat.ended { opacity: 0.7; }
+.livechat-transcript { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
+.lc-line { display: flex; flex-direction: column; max-width: 80%; padding: 5px 9px; border-radius: 10px; background: var(--bg-elev-2); font-size: 13px; }
+.lc-line.keo, .lc-line.you { align-self: flex-end; background: var(--accent-soft); }
+.lc-line.note { align-self: center; max-width: 95%; background: transparent; color: var(--text-3); font-size: 12px; text-align: center; }
+.lc-who { font-size: 11px; color: var(--text-3); }
+.lc-line.note .lc-who { display: none; }
+.lc-text { white-space: pre-wrap; word-break: break-word; }
+.chip.level { cursor: pointer; }

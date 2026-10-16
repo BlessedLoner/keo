@@ -70,6 +70,12 @@ export function ApprovalCard({ task, step }: { task: Task; step: TaskStep }) {
             <dd className="export">{step.preview.dataExport}</dd>
           </>
         )}
+        {step.preview.alwaysAskReason && (
+          <>
+            <dt>Always asks</dt>
+            <dd>{step.preview.alwaysAskReason}</dd>
+          </>
+        )}
       </dl>
       {step.preview.consequences.length > 0 && (
         <ul>

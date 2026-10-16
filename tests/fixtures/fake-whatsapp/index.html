@@ -76,6 +76,7 @@
   }
   function renderMsgs() {
     const chat = chats.find((c) => c.title === window.__state.open);
+    window.__state.lastMsg = chat ? chat.messages[chat.messages.length - 1].text : null;
     $('msgs').innerHTML = '';
     if (!chat) return;
     chat.messages.forEach((m) => {
@@ -97,6 +98,12 @@
     $('compose').innerText = '';
     renderMsgs();
   });
+  window.__receive = (from, text) => {
+    const chat = chats.find((c) => c.title === from);
+    if (!chat) return;
+    chat.messages.push({ from: 'them', text });
+    if (window.__state.open === from) renderMsgs();
+  };
   function selectTab(t) {
     window.__state.tab = t;
     $('tChats').setAttribute('aria-selected', String(t === 'chats'));

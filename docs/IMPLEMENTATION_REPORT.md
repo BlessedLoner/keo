@@ -83,6 +83,17 @@ Run on Windows 11 (10.0.22621), Electron 44.7.2.
 
 Bugs found by the real e2e and fixed: Chromium names list items with their concatenated text (“Daniel Okafor10:40”) → trailing time stripped; message rows are full-width so direction is now taken from the bubble's content position; an e2e step that re-clicked the wrong tab.
 
+### Approval levels and live chats
+
+| Check | Result |
+|---|---|
+| `npm run check` | pass; **158/158 tests** in 10 files (13 new in `tests/livechat.test.ts`: one-approval start, autonomous reply, price question paused despite a model reply, answer used, injection ignored, "are you a bot?" asked, reply limit, idle wait + window restore, answer provenance, message arriving mid-send not swallowed, Stop everything, approval levels incl. named-contact rule, raw click and Enter always ask) |
+| `npm run e2e:desktop` (real UI Automation, offline test provider as reply model) | **16/16**: live chat starts after one approval, replies on its own, pauses on a price question without sending, continues with the user's answer, sends nothing after stop |
+| `npm run smoke` | 34/34 |
+| Real WhatsApp Web (read-only probes, earlier) | search, chat list, header, message text and directions recognised; live chat **not** run against your WhatsApp |
+
+Bug found by the real e2e and fixed: a message arriving while Keo was verifying its own send was marked handled; now only messages up to Keo's reply count as handled.
+
 ## 4. Integrations that require configuration (not live-verified)
 
 | Integration | Status |

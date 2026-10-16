@@ -16,9 +16,28 @@ app.whenReady().then(async () => {
   const write = async () => {
     if (win.isDestroyed()) return;
     const st = await win.webContents.executeJavaScript('JSON.stringify(window.__state)').catch(() => '{}');
-    fs.writeFileSync(stateFile, JSON.stringify({ pid: process.pid, ...JSON.parse(st) }));
+    // Atomic replace, so the test never reads a half-written file.
+    fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify({ pid: process.pid, ...JSON.parse(st) }));
+    fs.renameSync(`${stateFile}.tmp`, stateFile);
   };
   await write();
   setInterval(() => void write(), 250);
+  // Test-driven incoming messages: FAKE_WA_INBOX holds [{ from, text }, …]; new entries arrive as messages.
+  const inbox = process.env.FAKE_WA_INBOX;
+  let delivered = 0;
+  if (inbox) {
+    setInterval(() => {
+      let list;
+      try {
+        list = JSON.parse(fs.readFileSync(inbox, 'utf8'));
+      } catch {
+        return;
+      }
+      for (; delivered < list.length; delivered++) {
+        const m = list[delivered];
+        void win.webContents.executeJavaScript(`window.__receive(${JSON.stringify(m.from)}, ${JSON.stringify(m.text)})`);
+      }
+    }, 300);
+  }
   setTimeout(() => app.exit(0), 240000); // never outlive the test
 });

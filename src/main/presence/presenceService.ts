@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentPhase, Presence, PresenceState } from '../../shared/domain';
+import type { AgentEvent, AgentPhase, AutonomyLevel, Presence, PresenceState } from '../../shared/domain';
 import type { CapabilityRegistry } from '../capabilities/registry';
 import type { StepActivity } from '../tasks/orchestrator';
 
@@ -24,6 +24,8 @@ export class PresenceService {
   private wake: WakeStatus = { enabled: false, listening: false, muted: false, status: 'off', message: null, phrase: null };
   private approvals: { count: number; first: { capabilityId: string; app: string | null } | null } = { count: 0, first: null };
   private grants = 0;
+  private live: Presence['liveChats'] = { active: 0, waiting: 0, firstWaiting: null };
+  private autonomy: AutonomyLevel = 'always_ask';
   private transient: { state: 'cancelled' | 'error'; until: number } | null = null;
   private timer: NodeJS.Timeout | null = null;
   private last = '';
@@ -69,6 +71,17 @@ export class PresenceService {
     this.schedule();
   }
 
+  /** Live chat sessions: running count, and the first contact waiting for the user. */
+  setLiveChats(l: Presence['liveChats']): void {
+    this.live = { ...l };
+    this.schedule();
+  }
+
+  setAutonomy(level: AutonomyLevel): void {
+    this.autonomy = level;
+    this.schedule();
+  }
+
   reportVoice(v: VoiceReport): void {
     this.voice = { ...v };
     this.schedule();
@@ -111,6 +124,9 @@ export class PresenceService {
     } else if (this.approvals.count > 0) {
       state = 'awaiting_approval';
       activity = this.approvals.first ? `Needs your approval: ${label(this.approvals.first.capabilityId, this.approvals.first.app)}` : 'Needs your approval';
+    } else if (this.live.waiting > 0) {
+      state = 'awaiting_approval';
+      activity = this.live.firstWaiting ? `${this.live.firstWaiting} needs your answer` : 'A live chat needs your answer';
     } else if (this.voice.recording || this.wake.status === 'capturing') {
       state = 'listening';
       activity = 'Listening…';
@@ -139,6 +155,7 @@ export class PresenceService {
       state = 'cancelled';
       activity = 'Stopped';
     }
+    if (state === 'idle' && this.live.active > 0) activity = this.live.active === 1 ? 'Live chat running' : `${this.live.active} live chats running`;
     return {
       state,
       activity,
@@ -147,6 +164,8 @@ export class PresenceService {
       runningSteps: this.steps.size,
       wake: { ...this.wake },
       grants: this.grants,
+      liveChats: { ...this.live },
+      autonomy: this.autonomy,
       updatedAt: new Date(t).toISOString(),
     };
   }

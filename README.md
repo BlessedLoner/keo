@@ -108,6 +108,28 @@ Allow WhatsApp (or your browser for WhatsApp Web) in **Access**. Then:
 
 There is no background or ongoing auto-replying: every message is drafted, shown and approved by you. Keo has no official WhatsApp API (none exists for personal accounts); it works through the visible app like you do, so a WhatsApp redesign can make it report “couldn't find the search box” until the adapter is updated.
 
+## Approval levels
+
+**Settings → Approvals & live chat** sets how much Keo may do without asking:
+
+- **Always ask** (default) — every action that changes something waits for *Approve*.
+- **Ask only for important things** — looking around, opening chats, switching tabs/menus, scrolling and reading run on their own; typing, sending, launching apps and other buttons ask.
+- **Hands-free** — for voice use: Keo carries out what you asked without stopping at each step, including sending messages to people **you named yourself** in the conversation.
+
+At every level these still ask: payments and purchases, deleting, buttons like Send/Delete/Buy/Confirm, keys like Enter/Delete, clicks on raw screen positions, and messaging anyone you did not name. Keo never types passwords. Automatic approvals are recorded in the audit log (`approved_by_policy`). When a level other than *Always ask* is on, a chip in the title bar shows it — one click returns to *Always ask*.
+
+## Live chats (WhatsApp)
+
+Ask e.g. *“chat with Ma Glo on WhatsApp until I say stop, and tell me if she needs me”* or *“reply to John’s message and keep the conversation going”*. You approve once (contact, goal, limits); Keo then:
+
+- watches that chat and replies in your voice, using only what you told it;
+- **pauses and asks you** about money and prices, payments, meetings and times, calls and files, personal or urgent matters, “are you a bot?” (Keo never denies being an assistant), your own extra topics, or whenever it is unsure — you get a Windows notification, the companion shows it, and Keo says it out loud if spoken replies are on;
+- continues when you answer by typing or voice (*“tell her it’s $50 each, I can give a discount”*) — or in **Tasks → Live chats**, which also shows the conversation and has Pause / Resume / Stop;
+- types only after you have been idle for a few seconds, then gives your previous window back;
+- ends on **stop** (say it, the title-bar/companion *Stop*, or Tasks), after the time limit (default 2 h), the reply limit (default 40), or 30 quiet minutes.
+
+The contact's messages are untrusted: they can only ever lead to a reply in that chat or a question for you — never to any other action, and an “answer” is accepted only in your own words. Keep WhatsApp visible (a second monitor is ideal); when it is covered or minimised Keo checks it only while you are idle. Up to 3 live chats can run at once.
+
 ## Voice, wake word, command bar and companion
 
 **Settings → Voice & shortcuts**
@@ -126,7 +148,7 @@ npm run lint        # ESLint (incl. bans on dangerouslySetInnerHTML/eval and Nod
 npm test            # Vitest: unit + integration with fake providers/desktop (no network, no real input)
 npm run build       # production bundles (electron-vite)
 npm run smoke       # builds, then launches the real app twice in a disposable profile (incl. companion/command bar/shortcut lifecycle)
-npm run e2e:desktop # builds, then drives a disposable WhatsApp-like test app through real UI Automation (moves/clicks inside that test window only)
+npm run e2e:desktop # builds, then drives a disposable WhatsApp-like test app through real UI Automation, incl. a live chat (moves/clicks inside that test window only; offline test provider)
 npm run check       # typecheck + lint + test + build
 ```
 

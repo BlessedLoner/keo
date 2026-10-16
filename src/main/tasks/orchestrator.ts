@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { Task, TaskOrigin, TaskStep } from '../../shared/domain';
+import type { AutonomyLevel, Task, TaskOrigin, TaskStep } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { Admission, CapabilityRegistry } from '../capabilities/registry';
 import { CapabilityError } from '../capabilities/types';
@@ -98,7 +98,13 @@ export class TaskOrchestrator {
       }
       // A user-created navigation grant may cover low-risk steps in its window.
       const grant = s.preview.grantable ? this.grantMatcher?.(s) ?? null : null;
-      if (grant) {
+      // The user's approval-level setting may approve routine/important steps (never 'always_ask' ones).
+      const policy = grant ? null : (this.policyMatcher?.(s, task) ?? null);
+      if (policy) {
+        this.repo.updateStep(s.id, { state: 'awaiting_authorization' });
+        this.repo.updateStep(s.id, { state: 'ready', approval: { decision: 'approved', decidedAt: nowIso(), inputHash: s.inputHash, policy } });
+        this.audit.record({ kind: 'permission.decision', decision: 'approved_by_policy', capabilityId: s.capabilityId, taskId, detail: { level: policy, tier: s.preview.autoTier ?? null } });
+      } else if (grant) {
         this.repo.updateStep(s.id, { state: 'awaiting_authorization' });
         this.repo.updateStep(s.id, { state: 'ready', approval: { decision: 'approved', decidedAt: nowIso(), inputHash: s.inputHash, grantId: grant } });
         this.audit.record({ kind: 'permission.decision', decision: 'approved_by_grant', capabilityId: s.capabilityId, taskId, detail: { grantId: grant } });
@@ -111,6 +117,9 @@ export class TaskOrchestrator {
 
   /** Returns a grant id that authorizes this step, consuming one use, or null. */
   grantMatcher: ((step: TaskStep) => string | null) | null = null;
+
+  /** Returns the approval level that authorizes this step without asking, or null. */
+  policyMatcher: ((step: TaskStep, task: Task) => AutonomyLevel | null) | null = null;
 
   onActivity(fn: (a: StepActivity) => void): () => void {
     this.events.on('activity', fn);

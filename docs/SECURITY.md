@@ -88,6 +88,22 @@ Execution (`TaskOrchestrator`):
 
 - `browser.read_page` reads only an allow-listed browser's active window via UIA (address bar, document title, selection, visible text, bounded). No extension, no debugging port, no cookies or other tabs. URLs are normalised; page text is untrusted.
 
+### 4d2. Approval levels
+
+- `settings.autonomy.level`: `always_ask` (default) | `important_only` | `hands_free`. Applied in one place (`TaskOrchestrator.policyMatcher`, wired in `services.ts`) next to navigation grants; every automatic approval is audited as `approved_by_policy` with the level and tier.
+- Each admitted action carries a tier in its preview (`Capability.autonomy`, default by risk): `routine` (auto under important_only and hands_free), `important` (auto only under hands_free), `always_ask` (never automatic). `always_ask`: raw coordinate clicks (`desktop.click`), sensitive controls (`isSensitiveControl`: send, delete, pay, buy, confirm, save, upload, sign in, …), submit/destroy/close keys (Enter, Delete, Backspace, Alt+F4, Ctrl+W/Q/S/P/D…), unidentifiable controls.
+- Actions toward a person (`whatsapp.send_message`, `whatsapp.live_chat_start`) set `mustBeNamed`: they run automatically only when that name appears, as whole words, in the user's own messages of the same conversation — never a name taken from screen or chat content.
+- Only tasks from a conversation qualify (not plans); password fields are refused regardless.
+
+### 4f. Live chats
+
+- One approval of `whatsapp.live_chat_start` (contact, goal, user instructions, limits, provider destination shown) authorizes replies **in that chat only**, bounded by time (≤ 12 h, default 2 h), replies (≤ 300, default 40), silence (default 30 min), at most 3 sessions; Stop everything, the companion, Tasks or a spoken "stop" end it; sessions live in memory and end when Keo closes.
+- The reply model is called **without tools** and must return a JSON decision (`reply | ask_user | wait | end`); unparsable output is treated as `ask_user`. The chat is passed as an untrusted block. Built-in attention topics (money, codes/passwords/account numbers, urgent matters, meetings/places/times, calls/files, emotional topics, "are you a bot?") plus user topics force `ask_user` unless the user's own guidance covers them; identity, secrets and emergencies are only settled right after the user answered.
+- `whatsapp.live_chat_answer` accepts text only when it is found in the user's own messages (provenance), so the contact cannot inject "answers"; the UI answer box is user-originated.
+- Every send goes through the verified WhatsApp send path (recipient header and draft re-checked, on-screen confirmation, duplicate guard). An unconfirmed send pauses the session and tells the user — never retried.
+- Typing waits for user idleness (`GetLastInputInfo`, default 4 s) and restores the previous foreground window. A covered/minimised browser (`CoveredShare`) is not trusted to be current; it is refreshed only while the user is idle (≤ every 45 s or when the chat list shows unread messages).
+- Disclosure: Keo does not announce itself; it never denies being an assistant and always asks the user when a contact asks.
+
 ## 4e. Voice activation, command bar and companion
 
 - Wake word uses the local Windows (SAPI) recognizer through the fixed helper. Off by default; while on, audio is processed on this PC only and non-matching speech (including a competing dictation grammar used to reject near-misses) is discarded, never stored or sent. Command capture after the wake phrase is local, or OpenAI transcription only when that provider is configured **and** the transcription consent is given. Listening pauses during Keo's speech; muting is immediate.

@@ -59,6 +59,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }),
     [],
   );
+  // Live chat alerts are spoken from the main window only (no duplicates from other windows).
+  const voiceSettings = settings.data?.voice;
+  useEffect(
+    () =>
+      subscribe('presence:command', (c) => {
+        if (c.type !== 'announce' || !voiceSettings?.speakResponses || voiceSettings.ttsEngine === 'none') return;
+        void voice.speak(c.text, voiceSettings.ttsEngine, voiceSettings.systemVoice).catch(() => undefined);
+      }),
+    [voiceSettings],
+  );
   useEffect(() => voice.subscribe(setVoiceState), []);
 
   useEffect(

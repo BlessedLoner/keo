@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Task } from '@shared/domain';
+import type { LiveChatSession, Task } from '@shared/domain';
 import { TaskCard } from '../components/TaskWidgets';
 import { Empty, ErrorBanner, ViewHeader } from '../components/ui';
 import { useApp } from '../state/AppState';
@@ -32,6 +32,119 @@ function GrantsBanner() {
           Revoke all
         </button>
       )}
+    </div>
+  );
+}
+
+const LIVE_LABEL: Record<LiveChatSession['status'], string> = { starting: 'Starting', active: 'Chatting', waiting_user: 'Needs your answer', paused: 'Paused', ended: 'Ended' };
+
+function LiveChatCard({ s }: { s: LiveChatSession }) {
+  const [answer, setAnswer] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(s.status === 'waiting_user');
+  const live = s.status !== 'ended';
+  const send = async () => {
+    if (!answer.trim()) return;
+    setBusy(true);
+    try {
+      await invoke('livechat:answer', { id: s.id, text: answer.trim() });
+      setAnswer('');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const chip = s.status === 'waiting_user' ? 'warn' : s.status === 'active' ? 'ok' : s.status === 'paused' ? 'warn' : '';
+  return (
+    <div className={`card livechat ${s.status}`}>
+      <div className="row">
+        <Icon name="chat" size={16} />
+        <strong className="grow">Live chat with {s.contact}</strong>
+        <span className={`chip ${chip}`}>{LIVE_LABEL[s.status]}</span>
+        <span className="muted small">
+          {s.replies}/{s.maxReplies} replies{live ? ` · until ${new Date(s.endsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+        </span>
+      </div>
+      <div className="muted small" style={{ marginTop: 4 }}>
+        Goal: {s.goal}
+        {s.activity && live ? ` · ${s.activity}` : ''}
+        {!live && s.endedReason ? ` · ${s.endedReason}` : ''}
+      </div>
+      {s.question && (
+        <div className="banner warn small" style={{ marginTop: 8 }}>
+          {s.question}
+        </div>
+      )}
+      {live && (s.status === 'waiting_user' || s.status === 'paused' || s.status === 'active') && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <input
+            className="input grow"
+            placeholder={s.status === 'waiting_user' ? 'Your answer, e.g. “tell her it’s $50 each, I can give a discount”' : 'An instruction for this chat (optional)'}
+            value={answer}
+            maxLength={1500}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void send()}
+          />
+          <button className="btn sm primary" disabled={busy || !answer.trim()} onClick={() => void send()}>
+            Send to Keo
+          </button>
+        </div>
+      )}
+      <div className="row" style={{ marginTop: 8, gap: 6 }}>
+        <button className="btn sm ghost" onClick={() => setOpen(!open)}>
+          {open ? 'Hide conversation' : 'Show conversation'}
+        </button>
+        <span className="grow" />
+        {s.status === 'active' && (
+          <button className="btn sm" onClick={() => void invoke('livechat:pause', { id: s.id })}>
+            Pause
+          </button>
+        )}
+        {s.status === 'paused' && (
+          <button className="btn sm" onClick={() => void invoke('livechat:resume', { id: s.id })}>
+            Resume
+          </button>
+        )}
+        {live && (
+          <button className="btn sm danger" onClick={() => void invoke('livechat:stop', { id: s.id })}>
+            Stop
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="livechat-transcript">
+          {s.transcript.slice(-20).map((l, k) => (
+            <div key={k} className={`lc-line ${l.from}`}>
+              <span className="lc-who">{l.from === 'them' ? s.contact : l.from === 'keo' ? 'Keo (for you)' : l.from === 'you' ? 'You' : ''}</span>
+              <span className="lc-text">{l.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveChats() {
+  const q = useInvoke('livechat:list', {}, { refreshOn: ['livechat:changed'], pollMs: 15000 });
+  const list = q.data ?? [];
+  if (!list.length) return null;
+  const running = list.filter((s) => s.status !== 'ended');
+  const ended = list.filter((s) => s.status === 'ended').slice(0, 3);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <h3 className="grow" style={{ margin: 0 }}>
+          Live chats
+        </h3>
+        {running.length > 1 && (
+          <button className="btn sm danger" onClick={() => void invoke('livechat:stop', {})}>
+            Stop all
+          </button>
+        )}
+      </div>
+      {[...running, ...ended].map((s) => (
+        <LiveChatCard key={s.id} s={s} />
+      ))}
     </div>
   );
 }
@@ -70,6 +183,7 @@ export function TasksView() {
       </ViewHeader>
       <div className="view-body">
         <ErrorBanner error={app.tasks.error} onRetry={() => void app.tasks.refresh()} />
+        <LiveChats />
         <GrantsBanner />
         {shown.length === 0 ? (
           <Empty icon="tasks" title={filter === 'attention' ? 'Nothing needs your attention' : 'No tasks here'}>

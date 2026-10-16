@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  LiveChatSession,
   AppInfo,
   AuditRecord,
   CapabilityInfo,
@@ -155,6 +156,11 @@ export const invokeSchemas = {
   'grants:list': empty,
   'grants:revoke': z.object({ id }).strict(),
   'grants:revokeAll': empty,
+  'livechat:list': empty,
+  'livechat:answer': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/), text: z.string().trim().min(1).max(1500) }).strict(),
+  'livechat:pause': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
+  'livechat:resume': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
+  'livechat:stop': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/).optional() }).strict(),
   'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
@@ -246,6 +252,11 @@ export interface InvokeOutputs {
   'grants:revoke': { revoked: boolean };
   'grants:revokeAll': { revoked: number };
   'grants:approveAndGrant': Task;
+  'livechat:list': LiveChatSession[];
+  'livechat:answer': LiveChatSession;
+  'livechat:pause': LiveChatSession;
+  'livechat:resume': LiveChatSession;
+  'livechat:stop': { stopped: number };
   'diagnostics:logs': LogEvent[];
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };

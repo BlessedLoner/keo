@@ -9,7 +9,7 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 
-type Section = 'providers' | 'web' | 'voice' | 'agent' | 'appearance' | 'data';
+type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'appearance' | 'data';
 
 export function SettingsView() {
   const app = useApp();
@@ -32,6 +32,7 @@ export function SettingsView() {
               ['providers', 'Providers'],
               ['web', 'Web search'],
               ['voice', 'Voice & shortcuts'],
+              ['autonomy', 'Approvals & live chat'],
               ['agent', 'Agent'],
               ['appearance', 'Appearance'],
               ['data', 'Privacy & data'],
@@ -57,6 +58,8 @@ export function SettingsView() {
             <WakeAndShortcuts s={s} patch={patch} />
             <Voice s={s} patch={patch} />
           </>
+        ) : section === 'autonomy' ? (
+          <ApprovalsAndLiveChat s={s} patch={patch} />
         ) : section === 'agent' ? (
           <Agent s={s} patch={patch} />
         ) : section === 'appearance' ? (
@@ -244,6 +247,102 @@ function CompatFields({ id, s, patch }: { id: 'openai' | 'openrouter' | 'local';
       <p className="hint small muted" style={{ marginTop: -6 }}>
         Capabilities are declared by you; Keo does not assume them. Without tool support, Keo can chat but cannot propose actions.
       </p>
+    </>
+  );
+}
+
+const LEVELS: Array<{ id: Settings['autonomy']['level']; title: string; text: string }> = [
+  { id: 'always_ask', title: 'Always ask', text: 'Every action that changes something waits for your Approve. Safest when you are at the computer.' },
+  {
+    id: 'important_only',
+    title: 'Ask only for important things',
+    text: 'Looking around, opening chats, switching tabs and menus, scrolling and reading run on their own. Typing, sending, launching apps and other buttons still ask.',
+  },
+  {
+    id: 'hands_free',
+    title: 'Hands-free',
+    text: 'For voice use. Keo does what you asked without stopping for each step, including sending messages to people you named yourself.',
+  },
+];
+
+function ApprovalsAndLiveChat({ s, patch }: { s: Settings; patch: Patch }) {
+  const lc = s.liveChat;
+  const [topic, setTopic] = useState('');
+  const num = (k: 'maxMinutes' | 'maxReplies' | 'quietMinutes' | 'idleSeconds', label: string, min: number, max: number, hint: string) => (
+    <div className="field">
+      <label htmlFor={`lc-${k}`}>{label}</label>
+      <input id={`lc-${k}`} className="input" type="number" min={min} max={max} defaultValue={lc[k]} onBlur={(e) => void patch({ liveChat: { [k]: Math.min(max, Math.max(min, Number(e.target.value) || min)) } })} />
+      <span className="muted small">{hint}</span>
+    </div>
+  );
+  return (
+    <>
+      <section className="card">
+        <h2 style={{ marginTop: 0 }}>How much Keo may do without asking</h2>
+        <div className="choice-list" role="radiogroup" aria-label="Approval level">
+          {LEVELS.map((l) => (
+            <label key={l.id} className={`choice ${s.autonomy.level === l.id ? 'selected' : ''}`}>
+              <input type="radio" name="autonomy" checked={s.autonomy.level === l.id} onChange={() => void patch({ autonomy: { level: l.id } })} />
+              <span>
+                <strong>{l.title}</strong>
+                <span className="muted small" style={{ display: 'block' }}>
+                  {l.text}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="banner info small" style={{ marginTop: 12 }}>
+          <span>
+            At every level Keo still asks before: payments and purchases, deleting, pressing buttons like Send / Delete / Buy / Confirm, keys like Enter or Delete, clicks on raw screen positions, and messaging anyone you did not name yourself. It never types passwords. Every automatic approval is recorded in Diagnose → Audit, and <strong>Stop</strong> (title bar or companion) halts everything.
+          </span>
+        </div>
+      </section>
+      <section className="card">
+        <h2 style={{ marginTop: 0 }}>Live chats (WhatsApp)</h2>
+        <p className="muted small">
+          Say e.g. “chat with Ma Glo on WhatsApp until I say stop” or “reply to John and keep the conversation going”. You approve once; Keo then reads new messages and replies in your voice. It pauses and asks you about prices and money, payments, meetings and times, calls and files, personal or urgent matters, and when someone asks whether they are talking to a bot — Keo never denies being an assistant. Answer by typing or speaking (“tell her it’s $50”), or in Tasks → Live chats.
+        </p>
+        <div className="grid-2">
+          {num('maxMinutes', 'Longest session (minutes)', 5, 720, 'A session ends after this, even if you forget to stop it.')}
+          {num('maxReplies', 'Most replies per session', 1, 300, 'Keo stops after this many messages.')}
+          {num('quietMinutes', 'End after quiet minutes', 5, 240, 'Ends when nobody writes for this long.')}
+          {num('idleSeconds', 'Type only after I am idle (seconds)', 0, 60, 'Keo waits until you stop typing/clicking, sends, then gives your window back.')}
+        </div>
+        <div className="field" style={{ marginTop: 8 }}>
+          <span className="field-label">Also always ask me about</span>
+          <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+            {lc.attentionTopics.map((t) => (
+              <span key={t} className="chip">
+                {t}{' '}
+                <button className="btn sm ghost" aria-label={`Remove ${t}`} onClick={() => void patch({ liveChat: { attentionTopics: lc.attentionTopics.filter((x) => x !== t) } })}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 6 }}>
+            <input className="input" placeholder="e.g. delivery, stock, my boss" value={topic} maxLength={60} onChange={(e) => setTopic(e.target.value)} />
+            <button
+              className="btn sm"
+              disabled={topic.trim().length < 2 || lc.attentionTopics.length >= 40}
+              onClick={() => {
+                void patch({ liveChat: { attentionTopics: [...new Set([...lc.attentionTopics, topic.trim()])] } });
+                setTopic('');
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+        <div className="field">
+          <Toggle checked={lc.notify} onChange={(v) => void patch({ liveChat: { notify: v } })} label="Show a Windows notification when someone needs me" />
+          <Toggle checked={lc.speak} onChange={(v) => void patch({ liveChat: { speak: v } })} label="Say it out loud (when spoken replies are on)" />
+        </div>
+        <p className="muted small">
+          Keo reads the chat through Windows accessibility. Keep WhatsApp open (a second monitor is ideal); if it is covered or minimised Keo checks it only while you are idle. Keo works through the visible app — a WhatsApp redesign can make it pause and tell you it cannot read the chat.
+        </p>
+      </section>
     </>
   );
 }

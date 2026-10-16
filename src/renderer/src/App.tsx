@@ -92,17 +92,26 @@ function TitleControls() {
   const app = useApp();
   const p = app.presence;
   const s = app.settings.data;
-  const busy = !!p && p.state !== 'idle' && p.state !== 'cancelled';
+  const busy = !!p && ((p.state !== 'idle' && p.state !== 'cancelled') || p.liveChats.active > 0);
   return (
     <div className="row" style={{ gap: 6, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
       {busy && (
-        <button className="chip danger" onClick={() => void invoke('presence:stopAll')} title="Stop replies, pending actions and navigation permissions">
+        <button className="chip danger" onClick={() => void invoke('presence:stopAll')} title="Stop replies, pending actions, live chats and navigation permissions">
           <Icon name="stop" size={12} /> Stop
         </button>
       )}
       {p?.wake.enabled && (
         <button className={`chip ${p.wake.muted ? 'warn' : 'accent'}`} onClick={() => void invoke('wake:setMuted', { muted: !p.wake.muted })} title={p.wake.message ?? 'Wake word'}>
           <Icon name="mic" size={12} /> {p.wake.muted ? 'Mic muted' : p.wake.status === 'listening' ? `“${p.wake.phrase}”` : p.wake.status}
+        </button>
+      )}
+      {p && p.autonomy !== 'always_ask' && (
+        <button
+          className="chip warn level"
+          onClick={() => void invoke('settings:update', { patch: { autonomy: { level: 'always_ask' } } })}
+          title="Some actions run without asking (payments, deleting, sensitive buttons and unnamed contacts still ask). Click to ask for everything again."
+        >
+          <Icon name="shield" size={12} /> {p.autonomy === 'hands_free' ? 'Hands-free' : 'Asks for important only'}
         </button>
       )}
       <button className="chip" onClick={() => void invoke('commandBar:show')} title="Open the command bar">

@@ -362,6 +362,12 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.wake.cancelCapture();
       return { ok: true as const };
     },
+    'livechat:list': () => s.live.list(),
+    // From Keo's own UI, so the text is the user's own answer.
+    'livechat:answer': ({ id, text }) => s.live.answer(id, text, true),
+    'livechat:pause': ({ id }) => s.live.pause(id),
+    'livechat:resume': ({ id }) => s.live.resume(id),
+    'livechat:stop': ({ id }) => ({ stopped: id ? (s.live.stop(id) ? 1 : 0) : s.live.stopAll() }),
     'grants:list': () => s.grants.list(),
     'grants:revoke': ({ id }) => ({ revoked: s.grants.revoke(id) }),
     'grants:revokeAll': () => ({ revoked: s.grants.revokeAll() }),

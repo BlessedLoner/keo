@@ -16,6 +16,8 @@ const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'wake:setMuted',
   'grants:list',
   'grants:revokeAll',
+  'livechat:list',
+  'livechat:stop',
   'settings:get',
 ]);
 
@@ -34,6 +36,9 @@ const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'tasks:denyStep',
   'tasks:cancel',
   'grants:approveAndGrant',
+  'livechat:answer',
+  'livechat:pause',
+  'livechat:resume',
   'grants:revoke',
   'wake:listenNow',
   'wake:cancelListen',

@@ -617,6 +617,15 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     verificationPolicy: 'Delivery confirmed by the OS input queue; effect not verified.',
     precheck: (i, s) => allowCheck(i.target, s),
     grantable: (i) => /^(shift\+)?tab$|^(up|down|left|right|pageup|pagedown|home|end|escape)$/.test(i.combo.toLowerCase().replace(/\s+/g, '')),
+    autonomy: (i) => {
+      const c = i.combo.toLowerCase().replace(/\s+/g, '');
+      if (/^(shift\+)?tab$|^(up|down|left|right|pageup|pagedown|home|end|escape)$|^ctrl\+(c|a|f)$/.test(c)) return { tier: 'routine' };
+      // Keys that submit, send, delete, close or save act on whatever has focus: always the user's call.
+      if (/(^|\+)(enter|return|delete|del|backspace)$|^alt\+f4$|^ctrl\+(w|q|s|p|d|enter|shift\+delete)$|^shift\+delete$/.test(c)) {
+        return { tier: 'always_ask', reason: 'This key can submit, send, delete or close something.' };
+      }
+      return { tier: 'important' };
+    },
     preview: (i) => ({ summary: `Bring ${i.target.processName} to the front and press ${i.combo.toUpperCase()}`, target: targetLabel(i.target), consequences: ['Key presses may trigger application actions (save, send, close).'], dataExport: null }),
     auditView: (i) => ({ target: i.target, combo: i.combo }),
     async execute(i, ctx) {
@@ -647,6 +656,8 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
       .strict(),
     output: z.object({ clicked: z.boolean() }),
     risk: 'high',
+    // Keo cannot tell what lies under a raw coordinate (it could be Buy or Delete).
+    autonomy: () => ({ tier: 'always_ask', reason: 'Keo can’t tell what is under a raw click; element-level actions (desktop__invoke_element) can run hands-free.' }),
     approval: 'always',
     permissions: ['desktop.control'],
     consequential: true,

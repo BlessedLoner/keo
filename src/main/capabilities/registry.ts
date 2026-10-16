@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ApprovalPreview, CapabilityInfo, PermissionKey } from '../../shared/domain';
+import type { ApprovalPreview, AutonomyTier, CapabilityInfo, PermissionKey } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { Logger } from '../logging/logger';
 import type { AuditRepo } from '../repos/audit';
@@ -199,7 +199,7 @@ export class CapabilityRegistry {
       input: parsed.data,
       inputHash: hashInput(cap.id, cap.version, parsed.data),
       requiresApproval: cap.approval === 'always',
-      preview: { ...cap.preview(parsed.data, s), grantable: cap.approval === 'always' && !!cap.grantable?.(parsed.data) },
+      preview: { ...cap.preview(parsed.data, s), grantable: cap.approval === 'always' && !!cap.grantable?.(parsed.data), ...autonomyOf(cap, parsed.data) },
     };
   }
 
@@ -238,6 +238,12 @@ export class CapabilityRegistry {
       throw err;
     }
   }
+}
+
+/** The approval-level tier of one admitted action (see Capability.autonomy). */
+export function autonomyOf(cap: AnyCapability, input: unknown): { autoTier: AutonomyTier; alwaysAskReason: string | null; mustBeNamed: string | null } {
+  const a = cap.autonomy?.(input) ?? { tier: cap.risk === 'high' ? ('important' as const) : ('routine' as const) };
+  return { autoTier: a.tier, alwaysAskReason: a.tier === 'always_ask' ? (a.reason ?? 'Always needs your approval.') : null, mustBeNamed: a.mustBeNamed ?? null };
 }
 
 export function formatZodError(e: z.ZodError): string {

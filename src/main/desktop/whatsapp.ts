@@ -12,6 +12,8 @@ export interface WaChat {
   node: UiaNodeRaw;
   /** The visible name text inside the entry, when exposed (best place to click). */
   titleNode: UiaNodeRaw | null;
+  /** Unread messages WhatsApp reports for this chat (0 when none or unknown). */
+  unread: number;
 }
 
 export interface WaMessage {
@@ -157,7 +159,8 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
       .map((j) => nodes[j] as UiaNodeRaw)
       .filter((d) => d.role === 'text' && d.name && !TIME.test(d.name));
     const title = cleanTitle(texts[0]?.name ?? stripTrailingTime(n.name.split(/\s{2,}|\n/)[0] ?? ''));
-    if (title) chats.push({ index: i, title, node: n, titleNode: texts[0] && !texts[0].offscreen ? texts[0] : null });
+    const unread = Number(/(\d+)\s+unread\s+messages?/i.exec(`${texts[0]?.name ?? ''} ${n.name}`)?.[1] ?? 0);
+    if (title) chats.push({ index: i, title, node: n, titleNode: texts[0] && !texts[0].offscreen ? texts[0] : null, unread });
   });
   // WhatsApp Web nests entries (row › cell › name); keep only the innermost one of each.
   const nested = new Set(chats.filter((c) => chats.some((o) => o !== c && descendants(c.index, kids, 400).includes(o.index))).map((c) => c.index));

@@ -537,7 +537,7 @@ describe('wake word and voice commands', () => {
     const speech = new FakeSpeech();
     setup({ speech, script: () => reply('Here is your summary.') });
     let shown = 0;
-    h.services.ui = { showCommandBar: () => shown++ };
+    h.services.ui = { showCommandBar: () => shown++, notify: () => undefined };
     h.services.settings.update({ wake: { enabled: true } });
     await waitFor(() => speech.cmds().includes('wake'));
     speech.fire({ event: 'wake', phrase: 'hey keo', confidence: 0.93 });

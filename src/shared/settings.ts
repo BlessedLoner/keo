@@ -181,6 +181,35 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /**
+     * How much Keo may do without asking. Whatever the level, payments,
+     * purchases, deleting, sensitive buttons, raw clicks and messaging someone
+     * the user did not name always ask (see capability autonomy tiers).
+     */
+    autonomy: z
+      .object({
+        level: z.enum(['always_ask', 'important_only', 'hands_free']).default('always_ask'),
+      })
+      .strict()
+      .prefault({}),
+    /** Defaults and limits for live WhatsApp chat sessions. */
+    liveChat: z
+      .object({
+        maxMinutes: z.number().int().min(5).max(720).default(120),
+        maxReplies: z.number().int().min(1).max(300).default(40),
+        /** End a session after this long without any new message. */
+        quietMinutes: z.number().int().min(5).max(240).default(30),
+        /** Keo types only after the user has not used keyboard/mouse for this long. */
+        idleSeconds: z.number().int().min(0).max(60).default(4),
+        /** Extra words/phrases that always make Keo pause and ask (besides the built-in topics). */
+        attentionTopics: z.array(z.string().trim().min(2).max(60)).max(40).default([]),
+        /** Show a Windows notification when a contact needs the user. */
+        notify: z.boolean().default(true),
+        /** Say it out loud (when spoken replies are enabled). */
+        speak: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
     companion: z
       .object({
         enabled: z.boolean().default(true),

@@ -68,6 +68,10 @@ export interface DesktopBackend {
   support(): { supported: boolean; reason: string | null };
   /** Helper diagnostics (e.g. its DPI awareness mode). */
   helperInfo?(): Promise<{ pong: boolean; dpi?: string }>;
+  /** Time since the user's last keyboard/mouse input, and the current foreground window. */
+  userActivity(): Promise<{ idleMs: number; foreground: string | null }>;
+  /** Share (0..1) of the window hidden behind other windows (1 when minimised). */
+  coveredShare(hwnd: string): Promise<number>;
   list(): Promise<RawWindow[]>;
   info(hwnd: string): Promise<RawWindow | null>;
   focus(hwnd: string): Promise<{ foreground: boolean }>;
@@ -228,6 +232,16 @@ export class Win32Backend implements DesktopBackend {
 
   helperInfo(): Promise<{ pong: boolean; dpi?: string }> {
     return this.call('ping', {});
+  }
+
+  async coveredShare(hwnd: string): Promise<number> {
+    const r = await this.call<{ share: number }>('covered', { hwnd });
+    return Number(r.share);
+  }
+
+  async userActivity(): Promise<{ idleMs: number; foreground: string | null }> {
+    const r = await this.call<{ idleMs: number; foreground: string }>('idle', {});
+    return { idleMs: Number(r.idleMs), foreground: r.foreground ? String(r.foreground) : null };
   }
 
   focus(hwnd: string): Promise<{ foreground: boolean }> {

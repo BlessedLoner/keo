@@ -39,6 +39,9 @@ interface ActiveTurn {
 }
 
 export class AgentService {
+  /** Live state appended to the system prompt each turn (e.g. running live chats). */
+  systemExtra: () => string = () => '';
+
   private readonly active = new Map<string, ActiveTurn>();
 
   constructor(
@@ -153,7 +156,7 @@ export class AgentService {
         const sep = text && !text.endsWith('\n') ? '\n\n' : '';
         let first = true;
         const result = await provider.stream(
-          { model, system: SYSTEM_PROMPT, messages, tools, maxOutputTokens: maxOut, correlationId },
+          { model, system: SYSTEM_PROMPT + this.systemExtra(), messages, tools, maxOutputTokens: maxOut, correlationId },
           {
             onText: (delta) => {
               if (first && sep) {

@@ -14,6 +14,13 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
   const results: Record<string, unknown> = {};
   const stateFile = path.join(opts.workDir, 'fake-wa-state.json');
   fs.rmSync(stateFile, { force: true });
+  const inboxFile = path.join(opts.workDir, 'fake-wa-inbox.json');
+  fs.writeFileSync(inboxFile, '[]');
+  const inbox: Array<{ from: string; text: string }> = [];
+  const receive = (from: string, text: string) => {
+    inbox.push({ from, text });
+    fs.writeFileSync(inboxFile, JSON.stringify(inbox));
+  };
   // Use the most-scaled monitor: mixed scaling is where pointer coordinates go wrong.
   const { screen } = await import('electron');
   const displays = screen.getAllDisplays();
@@ -22,6 +29,7 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
   const env: Record<string, string | undefined> = {
     ...process.env,
     FAKE_WA_STATE: stateFile,
+    FAKE_WA_INBOX: inboxFile,
     FAKE_WA_X: String(display.workArea.x + 20),
     FAKE_WA_Y: String(display.workArea.y + 20),
   };
@@ -150,6 +158,46 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
     results.repeat = await run('whatsapp.send_message', { contact: 'Daniel Okafor', text: 'E2E approved message' });
     await new Promise((r) => setTimeout(r, 500));
     results.sentFinal = state()?.sent ?? null;
+
+    // 6. Live chat: one approval, replies on its own, pauses on a price question, uses the
+    //    user's answer, stops on request. The reply "brain" is Keo's offline test provider.
+    {
+      const { TestProvider } = await import('../providers/testProvider');
+      const test = s.providers.get('test');
+      if (test instanceof TestProvider) {
+        s.settings.update({ activeProvider: 'test', liveChat: { idleSeconds: 0 } });
+        test.setScript((req) => {
+          const text = (() => {
+            if (!req.system.includes('replying in a WhatsApp chat on behalf of')) return 'ok';
+            const chat = JSON.stringify(req.messages);
+            if (/50 per blender/.test(req.system)) return JSON.stringify({ action: 'reply', message: 'They are $50 each, and I can give you a discount', covered_by_guidance: true });
+            if (/how much/i.test(chat)) return JSON.stringify({ action: 'reply', message: 'It is $40' }); // would invent a price
+            return JSON.stringify({ action: 'reply', message: 'Doing great, thanks for asking!' });
+          })();
+          return { text, toolCalls: [], stopReason: 'end', usage: null, model: 'keo-test-1', native: undefined };
+        });
+        const live = s.live;
+        const before = state()?.sent.length ?? 0;
+        const started = await run('whatsapp.live_chat_start', { contact: 'Daniel Smith', goal: 'Keep Daniel company' });
+        const session = () => live.list().find((x) => x.contact === 'Daniel Smith');
+        results.liveStart = { state: (started as { state: string }).state, status: session()?.status ?? null };
+        receive('Daniel Smith', 'Hi! How are you doing today?');
+        await wait(() => (state()?.sent.length ?? 0) > before, 60000).catch(() => undefined);
+        results.liveReplied = state()?.sent.slice(before) ?? [];
+        receive('Daniel Smith', 'How much is the blender?');
+        await wait(() => session()?.status === 'waiting_user', 60000).catch(() => undefined);
+        results.livePaused = { status: session()?.status ?? null, question: session()?.question ?? null, sentSince: (state()?.sent.length ?? 0) - before, activity: session()?.activity ?? null, transcript: session()?.transcript.slice(-5).map((l) => l.from + ':' + l.text), pageLastMsg: (state() as { lastMsg?: string } | null)?.lastMsg ?? null, covered: await s.desktop.backend.coveredShare(target.hwnd).catch(() => -1), keoSees: await (async () => { const { waView } = await import('../capabilities/advanced'); const v = await waView(s.capDeps, target); return { header: v.header, msgs: v.messages.slice(-3).map((m) => m.from + ':' + m.text) }; })() };
+        const id = session()?.id;
+        if (id) live.answer(id, 'tell him it is 50 per blender and I can give a discount', true);
+        await wait(() => (state()?.sent.length ?? 0) > before + 1, 60000).catch(() => undefined);
+        results.liveAnswered = state()?.sent.slice(before + 1) ?? [];
+        if (id) live.stop(id);
+        const afterStop = state()?.sent.length ?? 0;
+        receive('Daniel Smith', 'Are you still there?');
+        await new Promise((r) => setTimeout(r, 6000));
+        results.liveStopped = { status: session()?.status ?? null, sentAfterStop: (state()?.sent.length ?? 0) - afterStop };
+      } else results.liveSkipped = 'test provider not available';
+    }
     results.ok = true;
   } catch (e) {
     results.error = (e as Error).message;

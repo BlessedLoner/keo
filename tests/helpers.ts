@@ -9,7 +9,7 @@ import { resolveProfile } from '../src/main/env/profile';
 import { Logger } from '../src/main/logging/logger';
 import { TestProvider, type Script } from '../src/main/providers/testProvider';
 import type { SecretCipher } from '../src/main/secrets/secretStore';
-import { memoryClipboard, Services } from '../src/main/services';
+import { memoryClipboard, Services, type ServiceDeps } from '../src/main/services';
 import type { CaptureOutcome, ImageTools, WindowCaptureSource } from '../src/main/vision/visionService';
 import type { WebService } from '../src/main/web/webService';
 
@@ -72,6 +72,7 @@ export class FakeDesktop implements DesktopBackend {
     return this.act('focus', [hwnd], () => {
       if (!this.focusAllowed) return { foreground: false };
       for (const w of this.windows) w.foreground = w.hwnd === hwnd;
+      this.foreground = hwnd;
       return { foreground: true };
     });
   }
@@ -137,6 +138,16 @@ export class FakeDesktop implements DesktopBackend {
     this.calls.push({ op: 'uia_act', args: [hwnd, rid, action, text] });
     if (this.hang) return new Promise(() => undefined);
     return { method: this.app(hwnd).act(rid, action, text) };
+  }
+  /** Simulated user activity: ms since last input, and the foreground window. */
+  idleMs = 60_000;
+  foreground: string | null = null;
+  covered = 0;
+  async coveredShare() {
+    return this.covered;
+  }
+  async userActivity() {
+    return { idleMs: this.idleMs, foreground: this.foreground };
   }
   async uiaTexts(hwnd: string, rids: string[]): Promise<string[][]> {
     this.calls.push({ op: 'uia_texts', args: [hwnd, rids] });
@@ -226,7 +237,9 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export function makeHarness(opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech } = {}): Harness {
+export function makeHarness(
+  opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming'] } = {},
+): Harness {
   const dir = opts.dir ?? tempDir();
   const profile = resolveProfile(dir, { KEO_USER_DATA_DIR: dir }, false);
   const provider = new TestProvider(opts.script ?? null, opts.delayMs ?? 0);
@@ -247,6 +260,7 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
     speechEngine: opts.speech ?? new FakeSpeech(),
     clipboard,
     ...(opts.web ? { web: opts.web } : {}),
+    ...(opts.liveChatTiming ? { liveChatTiming: opts.liveChatTiming } : {}),
   });
   return {
     dir,

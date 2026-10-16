@@ -275,6 +275,47 @@ export interface ApprovalPreview {
   dataExport: string | null;
   /** Eligible for a time-boxed navigation grant (never for send/delete/submit-like actions). */
   grantable?: boolean;
+  /**
+   * Approval-level tier: 'routine' runs without asking under "Ask only for
+   * important things", 'important' only under "Hands-free", 'always_ask'
+   * always needs the user (payments, deleting, sensitive buttons, raw clicks…).
+   */
+  autoTier?: AutonomyTier;
+  /** Why this action always asks (shown on the card). */
+  alwaysAskReason?: string | null;
+  /** Text the user must have named in the conversation (e.g. the contact) for an automatic approval. */
+  mustBeNamed?: string | null;
+}
+
+export type AutonomyTier = 'routine' | 'important' | 'always_ask';
+export type AutonomyLevel = 'always_ask' | 'important_only' | 'hands_free';
+
+/** A live WhatsApp chat Keo keeps going for the user until stopped. */
+export type LiveChatStatus = 'starting' | 'active' | 'waiting_user' | 'paused' | 'ended';
+export interface LiveChatLine {
+  from: 'them' | 'keo' | 'you' | 'note';
+  text: string;
+  at: ISODate;
+}
+export interface LiveChatSession {
+  id: string;
+  contact: string;
+  target: { hwnd: string; pid: number; processName: string };
+  goal: string;
+  /** The user's own instructions and answers, in order (never the contact's words). */
+  guidance: string[];
+  status: LiveChatStatus;
+  /** What Keo is waiting for the user to decide, when status is waiting_user. */
+  question: string | null;
+  /** Latest thing Keo did or is waiting for (content-free where possible). */
+  activity: string | null;
+  replies: number;
+  maxReplies: number;
+  startedAt: ISODate;
+  endsAt: ISODate;
+  endedReason: string | null;
+  conversationId: string | null;
+  transcript: LiveChatLine[];
 }
 
 export interface NavigationGrant {
@@ -310,6 +351,9 @@ export interface Presence {
   runningSteps: number;
   wake: { enabled: boolean; listening: boolean; muted: boolean; status: 'off' | 'starting' | 'listening' | 'capturing' | 'error' | 'unavailable'; message: string | null; phrase: string | null };
   grants: number;
+  /** Live chats: how many are running and how many wait for the user. */
+  liveChats: { active: number; waiting: number; firstWaiting: string | null };
+  autonomy: AutonomyLevel;
   updatedAt: ISODate;
 }
 
@@ -325,7 +369,7 @@ export interface TaskStep {
   dependsOn: string[];
   state: StepState;
   requiresApproval: boolean;
-  approval: { decision: 'approved' | 'denied'; decidedAt: ISODate; inputHash: string; grantId?: string } | null;
+  approval: { decision: 'approved' | 'denied'; decidedAt: ISODate; inputHash: string; grantId?: string; policy?: AutonomyLevel } | null;
   preview: ApprovalPreview;
   attempts: number;
   maxAttempts: number;

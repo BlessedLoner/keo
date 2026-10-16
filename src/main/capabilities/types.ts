@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ApprovalPreview, PermissionKey, RiskLevel } from '../../shared/domain';
+import type { ApprovalPreview, AutonomyTier, PermissionKey, RiskLevel } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import { KeoError } from '../util/errors';
 
@@ -65,6 +65,14 @@ export interface Capability<I = unknown, O = unknown> {
    * delete, submit, pay, …) must return false.
    */
   grantable?(input: I): boolean;
+  /**
+   * Tier for the approval-level setting. Omitted = by risk ('high' → important,
+   * otherwise routine). Return 'always_ask' (with a reason) for anything that
+   * must never run without the user: payments, deleting, sensitive buttons,
+   * actions whose effect Keo cannot see in advance. `mustBeNamed` = text the
+   * user must have written in the conversation for an automatic approval.
+   */
+  autonomy?(input: I): { tier: AutonomyTier; reason?: string; mustBeNamed?: string };
   /** Extra admission checks (allow-lists, prerequisites). Return an error message to reject. */
   precheck?(input: I, settings: Settings): string | null;
   /** Human-readable approval preview: target, operation and material consequences. */

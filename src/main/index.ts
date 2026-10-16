@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pushChannels } from '../shared/ipc';
@@ -243,7 +243,16 @@ app.whenReady().then(() => {
     });
     const svc = services;
     presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
-    svc.ui = { showCommandBar: () => presenceWindows?.showCommandBar() };
+    svc.ui = {
+      showCommandBar: () => presenceWindows?.showCommandBar(),
+      // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
+      notify: (title, body) => {
+        if (!Notification.isSupported()) return;
+        const n = new Notification({ title, body: body.slice(0, 240), silent: false });
+        n.on('click', () => showMain('tasks'));
+        n.show();
+      },
+    };
     registerIpc(
       ipcMain,
       handlers,
@@ -371,6 +380,9 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Voice'))?.click();`);
   await wait(1500);
   fs.writeFileSync(path.join(dir, 'settings-voice.png'), (await win.webContents.capturePage()).toPNG());
+  await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Approvals'))?.click();`);
+  await wait(1200);
+  fs.writeFileSync(path.join(dir, 'settings-approvals.png'), (await win.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Appearance'))?.click();`);
   await wait(900);
   fs.writeFileSync(path.join(dir, 'appearance.png'), (await win.webContents.capturePage()).toPNG());

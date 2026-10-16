@@ -2,6 +2,8 @@ import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
 import { AgentService } from './agent/agentService';
 import { advancedCapabilities } from './capabilities/advanced';
+import { liveChatCapabilities } from './capabilities/liveChat';
+import { LiveChatService } from './livechat/liveChatService';
 import { builtinCapabilities, type CapabilityDeps, type PlanInput } from './capabilities/builtins';
 import { SnapshotStore } from './desktop/uia';
 import { GrantService } from './tasks/grants';
@@ -29,8 +31,8 @@ import { VoiceService } from './voice/voiceService';
 import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
-import { findQuote } from './agent/quotes';
-import type { AgentEvent } from '../shared/domain';
+import { findQuote, nameMentioned } from './agent/quotes';
+import type { AgentEvent, LiveChatSession } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
 export interface ServiceDeps {
@@ -49,6 +51,8 @@ export interface ServiceDeps {
   logger?: Logger;
   /** Local speech engine (Windows SAPI helper in the app; a fake in tests). */
   speechEngine?: SpeechEngine;
+  /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
+  liveChatTiming?: { pollMs?: number; debounceMs?: number; minGapMs?: number; sleep?: (ms: number) => Promise<void> };
 }
 
 export type Push = (channel: string, payload: unknown) => void;
@@ -83,11 +87,15 @@ export class Services {
   readonly voice: VoiceService;
   readonly web: WebService;
   readonly grants: GrantService;
+  readonly live: LiveChatService;
+  /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
+  readonly capDeps: CapabilityDeps;
   readonly snapshots = new SnapshotStore();
   readonly presence: PresenceService;
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
-  ui: { showCommandBar(): void } = { showCommandBar: () => undefined };
+  /** Window-side hooks set by the Electron entry point (no-ops in tests). */
+  ui: { showCommandBar(): void; notify(title: string, body: string): void } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly agent: AgentService;
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
@@ -137,10 +145,43 @@ export class Services {
       },
       focusSettleMs: d.focusSettleMs,
     };
-    for (const cap of [...builtinCapabilities(capDeps), ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots })]) {
+    this.capDeps = capDeps;
+    this.live = new LiveChatService({
+      cap: capDeps,
+      providers: this.providers,
+      settings: getSettings,
+      audit: this.audit,
+      log: this.log,
+      conversations: this.conversations,
+      alert: (session, text) => this.liveChatAlert(session, text),
+      changed: () => {
+        this.presence?.setLiveChats(this.live.counts());
+        this.push('livechat:changed', { sessions: this.live.list() });
+      },
+      ...(d.liveChatTiming ?? {}),
+    });
+    for (const cap of [
+      ...builtinCapabilities(capDeps),
+      ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
+      ...liveChatCapabilities({ ...capDeps, live: this.live }),
+    ]) {
       this.registry.register(cap);
     }
     this.tasks.grantMatcher = (step) => this.grants.match(step);
+    this.tasks.policyMatcher = (step, task) => {
+      const level = getSettings().autonomy.level;
+      const tier = step.preview.autoTier ?? 'important';
+      if (level === 'always_ask' || tier === 'always_ask') return null;
+      if (level === 'important_only' && tier !== 'routine') return null;
+      // Only actions from a conversation with the user (where "named" can be checked) run without asking.
+      if (task.origin === 'plan' || !task.conversationId) return null;
+      const named = step.preview.mustBeNamed;
+      if (named) {
+        const said = this.conversations.recentMessages(task.conversationId, 40).filter((m) => m.role === 'user');
+        if (!nameMentioned(said.map((m) => ({ text: m.content })), named)) return null;
+      }
+      return level;
+    };
 
     const context = new ContextBuilder(this.conversations, this.memory, this.projects);
     this.agent = new AgentService(
@@ -159,7 +200,9 @@ export class Services {
       },
     );
 
+    this.agent.systemExtra = () => this.live.agentContext();
     this.presence = new PresenceService(this.registry);
+    this.presence.setAutonomy(getSettings().autonomy.level);
     this.presence.onChange((p) => this.push('presence:changed', p));
     this.tasks.onChange((taskId) => {
       this.push('tasks:changed', { taskId });
@@ -183,6 +226,7 @@ export class Services {
     let lastWake = JSON.stringify(this.settings.get().wake);
     this.settings.onChange((st) => {
       this.push('settings:changed', {});
+      this.presence.setAutonomy(st.autonomy.level);
       const w = JSON.stringify(st.wake);
       if (w !== lastWake) {
         lastWake = w;
@@ -214,6 +258,17 @@ export class Services {
   }
 
   /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
+  /** A live chat needs the user: note in its conversation, Windows notification, spoken line. */
+  private liveChatAlert(session: LiveChatSession, text: string): void {
+    const st = this.settings.get().liveChat;
+    if (session.conversationId && this.conversations.get(session.conversationId)) {
+      this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `💬 **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
+      this.push('conversations:changed', { conversationId: session.conversationId });
+    }
+    if (st.notify) this.ui.notify(`${session.contact} needs you`, text);
+    if (st.speak) this.push('presence:command', { type: 'announce', text });
+  }
+
   stopAll(): { cancelledTurns: number; cancelledTasks: number; revokedGrants: number } {
     let cancelledTurns = 0;
     for (const id of this.agent.activeConversations()) if (this.agent.cancel(id)) cancelledTurns++;
@@ -229,11 +284,12 @@ export class Services {
       }
     }
     const revokedGrants = this.grants.revokeAll();
+    const stoppedLiveChats = this.live.stopAll('Stopped with Stop everything');
     this.wake.cancelCapture();
     this.push('presence:command', { type: 'stop_speaking' });
     this.presence.flash('cancelled', 2500);
-    this.audit.record({ kind: 'user.stop_all', decision: 'stopped', detail: { cancelledTurns, cancelledTasks, revokedGrants } });
-    this.log.info('presence.stop_all', { cancelledTurns, cancelledTasks, revokedGrants });
+    this.audit.record({ kind: 'user.stop_all', decision: 'stopped', detail: { cancelledTurns, cancelledTasks, revokedGrants, stoppedLiveChats } });
+    this.log.info('presence.stop_all', { cancelledTurns, cancelledTasks, revokedGrants, stoppedLiveChats });
     return { cancelledTurns, cancelledTasks, revokedGrants };
   }
 
@@ -377,6 +433,7 @@ export class Services {
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.wake.stop();
+    this.live.stopAll('Keo was closed');
     this.grants.revokeAll();
     this.snapshots.clear();
     for (const id of this.agent.activeConversations()) this.agent.cancel(id);

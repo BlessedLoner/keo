@@ -34,6 +34,11 @@ const checks = [
   ['nothing sent without approval / after denial', Array.isArray(r.sentAfterCancelAndDeny) && r.sentAfterCancelAndDeny.length === 0],
   ['approved send verified on screen', r.send?.state === 'completed' && r.send?.verification === 'verified'],
   ['duplicate send prevented', Array.isArray(r.sentFinal) && r.sentFinal.length === 1],
+  ['live chat: starts after one approval', r.liveStart?.state === 'completed' && r.liveStart?.status === 'active'],
+  ['live chat: replies to a new message on its own', r.liveReplied?.length === 1 && r.liveReplied[0].to === 'Daniel Smith'],
+  ['live chat: pauses on a price question, sends nothing', r.livePaused?.status === 'waiting_user' && r.livePaused?.sentSince === 1],
+  ['live chat: continues with the user’s answer', r.liveAnswered?.length === 1 && /\$50/.test(r.liveAnswered[0].text)],
+  ['live chat: nothing sent after stop', r.liveStopped?.status === 'ended' && r.liveStopped?.sentAfterStop === 0],
 ];
 let ok = r.ok === true;
 console.log(`Monitors: ${r.display?.count} (scale ${r.display?.scaleFactors?.join(', ')}); test window on scale ${r.display?.used}. Helper: ${JSON.stringify(r.pointerClick?.helper)}`);

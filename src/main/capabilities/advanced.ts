@@ -170,6 +170,116 @@ async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNod
   return (await has()) !== false;
 }
 
+
+// ---------------------------------------------------------------------------
+// WhatsApp driver: the verified open/send steps, shared by the capabilities
+// and by live chat sessions. Callers bring the window to the front first.
+// ---------------------------------------------------------------------------
+
+export interface WaOpenResult {
+  opened: boolean;
+  header: string | null;
+  candidates: string[];
+  reason: string | null;
+}
+
+export interface WaSendResult {
+  sent: boolean;
+  alreadyPresent: boolean;
+  appearsInChat: boolean;
+  status: string | null;
+  recipient: string;
+}
+
+export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: string, signal: AbortSignal): Promise<WaOpenResult> {
+  let { view } = await freshView(d, target);
+  if (headerMatches(view.header, contact)) return { opened: true, header: view.header, candidates: [view.header as string], reason: 'already_open' };
+  if (!view.search) throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Is WhatsApp open and signed in?', { dispatched: 'no' });
+  const searchNode = view.search;
+  await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, contact));
+  await sleep(d.focusSettleMs === 0 ? 0 : 900);
+  if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
+  view = (await freshView(d, target)).view;
+  const want = normName(contact);
+  const titles = [...new Set(view.chats.map((c) => c.title))];
+  const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
+  const exact = view.chats.filter((c) => normName(c.title) === want);
+  if (exact.length !== 1) {
+    return { opened: false, header: view.header, candidates, reason: exact.length > 1 ? 'several chats have this exact name' : candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
+  }
+  const chat = exact[0]!;
+  await step(`opening the “${chat.title}” entry`, async () => {
+    try {
+      await actOn(d, target, chat.node, 'invoke');
+    } catch (e) {
+      if (!(e instanceof CapabilityError) || !['unsupported_action', 'no_invoke_pattern'].includes(e.code)) throw e;
+      await actOn(d, target, chat.node, 'select');
+    }
+  });
+  await sleep(d.focusSettleMs === 0 ? 0 : 900);
+  view = (await freshView(d, target)).view;
+  if (!headerMatches(view.header, contact)) {
+    // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
+    const again = view.chats.filter((c) => normName(c.title) === want);
+    if (again.length === 1) {
+      const entry = again[0]!;
+      await step(`clicking the “${entry.title}” entry`, async () => {
+        const c = await centerOf(d, target, entry.titleNode ?? entry.node);
+        await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+      });
+      await sleep(d.focusSettleMs === 0 ? 0 : 900);
+      view = (await freshView(d, target)).view;
+    }
+  }
+  if (!headerMatches(view.header, contact)) {
+    // Opening a chat is repeatable and harmless, so this is a plain “not confirmed”, not an uncertain outcome.
+    return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${contact}”` };
+  }
+  return { opened: true, header: view.header, candidates, reason: null };
+}
+
+export async function waSend(d: CapabilityDeps, target: TargetT, contact: string, text: string, allowDuplicate: boolean, signal: AbortSignal): Promise<WaSendResult> {
+  let { view } = await freshView(d, target);
+  if (!headerMatches(view.header, contact)) {
+    throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
+  }
+  const last = lastOutgoing(view);
+  if (!allowDuplicate && last && textMatches(last.text, text) && normName(last.text).length <= normName(text).length + 12) {
+    return { sent: false, alreadyPresent: true, appearsInChat: true, status: last.status, recipient: view.header as string };
+  }
+  if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
+  const compose = view.compose;
+  await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text));
+  await sleep(d.focusSettleMs === 0 ? 0 : 300);
+  // Re-verify recipient and draft immediately before the irreversible step.
+  view = (await freshView(d, target)).view;
+  if (!headerMatches(view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
+  const draft = view.compose ? await d.desktop.backend.uiaDescribe(target.hwnd, view.compose.rid).catch(() => null) : null;
+  const draftText = draft?.value ?? draft?.name ?? '';
+  if (draft?.value !== undefined && !textMatches(draftText, text)) {
+    throw new CapabilityError('draft_mismatch', 'The message box does not contain the approved text. Nothing was sent.', { dispatched: 'no' });
+  }
+  if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
+  if (view.send) {
+    await actOn(d, target, view.send, 'invoke');
+  } else {
+    await d.desktop.backend.keys(target.hwnd, [], 0x0d); // Enter sends in WhatsApp
+  }
+  await sleep(d.focusSettleMs === 0 ? 0 : 1500);
+  view = (await freshView(d, target)).view;
+  const now = lastOutgoing(view);
+  const appears = !!now && textMatches(now.text, text);
+  if (!appears) {
+    throw new CapabilityError('unverified_send', 'Keo pressed Send but cannot see the message in the chat. It may or may not have been sent — check WhatsApp before trying again.', { dispatched: 'yes' });
+  }
+  return { sent: true, alreadyPresent: false, appearsInChat: true, status: now.status, recipient: view.header as string };
+}
+
+/** A fresh, completed view of the WhatsApp window (no focus change). */
+export async function waView(d: CapabilityDeps, target: TargetT): Promise<WaView> {
+  return (await freshView(d, target)).view;
+}
+
 export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
   const destination = () => d.activeProviderDestination();
   const nodeFor = (snapshotId: string, elementId: string, target: TargetT) => {
@@ -279,6 +389,15 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     grantable: (i) => {
       const n = nodeFor(i.snapshotId, i.elementId, i.target);
       return !!n && !isSensitiveControl(n);
+    },
+    autonomy: (i) => {
+      const n = nodeFor(i.snapshotId, i.elementId, i.target);
+      if (!n) return { tier: 'always_ask', reason: 'Keo could not identify the control.' };
+      if (isSensitiveControl(n)) return { tier: 'always_ask', reason: `“${n.name}” looks like a send, delete, buy, pay or confirm control.` };
+      // Moving between sections, tabs and menus is routine; other buttons are important.
+      return ['tabitem', 'menuitem', 'treeitem', 'listitem', 'hyperlink', 'tab', 'dataitem'].includes(n.role) || i.action === 'focus' || i.action === 'expand' || i.action === 'collapse'
+        ? { tier: 'routine' }
+        : { tier: 'important' };
     },
     preview: (i) => {
       const n = nodeFor(i.snapshotId, i.elementId, i.target);
@@ -528,50 +647,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length }),
     async execute(i, ctx) {
       await bringToFront(d, i.target, ctx.settings);
-      let { view } = await freshView(d, i.target);
-      if (headerMatches(view.header, i.contact)) return { opened: true, header: view.header, candidates: [view.header as string], reason: 'already_open' };
-      if (!view.search) throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Is WhatsApp open and signed in?', { dispatched: 'no' });
-      const searchNode = view.search;
-      await step('typing the name into the search box', () => enterTextChecked(d, i.target, searchNode, i.contact));
-      await sleep(d.focusSettleMs === 0 ? 0 : 900);
-      if (ctx.signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
-      view = (await freshView(d, i.target)).view;
-      const want = normName(i.contact);
-      const titles = [...new Set(view.chats.map((c) => c.title))];
-      const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
-      const exact = view.chats.filter((c) => normName(c.title) === want);
-      if (exact.length !== 1) {
-        return { opened: false, header: view.header, candidates, reason: exact.length > 1 ? 'several chats have this exact name' : candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
-      }
-      const chat = exact[0]!;
-      await step(`opening the “${chat.title}” entry`, async () => {
-        try {
-          await actOn(d, i.target, chat.node, 'invoke');
-        } catch (e) {
-          if (!(e instanceof CapabilityError) || !['unsupported_action', 'no_invoke_pattern'].includes(e.code)) throw e;
-          await actOn(d, i.target, chat.node, 'select');
-        }
-      });
-      await sleep(d.focusSettleMs === 0 ? 0 : 900);
-      view = (await freshView(d, i.target)).view;
-      if (!headerMatches(view.header, i.contact)) {
-        // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
-        const again = view.chats.filter((c) => normName(c.title) === want);
-        if (again.length === 1) {
-          const entry = again[0]!;
-          await step(`clicking the “${entry.title}” entry`, async () => {
-            const c = await centerOf(d, i.target, entry.titleNode ?? entry.node);
-            await d.desktop.backend.clickScreen(i.target.hwnd, c.x, c.y);
-          });
-          await sleep(d.focusSettleMs === 0 ? 0 : 900);
-          view = (await freshView(d, i.target)).view;
-        }
-      }
-      if (!headerMatches(view.header, i.contact)) {
-        // Opening a chat is repeatable and harmless, so this is a plain “not confirmed”, not an uncertain outcome.
-        return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${i.contact}”` };
-      }
-      return { opened: true, header: view.header, candidates, reason: null };
+      return waOpenChat(d, i.target, i.contact, ctx.signal);
     },
     async verify(i, o) {
       if (!o.opened) return { verified: null, detail: `Not opened: ${o.reason}. Candidates: ${o.candidates.join(', ') || 'none'}.` };
@@ -636,6 +712,8 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     maxAttempts: 1,
     modelVisible: true,
     verificationPolicy: 'Recipient verified from the chat header before sending; the sent text must appear as your latest message afterwards. Delivery/read status is reported only if WhatsApp shows it.',
+    // Hands-free may send only to someone the user named themselves in this conversation.
+    autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
     precheck: (i, s) => allowCheck(i.target, s),
     preview: (i) => ({
       summary: `Send a WhatsApp message to ${i.contact}`,
@@ -646,40 +724,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     auditView: (i) => ({ target: i.target, chars: i.text.length, allowDuplicate: i.allowDuplicate }),
     async execute(i, ctx) {
       await bringToFront(d, i.target, ctx.settings);
-      let { view } = await freshView(d, i.target);
-      if (!headerMatches(view.header, i.contact)) {
-        throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${i.contact}”. Nothing was sent.`, { dispatched: 'no' });
-      }
-      const last = lastOutgoing(view);
-      if (!i.allowDuplicate && last && textMatches(last.text, i.text) && normName(last.text).length <= normName(i.text).length + 12) {
-        return { sent: false, alreadyPresent: true, appearsInChat: true, status: last.status, recipient: view.header as string };
-      }
-      if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
-      const compose = view.compose;
-      await step('typing the message into the message box', () => enterTextChecked(d, i.target, compose, i.text));
-      await sleep(d.focusSettleMs === 0 ? 0 : 300);
-      // Re-verify recipient and draft immediately before the irreversible step.
-      view = (await freshView(d, i.target)).view;
-      if (!headerMatches(view.header, i.contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
-      const draft = view.compose ? await d.desktop.backend.uiaDescribe(i.target.hwnd, view.compose.rid).catch(() => null) : null;
-      const draftText = draft?.value ?? draft?.name ?? '';
-      if (draft?.value !== undefined && !textMatches(draftText, i.text)) {
-        throw new CapabilityError('draft_mismatch', 'The message box does not contain the approved text. Nothing was sent.', { dispatched: 'no' });
-      }
-      if (ctx.signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
-      if (view.send) {
-        await actOn(d, i.target, view.send, 'invoke');
-      } else {
-        await d.desktop.backend.keys(i.target.hwnd, [], 0x0d); // Enter sends in WhatsApp
-      }
-      await sleep(d.focusSettleMs === 0 ? 0 : 1500);
-      view = (await freshView(d, i.target)).view;
-      const now = lastOutgoing(view);
-      const appears = !!now && textMatches(now.text, i.text);
-      if (!appears) {
-        throw new CapabilityError('unverified_send', 'Keo pressed Send but cannot see the message in the chat. It may or may not have been sent — check WhatsApp before trying again.', { dispatched: 'yes' });
-      }
-      return { sent: true, alreadyPresent: false, appearsInChat: true, status: now.status, recipient: view.header as string };
+      return waSend(d, i.target, i.contact, i.text, i.allowDuplicate, ctx.signal);
     },
     async verify(_i, o) {
       if (o.alreadyPresent) return { verified: true, detail: 'This exact message is already your latest message in the chat, so it was not sent again.' };

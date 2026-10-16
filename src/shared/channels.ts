@@ -82,6 +82,11 @@ export const INVOKE_CHANNELS = [
   'grants:revoke',
   'grants:revokeAll',
   'grants:approveAndGrant',
+  'livechat:list',
+  'livechat:answer',
+  'livechat:pause',
+  'livechat:resume',
+  'livechat:stop',
   'diagnostics:logs',
   'diagnostics:audit',
   'data:backup',
@@ -100,6 +105,7 @@ export const pushChannels = [
   'presence:changed',
   'presence:command',
   'grants:changed',
+  'livechat:changed',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

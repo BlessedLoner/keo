@@ -53,6 +53,31 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+  [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO i);
+
+  // Milliseconds since the user last used the keyboard or mouse (any app).
+  public static long IdleMs() {
+    var i = new LASTINPUTINFO(); i.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+    if (!GetLastInputInfo(ref i)) return -1;
+    return (long)unchecked((uint)Environment.TickCount - i.dwTime);
+  }
+
+  // Share (0..1) of sample points inside the window that another window covers.
+  // Browsers stop updating a covered page, so its accessibility tree goes stale.
+  public static double CoveredShare(IntPtr h) {
+    RECT r; if (!GetWindowRect(h, out r) || IsIconic(h)) return 1.0;
+    int w = r.Right - r.Left, hh = r.Bottom - r.Top; if (w <= 0 || hh <= 0) return 1.0;
+    int covered = 0, total = 0;
+    for (int ix = 1; ix <= 3; ix++) for (int iy = 1; iy <= 3; iy++) {
+      var p = new POINT(); p.X = r.Left + w * ix / 4; p.Y = r.Top + hh * iy / 4;
+      total++;
+      if (GetAncestor(WindowFromPoint(p), 2) != h) covered++;
+    }
+    return (double)covered / total;
+  }
+
+  public static string ForegroundHwnd() { var h = GetForegroundWindow(); return h == IntPtr.Zero ? "" : h.ToInt64().ToString(); }
   [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int v);
@@ -657,6 +682,8 @@ while ($true) {
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
       'ping'  { Reply $req.id $true @{ pong = $true; dpi = $script:dpiMode } }
+      'idle'  { Reply $req.id $true @{ idleMs = [KeoWin]::IdleMs(); foreground = [KeoWin]::ForegroundHwnd() } }
+      'covered' { Reply $req.id $true @{ share = [KeoWin]::CoveredShare($h) } }
       default { Reply $req.id $false @{ code = 'unknown_command'; message = 'Unknown command' } }
     }
   } catch {

@@ -25,3 +25,14 @@ export function findQuote(messages: Array<{ id: string; text: string }>, quote: 
   }
   return null;
 }
+
+/**
+ * Whether the user named this person/thing themselves (whole words, any
+ * length): used so actions toward a contact can only run without asking when
+ * the user mentioned that contact — never one taken from screen content.
+ */
+export function nameMentioned(messages: Array<{ text: string }>, name: string): boolean {
+  const n = normalizeQuote(name);
+  if (n.length < 2) return false;
+  return messages.some((m) => ` ${normalizeQuote(m.text)} `.includes(` ${n} `));
+}
