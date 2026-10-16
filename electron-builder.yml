@@ -1,0 +1,37 @@
+# Windows packaging for Keo. Nothing is published: `--publish never` is used in
+# every script and no publish provider is configured.
+appId: com.keo.desktop
+productName: Keo
+copyright: Copyright © 2026 Keo
+directories:
+  output: release
+  buildResources: build
+# Reuse the already-installed, pinned Electron runtime instead of downloading another copy.
+electronDist: node_modules/electron/dist
+files:
+  - out/**
+  - build/icon.png
+  - package.json
+  - '!**/*.map'
+asar: true
+compression: normal
+npmRebuild: false # Keo ships no native modules (SQLite is Node's built-in node:sqlite).
+afterPack: scripts/after-pack.cjs
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  executableName: Keo
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Keo
+  # User data in %APPDATA%\Keo is kept on uninstall; deleting it is an explicit in-app action.
+  deleteAppDataOnUninstall: false
+  artifactName: Keo-Setup-${version}.${ext}
+publish: null

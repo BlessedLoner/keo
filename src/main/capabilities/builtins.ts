@@ -1,0 +1,657 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { z } from 'zod';
+import type { Settings } from '../../shared/settings';
+import type { DesktopService } from '../desktop/desktopService';
+import { isAllowedProcess } from '../desktop/desktopService';
+import type { MemoryRepo } from '../repos/memory';
+import type { ProjectRepo } from '../repos/projects';
+import type { ObservationRepo } from '../repos/observations';
+import type { VisionService } from '../vision/visionService';
+import { CapabilityError, defineCapability, type AnyCapability } from './types';
+
+// ---------------------------------------------------------------------------
+// Shared schemas
+// ---------------------------------------------------------------------------
+
+const Target = z
+  .object({
+    hwnd: z.string().regex(/^\d{1,20}$/).describe('Window handle from desktop__list_windows'),
+    pid: z.number().int().positive().describe('Process id from desktop__list_windows'),
+    processName: z.string().min(1).max(120).describe('Process name from desktop__list_windows'),
+  })
+  .strict();
+type TargetT = z.infer<typeof Target>;
+
+const targetLabel = (t: TargetT) => `${t.processName} (window ${t.hwnd}, pid ${t.pid})`;
+
+const allowCheck = (t: TargetT, s: Settings) =>
+  isAllowedProcess(t.processName, s) ? null : `${t.processName} is not in the allowed applications list (Capabilities → Allowed applications).`;
+
+/** Keys the model may press. Win-key combinations are deliberately excluded. */
+export const KEY_CODES: Record<string, number> = {
+  enter: 0x0d, tab: 0x09, escape: 0x1b, backspace: 0x08, delete: 0x2e, space: 0x20,
+  up: 0x26, down: 0x28, left: 0x25, right: 0x27, home: 0x24, end: 0x23, pageup: 0x21, pagedown: 0x22,
+  ...Object.fromEntries([...'abcdefghijklmnopqrstuvwxyz'].map((c) => [c, c.toUpperCase().charCodeAt(0)])),
+  ...Object.fromEntries([...'0123456789'].map((c) => [c, c.charCodeAt(0)])),
+  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`f${i + 1}`, 0x70 + i])),
+};
+const MODIFIERS: Record<string, number> = { ctrl: 0x11, shift: 0x10, alt: 0x12 };
+
+export function parseKeyCombo(combo: string): { mods: number[]; key: number } | null {
+  const parts = combo.toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
+  if (!parts.length || parts.length > 4) return null;
+  const keyName = parts[parts.length - 1] as string;
+  const key = KEY_CODES[keyName];
+  if (key === undefined) return null;
+  const mods: number[] = [];
+  for (const m of parts.slice(0, -1)) {
+    const vk = MODIFIERS[m];
+    if (vk === undefined || mods.includes(vk)) return null;
+    mods.push(vk);
+  }
+  return { mods, key };
+}
+
+export interface CapabilityDeps {
+  memory: MemoryRepo;
+  projects: ProjectRepo;
+  observations: ObservationRepo;
+  desktop: DesktopService;
+  vision: VisionService;
+  activeProviderDestination: () => string;
+  activeProviderId: () => string | null;
+  /** Creates a proposed (non-executing) task from a model plan. Returns task id. */
+  proposePlan: (plan: PlanInput, ctx: { conversationId: string | null; correlationId: string }) => { taskId: string; rejected: string[] };
+}
+
+export const PlanStep = z
+  .object({
+    capability: z.string().min(3).max(80).describe('Capability id, e.g. "desktop.focus_window"'),
+    title: z.string().min(1).max(200),
+    input: z.record(z.string(), z.unknown()),
+    dependsOn: z.array(z.number().int().min(1)).max(10).default([]).describe('1-based indexes of earlier steps'),
+  })
+  .strict();
+export const PlanInput = z
+  .object({
+    title: z.string().min(1).max(200),
+    rationale: z.string().min(1).max(2000),
+    steps: z.array(PlanStep).min(1).max(12),
+  })
+  .strict();
+export type PlanInput = z.infer<typeof PlanInput>;
+
+// ---------------------------------------------------------------------------
+// Capability definitions
+// ---------------------------------------------------------------------------
+
+export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
+  const memorySearch = defineCapability({
+    id: 'memory.search',
+    version: '1.0.0',
+    title: 'Search memory',
+    description: 'Search Keo’s user-confirmed long-term memory. Returns stored items with provenance and dates. Use before claiming to remember something.',
+    input: z.object({ query: z.string().min(1).max(300), limit: z.number().int().min(1).max(20).default(8) }).strict(),
+    output: z.object({
+      results: z.array(z.object({ id: z.string(), content: z.string(), subject: z.string().nullable(), provenance: z.string(), confirmedAt: z.string().nullable(), score: z.number() })),
+    }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5000,
+    maxAttempts: 2,
+    modelVisible: true,
+    verificationPolicy: 'Read-only; results come directly from the local database.',
+    preview: (i) => ({ summary: `Search memory for “${i.query}”`, target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ queryLength: i.query.length, limit: i.limit }),
+    async execute(i) {
+      return {
+        results: d.memory.search(i.query, { limit: i.limit }).map((r) => ({
+          id: r.item.id,
+          content: r.item.content,
+          subject: r.item.subject,
+          provenance: r.item.provenance,
+          confirmedAt: r.item.confirmedAt,
+          score: r.score,
+        })),
+      };
+    },
+  });
+
+  const memoryPropose = defineCapability({
+    id: 'memory.propose',
+    version: '1.0.0',
+    title: 'Propose a memory',
+    description:
+      'Propose a durable fact, preference or instruction the user stated, for the user to confirm. It is NOT stored as known until the user accepts it in the Memory view. Never propose secrets, passwords or sensitive personal data. Set "subject" to a short stable key (e.g. "user.timezone") so conflicts can be detected.',
+    input: z
+      .object({
+        kind: z.enum(['fact', 'preference', 'instruction', 'person', 'context']),
+        content: z.string().min(3).max(600),
+        subject: z.string().min(1).max(120).optional(),
+        evidence: z.string().min(1).max(500).describe('Quote of the user words this is based on'),
+      })
+      .strict(),
+    output: z.object({ memoryId: z.string(), status: z.literal('proposed'), note: z.string() }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 5000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Creates a proposal only; the user confirms or rejects it.',
+    preview: (i) => ({ summary: `Propose memory: ${i.content}`, target: null, consequences: ['Adds a proposal awaiting your confirmation.'], dataExport: null }),
+    auditView: (i) => ({ kind: i.kind, subject: i.subject ?? null }),
+    async execute(i, ctx) {
+      const m = d.memory.create({
+        kind: i.kind,
+        subject: i.subject ?? null,
+        content: i.content,
+        status: 'proposed',
+        provenance: 'model_inferred',
+        sourceConversationId: ctx.conversationId,
+        sourceMessageId: ctx.sourceMessageId,
+        sourceExcerpt: i.evidence,
+      });
+      return { memoryId: m.id, status: 'proposed' as const, note: 'Saved as a proposal. Tell the user it will be remembered only after they confirm it in Memory.' };
+    },
+  });
+
+  const projectList = defineCapability({
+    id: 'project.list',
+    version: '1.0.0',
+    title: 'List projects',
+    description: 'List the user’s tracked projects with status and count of open items.',
+    input: z.object({}).strict(),
+    output: z.object({ projects: z.array(z.object({ id: z.string(), name: z.string(), status: z.string(), description: z.string(), openItems: z.number() })) }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5000,
+    maxAttempts: 2,
+    modelVisible: true,
+    verificationPolicy: 'Read-only.',
+    preview: () => ({ summary: 'List projects', target: null, consequences: [], dataExport: null }),
+    auditView: () => ({}),
+    async execute() {
+      return { projects: d.projects.list().map((p) => ({ id: p.id, name: p.name, status: p.status, description: p.description, openItems: p.openItemCount })) };
+    },
+  });
+
+  const projectGet = defineCapability({
+    id: 'project.get',
+    version: '1.0.0',
+    title: 'Get project details',
+    description: 'Get a project with its objectives, decisions, blockers, open questions and progress notes, including whether each was confirmed by the user.',
+    input: z.object({ projectId: z.string().min(6).max(64) }).strict(),
+    output: z.object({
+      project: z.object({ id: z.string(), name: z.string(), status: z.string(), description: z.string() }),
+      items: z.array(z.object({ id: z.string(), type: z.string(), content: z.string(), status: z.string(), provenance: z.string(), createdAt: z.string() })),
+    }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5000,
+    maxAttempts: 2,
+    modelVisible: true,
+    verificationPolicy: 'Read-only.',
+    preview: (i) => ({ summary: `Read project ${i.projectId}`, target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ projectId: i.projectId }),
+    async execute(i) {
+      const p = d.projects.get(i.projectId);
+      if (!p) throw new CapabilityError('not_found', 'No project with that id.');
+      return {
+        project: { id: p.id, name: p.name, status: p.status, description: p.description },
+        items: d.projects.items(p.id).map((x) => ({ id: x.id, type: x.type, content: x.content, status: x.status, provenance: x.provenance, createdAt: x.createdAt })),
+      };
+    },
+  });
+
+  const projectProposeItem = defineCapability({
+    id: 'project.propose_item',
+    version: '1.0.0',
+    title: 'Propose project item',
+    description: 'Propose an objective, decision, blocker, open question or progress note for an existing project, based on what the user said. It stays a proposal until the user accepts it.',
+    input: z
+      .object({
+        projectId: z.string().min(6).max(64),
+        type: z.enum(['objective', 'decision', 'blocker', 'question', 'progress']),
+        content: z.string().min(3).max(600),
+      })
+      .strict(),
+    output: z.object({ itemId: z.string(), status: z.literal('proposed') }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 5000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Creates a proposal only.',
+    preview: (i) => ({ summary: `Propose ${i.type}: ${i.content}`, target: i.projectId, consequences: ['Adds a proposal to the project.'], dataExport: null }),
+    auditView: (i) => ({ projectId: i.projectId, type: i.type }),
+    async execute(i, ctx) {
+      if (!d.projects.get(i.projectId)) throw new CapabilityError('not_found', 'No project with that id.');
+      const it = d.projects.addItem({
+        projectId: i.projectId,
+        type: i.type,
+        content: i.content,
+        status: 'proposed',
+        provenance: 'model_inferred',
+        sourceConversationId: ctx.conversationId,
+        sourceMessageId: ctx.sourceMessageId,
+      });
+      return { itemId: it.id, status: 'proposed' as const };
+    },
+  });
+
+  const taskProposePlan = defineCapability({
+    id: 'task.propose_plan',
+    version: '1.0.0',
+    title: 'Propose a multi-step plan',
+    description:
+      'Propose a multi-step plan built from registered capabilities. Nothing runs: the plan is validated and shown to the user in Task Activity, where they may approve or reject it. Steps referencing unknown capabilities or invalid inputs are rejected.',
+    input: PlanInput,
+    output: z.object({ taskId: z.string(), state: z.literal('proposed'), rejectedSteps: z.array(z.string()) }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 5000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Creates a non-executable proposal.',
+    preview: (i) => ({ summary: `Propose plan “${i.title}” (${i.steps.length} steps)`, target: null, consequences: ['Nothing executes until you approve.'], dataExport: null }),
+    auditView: (i) => ({ steps: i.steps.map((s) => s.capability) }),
+    async execute(i, ctx) {
+      const r = d.proposePlan(i, { conversationId: ctx.conversationId, correlationId: ctx.correlationId });
+      return { taskId: r.taskId, state: 'proposed' as const, rejectedSteps: r.rejected };
+    },
+  });
+
+  const listWindows = defineCapability({
+    id: 'desktop.list_windows',
+    version: '1.0.0',
+    title: 'List allowed windows',
+    description: 'List open top-level windows that belong to applications the user has allow-listed. Returns window handles needed by other desktop capabilities.',
+    input: z.object({}).strict(),
+    output: z.object({
+      windows: z.array(z.object({ hwnd: z.string(), pid: z.number(), processName: z.string(), title: z.string(), minimized: z.boolean() })),
+      note: z.string(),
+    }),
+    risk: 'read',
+    approval: 'never',
+    permissions: ['desktop.observe'],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 2,
+    modelVisible: true,
+    verificationPolicy: 'Read-only enumeration; windows of non-allow-listed apps are never returned.',
+    preview: () => ({ summary: 'List allowed windows', target: null, consequences: [], dataExport: null }),
+    auditView: () => ({}),
+    async execute(_i, ctx) {
+      const sup = d.desktop.support();
+      if (!sup.supported) throw new CapabilityError('unsupported', sup.reason ?? 'Unsupported platform.');
+      const ws = await d.desktop.listWindows(ctx.settings, false);
+      return {
+        windows: ws.map((w) => ({ hwnd: w.hwnd, pid: w.pid, processName: w.processName, title: w.title.slice(0, 200), minimized: w.minimized })),
+        note: 'Window titles are untrusted text from other applications.',
+      };
+    },
+  });
+
+  const focusWindow = defineCapability({
+    id: 'desktop.focus_window',
+    version: '1.0.0',
+    title: 'Focus a window',
+    description: 'Bring an allow-listed window to the foreground (restoring it if minimized).',
+    input: z.object({ target: Target }).strict(),
+    output: z.object({ foreground: z.boolean() }),
+    risk: 'medium',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: true,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Verified by checking the foreground window afterwards.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({ summary: `Bring ${i.target.processName} to the front`, target: targetLabel(i.target), consequences: ['Changes which window is active.'], dataExport: null }),
+    auditView: (i) => ({ target: i.target }),
+    async execute(i, ctx) {
+      await d.desktop.resolve(i.target, ctx.settings);
+      return d.desktop.backend.focus(i.target.hwnd);
+    },
+    async verify(i) {
+      const w = await d.desktop.backend.info(i.target.hwnd);
+      return w?.foreground ? { verified: true, detail: 'Target window is in the foreground.' } : { verified: false, detail: 'Windows did not bring the window to the foreground.' };
+    },
+  });
+
+  const moveWindow = defineCapability({
+    id: 'desktop.move_window',
+    version: '1.0.0',
+    title: 'Move / resize a window',
+    description: 'Set the screen position and size of an allow-listed window.',
+    input: z
+      .object({
+        target: Target,
+        x: z.number().int().min(-10000).max(20000),
+        y: z.number().int().min(-10000).max(20000),
+        width: z.number().int().min(100).max(10000),
+        height: z.number().int().min(80).max(10000),
+      })
+      .strict(),
+    output: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+    risk: 'medium',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: true,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Verified by reading back the window rectangle.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({ summary: `Move ${i.target.processName} to ${i.x},${i.y} size ${i.width}×${i.height}`, target: targetLabel(i.target), consequences: ['Changes window position and size.'], dataExport: null }),
+    auditView: (i) => ({ target: i.target, x: i.x, y: i.y, width: i.width, height: i.height }),
+    async execute(i, ctx) {
+      await d.desktop.resolve(i.target, ctx.settings);
+      const w = await d.desktop.backend.move(i.target.hwnd, { x: i.x, y: i.y, width: i.width, height: i.height });
+      return { x: w.x, y: w.y, width: w.width, height: w.height };
+    },
+    async verify(i, o) {
+      const close = Math.abs(o.x - i.x) <= 16 && Math.abs(o.y - i.y) <= 16 && Math.abs(o.width - i.width) <= 32 && Math.abs(o.height - i.height) <= 32;
+      return close ? { verified: true, detail: 'Window rectangle matches the request.' } : { verified: null, detail: `Window reports ${o.x},${o.y} ${o.width}×${o.height}; the application may constrain its size.` };
+    },
+  });
+
+  const typeText = defineCapability({
+    id: 'desktop.type_text',
+    version: '1.0.0',
+    title: 'Type text',
+    description: 'Type text into an allow-listed window that is already in the foreground (focus it first). Never use it to submit forms, send messages or enter credentials without the user explicitly asking.',
+    input: z.object({ target: Target, text: z.string().min(1).max(4000) }).strict(),
+    output: z.object({ chars: z.number() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 40000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Delivery is confirmed by the OS input queue; the resulting application state is not verified.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({
+      summary: `Type ${i.text.length} characters into ${i.target.processName}`,
+      target: targetLabel(i.target),
+      consequences: [`Text: “${i.text.length > 300 ? `${i.text.slice(0, 300)}…` : i.text}”`, 'Typing cannot be undone automatically. Any newline presses Enter.'],
+      dataExport: null,
+    }),
+    auditView: (i) => ({ target: i.target, chars: i.text.length }),
+    async execute(i, ctx) {
+      await d.desktop.resolve(i.target, ctx.settings);
+      return d.desktop.backend.typeText(i.target.hwnd, i.text);
+    },
+    async verify(i, o) {
+      return o.chars === i.text.length
+        ? { verified: null, detail: 'All keystrokes were delivered; Keo cannot read back what the application did with them.' }
+        : { verified: false, detail: 'Not all characters were delivered.' };
+    },
+  });
+
+  const pressKeys = defineCapability({
+    id: 'desktop.press_keys',
+    version: '1.0.0',
+    title: 'Press a key combination',
+    description: 'Press one key or combination (e.g. "ctrl+s", "enter", "alt+f4") in an allow-listed foreground window. Allowed modifiers: ctrl, shift, alt.',
+    input: z
+      .object({ target: Target, combo: z.string().min(1).max(40).refine((c) => parseKeyCombo(c) !== null, 'Unsupported key combination') })
+      .strict(),
+    output: z.object({ sent: z.boolean() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Delivery confirmed by the OS input queue; effect not verified.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({ summary: `Press ${i.combo.toUpperCase()} in ${i.target.processName}`, target: targetLabel(i.target), consequences: ['Key presses may trigger application actions (save, send, close).'], dataExport: null }),
+    auditView: (i) => ({ target: i.target, combo: i.combo }),
+    async execute(i, ctx) {
+      await d.desktop.resolve(i.target, ctx.settings);
+      const k = parseKeyCombo(i.combo);
+      if (!k) throw new CapabilityError('invalid_input', 'Unsupported key combination.');
+      await d.desktop.backend.keys(i.target.hwnd, k.mods, k.key);
+      return { sent: true };
+    },
+    async verify() {
+      return { verified: null, detail: 'Keys delivered; the application’s reaction is not observed.' };
+    },
+  });
+
+  const click = defineCapability({
+    id: 'desktop.click',
+    version: '1.0.0',
+    title: 'Click in a window',
+    description: 'Click at a point given in the window’s client coordinates (pixels from its top-left content corner). The window must be in the foreground and the point must not be covered by another window.',
+    input: z
+      .object({
+        target: Target,
+        x: z.number().int().min(0).max(10000),
+        y: z.number().int().min(0).max(10000),
+        button: z.enum(['left', 'right']).default('left'),
+        double: z.boolean().default(false),
+      })
+      .strict(),
+    output: z.object({ clicked: z.boolean() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Delivery confirmed; effect not verified.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({
+      summary: `${i.double ? 'Double-' : ''}${i.button === 'right' ? 'right-' : ''}click at (${i.x}, ${i.y}) in ${i.target.processName}`,
+      target: targetLabel(i.target),
+      consequences: ['A click can activate buttons, links or confirmations in that application.'],
+      dataExport: null,
+    }),
+    auditView: (i) => ({ target: i.target, x: i.x, y: i.y, button: i.button, double: i.double }),
+    async execute(i, ctx) {
+      await d.desktop.resolve(i.target, ctx.settings);
+      await d.desktop.backend.click(i.target.hwnd, i.x, i.y, i.button, i.double);
+      return { clicked: true };
+    },
+    async verify() {
+      return { verified: null, detail: 'Click delivered; the application’s reaction is not observed.' };
+    },
+  });
+
+  const launchApp = defineCapability({
+    id: 'desktop.launch_app',
+    version: '1.0.0',
+    title: 'Launch an approved application',
+    description: 'Start one of the applications the user registered under Capabilities → Launchable applications, by its id. Arbitrary paths and arguments are not supported.',
+    input: z.object({ appId: z.string().regex(/^[a-z0-9-]{1,40}$/) }).strict(),
+    output: z.object({ pid: z.number(), path: z.string() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: ['desktop.launch'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60000, // includes first-use start of the desktop helper
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Verified by the OS returning a process id.',
+    precheck: (i, s) => (s.permissions.launchableApps.some((a) => a.id === i.appId) ? null : `No launchable application with id "${i.appId}".`),
+    preview: (i, s) => {
+      const a = s.permissions.launchableApps.find((x) => x.id === i.appId);
+      return { summary: `Launch ${a?.label ?? i.appId}`, target: a?.path ?? null, consequences: ['Starts a new process on this computer.'], dataExport: null };
+    },
+    auditView: (i) => ({ appId: i.appId }),
+    async execute(i, ctx) {
+      const app = ctx.settings.permissions.launchableApps.find((a) => a.id === i.appId);
+      if (!app) throw new CapabilityError('not_found', 'Application is no longer registered.');
+      if (!path.isAbsolute(app.path) || !fs.existsSync(app.path)) throw new CapabilityError('not_found', 'The registered executable no longer exists.');
+      return await new Promise<{ pid: number; path: string }>((resolve, reject) => {
+        const child = spawn(app.path, [], { detached: true, stdio: 'ignore', shell: false, windowsHide: false });
+        child.once('error', (e) => reject(new CapabilityError('launch_failed', `Could not start the application: ${e.message}`, { dispatched: 'no' })));
+        child.once('spawn', () => {
+          child.unref();
+          resolve({ pid: child.pid ?? 0, path: app.path });
+        });
+      });
+    },
+    async verify(_i, o) {
+      return o.pid > 0 ? { verified: true, detail: `Process started (pid ${o.pid}).` } : { verified: false, detail: 'No process id returned.' };
+    },
+  });
+
+  const observeWindow = defineCapability({
+    id: 'vision.observe_window',
+    version: '1.0.0',
+    title: 'Observe a window',
+    description:
+      'Capture a FRESH screenshot of one allow-listed window and have the active model describe it with respect to a question. Requires approval each time because screen content is sent to the model provider. Returns the observation id and capture time.',
+    input: z.object({ target: Target, question: z.string().min(1).max(1000) }).strict(),
+    output: z.object({ observationId: z.string(), capturedAt: z.string(), fresh: z.literal(true), analysis: z.string(), analysisProvider: z.string() }),
+    risk: 'medium',
+    approval: 'always',
+    permissions: ['desktop.observe', 'vision.export'],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 180000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Capture provenance (window identity, time, SHA-256) is recorded; analysis is model output and is labelled untrusted.',
+    precheck: (i, s) => {
+      const a = allowCheck(i.target, s);
+      if (a) return a;
+      const pid = d.activeProviderId();
+      if (pid && pid !== 'test' && !s.permissions.visionExport[pid as 'anthropic' | 'openai' | 'local']) {
+        return `Screen-content export to ${d.activeProviderDestination()} is not enabled (Capabilities → Screen-content export).`;
+      }
+      return null;
+    },
+    preview: (i) => ({
+      summary: `Capture ${i.target.processName} and ask: “${i.question.slice(0, 160)}”`,
+      target: targetLabel(i.target),
+      consequences: ['Takes a screenshot of only this window.', 'The image is stored locally under Keo’s retention policy.'],
+      dataExport: `Screenshot is sent to ${d.activeProviderDestination()} for analysis.`,
+    }),
+    auditView: (i) => ({ target: i.target, questionLength: i.question.length }),
+    async execute(i, ctx) {
+      const obs = await d.vision.capture(i.target, ctx.settings, 'task', ctx.taskId);
+      try {
+        const a = await d.vision.analyze(obs.id, i.question, ctx.settings, ctx.signal);
+        return { observationId: obs.id, capturedAt: obs.capturedAt, fresh: true as const, analysis: a.result, analysisProvider: `${a.providerId}/${a.model}` };
+      } catch (e) {
+        if (e instanceof CapabilityError) throw new CapabilityError(e.code, `Captured observation ${obs.id}, but analysis failed: ${e.message}`, { dispatched: 'no' });
+        throw e;
+      }
+    },
+  });
+
+  const getObservation = defineCapability({
+    id: 'vision.get_observation',
+    version: '1.0.0',
+    title: 'Get a stored observation',
+    description: 'Return metadata and earlier analyses of a PREVIOUS observation by id. This is not a fresh capture; use only when the user explicitly refers to an earlier result.',
+    input: z.object({ observationId: z.string().min(6).max(64) }).strict(),
+    output: z.object({
+      observationId: z.string(),
+      capturedAt: z.string(),
+      fresh: z.literal(false),
+      target: z.object({ processName: z.string(), title: z.string() }),
+      analyses: z.array(z.object({ createdAt: z.string(), prompt: z.string(), result: z.string() })),
+    }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Read-only; marked as stored (not fresh).',
+    preview: (i) => ({ summary: `Read stored observation ${i.observationId}`, target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ observationId: i.observationId }),
+    async execute(i) {
+      const o = d.observations.get(i.observationId);
+      if (!o) throw new CapabilityError('not_found', 'No observation with that id.');
+      return {
+        observationId: o.id,
+        capturedAt: o.capturedAt,
+        fresh: false as const,
+        target: { processName: o.target.processName, title: o.target.title },
+        analyses: d.observations.analyses(o.id).map((a) => ({ createdAt: a.createdAt, prompt: a.prompt, result: a.result })),
+      };
+    },
+  });
+
+  const datetime = defineCapability({
+    id: 'system.datetime',
+    version: '1.0.0',
+    title: 'Current date and time',
+    description: 'Get the current local date, time and time zone of this computer.',
+    input: z.object({}).strict(),
+    output: z.object({ iso: z.string(), local: z.string(), timeZone: z.string() }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 2000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Read from the system clock.',
+    preview: () => ({ summary: 'Read the clock', target: null, consequences: [], dataExport: null }),
+    auditView: () => ({}),
+    async execute() {
+      const now = new Date();
+      return { iso: now.toISOString(), local: now.toString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    },
+  });
+
+  return [
+    memorySearch,
+    memoryPropose,
+    projectList,
+    projectGet,
+    projectProposeItem,
+    taskProposePlan,
+    listWindows,
+    focusWindow,
+    moveWindow,
+    typeText,
+    pressKeys,
+    click,
+    launchApp,
+    observeWindow,
+    getObservation,
+    datetime,
+  ] as AnyCapability[];
+}

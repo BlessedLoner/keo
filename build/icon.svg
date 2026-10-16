@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="512" height="512">
+  <!-- Static rendition of the Keo emblem (idle state) used for the app icon. -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#141a26"/>
+      <stop offset="70%" stop-color="#0b0e15"/>
+      <stop offset="100%" stop-color="#07090d"/>
+    </radialGradient>
+    <linearGradient id="skin" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#6a7488"/>
+      <stop offset="28%" stop-color="#323946"/>
+      <stop offset="70%" stop-color="#161a22"/>
+      <stop offset="100%" stop-color="#0b0d12"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8b6bff" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#3dd6ff" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#3dd6ff" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="collar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a4150"/>
+      <stop offset="100%" stop-color="#0d1016"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+    <clipPath id="disc"><circle cx="100" cy="98" r="72"/></clipPath>
+  </defs>
+  <circle cx="100" cy="98" r="84" fill="#3dd6ff" opacity="0.16" filter="url(#soft)"/>
+  <circle cx="100" cy="98" r="91" fill="none" stroke="#3dd6ff" stroke-width="2.5" stroke-dasharray="1 5.1" opacity="0.8"/>
+  <circle cx="100" cy="98" r="84" fill="none" stroke="url(#rim)" stroke-width="4" stroke-dasharray="120 40 60 308" stroke-linecap="round" transform="rotate(-30 100 98)"/>
+  <circle cx="100" cy="98" r="78" fill="none" stroke="#8b6bff" stroke-width="2" stroke-dasharray="70 420" stroke-linecap="round" filter="url(#glow)" transform="rotate(150 100 98)"/>
+  <circle cx="100" cy="98" r="72" fill="url(#bg)" stroke="#1d2433" stroke-width="1"/>
+  <g clip-path="url(#disc)" fill="none" stroke="#8b6bff" stroke-width="0.7" stroke-opacity="0.4">
+    <path d="M34 70 H54 L62 78 V112 M40 124 H58 L66 132 M166 70 H146 L138 78 V112 M160 124 H142 L134 132"/>
+  </g>
+  <path d="M58 172 C64 150 82 146 100 147 C118 146 136 150 142 172 Z" fill="url(#collar)" stroke="#4a5263" stroke-width="0.8"/>
+  <path d="M86 150 L100 166 L114 150" fill="none" stroke="#3dd6ff" stroke-width="1.4" filter="url(#glow)"/>
+  <circle cx="100" cy="166" r="6.5" fill="#0b0e14" stroke="#3dd6ff" stroke-width="1.8" filter="url(#glow)"/>
+  <circle cx="100" cy="166" r="2.6" fill="#3dd6ff"/>
+  <path d="M100 34 C129 34 137 58 136 82 C135 103 129 121 117 136 C111 144 106 148 100 148 C94 148 89 144 83 136 C71 121 65 103 64 82 C63 58 71 34 100 34 Z" fill="url(#skin)" stroke="#5d6780" stroke-width="0.8"/>
+  <path d="M80 44 C88 37 104 36 112 40 C100 41 88 46 80 58 Z" fill="#ffffff" opacity="0.16"/>
+  <g fill="none" stroke="#3dd6ff" stroke-width="1.6" stroke-linecap="round" filter="url(#glow)">
+    <path d="M100 38 V58 L90 68 M100 58 L110 68"/>
+    <path d="M78 52 L84 62 L84 72 M122 52 L116 62 L116 72" stroke-opacity="0.7"/>
+  </g>
+  <g filter="url(#glow)" fill="#c8f6ff">
+    <path d="M76 91 Q86 83 96 90 Q86 97 76 91 Z"/>
+    <path d="M104 90 Q114 83 124 91 Q114 97 104 90 Z"/>
+  </g>
+  <path d="M92 122 Q100 124.5 108 122" fill="none" stroke="#3dd6ff" stroke-opacity="0.55" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

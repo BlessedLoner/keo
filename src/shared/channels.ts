@@ -1,0 +1,78 @@
+/**
+ * Allow-list of invoke channel names, kept free of runtime dependencies so the
+ * sandboxed preload can embed it. tests/security.test.ts asserts it matches
+ * the schema table in ipc.ts exactly.
+ */
+export const INVOKE_CHANNELS = [
+  'app:info',
+  'app:openDataFolder',
+  'settings:get',
+  'settings:update',
+  'providers:list',
+  'providers:setKey',
+  'providers:clearKey',
+  'providers:diagnose',
+  'conversations:list',
+  'conversations:create',
+  'conversations:rename',
+  'conversations:setProject',
+  'conversations:delete',
+  'conversations:messages',
+  'chat:send',
+  'chat:retry',
+  'chat:cancel',
+  'chat:active',
+  'memory:list',
+  'memory:create',
+  'memory:rememberMessage',
+  'memory:update',
+  'memory:confirm',
+  'memory:reject',
+  'memory:supersede',
+  'memory:delete',
+  'memory:revisions',
+  'projects:list',
+  'projects:create',
+  'projects:update',
+  'projects:delete',
+  'projects:items',
+  'projects:addItem',
+  'projects:setItemStatus',
+  'projects:deleteItem',
+  'capabilities:list',
+  'tasks:list',
+  'tasks:get',
+  'tasks:approveStep',
+  'tasks:denyStep',
+  'tasks:approvePlan',
+  'tasks:cancel',
+  'tasks:reconcileStep',
+  'desktop:listWindows',
+  'desktop:pickLaunchable',
+  'vision:capture',
+  'vision:list',
+  'vision:image',
+  'vision:analyze',
+  'vision:analyses',
+  'vision:delete',
+  'voice:transcribe',
+  'voice:speak',
+  'diagnostics:logs',
+  'diagnostics:audit',
+  'data:backup',
+  'data:deleteAll',
+] as const;
+
+/** main -> renderer push events. */
+export const pushChannels = [
+  'agent:event',
+  'tasks:changed',
+  'memory:changed',
+  'projects:changed',
+  'conversations:changed',
+  'observations:changed',
+  'settings:changed',
+] as const;
+export type PushChannel = (typeof pushChannels)[number];
+
+export const INVOKE_PREFIX = 'keo:';
