@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { invoke } from './lib/api';
 import { Icon } from './components/Icon';
 import { KeoEmblem, STATE_LABEL } from './components/KeoEmblem';
 import { useApp, type ViewId } from './state/AppState';
@@ -61,6 +62,7 @@ export function App() {
           KEO <small>{STATE_LABEL[app.emblem]}</small>
         </div>
         <div className="spacer" />
+        <TitleControls />
         {providerChip}
       </div>
       <nav className="rail" aria-label="Main">
@@ -81,6 +83,31 @@ export function App() {
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>
+    </div>
+  );
+}
+
+/** Command bar shortcut and a stop control that is visible whenever Keo is active. */
+function TitleControls() {
+  const app = useApp();
+  const p = app.presence;
+  const s = app.settings.data;
+  const busy = !!p && p.state !== 'idle' && p.state !== 'cancelled';
+  return (
+    <div className="row" style={{ gap: 6, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      {busy && (
+        <button className="chip danger" onClick={() => void invoke('presence:stopAll')} title="Stop replies, pending actions and navigation permissions">
+          <Icon name="stop" size={12} /> Stop
+        </button>
+      )}
+      {p?.wake.enabled && (
+        <button className={`chip ${p.wake.muted ? 'warn' : 'accent'}`} onClick={() => void invoke('wake:setMuted', { muted: !p.wake.muted })} title={p.wake.message ?? 'Wake word'}>
+          <Icon name="mic" size={12} /> {p.wake.muted ? 'Mic muted' : p.wake.status === 'listening' ? `“${p.wake.phrase}”` : p.wake.status}
+        </button>
+      )}
+      <button className="chip" onClick={() => void invoke('commandBar:show')} title="Open the command bar">
+        <Icon name="chat" size={12} /> {s?.shortcuts.commandBarEnabled ? s.shortcuts.commandBar.replace('Control', 'Ctrl') : 'Command bar'}
+      </button>
     </div>
   );
 }

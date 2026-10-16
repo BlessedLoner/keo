@@ -1,4 +1,4 @@
-import type { AgentEvent, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
+import type { AgentEvent, AgentPhase, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { CapabilityRegistry } from '../capabilities/registry';
 import { CapabilityError } from '../capabilities/types';
@@ -16,7 +16,20 @@ import { unsupportedClaims } from './claims';
 import { SYSTEM_PROMPT } from './systemPrompt';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
-const UNTRUSTED_OUTPUT = new Set(['desktop.list_windows', 'vision.observe_window', 'vision.get_observation', 'web.search', 'web.fetch_page']);
+const UNTRUSTED_OUTPUT = new Set([
+  'desktop.list_windows',
+  'desktop.inspect_window',
+  'browser.read_page',
+  'whatsapp.read_chat',
+  'whatsapp.open_chat',
+  'vision.observe_window',
+  'vision.get_observation',
+  'web.search',
+  'web.fetch_page',
+]);
+
+/** Read-only capabilities that gather context (shown as "gathering context"). */
+const CONTEXT_CAPS = new Set(['web.search', 'web.fetch_page', 'browser.read_page', 'desktop.inspect_window', 'desktop.list_windows', 'whatsapp.read_chat', 'memory.search', 'project.list', 'project.get', 'vision.get_observation', 'system.datetime']);
 const MAX_TOOL_RESULT_CHARS = 20000;
 
 interface ActiveTurn {
@@ -100,8 +113,7 @@ export class AgentService {
       lastFlush = now;
       this.conversations.updateMessage(assistant.id, { content: text, meta });
     };
-    const phase = (p: 'thinking' | 'generating' | 'tool' | 'waiting_approval') =>
-      this.emit({ type: 'phase', conversationId, messageId: assistant.id, phase: p });
+    const phase = (p: AgentPhase) => this.emit({ type: 'phase', conversationId, messageId: assistant.id, phase: p });
 
     let finalStatus: Message['status'] = 'complete';
     try {
@@ -212,7 +224,8 @@ export class AgentService {
           ],
           native: result.native,
         });
-        phase('tool');
+        const names = result.toolCalls.map((c) => this.registry.resolveToolName(c.name) ?? '');
+        phase(names.includes('task.propose_plan') ? 'planning' : names.every((n) => CONTEXT_CAPS.has(n)) ? 'gathering_context' : 'tool');
         const results: NeutralMessage['content'] = [];
         const upsert = (a: ToolActivity) => {
           const list = (meta.tools ??= []);

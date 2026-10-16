@@ -3,6 +3,38 @@ import type { Task } from '@shared/domain';
 import { TaskCard } from '../components/TaskWidgets';
 import { Empty, ErrorBanner, ViewHeader } from '../components/ui';
 import { useApp } from '../state/AppState';
+import { Icon } from '../components/Icon';
+import { invoke } from '../lib/api';
+import { useInvoke } from '../lib/hooks';
+
+/** Active navigation permissions, with revoke controls. */
+function GrantsBanner() {
+  const grants = useInvoke('grants:list', {}, { refreshOn: ['grants:changed'], pollMs: 30000 });
+  const list = grants.data ?? [];
+  if (!list.length) return null;
+  return (
+    <div className="banner warn" style={{ marginBottom: 12 }}>
+      <Icon name="shield" size={16} />
+      <div className="grow">
+        {list.map((g) => (
+          <div key={g.id} className="row" style={{ gap: 8 }}>
+            <span>
+              Keo may navigate in <strong>{g.target.processName}</strong> without asking — until {new Date(g.expiresAt).toLocaleTimeString()} ({g.used}/{g.maxActions} actions used). Sending, deleting, submitting and paying still ask.
+            </span>
+            <button className="btn sm" onClick={() => void invoke('grants:revoke', { id: g.id })}>
+              Revoke
+            </button>
+          </div>
+        ))}
+      </div>
+      {list.length > 1 && (
+        <button className="btn sm danger" onClick={() => void invoke('grants:revokeAll')}>
+          Revoke all
+        </button>
+      )}
+    </div>
+  );
+}
 
 type Filter = 'attention' | 'active' | 'done' | 'all';
 
@@ -38,6 +70,7 @@ export function TasksView() {
       </ViewHeader>
       <div className="view-body">
         <ErrorBanner error={app.tasks.error} onRetry={() => void app.tasks.refresh()} />
+        <GrantsBanner />
         {shown.length === 0 ? (
           <Empty icon="tasks" title={filter === 'attention' ? 'Nothing needs your attention' : 'No tasks here'}>
             {filter === 'attention'

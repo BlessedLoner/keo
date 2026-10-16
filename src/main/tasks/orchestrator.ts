@@ -10,6 +10,13 @@ import { errorCode, errorMessage, KeoError, nowIso } from '../util/errors';
 import { hashInput } from '../util/hash';
 import { deriveTaskState, TERMINAL_STEP, TERMINAL_TASK } from './stateMachine';
 
+export interface StepActivity {
+  taskId: string;
+  stepId: string;
+  capabilityId: string;
+  phase: 'executing' | 'verifying' | 'done';
+}
+
 export interface PlannedStep {
   admission: Extract<Admission, { ok: true }>;
   title: string;
@@ -85,9 +92,33 @@ export class TaskOrchestrator {
     const task = this.repo.require(taskId);
     if (task.state !== 'proposed') throw new KeoError('invalid_state', `Task is ${task.state}, not proposed.`);
     for (const s of task.steps) {
-      this.repo.updateStep(s.id, { state: s.requiresApproval ? 'awaiting_authorization' : 'ready' });
+      if (!s.requiresApproval) {
+        this.repo.updateStep(s.id, { state: 'ready' });
+        continue;
+      }
+      // A user-created navigation grant may cover low-risk steps in its window.
+      const grant = s.preview.grantable ? this.grantMatcher?.(s) ?? null : null;
+      if (grant) {
+        this.repo.updateStep(s.id, { state: 'awaiting_authorization' });
+        this.repo.updateStep(s.id, { state: 'ready', approval: { decision: 'approved', decidedAt: nowIso(), inputHash: s.inputHash, grantId: grant } });
+        this.audit.record({ kind: 'permission.decision', decision: 'approved_by_grant', capabilityId: s.capabilityId, taskId, detail: { grantId: grant } });
+      } else {
+        this.repo.updateStep(s.id, { state: 'awaiting_authorization' });
+      }
     }
     return this.refresh(taskId, 'submitted');
+  }
+
+  /** Returns a grant id that authorizes this step, consuming one use, or null. */
+  grantMatcher: ((step: TaskStep) => string | null) | null = null;
+
+  onActivity(fn: (a: StepActivity) => void): () => void {
+    this.events.on('activity', fn);
+    return () => this.events.off('activity', fn);
+  }
+
+  private activity(a: StepActivity): void {
+    this.events.emit('activity', a);
   }
 
   // -- user decisions -----------------------------------------------------------
@@ -303,6 +334,7 @@ export class TaskOrchestrator {
     this.refresh(task.id, 'running');
     this.log.info('task.step_started', { taskId: task.id, stepId: step.id, capabilityId: cap.id, attempt }, task.correlationId);
 
+    this.activity({ taskId: task.id, stepId: step.id, capabilityId: cap.id, phase: 'executing' });
     const ctx = {
       signal: controller.signal,
       idempotencyKey: step.idempotencyKey,
@@ -318,6 +350,7 @@ export class TaskOrchestrator {
       let verification: TaskStep['verification'] = 'not_applicable';
       let detail: string | null = null;
       if (cap.verify) {
+        this.activity({ taskId: task.id, stepId: step.id, capabilityId: cap.id, phase: 'verifying' });
         try {
           const v = await cap.verify(parsed.data, out, ctx);
           verification = v.verified === true ? 'verified' : v.verified === false ? 'verification_failed' : 'unverified';
@@ -357,6 +390,7 @@ export class TaskOrchestrator {
       this.audit.record({ kind: 'capability.execution', decision: `error:${ce.code}`, capabilityId: cap.id, taskId: task.id, detail: { dispatched: ce.dispatched, attempt }, correlationId: task.correlationId });
       this.log.warn('task.step_error', { taskId: task.id, stepId: step.id, code: ce.code, dispatched: ce.dispatched, attempt }, task.correlationId);
     } finally {
+      this.activity({ taskId: task.id, stepId: step.id, capabilityId: cap.id, phase: 'done' });
       this.running.delete(step.id);
       this.refresh(task.id, 'step_finished');
       this.pump();

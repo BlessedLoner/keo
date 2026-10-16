@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { DesktopBackend, RawWindow } from '../src/main/desktop/backend';
+import type { BrowserContextRaw, DesktopBackend, RawWindow, UiaAction, UiaNodeRaw, UiaSnapshotRaw } from '../src/main/desktop/backend';
+import type { SpeechEngine, SpeechEvent } from '../src/main/voice/wakeService';
+import type { FakeUiaApp } from './fakeApps';
 import { CapabilityError } from '../src/main/capabilities/types';
 import { resolveProfile } from '../src/main/env/profile';
 import { Logger } from '../src/main/logging/logger';
@@ -107,7 +109,85 @@ export class FakeDesktop implements DesktopBackend {
   }
   dispose() {}
   inputCalls() {
-    return this.calls.filter((c) => ['focus', 'move', 'type', 'paste', 'keys', 'click'].includes(c.op));
+    return this.calls.filter((c) => ['focus', 'move', 'type', 'paste', 'keys', 'click', 'uia_act', 'click_screen', 'wheel'].includes(c.op));
+  }
+
+  // -- simulated UI Automation (per window) -----------------------------------
+  apps = new Map<string, FakeUiaApp>();
+  addApp(win: RawWindow, app: FakeUiaApp) {
+    this.windows.push(win);
+    this.apps.set(win.hwnd, app);
+  }
+  private app(hwnd: string): FakeUiaApp {
+    const a = this.apps.get(hwnd);
+    if (!a) throw new CapabilityError('uia_unavailable', 'No UI Automation for this window.', { dispatched: 'no' });
+    return a;
+  }
+  async uiaSnapshot(hwnd: string): Promise<UiaSnapshotRaw> {
+    this.calls.push({ op: 'uia_snapshot', args: [hwnd] });
+    const a = this.app(hwnd);
+    return { nodes: a.nodes(), truncated: false, ms: 1, window: a.window };
+  }
+  async uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null> {
+    return this.app(hwnd).nodes().find((n) => n.rid === rid) ?? null;
+  }
+  async uiaAct(hwnd: string, rid: string, action: UiaAction, text?: string): Promise<{ method: string }> {
+    this.calls.push({ op: 'uia_act', args: [hwnd, rid, action, text] });
+    if (this.hang) return new Promise(() => undefined);
+    return { method: this.app(hwnd).act(rid, action, text) };
+  }
+  async uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }> {
+    const n = this.app(hwnd).nodes().find((x) => x.rid === rid);
+    if (!n) throw new CapabilityError('element_gone', 'gone', { dispatched: 'no' });
+    return { x: (n.x ?? 0) + (n.w ?? 0) / 2, y: (n.y ?? 0) + (n.h ?? 0) / 2 };
+  }
+  async browserContext(hwnd: string): Promise<BrowserContextRaw> {
+    const a = this.app(hwnd);
+    if (!a.browserContext) throw new CapabilityError('uia_unavailable', 'not a browser', { dispatched: 'no' });
+    return a.browserContext();
+  }
+  async processWindows(pid: number) {
+    const base = this.windows.filter((w) => w.pid === pid).map((w) => ({ ...w, owner: '0' }));
+    const extra = this.windows
+      .filter((w) => w.pid === pid)
+      .flatMap((w) => (this.apps.get(w.hwnd)?.extraWindows ?? []).map((d) => ({ ...w, hwnd: d.hwnd, title: d.title, owner: w.hwnd })));
+    return [...base, ...extra];
+  }
+  async clickScreen(hwnd: string, x: number, y: number) {
+    this.calls.push({ op: 'click_screen', args: [hwnd, x, y] });
+  }
+  async wheel(hwnd: string, x: number, y: number, notches: number) {
+    this.calls.push({ op: 'wheel', args: [hwnd, x, y, notches] });
+  }
+}
+
+/** Speech engine double: records commands, lets tests emit recognizer events. */
+export class FakeSpeech implements SpeechEngine {
+  sent: Array<Record<string, unknown>> = [];
+  started = 0;
+  private emit: ((e: SpeechEvent) => void) | null = null;
+  failStart: string | null = null;
+  async start(onEvent: (e: SpeechEvent) => void) {
+    this.started++;
+    if (this.failStart) throw new Error(this.failStart);
+    this.emit = onEvent;
+    onEvent({ event: 'ready' });
+  }
+  send(cmd: Record<string, unknown>) {
+    this.sent.push(cmd);
+    if (cmd.cmd === 'wake') this.emit?.({ event: 'listening' });
+    if (cmd.cmd === 'pause') this.emit?.({ event: 'paused' });
+    if (cmd.cmd === 'capture') this.emit?.({ event: 'capturing' });
+    if (cmd.cmd === 'recognizers') this.emit?.({ event: 'recognizers', list: [{ culture: 'en-US', name: 'Fake recognizer' }] });
+  }
+  fire(e: SpeechEvent) {
+    this.emit?.(e);
+  }
+  stop() {
+    this.emit = null;
+  }
+  cmds() {
+    return this.sent.map((c) => c.cmd);
   }
 }
 
@@ -135,7 +215,7 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export function makeHarness(opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService } = {}): Harness {
+export function makeHarness(opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech } = {}): Harness {
   const dir = opts.dir ?? tempDir();
   const profile = resolveProfile(dir, { KEO_USER_DATA_DIR: dir }, false);
   const provider = new TestProvider(opts.script ?? null, opts.delayMs ?? 0);
@@ -153,6 +233,7 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
     testProvider: provider,
     logger: new Logger(profile.logsDir, false),
     focusSettleMs: 0,
+    speechEngine: opts.speech ?? new FakeSpeech(),
     clipboard,
     ...(opts.web ? { web: opts.web } : {}),
   });

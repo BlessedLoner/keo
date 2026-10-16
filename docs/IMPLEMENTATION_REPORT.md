@@ -68,6 +68,21 @@ What the automated suites cover:
 - **Desktop/web/memory additions:** focus-before-input (and nothing sent when focus is refused), `notepad.exe`≡`Notepad`, launch errors list registered ids, invented handles reported clearly; Brave query/header/parse, auth/quota/no-key errors, private-destination refusal incl. DNS and redirects, text extraction, capability hidden until key + permission; memory saved only from verbatim user quotes, proposals otherwise, *ask first* setting, duplicate detection, profile facts always in context; v1→v2 migration preserves memories/revisions and keeps foreign keys enforced.
 - **Providers (no network):** OpenRouter (separate https-only provider with its own key; `max_tokens`, no `stream_options`; tool-call assembly; usage; `/key` check; reported capabilities never override declared ones); Anthropic request construction (model, effort, tools with eager streaming, refusal fallback beta, no disabled thinking), streaming deltas/phases, usage incl. cache tokens, native content (thinking blocks) echoed unchanged, tool-result mapping; SDK error mapping (auth, rate limit, quota, network, cancel, malformed) for Anthropic and OpenAI.
 
+### Desktop autonomy, voice activation and context-aware actions (current iteration)
+
+Run on Windows 11 (10.0.22621), Electron 44.7.2.
+
+| Command / check | Result |
+|---|---|
+| `npm run check` (typecheck, lint, tests, build) | pass; **136/136 tests** in 9 files (30+ new in `tests/autonomy.test.ts`) |
+| `npm run smoke` | **34/34**, incl. new presence checks: one companion window, non-focusable, on a display, role-restricted IPC (companion cannot read memory or chat; command bar cannot change settings or list windows), shortcut registers and is released when disabled, companion closes when disabled, no windows left after shutdown |
+| `npm run e2e:desktop` — real Win32 + UI Automation against a disposable WhatsApp-like Electron app | **10/10**: observe, tab navigation, unchanged element re-validated, vanished element refused (nothing dispatched), ambiguous contact → candidates, exact contact opened + verified, chat read with correct directions, nothing sent while pending or after denial, approved send verified on screen, duplicate blocked. (One cold start timed out before the test app was up; startup wait raised to 90 s.) |
+| UIA helper on real windows | ~80-node snapshot in ≈0.7 s; invoke / set_value / toggle / scroll; password field refused and hidden; stale id → `element_gone`; browser context survives DOM mutation (Chromium access violation caught) |
+| Wake word helper (SAPI, en-US recognizer) | “hey keo” recognised via emulation, ordinary sentence rejected by the competing grammar, custom phrase “okay jarvis” recognised, unknown culture → `no_recognizer` |
+| Visual review | companion, command bar and *Voice & shortcuts* settings captured from the real app; a misleading shortcut note was found and reworded |
+
+Bugs found by the real e2e and fixed: Chromium names list items with their concatenated text (“Daniel Okafor10:40”) → trailing time stripped; message rows are full-width so direction is now taken from the bubble's content position; an e2e step that re-clicked the wrong tab.
+
 ## 4. Integrations that require configuration (not live-verified)
 
 | Integration | Status |
@@ -80,7 +95,10 @@ What the automated suites cover:
 | Speech-to-text (OpenAI) | Implemented, consent-gated; not live-tested; microphone capture not exercised automatically. |
 | Text-to-speech | Windows voices via `speechSynthesis` and OpenAI TTS implemented; not exercised automatically. |
 | Window capture | Pipeline tested with a fake capture source; the Electron `desktopCapturer` path was **not** run against your windows (to avoid capturing your screen without a request). |
-| Desktop input actions | Implemented and protected; **never executed** here — only read-only helper commands were run. |
+| Desktop input actions | Executed only against windows owned by the checks themselves (test windows and the disposable WhatsApp-like app); never against your applications. |
+| WhatsApp (real) | Not tested against your WhatsApp — no messages were sent. Needs the physical acceptance test in the README/final report. |
+| Wake word with a real microphone | Recognition logic verified with emulated audio; real-microphone use needs physical acceptance. |
+| Ctrl+K in real use | Registration/release verified with a non-conflicting accelerator; whether Ctrl+K is free on your PC depends on your other apps. |
 | Installer | Built, **not installed** (installing would modify your system). Not code-signed. |
 
 ## 5. Known limitations and risks
@@ -91,7 +109,8 @@ What the automated suites cover:
 - First desktop action after startup can take ~10 s while the helper compiles its Win32 bindings (pre-warmed at startup when desktop features are enabled).
 - The audit trail and usage log are not pruned automatically (they contain no message text).
 - Markdown rendering is intentionally minimal (no tables/HTML).
-- Wake word is not implemented (push-to-talk only).
+- Wake word uses Windows speech recognition: accuracy depends on microphone, room and accent; only installed recognizer languages are offered. Not exercised with a real microphone automatically.
+- WhatsApp and browser reading depend on what those apps expose to UI Automation; verified against a disposable look-alike app, **not** against real WhatsApp or a real Chrome page (that would touch your accounts).
 - Dev tooling (`electron-builder` → `@electron/get` → `global-agent` → `sprintf-js`) has 8 moderate audit advisories; they are not shipped in the app.
 - The installer and executable are unsigned; SmartScreen will warn.
 
@@ -103,5 +122,5 @@ All work happened inside `C:\Users\bless\keo` plus disposable directories under 
 
 - Supplying provider API keys (OpenRouter now; Anthropic and/or OpenAI later) or running a local model server.
 - Code-signing certificate, if you want signed builds.
-- Whether to `git init` / commit (not done).
+- Whether to commit this iteration (not committed).
 - Running the installer on a machine.

@@ -19,7 +19,7 @@ afterEach(async () => {
   await h?.close();
 });
 
-const policy: SenderPolicy = { trustedOrigin: 'app://keo', trustedWebContentsId: () => 7 };
+const policy: SenderPolicy = { trustedOrigin: 'app://keo', roleOf: (id) => (id === 7 ? 'main' : id === 9 ? 'companion' : id === 10 ? 'command' : null) };
 const good = { senderId: 7, frameUrl: 'app://keo/index.html', isMainFrame: true };
 const host = { appInfo: () => ({ name: 'Keo', version: 't', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined };
 
@@ -35,7 +35,7 @@ describe('IPC boundary', () => {
     expect(senderAllowed({ ...good, frameUrl: 'https://evil.example/' }, policy).reason).toBe('untrusted_origin');
     expect(senderAllowed({ ...good, frameUrl: 'file:///C:/x.html' }, policy).ok).toBe(false);
     expect(senderAllowed({ ...good, frameUrl: null }, policy).ok).toBe(false);
-    expect(senderAllowed(good, { ...policy, trustedWebContentsId: () => null }).ok).toBe(false);
+    expect(senderAllowed(good, { ...policy, roleOf: () => null }).ok).toBe(false);
     expect(senderAllowed({ ...good, frameUrl: 'app://keo.evil/index.html' }, policy).ok).toBe(false);
     expect(originOf('app://keo/x')).toBe('app://keo');
     expect(originOf('http://localhost:5173/')).toBe('http://localhost:5173');

@@ -195,7 +195,7 @@ export class CapabilityRegistry {
       input: parsed.data,
       inputHash: hashInput(cap.id, cap.version, parsed.data),
       requiresApproval: cap.approval === 'always',
-      preview: cap.preview(parsed.data, s),
+      preview: { ...cap.preview(parsed.data, s), grantable: cap.approval === 'always' && !!cap.grantable?.(parsed.data) },
     };
   }
 

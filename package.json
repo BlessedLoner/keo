@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "e2e:desktop": "npm run build && node scripts/e2e-desktop.mjs",
     "package:dir": "npm run build && electron-builder --win --dir --publish never",
     "package:win": "npm run build && electron-builder --win --publish never"
   },

@@ -1,7 +1,10 @@
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
 import { AgentService } from './agent/agentService';
-import { builtinCapabilities, type PlanInput } from './capabilities/builtins';
+import { advancedCapabilities } from './capabilities/advanced';
+import { builtinCapabilities, type CapabilityDeps, type PlanInput } from './capabilities/builtins';
+import { SnapshotStore } from './desktop/uia';
+import { GrantService } from './tasks/grants';
 import { CapabilityRegistry } from './capabilities/registry';
 import type { PlannedStep } from './tasks/orchestrator';
 import { openDatabase, type Database } from './db/database';
@@ -24,6 +27,8 @@ import { KeoError } from './util/errors';
 import { VisionService, type ImageTools, type WindowCaptureSource } from './vision/visionService';
 import { VoiceService } from './voice/voiceService';
 import { WebService } from './web/webService';
+import { PresenceService, type VoiceReport } from './presence/presenceService';
+import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote } from './agent/quotes';
 import type { AgentEvent } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
@@ -42,6 +47,8 @@ export interface ServiceDeps {
   focusSettleMs?: number;
   logEcho?: boolean;
   logger?: Logger;
+  /** Local speech engine (Windows SAPI helper in the app; a fake in tests). */
+  speechEngine?: SpeechEngine;
 }
 
 export type Push = (channel: string, payload: unknown) => void;
@@ -75,6 +82,12 @@ export class Services {
   readonly vision: VisionService;
   readonly voice: VoiceService;
   readonly web: WebService;
+  readonly grants: GrantService;
+  readonly snapshots = new SnapshotStore();
+  readonly presence: PresenceService;
+  readonly wake: WakeService;
+  /** Window hooks supplied by the Electron shell (no-ops in tests). */
+  ui: { showCommandBar(): void } = { showCommandBar: () => undefined };
   readonly agent: AgentService;
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
@@ -97,12 +110,13 @@ export class Services {
     this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null });
     this.registry = new CapabilityRegistry(getSettings, this.audit, this.log);
     this.tasks = new TaskOrchestrator(this.taskRepo, this.registry, this.audit, this.log, getSettings);
+    this.grants = new GrantService(this.audit);
     this.desktop = new DesktopService(d.desktopBackend);
     this.vision = new VisionService(this.observations, this.desktop, d.captureSource, d.imageTools, this.providers, d.profile.observationsDir, this.log);
     this.voice = new VoiceService(this.providers.openai, getSettings, () => this.secrets.has('openai'), this.log);
     this.web = d.web ?? new WebService(() => this.secrets.get('brave'), this.log);
 
-    for (const cap of builtinCapabilities({
+    const capDeps: CapabilityDeps = {
       memory: this.memory,
       projects: this.projects,
       observations: this.observations,
@@ -122,9 +136,11 @@ export class Services {
         return hit ? { messageId: hit } : null;
       },
       focusSettleMs: d.focusSettleMs,
-    })) {
+    };
+    for (const cap of [...builtinCapabilities(capDeps), ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots })]) {
       this.registry.register(cap);
     }
+    this.tasks.grantMatcher = (step) => this.grants.match(step);
 
     const context = new ContextBuilder(this.conversations, this.memory, this.projects);
     this.agent = new AgentService(
@@ -143,15 +159,123 @@ export class Services {
       },
     );
 
+    this.presence = new PresenceService(this.registry);
+    this.presence.onChange((p) => this.push('presence:changed', p));
     this.tasks.onChange((taskId) => {
       this.push('tasks:changed', { taskId });
       this.noteTaskOutcome(taskId);
+      this.updateApprovals();
     });
-    this.settings.onChange(() => this.push('settings:changed', {}));
+    this.tasks.onActivity((a) => {
+      const step = this.taskRepo.stepById(a.stepId);
+      const app = (step?.input as { target?: { processName?: string } } | null)?.target?.processName ?? null;
+      this.presence.stepActivity(a, app);
+    });
+    this.grants.onChange(() => {
+      const list = this.grants.list();
+      this.presence.setGrants(list.length);
+      this.push('grants:changed', { grants: list });
+    });
+    this.wake = new WakeService(d.speechEngine ?? new PowerShellSpeechEngine(d.profile.runtimeDir), getSettings, this.log, {
+      onWake: () => void this.handleWake(),
+      onState: (st) => this.presence.setWake({ status: st.status, message: st.message, muted: st.muted, listening: st.status === 'listening', enabled: getSettings().wake.enabled, phrase: getSettings().wake.phrases[0] ?? null }),
+    });
+    let lastWake = JSON.stringify(this.settings.get().wake);
+    this.settings.onChange((st) => {
+      this.push('settings:changed', {});
+      const w = JSON.stringify(st.wake);
+      if (w !== lastWake) {
+        lastWake = w;
+        void this.wake.apply();
+      }
+    });
   }
 
   setPush(p: Push): void {
-    this.push = p;
+    this.push = (channel, payload) => {
+      if (channel === 'agent:event') this.presence.agentEvent(payload as AgentEvent);
+      p(channel, payload);
+    };
+  }
+
+  private updateApprovals(): void {
+    const active = this.tasks.list(200).filter((t) => !TERMINAL_TASK.has(t.state));
+    const waiting = active.flatMap((t) => t.steps.filter((s) => s.state === 'awaiting_authorization'));
+    const proposed = active.filter((t) => t.state === 'proposed').length;
+    const first = waiting[0];
+    const app = (first?.input as { target?: { processName?: string } } | null)?.target?.processName ?? null;
+    this.presence.setApprovals(waiting.length + proposed, first ? { capabilityId: first.capabilityId, app } : null);
+  }
+
+  /** Renderer windows report real audio activity (playback, recording). */
+  reportVoice(v: VoiceReport): void {
+    this.presence.reportVoice(v);
+    this.wake.setSpeaking(v.speaking);
+  }
+
+  /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
+  stopAll(): { cancelledTurns: number; cancelledTasks: number; revokedGrants: number } {
+    let cancelledTurns = 0;
+    for (const id of this.agent.activeConversations()) if (this.agent.cancel(id)) cancelledTurns++;
+    let cancelledTasks = 0;
+    for (const t of this.tasks.list(200)) {
+      if (['awaiting_authorization', 'ready', 'running', 'waiting_dependency'].includes(t.state)) {
+        try {
+          this.tasks.cancel(t.id);
+          cancelledTasks++;
+        } catch {
+          /* settled meanwhile */
+        }
+      }
+    }
+    const revokedGrants = this.grants.revokeAll();
+    this.wake.cancelCapture();
+    this.push('presence:command', { type: 'stop_speaking' });
+    this.presence.flash('cancelled', 2500);
+    this.audit.record({ kind: 'user.stop_all', decision: 'stopped', detail: { cancelledTurns, cancelledTasks, revokedGrants } });
+    this.log.info('presence.stop_all', { cancelledTurns, cancelledTasks, revokedGrants });
+    return { cancelledTurns, cancelledTasks, revokedGrants };
+  }
+
+  /** The conversation used by the command bar and voice commands. */
+  commandConversation(fresh = false): string {
+    const id = this.settings.get().commandBar.conversationId;
+    if (!fresh && id && this.conversations.get(id)) return id;
+    const c = this.conversations.create('Quick commands');
+    this.settings.update({ commandBar: { conversationId: c.id } });
+    this.push('conversations:changed', { conversationId: c.id });
+    return c.id;
+  }
+
+  private async handleWake(): Promise<void> {
+    this.ui.showCommandBar();
+    await this.listenAndSend();
+  }
+
+  /** Captures one spoken command (locally or via the command bar's recorder) and sends it. */
+  async listenAndSend(): Promise<{ text: string | null; reason: string; sent: boolean; conversationId: string | null }> {
+    const s = this.settings.get();
+    if (s.wake.commandRecognizer === 'openai' && this.voice.sttStatus(s).available) {
+      // The command bar records with voice-activity detection and sends the transcript itself.
+      this.push('presence:command', { type: 'record_command' });
+      return { text: null, reason: 'recording_in_command_bar', sent: false, conversationId: null };
+    }
+    const r = await this.wake.capture();
+    if (!r.text) {
+      this.push('presence:command', { type: 'listen_result', reason: r.reason });
+      return { ...r, sent: false, conversationId: null };
+    }
+    const conversationId = this.commandConversation();
+    this.push('presence:command', { type: 'transcript', text: r.text, conversationId });
+    try {
+      const sent = this.agent.send(conversationId, r.text);
+      sent.done.catch((e) => this.log.error('agent.unhandled', { error: String(e) }));
+      this.push('conversations:changed', { conversationId });
+      return { text: r.text, reason: 'ok', sent: true, conversationId };
+    } catch (e) {
+      this.log.warn('wake.send_failed', { error: String(e) });
+      return { text: r.text, reason: 'busy', sent: false, conversationId };
+    }
   }
 
   emit(channel: string, payload: unknown): void {
@@ -252,6 +376,9 @@ export class Services {
 
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.wake.stop();
+    this.grants.revokeAll();
+    this.snapshots.clear();
     for (const id of this.agent.activeConversations()) this.agent.cancel(id);
     this.tasks.dispose();
     this.desktop.backend.dispose();

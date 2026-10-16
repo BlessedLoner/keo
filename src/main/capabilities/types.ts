@@ -59,6 +59,12 @@ export interface Capability<I = unknown, O = unknown> {
   verificationPolicy: string;
   /** Capability-wide prerequisite (e.g. a missing API key). Unavailable capabilities are hidden from the model. */
   unavailableReason?(settings: Settings): string | null;
+  /**
+   * Whether this input may run under a user-created navigation grant instead
+   * of a per-action approval. Omitted = never. Sensitive actions (send,
+   * delete, submit, pay, …) must return false.
+   */
+  grantable?(input: I): boolean;
   /** Extra admission checks (allow-lists, prerequisites). Return an error message to reject. */
   precheck?(input: I, settings: Settings): string | null;
   /** Human-readable approval preview: target, operation and material consequences. */

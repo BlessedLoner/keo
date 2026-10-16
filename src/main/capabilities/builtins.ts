@@ -17,18 +17,18 @@ import { CapabilityError, defineCapability, type AnyCapability } from './types';
 // Shared schemas
 // ---------------------------------------------------------------------------
 
-const Target = z
+export const Target = z
   .object({
     hwnd: z.string().regex(/^\d{1,20}$/).describe('Window handle exactly as returned by desktop__list_windows in this conversation. Never guess.'),
     pid: z.number().int().positive().describe('Process id exactly as returned by desktop__list_windows'),
     processName: z.string().min(1).max(120).describe('Process name exactly as returned by desktop__list_windows'),
   })
   .strict();
-type TargetT = z.infer<typeof Target>;
+export type TargetT = z.infer<typeof Target>;
 
-const targetLabel = (t: TargetT) => `${t.processName} (window ${t.hwnd}, pid ${t.pid})`;
+export const targetLabel = (t: TargetT) => `${t.processName} (window ${t.hwnd}, pid ${t.pid})`;
 
-const allowCheck = (t: TargetT, s: Settings) =>
+export const allowCheck = (t: TargetT, s: Settings) =>
   isAllowedProcess(t.processName, s) ? null : `${t.processName} is not in the allowed applications list (Capabilities → Allowed applications).`;
 
 /** Keys the model may press. Win-key combinations are deliberately excluded. */
@@ -62,7 +62,7 @@ export function parseKeyCombo(combo: string): { mods: number[]; key: number } | 
  * part of the approved operation, confirm it really is the foreground window,
  * and only then send input. If Windows refuses, nothing is sent.
  */
-async function bringToFront(d: CapabilityDeps, target: TargetT, settings: Settings): Promise<void> {
+export async function bringToFront(d: CapabilityDeps, target: TargetT, settings: Settings): Promise<void> {
   await d.desktop.resolve(target, settings);
   const r = await d.desktop.backend.focus(target.hwnd);
   if (!r.foreground) {
@@ -80,7 +80,7 @@ export function chooseMethod(text: string, method: 'auto' | 'paste' | 'type'): '
   return text.length > 60 || /[\r\n]/.test(text) ? 'paste' : 'type';
 }
 
-const FRESH_TARGET_NOTE = ' Keo brings the window to the front itself as part of the approved action, so you do not need desktop__focus_window first. Take the target from desktop__list_windows in this conversation; never invent handles.';
+export const FRESH_TARGET_NOTE = ' Keo brings the window to the front itself as part of the approved action, so you do not need desktop__focus_window first. Take the target from desktop__list_windows in this conversation; never invent handles.';
 
 export interface CapabilityDeps {
   memory: MemoryRepo;
@@ -454,6 +454,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     modelVisible: true,
     verificationPolicy: 'Verified by checking the foreground window afterwards.',
     precheck: (i, s) => allowCheck(i.target, s),
+    grantable: () => true,
     preview: (i) => ({ summary: `Bring ${i.target.processName} to the front`, target: targetLabel(i.target), consequences: ['Changes which window is active.'], dataExport: null }),
     auditView: (i) => ({ target: i.target }),
     async execute(i, ctx) {
@@ -612,6 +613,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     modelVisible: true,
     verificationPolicy: 'Delivery confirmed by the OS input queue; effect not verified.',
     precheck: (i, s) => allowCheck(i.target, s),
+    grantable: (i) => /^(shift\+)?tab$|^(up|down|left|right|pageup|pagedown|home|end|escape)$/.test(i.combo.toLowerCase().replace(/\s+/g, '')),
     preview: (i) => ({ summary: `Bring ${i.target.processName} to the front and press ${i.combo.toUpperCase()}`, target: targetLabel(i.target), consequences: ['Key presses may trigger application actions (save, send, close).'], dataExport: null }),
     auditView: (i) => ({ target: i.target, combo: i.combo }),
     async execute(i, ctx) {

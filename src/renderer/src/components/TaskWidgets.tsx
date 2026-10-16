@@ -82,6 +82,16 @@ export function ApprovalCard({ task, step }: { task: Task; step: TaskStep }) {
         <button className="btn warn" disabled={busy} onClick={() => void act(() => invoke('tasks:approveStep', { stepId: step.id, inputHash: step.inputHash }))}>
           <Icon name="check" size={15} /> Approve once
         </button>
+        {step.preview.grantable && (
+          <button
+            className="btn"
+            disabled={busy}
+            title="Approve this, and let Keo look around and navigate (no sending, deleting, submitting or paying) in this window for 10 minutes. Revoke any time."
+            onClick={() => void act(() => invoke('grants:approveAndGrant', { stepId: step.id, inputHash: step.inputHash, minutes: 10 }))}
+          >
+            <Icon name="shield" size={15} /> Approve + allow navigation (10 min)
+          </button>
+        )}
         <button className="btn ghost" disabled={busy} onClick={() => void act(() => invoke('tasks:denyStep', { stepId: step.id }))}>
           <Icon name="x" size={15} /> Deny
         </button>

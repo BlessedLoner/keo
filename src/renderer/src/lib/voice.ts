@@ -52,6 +52,8 @@ class VoiceController {
     return this.ctx;
   }
 
+  private vad: { speechAt: number; quietSince: number; startedAt: number } | null = null;
+
   private meter(analyser: AnalyserNode, from: 'mic' | 'playback'): void {
     const buf = new Uint8Array(analyser.fftSize);
     const loop = () => {
@@ -61,7 +63,27 @@ class VoiceController {
         const x = (v - 128) / 128;
         sum += x * x;
       }
-      levelBus.set(Math.min(1, Math.sqrt(sum / buf.length) * 4), from);
+      const level = Math.min(1, Math.sqrt(sum / buf.length) * 4);
+      levelBus.set(level, from);
+      // Voice-activity detection for hands-free commands: stop after ~1.3 s of
+      // silence following speech, or give up after 7 s without speech.
+      if (from === 'mic' && this.vad) {
+        const now = performance.now();
+        if (level > 0.12) {
+          this.vad.speechAt = now;
+          this.vad.quietSince = 0;
+        } else if (this.vad.speechAt && !this.vad.quietSince) this.vad.quietSince = now;
+        if (this.vad.speechAt && this.vad.quietSince && now - this.vad.quietSince > 1300) {
+          this.vad = null;
+          this.stop();
+          return;
+        }
+        if (!this.vad.speechAt && now - this.vad.startedAt > 7000) {
+          this.vad = null;
+          this.abort();
+          return;
+        }
+      }
       this.raf = requestAnimationFrame(loop);
     };
     cancelAnimationFrame(this.raf);
@@ -74,7 +96,7 @@ class VoiceController {
   }
 
   /** Starts recording. Resolves with the transcript when stop() is called. */
-  async start(): Promise<string | null> {
+  async start(opts: { autoStop?: boolean } = {}): Promise<string | null> {
     if (this.state.recording || this.state.transcribing) return null;
     this.set({ error: null });
     try {
@@ -96,6 +118,7 @@ class VoiceController {
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     src.connect(analyser);
+    this.vad = opts.autoStop ? { speechAt: 0, quietSince: 0, startedAt: performance.now() } : null;
     this.meter(analyser, 'mic');
     this.recorder.start(250);
     this.set({ recording: true });

@@ -12,7 +12,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   {
-    files: ['scripts/**/*.cjs'],
+    files: ['scripts/**/*.cjs', 'tests/fixtures/**/*.cjs'],
     languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },

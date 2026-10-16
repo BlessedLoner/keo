@@ -273,6 +273,44 @@ export interface ApprovalPreview {
   consequences: string[];
   /** Destination for any data leaving this computer, if applicable. */
   dataExport: string | null;
+  /** Eligible for a time-boxed navigation grant (never for send/delete/submit-like actions). */
+  grantable?: boolean;
+}
+
+export interface NavigationGrant {
+  id: string;
+  target: { hwnd: string; pid: number; processName: string };
+  label: string;
+  capabilities: string[];
+  createdAt: ISODate;
+  expiresAt: ISODate;
+  maxActions: number;
+  used: number;
+}
+
+/** Live presence of the agent, aggregated in the main process from real events only. */
+export type PresenceState =
+  | 'idle'
+  | 'listening'
+  | 'understanding'
+  | 'planning'
+  | 'acting'
+  | 'verifying'
+  | 'awaiting_approval'
+  | 'speaking'
+  | 'cancelled'
+  | 'error';
+
+export interface Presence {
+  state: PresenceState;
+  /** Short, content-free activity line (capability title + application only). */
+  activity: string | null;
+  pendingApprovals: number;
+  activeTurns: number;
+  runningSteps: number;
+  wake: { enabled: boolean; listening: boolean; muted: boolean; status: 'off' | 'starting' | 'listening' | 'capturing' | 'error' | 'unavailable'; message: string | null; phrase: string | null };
+  grants: number;
+  updatedAt: ISODate;
 }
 
 export interface TaskStep {
@@ -287,7 +325,7 @@ export interface TaskStep {
   dependsOn: string[];
   state: StepState;
   requiresApproval: boolean;
-  approval: { decision: 'approved' | 'denied'; decidedAt: ISODate; inputHash: string } | null;
+  approval: { decision: 'approved' | 'denied'; decidedAt: ISODate; inputHash: string; grantId?: string } | null;
   preview: ApprovalPreview;
   attempts: number;
   maxAttempts: number;
@@ -399,9 +437,12 @@ export interface AppInfo {
 // Streaming agent events (main -> renderer)
 // ---------------------------------------------------------------------------
 
+/** Turn phases: model reasoning, context gathering, planning, acting, waiting for the user. */
+export type AgentPhase = 'thinking' | 'generating' | 'gathering_context' | 'planning' | 'tool' | 'waiting_approval';
+
 export type AgentEvent =
   | { type: 'turn_started'; conversationId: string; messageId: string; correlationId: string }
   | { type: 'text_delta'; conversationId: string; messageId: string; delta: string }
   | { type: 'tool_activity'; conversationId: string; messageId: string; activity: ToolActivity }
-  | { type: 'phase'; conversationId: string; messageId: string; phase: 'thinking' | 'generating' | 'tool' | 'waiting_approval' }
+  | { type: 'phase'; conversationId: string; messageId: string; phase: AgentPhase }
   | { type: 'turn_finished'; conversationId: string; message: Message };

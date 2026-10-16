@@ -55,8 +55,27 @@ check('OS secret encryption available', a.secretStorage === 'os-encrypted', a.se
 check('chat round-trip completes', a.assistantStatus === 'complete', `${a.assistantStatus}: ${a.assistantText}`);
 check('capabilities registered', a.capabilities >= 15, a.capabilities);
 
+const p = a.presence ?? {};
+check('presence: no error', !p.error, p.error);
+check('companion: exactly one window', p.companionSingle === true, p.companionSingle);
+check('companion: never takes focus', p.companionFocusable === false, p.companionFocusable);
+check('companion: always on top', p.companionAlwaysOnTop === true, p.companionAlwaysOnTop);
+check('companion: placed on a display', p.companionOnScreen === true, p.companionOnScreen);
+check('companion: rendered', p.companionRendered === true, p.companionRendered);
+check('companion: may read presence', p.companionPresenceGet === 'ok', p.companionPresenceGet);
+check('companion: cannot read memory', p.companionMemoryList === 'forbidden', p.companionMemoryList);
+check('companion: cannot send chat', p.companionChatSend === 'forbidden', p.companionChatSend);
+check('command bar: rendered', p.commandRendered === true, p.commandRendered);
+check('command bar: may query chat', p.commandChatActive === 'ok', p.commandChatActive);
+check('command bar: cannot change settings', p.commandSettingsUpdate === 'forbidden', p.commandSettingsUpdate);
+check('command bar: cannot list desktop windows', p.commandDesktopList === 'forbidden', p.commandDesktopList);
+check('shortcut: registers', p.shortcutRegistered === true, p.shortcutRegistered);
+check('shortcut: released when disabled', p.shortcutReleasedWhenDisabled === true, p.shortcutReleasedWhenDisabled);
+check('companion: closed when disabled', p.companionClosedWhenDisabled === true, p.companionClosedWhenDisabled);
+check('presence: no orphan windows after shutdown', p.noPresenceWindowsAfterShutdown === true, p.noPresenceWindowsAfterShutdown);
+
 const b = launch(2);
-check('conversations persist across restart', b.conversationCount === a.conversationCount + 1, `${a.conversationCount} -> ${b.conversationCount}`);
+check('conversations persist across restart', b.conversationCount === (p.conversationsAfter ?? a.conversationCount) + 1, `${p.conversationsAfter ?? a.conversationCount} -> ${b.conversationCount}`);
 
 const logDir = path.join(profile, 'logs');
 const logs = fs.readdirSync(logDir).map((f) => fs.readFileSync(path.join(logDir, f), 'utf8')).join('\n');

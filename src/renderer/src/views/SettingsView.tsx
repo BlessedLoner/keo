@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ProviderDiagnostic, ProviderInfo } from '@shared/domain';
-import type { WebStatus } from '@shared/ipc';
+import type { WakeStatusInfo, WebStatus } from '@shared/ipc';
+import { subscribe } from '../lib/api';
 import type { Settings } from '@shared/settings';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, type EmblemState } from '../components/KeoEmblem';
@@ -30,7 +31,7 @@ export function SettingsView() {
             [
               ['providers', 'Providers'],
               ['web', 'Web search'],
-              ['voice', 'Voice'],
+              ['voice', 'Voice & shortcuts'],
               ['agent', 'Agent'],
               ['appearance', 'Appearance'],
               ['data', 'Privacy & data'],
@@ -52,7 +53,10 @@ export function SettingsView() {
         ) : section === 'web' ? (
           <WebSearch s={s} patch={patch} />
         ) : section === 'voice' ? (
-          <Voice s={s} patch={patch} />
+          <>
+            <WakeAndShortcuts s={s} patch={patch} />
+            <Voice s={s} patch={patch} />
+          </>
         ) : section === 'agent' ? (
           <Agent s={s} patch={patch} />
         ) : section === 'appearance' ? (
@@ -240,6 +244,143 @@ function CompatFields({ id, s, patch }: { id: 'openai' | 'openrouter' | 'local';
       <p className="hint small muted" style={{ marginTop: -6 }}>
         Capabilities are declared by you; Keo does not assume them. Without tool support, Keo can chat but cannot propose actions.
       </p>
+    </>
+  );
+}
+
+function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
+  const ui = useUi();
+  const [status, setStatus] = useState<WakeStatusInfo | null>(null);
+  const [phrase, setPhrase] = useState('');
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [accel, setAccel] = useState(s.shortcuts.commandBar);
+  const refresh = useCallback(() => void invoke('wake:status').then(setStatus, (e) => ui.error(errText(e))), [ui]);
+  useEffect(() => {
+    refresh();
+    const off = subscribe('presence:changed', () => refresh());
+    return off;
+  }, [refresh, s]);
+  const w = s.wake;
+  const addPhrase = async () => {
+    const p = phrase.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!p) return;
+    if (w.phrases.includes(p)) return setPhrase('');
+    await patch({ wake: { phrases: [...w.phrases, p].slice(0, 5) } });
+    setPhrase('');
+  };
+  const test = async (p: string) => {
+    setTesting(p);
+    setTestMsg('Say the phrase now (8 seconds)…');
+    try {
+      const r = await invoke('wake:testPhrase', { phrase: p });
+      setTestMsg(r.message);
+    } catch (e) {
+      setTestMsg(errText(e));
+    } finally {
+      setTesting(null);
+    }
+  };
+  const statusChip = !status ? null : status.status === 'listening' ? <span className="chip ok">Listening locally</span> : status.status === 'error' || status.status === 'unavailable' ? <span className="chip danger">{status.status}</span> : <span className="chip">{status.muted ? 'muted' : status.status}</span>;
+  return (
+    <>
+      <section className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>Wake word</h2>
+          {statusChip}
+        </div>
+        <p className="muted small">
+          Uses Windows’ built-in speech recognizer on this computer. While enabled, the microphone is open and audio is processed locally; speech that is not your wake phrase is discarded and never stored or sent. Listening pauses while Keo speaks, and you can mute it any time (title bar or companion).
+        </p>
+        {status?.message && <div className={`banner ${status.status === 'error' || status.status === 'unavailable' ? 'danger' : 'info'} small`} style={{ marginBottom: 10 }}>{status.message}</div>}
+        <Toggle checked={w.enabled} onChange={(v) => void patch({ wake: { enabled: v } })} label={<span><strong style={{ fontWeight: 600 }}>Listen for the wake phrase</strong></span>} />
+        <div className="field" style={{ marginTop: 12 }}>
+          <span className="field-label">Wake phrases</span>
+          {w.phrases.map((p) => (
+            <div className="row" key={p} style={{ padding: '3px 0' }}>
+              <span className="mono">“{p}”</span>
+              <button className="btn ghost sm" disabled={!!testing} onClick={() => void test(p)}>
+                {testing === p ? <span className="spinner" /> : <Icon name="mic" size={13} />} Test
+              </button>
+              {w.phrases.length > 1 && (
+                <button className="btn ghost sm" onClick={() => void patch({ wake: { phrases: w.phrases.filter((x) => x !== p) } })}>
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+          <div className="row">
+            <input className="input" style={{ maxWidth: 260 }} placeholder="Add a phrase, e.g. hey kio" value={phrase} maxLength={40} onChange={(e) => setPhrase(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void addPhrase()} />
+            <button className="btn sm" disabled={!phrase.trim()} onClick={() => void addPhrase()}>
+              Add
+            </button>
+          </div>
+          <span className="hint">2–4 words, letters only. Distinctive phrases trigger less by accident. If “Keo” isn’t recognised reliably, add a spelling that sounds the same to Windows (e.g. “hey kio”) and test it.</span>
+          {testMsg && <div className="small" style={{ marginTop: 6 }}>{testMsg}</div>}
+        </div>
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="wake-sens">Required confidence: {w.sensitivity.toFixed(2)}</label>
+            <input id="wake-sens" type="range" min={0.5} max={0.98} step={0.01} defaultValue={w.sensitivity} onMouseUp={(e) => void patch({ wake: { sensitivity: Number((e.target as HTMLInputElement).value) } })} onKeyUp={(e) => void patch({ wake: { sensitivity: Number((e.target as HTMLInputElement).value) } })} />
+            <span className="hint">Higher means fewer accidental wakes from TV or conversation, but you may need to speak more clearly.</span>
+          </div>
+          <div className="field">
+            <label htmlFor="wake-lang">Language</label>
+            <select id="wake-lang" className="select" value={w.culture} onChange={(e) => void patch({ wake: { culture: e.target.value } })}>
+              {(status?.recognizers ?? [{ culture: w.culture, name: '' }]).map((r) => (
+                <option key={r.culture} value={r.culture}>
+                  {r.culture}
+                </option>
+              ))}
+            </select>
+            <span className="hint">Only languages with an installed Windows speech recognizer are listed{status ? ` (${status.recognizers.length} installed)` : ''}.</span>
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="wake-cmd">After the wake phrase, understand the command with</label>
+          <select id="wake-cmd" className="select" style={{ maxWidth: 420 }} value={w.commandRecognizer} onChange={(e) => void patch({ wake: { commandRecognizer: e.target.value } })}>
+            <option value="local">Windows speech (offline, on this computer)</option>
+            <option value="openai">OpenAI transcription (more accurate; sends that recording to OpenAI)</option>
+          </select>
+          {w.commandRecognizer === 'openai' && !(s.voice.sttProvider === 'openai' && s.voice.audioExportConsent) && <span className="hint" style={{ color: 'var(--warn)' }}>OpenAI transcription isn’t set up (Voice section below), so Keo will use Windows speech.</span>}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>Command bar shortcut</h2>
+          {status?.shortcut.registered ? <span className="chip ok">Active</span> : status?.shortcut.enabled ? <span className="chip danger">Not registered</span> : <span className="chip">Off</span>}
+        </div>
+        <p className="muted small">
+          Opens Keo’s command bar from anywhere while Keo is running. Note: a global shortcut is taken away from every other app while Keo runs — Ctrl+K, for example, is also used by browsers, VS Code and Slack. Ctrl+Alt+K or Ctrl+Shift+Space avoid most conflicts.
+        </p>
+        {status?.shortcut.error && <div className="banner danger small" style={{ marginBottom: 10 }}>{status.shortcut.error}</div>}
+        <Toggle checked={s.shortcuts.commandBarEnabled} onChange={(v) => void patch({ shortcuts: { commandBarEnabled: v } })} label="Enable the global shortcut" />
+        <div className="row" style={{ marginTop: 10 }}>
+          <input className="input mono" style={{ maxWidth: 220 }} aria-label="Shortcut" value={accel} onChange={(e) => setAccel(e.target.value)} />
+          <button className="btn sm" disabled={accel === s.shortcuts.commandBar} onClick={() => void patch({ shortcuts: { commandBar: accel } })}>
+            Save
+          </button>
+          {['Control+K', 'Control+Alt+K', 'Control+Shift+Space'].map((a) => (
+            <button key={a} className="btn ghost sm" onClick={() => { setAccel(a); void patch({ shortcuts: { commandBar: a } }); }}>
+              {a.replace('Control', 'Ctrl')}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Floating companion</h2>
+        <p className="muted small">A small Keo emblem that stays on screen and shows what Keo is really doing. It never takes keyboard focus. Drag it to move; hover for controls.</p>
+        <Toggle checked={s.companion.enabled} onChange={(v) => void patch({ companion: { enabled: v } })} label="Show the companion" />
+        <div style={{ height: 8 }} />
+        <Toggle checked={s.companion.alwaysOnTop} onChange={(v) => void patch({ companion: { alwaysOnTop: v } })} label="Keep it above other windows" />
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn ghost sm" onClick={() => void patch({ companion: { x: null, y: null, enabled: false } }).then(() => patch({ companion: { enabled: true } }))}>
+            Reset position
+          </button>
+        </div>
+      </section>
     </>
   );
 }

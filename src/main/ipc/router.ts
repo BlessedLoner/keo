@@ -5,6 +5,7 @@ import type { Logger } from '../logging/logger';
 import { redactString } from '../logging/redact';
 import { errorCode, errorMessage, KeoError } from '../util/errors';
 import type { HandlerMap } from './handlers';
+import { channelAllowed, type WindowRole } from './roles';
 
 /** Minimal view of the sender used for validation (keeps this unit-testable). */
 export interface SenderInfo {
@@ -14,8 +15,8 @@ export interface SenderInfo {
 }
 
 export interface SenderPolicy {
-  /** WebContents id of Keo's own main window. */
-  trustedWebContentsId(): number | null;
+  /** Role of a Keo window by its WebContents id; null for anything else. */
+  roleOf(webContentsId: number): WindowRole | null;
   /** Exact origin Keo's renderer is served from (app://keo or the dev server). */
   trustedOrigin: string;
 }
@@ -34,15 +35,15 @@ export function originOf(url: string): string | null {
   }
 }
 
-export function senderAllowed(info: SenderInfo, policy: SenderPolicy): { ok: boolean; reason?: string } {
-  const trusted = policy.trustedWebContentsId();
-  if (trusted === null || info.senderId !== trusted) return { ok: false, reason: 'unknown_webcontents' };
+export function senderAllowed(info: SenderInfo, policy: SenderPolicy): { ok: boolean; reason?: string; role?: WindowRole } {
+  const role = policy.roleOf(info.senderId);
+  if (!role) return { ok: false, reason: 'unknown_webcontents' };
   if (!info.isMainFrame) return { ok: false, reason: 'subframe' };
   if (!info.frameUrl) return { ok: false, reason: 'no_frame_url' };
   const origin = originOf(info.frameUrl);
   if (!origin) return { ok: false, reason: 'bad_url' };
   if (origin !== policy.trustedOrigin) return { ok: false, reason: 'untrusted_origin' };
-  return { ok: true };
+  return { ok: true, role };
 }
 
 /**
@@ -67,6 +68,10 @@ export async function dispatch(
     return { ok: false, error: { code: 'unknown_channel', message: 'Unknown request.' } };
   }
   const ch = channel as InvokeChannel;
+  if (!channelAllowed(allowed.role as WindowRole, ch)) {
+    log.warn('ipc.role_rejected', { channel: ch, role: allowed.role });
+    return { ok: false, error: { code: 'forbidden', message: 'This window cannot do that.' } };
+  }
   const parsed = invokeSchemas[ch].safeParse(rawInput ?? {});
   if (!parsed.success) {
     log.warn('ipc.invalid_input', { channel: ch, issues: parsed.error.issues.length });

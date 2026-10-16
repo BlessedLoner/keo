@@ -94,6 +94,48 @@ public static class KeoWin {
     return list;
   }
 
+  // All visible windows of one process, including owned popups/dialogs.
+  public static List<Dictionary<string, object>> ProcessWindows(uint pid) {
+    var list = new List<Dictionary<string, object>>();
+    EnumWindows((h, l) => {
+      uint p; GetWindowThreadProcessId(h, out p);
+      if (p != pid || !IsWindowVisible(h) || Cloaked(h)) return true;
+      var d = Describe(h);
+      d["owner"] = GetWindow(h, 4).ToInt64().ToString();
+      list.Add(d);
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
+
+  public static Dictionary<string, object> CursorTo(int x, int y) {
+    SetCursorPos(x, y);
+    var d = new Dictionary<string, object>(); d["x"] = x; d["y"] = y; return d;
+  }
+
+  public static void Wheel(IntPtr h, int sx, int sy, int notches) {
+    RequireForeground(h);
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
+    SetCursorPos(sx, sy);
+    var inputs = new List<INPUT>();
+    int n = Math.Abs(notches);
+    for (int i = 0; i < n; i++) {
+      var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = 0x0800; a.U.mi.mouseData = (uint)(notches < 0 ? 120 : -120); inputs.Add(a);
+    }
+    Send(inputs);
+  }
+
+  public static void ClickScreen(IntPtr h, int sx, int sy) {
+    RequireForeground(h);
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
+    SetCursorPos(sx, sy);
+    var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = 0x0002;
+    var b = new INPUT(); b.type = 0; b.U.mi.dwFlags = 0x0004;
+    Send(new List<INPUT> { a, b });
+  }
+
   static INPUT Key(ushort vk, ushort scan, uint flags) {
     var i = new INPUT(); i.type = 1; i.U.ki.wVk = vk; i.U.ki.wScan = scan; i.U.ki.dwFlags = flags; return i;
   }
@@ -221,12 +263,22 @@ public static class KeoWin {
 # separately so a failure here only disables verification.
 $script:uiaReady = $false
 try {
-  Add-Type -Language CSharp -ReferencedAssemblies UIAutomationClient, UIAutomationTypes -TypeDefinition @'
+  Add-Type -Language CSharp -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase, System.Web.Extensions -TypeDefinition @'
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
+using System.Windows;
 using System.Windows.Automation;
+using System.Web.Script.Serialization;
 
 public static class KeoUia {
+  static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+
+  // UIA text ranges from browsers can fault (access violation) when the page
+  // changes mid-read; these methods catch that instead of crashing the helper.
+  [System.Runtime.ExceptionServices.HandleProcessCorruptedStateExceptions]
+  [System.Security.SecurityCritical]
   public static string ReadText(IntPtr h) {
     var root = AutomationElement.FromHandle(h);
     var cond = new OrCondition(
@@ -236,16 +288,267 @@ public static class KeoUia {
     var sb = new StringBuilder();
     foreach (AutomationElement el in els) {
       object p;
-      if (el.TryGetCurrentPattern(TextPattern.Pattern, out p)) { sb.Append(((TextPattern)p).DocumentRange.GetText(400000)); sb.Append('\n'); }
-      else if (el.TryGetCurrentPattern(ValuePattern.Pattern, out p)) { sb.Append(((ValuePattern)p).Current.Value); sb.Append('\n'); }
+      if (el.Current.IsPassword) continue;
+      try {
+        if (el.TryGetCurrentPattern(TextPattern.Pattern, out p)) { sb.Append(((TextPattern)p).DocumentRange.GetText(400000)); sb.Append('\n'); }
+        else if (el.TryGetCurrentPattern(ValuePattern.Pattern, out p)) { sb.Append(((ValuePattern)p).Current.Value); sb.Append('\n'); }
+      } catch (Exception) { }
       if (sb.Length > 400000) break;
     }
     return sb.ToString();
+  }
+
+  static string Rid(AutomationElement e) {
+    var r = e.GetRuntimeId();
+    if (r == null) return "";
+    var parts = new string[r.Length];
+    for (int i = 0; i < r.Length; i++) parts[i] = r[i].ToString();
+    return string.Join(".", parts);
+  }
+
+  static int[] ParseRid(string s) {
+    var parts = s.Split('.');
+    var r = new int[parts.Length];
+    for (int i = 0; i < parts.Length; i++) r[i] = int.Parse(parts[i]);
+    return r;
+  }
+
+  static string Short(ControlType t) {
+    var n = t.ProgrammaticName; int i = n.LastIndexOf('.');
+    return (i >= 0 ? n.Substring(i + 1) : n).ToLowerInvariant();
+  }
+
+  static string Clip(string s, int n) {
+    if (s == null) return "";
+    s = s.Replace("\r", " ").Replace("\n", " ").Trim();
+    return s.Length > n ? s.Substring(0, n) + "…" : s;
+  }
+
+  static Dictionary<string, object> Node(AutomationElement e, Rect win, int depth, int parent) {
+    var c = e.Current;
+    var d = new Dictionary<string, object>();
+    d["rid"] = Rid(e);
+    d["role"] = Short(c.ControlType);
+    var lct = c.LocalizedControlType;
+    if (!string.IsNullOrEmpty(lct)) d["lct"] = Clip(lct, 40);
+    d["name"] = Clip(c.Name, 200);
+    if (!string.IsNullOrEmpty(c.AutomationId)) d["aid"] = Clip(c.AutomationId, 80);
+    var r = c.BoundingRectangle;
+    if (!r.IsEmpty && !double.IsInfinity(r.X) && !double.IsNaN(r.X)) { d["x"] = (int)(r.X - win.X); d["y"] = (int)(r.Y - win.Y); d["w"] = (int)r.Width; d["h"] = (int)r.Height; }
+    d["depth"] = depth; d["parent"] = parent;
+    if (!c.IsEnabled) d["disabled"] = true;
+    if (c.IsOffscreen) d["offscreen"] = true;
+    if (c.HasKeyboardFocus) d["focused"] = true;
+    if (c.IsPassword) d["password"] = true;
+    var pats = new List<string>();
+    object p;
+    if (e.TryGetCurrentPattern(InvokePattern.Pattern, out p)) pats.Add("invoke");
+    if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { pats.Add("toggle"); d["toggle"] = ((TogglePattern)p).Current.ToggleState.ToString().ToLowerInvariant(); }
+    if (e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { pats.Add("select"); if (((SelectionItemPattern)p).Current.IsSelected) d["selected"] = true; }
+    if (e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) { pats.Add("expand"); d["expanded"] = ((ExpandCollapsePattern)p).Current.ExpandCollapseState.ToString().ToLowerInvariant(); }
+    if (e.TryGetCurrentPattern(ValuePattern.Pattern, out p)) {
+      pats.Add("value");
+      var vp = (ValuePattern)p;
+      if (vp.Current.IsReadOnly) d["readonly"] = true;
+      if (!c.IsPassword) d["value"] = Clip(vp.Current.Value, 400);
+    }
+    if (e.TryGetCurrentPattern(ScrollPattern.Pattern, out p)) pats.Add("scroll");
+    if (e.TryGetCurrentPattern(TextPattern.Pattern, out p)) pats.Add("text");
+    if (pats.Count > 0) d["patterns"] = pats;
+    return d;
+  }
+
+  public static string Snapshot(IntPtr h, int maxNodes, int maxDepth, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var root = AutomationElement.FromHandle(h);
+    var win = root.Current.BoundingRectangle;
+    var list = new List<Dictionary<string, object>>();
+    var walker = TreeWalker.ControlViewWalker;
+    var stack = new Stack<Tuple<AutomationElement, int, int>>();
+    stack.Push(Tuple.Create(root, 0, -1));
+    bool truncated = false;
+    while (stack.Count > 0) {
+      if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+      var t = stack.Pop();
+      Dictionary<string, object> n;
+      try { n = Node(t.Item1, win, t.Item2, t.Item3); } catch { continue; }
+      int idx = list.Count; n["i"] = idx; list.Add(n);
+      if (t.Item2 >= maxDepth) continue;
+      var kids = new List<AutomationElement>();
+      try {
+        var ch = walker.GetFirstChild(t.Item1);
+        while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
+      } catch { }
+      for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+    }
+    var res = new Dictionary<string, object>();
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds;
+    var wd = new Dictionary<string, object>(); wd["w"] = (int)win.Width; wd["h"] = (int)win.Height; wd["x"] = (int)win.X; wd["y"] = (int)win.Y;
+    res["window"] = wd;
+    return Json.Serialize(res);
+  }
+
+  static AutomationElement Find(IntPtr h, string rid) {
+    var root = AutomationElement.FromHandle(h);
+    if (Rid(root) == rid) return root;
+    return root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.RuntimeIdProperty, ParseRid(rid)));
+  }
+
+  public static string Describe(IntPtr h, string rid) {
+    var e = Find(h, rid);
+    if (e == null) return "null";
+    var win = AutomationElement.FromHandle(h).Current.BoundingRectangle;
+    return Json.Serialize(Node(e, win, 0, -1));
+  }
+
+  public static string Center(IntPtr h, string rid) {
+    var e = Find(h, rid);
+    if (e == null) throw new Exception("element_gone");
+    var r = e.Current.BoundingRectangle;
+    if (r.IsEmpty || e.Current.IsOffscreen) throw new Exception("element_offscreen");
+    var d = new Dictionary<string, object>(); d["x"] = (int)(r.X + r.Width / 2); d["y"] = (int)(r.Y + r.Height / 2);
+    return Json.Serialize(d);
+  }
+
+  static AutomationElement ScrollTarget(AutomationElement e) {
+    var walker = TreeWalker.ControlViewWalker;
+    var cur = e;
+    for (int i = 0; i < 12 && cur != null; i++) {
+      object p;
+      if (cur.TryGetCurrentPattern(ScrollPattern.Pattern, out p) && ((ScrollPattern)p).Current.VerticallyScrollable) return cur;
+      cur = walker.GetParent(cur);
+    }
+    return null;
+  }
+
+  public static string Act(IntPtr h, string rid, string action, string text) {
+    var e = Find(h, rid);
+    if (e == null) throw new Exception("element_gone");
+    if (!e.Current.IsEnabled) throw new Exception("element_disabled");
+    object p; string method = "";
+    switch (action) {
+      case "invoke":
+        if (e.TryGetCurrentPattern(InvokePattern.Pattern, out p)) { ((InvokePattern)p).Invoke(); method = "invoke"; }
+        else if (e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { ((SelectionItemPattern)p).Select(); method = "select"; }
+        else if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { ((TogglePattern)p).Toggle(); method = "toggle"; }
+        else if (e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) { ((ExpandCollapsePattern)p).Expand(); method = "expand"; }
+        else throw new Exception("no_invoke_pattern");
+        break;
+      case "toggle":
+        if (!e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) throw new Exception("unsupported_action");
+        ((TogglePattern)p).Toggle(); method = "toggle"; break;
+      case "select":
+        if (!e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) throw new Exception("unsupported_action");
+        ((SelectionItemPattern)p).Select(); method = "select"; break;
+      case "expand":
+        if (!e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) throw new Exception("unsupported_action");
+        ((ExpandCollapsePattern)p).Expand(); method = "expand"; break;
+      case "collapse":
+        if (!e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) throw new Exception("unsupported_action");
+        ((ExpandCollapsePattern)p).Collapse(); method = "collapse"; break;
+      case "focus":
+        e.SetFocus(); method = "focus"; break;
+      case "set_value":
+        if (e.Current.IsPassword) throw new Exception("password_field");
+        if (!e.TryGetCurrentPattern(ValuePattern.Pattern, out p) || ((ValuePattern)p).Current.IsReadOnly) throw new Exception("no_value_pattern");
+        ((ValuePattern)p).SetValue(text); method = "value"; break;
+      case "scroll_down": case "scroll_up": case "page_down": case "page_up": {
+        var st = ScrollTarget(e);
+        if (st == null) throw new Exception("no_scroll_pattern");
+        var sp = (ScrollPattern)st.GetCurrentPattern(ScrollPattern.Pattern);
+        var amt = action == "scroll_down" ? ScrollAmount.SmallIncrement : action == "scroll_up" ? ScrollAmount.SmallDecrement : action == "page_down" ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement;
+        sp.ScrollVertical(amt); method = "scroll"; break;
+      }
+      default: throw new Exception("unsupported_action");
+    }
+    var d = new Dictionary<string, object>(); d["method"] = method;
+    return Json.Serialize(d);
+  }
+
+  // Fallback page text: names of text-bearing controls in tree order (no text ranges).
+  static string CollectText(AutomationElement root, int maxChars, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var sb = new StringBuilder();
+    var walker = TreeWalker.ControlViewWalker;
+    var stack = new Stack<AutomationElement>();
+    stack.Push(root);
+    while (stack.Count > 0 && sb.Length < maxChars && sw.ElapsedMilliseconds < budgetMs) {
+      var e = stack.Pop();
+      try {
+        var c = e.Current;
+        if (!c.IsPassword && !c.IsOffscreen) {
+          var t = c.ControlType;
+          if ((t == ControlType.Text || t == ControlType.Hyperlink || t == ControlType.ListItem || t == ControlType.DataItem || t == ControlType.Header || t == ControlType.HeaderItem) && !string.IsNullOrEmpty(c.Name)) { sb.Append(c.Name.Trim()); sb.Append('\n'); }
+        }
+        var kids = new List<AutomationElement>();
+        var ch = walker.GetFirstChild(e);
+        while (ch != null && kids.Count < 400) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
+        for (int k = kids.Count - 1; k >= 0; k--) stack.Push(kids[k]);
+      } catch (Exception) { }
+    }
+    var s = sb.ToString();
+    return s.Length > maxChars ? s.Substring(0, maxChars) : s;
+  }
+
+  // Current tab context from a browser window: address bar value, the
+  // selection and readable text of the page document (no cookies, no history).
+  [System.Runtime.ExceptionServices.HandleProcessCorruptedStateExceptions]
+  [System.Security.SecurityCritical]
+  public static string BrowserContext(IntPtr h, int maxChars) {
+    var root = AutomationElement.FromHandle(h);
+    string url = null;
+    var edits = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+    foreach (AutomationElement ed in edits) {
+      var nm = (ed.Current.Name ?? "").ToLowerInvariant();
+      if (ed.Current.IsPassword) continue;
+      if (nm.Contains("address") || nm.Contains("url") || nm.Contains("search or enter") || nm.Contains("search with")) {
+        object vp;
+        if (ed.TryGetCurrentPattern(ValuePattern.Pattern, out vp)) { url = ((ValuePattern)vp).Current.Value; break; }
+      }
+    }
+    string selection = "", page = "", docName = "";
+    bool textAvailable = false;
+    // Pages change while being read (text ranges become invalid), so retry once.
+    for (int attempt = 0; attempt < 2 && page.Trim().Length == 0; attempt++) {
+      if (attempt > 0) System.Threading.Thread.Sleep(250);
+      AutomationElementCollection docs;
+      try { docs = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document)); } catch { continue; }
+      foreach (AutomationElement d in docs) {
+        try {
+          object tp;
+          if (!d.TryGetCurrentPattern(TextPattern.Pattern, out tp)) continue;
+          textAvailable = true;
+          var t = (TextPattern)tp;
+          try {
+            selection = "";
+            foreach (var r in t.GetSelection()) { selection += r.GetText(20000); if (selection.Length > 20000) break; }
+          } catch (Exception) { selection = ""; }
+          page = t.DocumentRange.GetText(maxChars);
+          docName = d.Current.Name ?? "";
+          if (page.Trim().Length > 0) break;
+        } catch (Exception) { page = ""; }
+      }
+    }
+    string method = "text_pattern";
+    if (page.Trim().Length == 0) {
+      page = CollectText(root, maxChars, 6000);
+      method = "control_names";
+    }
+    var res = new Dictionary<string, object>();
+    res["url"] = url; res["documentName"] = Clip(docName, 300); res["textAvailable"] = textAvailable || page.Length > 0; res["selection"] = selection; res["page"] = page; res["method"] = method;
+    return Json.Serialize(res);
   }
 }
 '@
   $script:uiaReady = $true
 } catch { $script:uiaReady = $false }
+
+function ReplyRaw($id, $json) {
+  [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"result":' + $json + '}')
+  [Console]::Out.Flush()
+}
+
+function RequireUia() { if (-not $script:uiaReady) { throw 'uia_unavailable' } }
 
 function Reply($id, $ok, $payload) {
   $o = @{ id = $id; ok = $ok }
@@ -278,6 +581,14 @@ while ($true) {
         elseif (-not [KeoWin]::IsWindow($h)) { Reply $req.id $false @{ code = 'helper_error'; message = 'target_gone' } }
         else { Reply $req.id $true @{ available = $true; text = [KeoUia]::ReadText($h) } }
       }
+      'uia_snapshot' { RequireUia; ReplyRaw $req.id ([KeoUia]::Snapshot($h, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
+      'uia_describe' { RequireUia; ReplyRaw $req.id ([KeoUia]::Describe($h, [string]$req.args.rid)) }
+      'uia_act'      { RequireUia; ReplyRaw $req.id ([KeoUia]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }
+      'uia_center'   { RequireUia; ReplyRaw $req.id ([KeoUia]::Center($h, [string]$req.args.rid)) }
+      'browser_context' { RequireUia; ReplyRaw $req.id ([KeoUia]::BrowserContext($h, [int]$req.args.maxChars)) }
+      'proc_windows' { Reply $req.id $true @([KeoWin]::ProcessWindows([uint32]$req.args.pid)) }
+      'click_screen' { [KeoWin]::ClickScreen($h, [int]$req.args.x, [int]$req.args.y); Reply $req.id $true @{ clicked = $true } }
+      'wheel'        { [KeoWin]::Wheel($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.notches); Reply $req.id $true @{ scrolled = $true } }
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
       'ping'  { Reply $req.id $true @{ pong = $true } }

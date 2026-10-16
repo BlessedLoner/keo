@@ -2,6 +2,7 @@ import type { AppInfo } from '../../shared/domain';
 import type { InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc';
 import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
+import { validateWakePhrase } from '../voice/wakeService';
 import type { Services } from '../services';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +16,14 @@ export interface HostHooks {
   pickExecutable(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
+  openMain?(view?: 'chat' | 'tasks' | 'settings'): void;
+  showCommandBar?(): void;
+  hideCommandBar?(): void;
+  hideCompanion?(): void;
+  setCompanionInteractive?(interactive: boolean): void;
+  companionDrag?(phase: 'start' | 'end'): void;
+  shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  quit?(): void;
 }
 
 /**
@@ -24,6 +33,11 @@ export interface HostHooks {
 export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const changed = (channel: string, payload: unknown) => s.emit(channel, payload);
   const abortAfter = (ms: number) => AbortSignal.timeout(ms);
+  const wakeStatus = async () => ({
+    ...s.wake.getState(),
+    recognizers: await s.wake.recognizers(),
+    shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
+  });
   const webStatus = () => {
     const st = s.settings.get();
     return { hasKey: s.secrets.has('brave'), searchEnabled: st.permissions.webSearchEnabled, fetchEnabled: st.permissions.webFetchEnabled, secretStorage: s.secrets.available() };
@@ -284,6 +298,83 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'voice:transcribe': async ({ audio, mimeType }) => ({ text: await s.voice.transcribe(audio, mimeType, abortAfter(120000)) }),
     'voice:speak': async ({ text }) => ({ audio: await s.voice.speak(text, abortAfter(120000)), mimeType: 'audio/mpeg' }),
 
+    'presence:get': () => s.presence.get(),
+    'presence:report': (v) => {
+      s.reportVoice(v);
+      return { ok: true as const };
+    },
+    'presence:stopAll': () => s.stopAll(),
+    'presence:openMain': ({ view }) => {
+      host.openMain?.(view);
+      return { ok: true as const };
+    },
+    'companion:setInteractive': ({ interactive }) => {
+      host.setCompanionInteractive?.(interactive);
+      return { ok: true as const };
+    },
+    'companion:drag': ({ phase }) => {
+      host.companionDrag?.(phase);
+      return { ok: true as const };
+    },
+    'companion:hide': () => {
+      s.settings.update({ companion: { enabled: false } });
+      host.hideCompanion?.();
+      return { ok: true as const };
+    },
+    'app:quit': () => {
+      setTimeout(() => host.quit?.(), 50);
+      return { ok: true as const };
+    },
+    'commandBar:show': () => {
+      host.showCommandBar?.();
+      return { ok: true as const };
+    },
+    'commandBar:hide': () => {
+      host.hideCommandBar?.();
+      return { ok: true as const };
+    },
+    'commandBar:conversation': ({ fresh }) => ({ conversationId: s.commandConversation(fresh) }),
+    'wake:status': () => wakeStatus(),
+    'wake:setMuted': async ({ muted }) => {
+      await s.wake.setMuted(muted);
+      return await wakeStatus();
+    },
+    'wake:testPhrase': async ({ phrase }) => {
+      const invalid = validateWakePhrase(phrase);
+      if (invalid) return { ok: false, recognized: false, confidence: 0, message: invalid };
+      try {
+        const r = await s.wake.testPhrase(phrase.toLowerCase(), 8);
+        const thr = s.settings.get().wake.sensitivity;
+        const message = r.recognized
+          ? r.confidence >= thr
+            ? `Recognised (confidence ${r.confidence.toFixed(2)}). This phrase works.`
+            : `Recognised, but confidence ${r.confidence.toFixed(2)} is below your sensitivity ${thr.toFixed(2)}. Speak more clearly or lower the sensitivity.`
+          : r.heardSomething
+            ? 'Heard speech, but not the phrase. Try again, or choose a phrase with clearer words.'
+            : 'Heard nothing within 8 seconds. Check the microphone.';
+        return { ok: r.recognized && r.confidence >= thr, recognized: r.recognized, confidence: r.confidence, message };
+      } catch (e) {
+        return { ok: false, recognized: false, confidence: 0, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    'wake:listenNow': () => s.listenAndSend(),
+    'wake:cancelListen': () => {
+      s.wake.cancelCapture();
+      return { ok: true as const };
+    },
+    'grants:list': () => s.grants.list(),
+    'grants:revoke': ({ id }) => ({ revoked: s.grants.revoke(id) }),
+    'grants:revokeAll': () => ({ revoked: s.grants.revokeAll() }),
+    'grants:approveAndGrant': ({ stepId, inputHash, minutes }) => {
+      const step = s.taskRepo.stepById(stepId);
+      if (!step) throw new KeoError('not_found', 'Step not found.');
+      if (!step.preview.grantable) throw new KeoError('not_grantable', 'This action cannot be covered by navigation permission; approve it on its own.');
+      const target = (step.input as { target?: { hwnd: string; pid: number; processName: string } }).target;
+      if (!target) throw new KeoError('not_grantable', 'This action has no window target.');
+      const task = s.tasks.approveStep(stepId, inputHash);
+      s.grants.create(target, `Navigate in ${target.processName}`, minutes);
+      return task;
+    },
     'diagnostics:logs': ({ limit }) => s.log.recent(limit),
     'diagnostics:audit': ({ limit }) => s.audit.recent(limit),
 

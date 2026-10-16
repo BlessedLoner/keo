@@ -20,6 +20,49 @@ export interface RawWindow {
   foreground: boolean;
 }
 
+export type UiaAction = 'invoke' | 'toggle' | 'select' | 'expand' | 'collapse' | 'focus' | 'set_value' | 'scroll_down' | 'scroll_up' | 'page_down' | 'page_up';
+
+export interface UiaNodeRaw {
+  i?: number;
+  rid: string;
+  role: string;
+  lct?: string;
+  name: string;
+  aid?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  depth: number;
+  parent: number;
+  disabled?: boolean;
+  offscreen?: boolean;
+  focused?: boolean;
+  password?: boolean;
+  readonly?: boolean;
+  patterns?: string[];
+  toggle?: string;
+  selected?: boolean;
+  expanded?: string;
+  value?: string;
+}
+
+export interface UiaSnapshotRaw {
+  nodes: UiaNodeRaw[];
+  truncated: boolean;
+  ms: number;
+  window: { w: number; h: number; x: number; y: number };
+}
+
+export interface BrowserContextRaw {
+  url: string | null;
+  documentName: string;
+  textAvailable: boolean;
+  selection: string;
+  page: string;
+  method: string;
+}
+
 /** Native desktop operations. Every method acts on exactly one explicit hwnd. */
 export interface DesktopBackend {
   support(): { supported: boolean; reason: string | null };
@@ -32,13 +75,40 @@ export interface DesktopBackend {
   paste(hwnd: string): Promise<void>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
   readText(hwnd: string): Promise<string | null>;
+  /** Bounded UI Automation tree of one window. */
+  uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw>;
+  /** Current properties of one element (null when it no longer exists). */
+  uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null>;
+  uiaAct(hwnd: string, rid: string, action: UiaAction, text?: string): Promise<{ method: string }>;
+  /** Screen coordinates of an element's centre (for the pointer fallback). */
+  uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }>;
+  browserContext(hwnd: string, maxChars: number): Promise<BrowserContextRaw>;
+  /** All visible windows of a process, including owned dialogs. */
+  processWindows(pid: number): Promise<Array<RawWindow & { owner: string }>>;
+  clickScreen(hwnd: string, x: number, y: number): Promise<void>;
+  wheel(hwnd: string, x: number, y: number, notches: number): Promise<void>;
   keys(hwnd: string, mods: number[], key: number): Promise<void>;
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void>;
   dispose(): void;
 }
 
 /** Helper error codes that guarantee nothing was sent to the target. */
-const NOT_DISPATCHED = new Set(['target_gone', 'not_foreground', 'outside_client_area', 'target_obscured', 'unknown_command']);
+const NOT_DISPATCHED = new Set([
+  'target_gone',
+  'not_foreground',
+  'outside_client_area',
+  'target_obscured',
+  'unknown_command',
+  'element_gone',
+  'element_disabled',
+  'element_offscreen',
+  'no_invoke_pattern',
+  'no_value_pattern',
+  'no_scroll_pattern',
+  'unsupported_action',
+  'password_field',
+  'uia_unavailable',
+]);
 
 /**
  * Win32 backend: a single long-lived PowerShell process running the fixed
@@ -166,6 +236,39 @@ export class Win32Backend implements DesktopBackend {
     await this.call('paste', { hwnd });
   }
 
+  uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw> {
+    return this.call('uia_snapshot', { hwnd, ...opts }, opts.budgetMs + 15000);
+  }
+
+  uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null> {
+    return this.call('uia_describe', { hwnd, rid }, 15000);
+  }
+
+  uiaAct(hwnd: string, rid: string, action: UiaAction, text = ''): Promise<{ method: string }> {
+    return this.call('uia_act', { hwnd, rid, action, text }, 20000);
+  }
+
+  uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }> {
+    return this.call('uia_center', { hwnd, rid }, 15000);
+  }
+
+  browserContext(hwnd: string, maxChars: number): Promise<BrowserContextRaw> {
+    return this.call('browser_context', { hwnd, maxChars }, 30000);
+  }
+
+  async processWindows(pid: number): Promise<Array<RawWindow & { owner: string }>> {
+    const r = await this.call<Array<RawWindow & { owner: string }> | (RawWindow & { owner: string }) | null>('proc_windows', { pid });
+    return (Array.isArray(r) ? r : r ? [r] : []).map((w) => ({ ...normalize(w), owner: String(w.owner ?? '0') }));
+  }
+
+  async clickScreen(hwnd: string, x: number, y: number): Promise<void> {
+    await this.call('click_screen', { hwnd, x, y });
+  }
+
+  async wheel(hwnd: string, x: number, y: number, notches: number): Promise<void> {
+    await this.call('wheel', { hwnd, x, y, notches });
+  }
+
   async readText(hwnd: string): Promise<string | null> {
     try {
       const r = await this.call<{ available: boolean; text: string }>('readtext', { hwnd }, 15000);
@@ -220,6 +323,24 @@ function describe(code: string): string {
       return 'The click position is outside the target window.';
     case 'target_obscured':
       return 'Another window covers that point, so the click was not sent.';
+    case 'element_gone':
+      return 'That control no longer exists in the window (the screen changed). Inspect the window again.';
+    case 'element_disabled':
+      return 'That control is disabled right now.';
+    case 'element_offscreen':
+      return 'That control is not visible on screen; scroll to it first.';
+    case 'no_invoke_pattern':
+      return 'That control cannot be activated through accessibility.';
+    case 'no_value_pattern':
+      return 'That control does not accept text through accessibility.';
+    case 'no_scroll_pattern':
+      return 'Nothing scrollable was found around that control.';
+    case 'unsupported_action':
+      return 'That control does not support this action.';
+    case 'password_field':
+      return 'Keo never types into password fields.';
+    case 'uia_unavailable':
+      return 'Windows UI Automation is not available in the desktop helper.';
     default:
       return code;
   }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pushChannels } from '../shared/ipc';
@@ -13,6 +13,7 @@ import { Services } from './services';
 import { errorMessage } from './util/errors';
 import { electronImageTools, ElectronWindowCapture } from './vision/electronCapture';
 import { buildCsp } from './window/csp';
+import { PresenceWindows } from './window/presenceWindows';
 
 // ---------------------------------------------------------------------------
 // Identity & isolated profile (must happen before "ready")
@@ -30,6 +31,7 @@ const TRUSTED_ORIGIN = (DEV_URL ? originOf(DEV_URL) : null) ?? 'app://keo';
 const RENDERER_DIR = path.join(__dirname, '../renderer');
 const TEST_PROVIDER = process.env.KEO_ENABLE_TEST_PROVIDER === '1';
 const SMOKE = process.env.KEO_SMOKE === '1';
+const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
@@ -160,7 +162,7 @@ function createWindow(): BrowserWindow {
     },
   });
   win.once('ready-to-show', () => {
-    if (!SMOKE) win.show();
+    if (!SMOKE && !E2E_DESKTOP) win.show();
   });
   win.on('closed', () => {
     mainWindow = null;
@@ -173,16 +175,26 @@ function push(channel: string, payload: unknown): void {
   if (!(pushChannels as readonly string[]).includes(channel)) return;
   const wc = mainWindow?.webContents;
   if (wc && !wc.isDestroyed()) wc.send(channel, payload);
+  presenceWindows?.broadcast(channel, payload);
 }
+
+let presenceWindows: PresenceWindows | null = null;
+
+function showMain(view?: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  if (view) mainWindow.webContents.send('presence:command', { type: 'navigate', view });
+}
+
+const rendererUrl = (hash: string) => `${DEV_URL ?? 'app://keo/index.html'}${hash}`;
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 app.on('second-instance', () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  showMain();
 });
 
 app.whenReady().then(() => {
@@ -220,12 +232,59 @@ app.whenReady().then(() => {
         app.relaunch();
         app.exit(0);
       },
+      openMain: (view) => showMain(view),
+      showCommandBar: () => presenceWindows?.showCommandBar(),
+      hideCommandBar: () => presenceWindows?.hideCommandBar(),
+      hideCompanion: () => presenceWindows?.syncCompanion(),
+      setCompanionInteractive: (b) => presenceWindows?.setCompanionInteractive(b),
+      companionDrag: (phase) => presenceWindows?.companionDrag(phase),
+      shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+      quit: () => app.quit(),
     });
-    registerIpc(ipcMain, handlers, { trustedOrigin: TRUSTED_ORIGIN, trustedWebContentsId: () => mainWindow?.webContents.id ?? null }, log);
+    const svc = services;
+    presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
+    svc.ui = { showCommandBar: () => presenceWindows?.showCommandBar() };
+    registerIpc(
+      ipcMain,
+      handlers,
+      {
+        trustedOrigin: TRUSTED_ORIGIN,
+        roleOf: (id) => (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === id ? 'main' : (presenceWindows?.roleOf(id) ?? null)),
+      },
+      log,
+    );
     const recovered = services.start();
     log.info('app.ready', { profile: profile.profile, ...recovered.recovery, interruptedMessages: recovered.interruptedMessages, secretStorage: cipher.isAvailable() });
     mainWindow = createWindow();
-    if (SMOKE) runSmoke(mainWindow);
+    if (E2E_DESKTOP && !app.isPackaged) {
+      const out = process.env.KEO_E2E_OUT ?? path.join(profile.userData, 'e2e-desktop.json');
+      void import('./devtools/e2eDesktop').then(({ runDesktopE2E }) =>
+        runDesktopE2E(svc, { electronPath: process.execPath, fixtureDir: path.join(__dirname, '../../tests/fixtures/fake-whatsapp'), outFile: out, workDir: profile.userData }).finally(() => app.quit()),
+      );
+    } else if (SMOKE) {
+      runSmoke(mainWindow);
+    } else {
+      // Desktop presence: companion, global shortcut and (if enabled) wake word.
+      presenceWindows.syncCompanion();
+      presenceWindows.syncShortcut();
+      void svc.wake.apply();
+      let lastShortcut = JSON.stringify(svc.settings.get().shortcuts);
+      let lastCompanion = JSON.stringify({ e: svc.settings.get().companion.enabled, t: svc.settings.get().companion.alwaysOnTop });
+      svc.settings.onChange((st) => {
+        const sc = JSON.stringify(st.shortcuts);
+        if (sc !== lastShortcut) {
+          lastShortcut = sc;
+          presenceWindows?.syncShortcut();
+        }
+        const cp = JSON.stringify({ e: st.companion.enabled, t: st.companion.alwaysOnTop });
+        if (cp !== lastCompanion) {
+          lastCompanion = cp;
+          presenceWindows?.syncCompanion();
+        }
+      });
+      screen.on('display-removed', () => presenceWindows?.onDisplaysChanged());
+      screen.on('display-metrics-changed', () => presenceWindows?.onDisplaysChanged());
+    }
   } catch (err) {
     log.error('app.startup_failed', { error: errorMessage(err) });
     dialog.showErrorBox('Keo could not start', errorMessage(err));
@@ -233,6 +292,8 @@ app.whenReady().then(() => {
   }
 });
 
+// Closing the main window keeps Keo running in the companion (if enabled);
+// with no companion, closing the last window quits.
 app.on('window-all-closed', () => {
   app.quit();
 });
@@ -242,6 +303,8 @@ app.on('before-quit', (e) => {
   if (shuttingDown || !services) return;
   e.preventDefault();
   shuttingDown = true;
+  presenceWindows?.shutdown();
+  presenceWindows = null;
   services
     .shutdown()
     .catch(() => undefined)
@@ -305,11 +368,75 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Web search'))?.click();`);
   await wait(700);
   fs.writeFileSync(path.join(dir, 'settings-web.png'), (await win.webContents.capturePage()).toPNG());
+  await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Voice'))?.click();`);
+  await wait(1500);
+  fs.writeFileSync(path.join(dir, 'settings-voice.png'), (await win.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Appearance'))?.click();`);
   await wait(900);
   fs.writeFileSync(path.join(dir, 'appearance.png'), (await win.webContents.capturePage()).toPNG());
   // Leave the pending approval unanswered; cancel the turn so nothing lingers.
   await js(`for (const id of await call('chat:active')) await call('chat:cancel', { conversationId: id });`);
+}
+
+/**
+ * Smoke part 2: the desktop presence windows in the real app. Uses a shortcut
+ * nobody else is likely to hold (not Ctrl+K) so the check never collides with
+ * the user's other applications, and tears everything down again.
+ */
+async function presenceSmoke(shots: string | undefined): Promise<Record<string, unknown>> {
+  const svc = services;
+  const pw = presenceWindows;
+  if (!svc || !pw) throw new Error('presence not initialised');
+  const r: Record<string, unknown> = {};
+  const loaded = (w: BrowserWindow) => (w.webContents.isLoading() ? new Promise<void>((res) => w.webContents.once('did-finish-load', () => res())) : Promise.resolve());
+  const tryCall = (w: BrowserWindow, ch: string, input: unknown = {}) =>
+    w.webContents.executeJavaScript(`window.keo.invoke(${JSON.stringify(ch)}, ${JSON.stringify(input)}).then(r => r.ok ? 'ok' : r.error.code)`) as Promise<string>;
+  const before = BrowserWindow.getAllWindows().length;
+  pw.syncCompanion();
+  const first = pw.companion;
+  pw.syncCompanion();
+  r.companionSingle = !!first && pw.companion === first && BrowserWindow.getAllWindows().length === before + 1;
+  const comp = pw.companion!;
+  await loaded(comp);
+  await new Promise((res) => setTimeout(res, 600));
+  r.companionFocusable = comp.isFocusable();
+  r.companionAlwaysOnTop = comp.isAlwaysOnTop();
+  r.companionOnScreen = screen.getAllDisplays().some((d) => {
+    const b = comp.getBounds();
+    return b.x >= d.bounds.x && b.y >= d.bounds.y && b.x + b.width <= d.bounds.x + d.bounds.width && b.y + b.height <= d.bounds.y + d.bounds.height;
+  });
+  r.companionRendered = await comp.webContents.executeJavaScript(`!!document.querySelector('.companion')`);
+  r.companionPresenceGet = await tryCall(comp, 'presence:get');
+  r.companionMemoryList = await tryCall(comp, 'memory:list', {});
+  r.companionChatSend = await tryCall(comp, 'chat:send', { conversationId: 'x', text: 'x' });
+  pw.showCommandBar();
+  const cmd = pw.command!;
+  await loaded(cmd);
+  await new Promise((res) => setTimeout(res, 600));
+  r.commandRendered = await cmd.webContents.executeJavaScript(`!!document.querySelector('.command-shell')`);
+  r.commandChatActive = await tryCall(cmd, 'chat:active');
+  r.commandSettingsUpdate = await tryCall(cmd, 'settings:update', { patch: {} });
+  r.commandDesktopList = await tryCall(cmd, 'desktop:listWindows', {});
+  if (shots && !app.isPackaged) {
+    fs.mkdirSync(shots, { recursive: true });
+    fs.writeFileSync(path.join(shots, 'companion.png'), (await comp.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(shots, 'command-bar.png'), (await cmd.webContents.capturePage()).toPNG());
+  }
+  pw.hideCommandBar();
+  svc.settings.update({ shortcuts: { commandBarEnabled: true, commandBar: 'Control+Alt+Shift+F11' } });
+  const st = pw.syncShortcut();
+  r.shortcutRegistered = st.registered && globalShortcut.isRegistered('Control+Alt+Shift+F11');
+  svc.settings.update({ shortcuts: { commandBarEnabled: false } });
+  pw.syncShortcut();
+  r.shortcutReleasedWhenDisabled = !globalShortcut.isRegistered('Control+Alt+Shift+F11');
+  svc.settings.update({ companion: { enabled: false } });
+  pw.syncCompanion();
+  r.companionClosedWhenDisabled = pw.companion === null && comp.isDestroyed();
+  pw.shutdown();
+  r.noPresenceWindowsAfterShutdown = BrowserWindow.getAllWindows().length === before;
+  // The command bar keeps its own "Quick commands" conversation; count after it exists.
+  r.conversationsAfter = svc.conversations.list({}).length;
+  return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +479,11 @@ function runSmoke(win: BrowserWindow): void {
         )) as Record<string, unknown>;
       } catch (e) {
         result = { error: errorMessage(e) };
+      }
+      try {
+        result.presence = await presenceSmoke(process.env.KEO_SMOKE_SHOTS);
+      } catch (e) {
+        result.presence = { error: errorMessage(e) };
       }
       log.info('smoke.result', { keys: Object.keys(result).length });
       if (out) fs.writeFileSync(out, JSON.stringify(result, null, 2));

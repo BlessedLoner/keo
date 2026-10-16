@@ -156,6 +156,46 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    wake: z
+      .object({
+        /** Off by default: listening is an explicit choice. Processing is local (Windows speech). */
+        enabled: z.boolean().default(false),
+        phrases: z
+          .array(z.string().trim().min(6).max(40).regex(/^[\p{L}' -]+$/u, 'Letters only'))
+          .min(1)
+          .max(5)
+          .default(['hey keo']),
+        culture: z.string().regex(/^[a-z]{2}-[A-Z]{2}$/).default('en-US'),
+        /** Minimum recognizer confidence for the wake phrase (higher = fewer false wakes). */
+        sensitivity: z.number().min(0.5).max(0.98).default(0.82),
+        /** How a spoken command is turned into text after the wake phrase. */
+        commandRecognizer: z.enum(['local', 'openai']).default('local'),
+      })
+      .strict()
+      .prefault({}),
+    shortcuts: z
+      .object({
+        commandBarEnabled: z.boolean().default(true),
+        /** Electron accelerator, e.g. "Control+K", "Control+Alt+K". */
+        commandBar: z.string().trim().min(3).max(40).regex(/^((Control|Ctrl|Alt|Shift|Super|CommandOrControl)\+){1,3}([A-Z0-9]|F([1-9]|1[0-2])|Space)$/i, 'Invalid shortcut').default('Control+K'),
+      })
+      .strict()
+      .prefault({}),
+    companion: z
+      .object({
+        enabled: z.boolean().default(true),
+        alwaysOnTop: z.boolean().default(true),
+        x: z.number().int().nullable().default(null),
+        y: z.number().int().nullable().default(null),
+      })
+      .strict()
+      .prefault({}),
+    commandBar: z
+      .object({
+        conversationId: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/).nullable().default(null),
+      })
+      .strict()
+      .prefault({}),
     privacy: z
       .object({
         observationRetentionHours: z.number().int().min(0).max(24 * 30).default(24),

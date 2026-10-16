@@ -84,9 +84,39 @@ Long or multi-line text is **pasted** through the clipboard (exact and instant; 
 
 Quick start for Notepad: **Access → Launchable applications → + Notepad** registers Notepad, allows its windows and turns on launching. Then ask Keo to open Notepad and write something.
 
-## Voice
+## Working inside applications (UI Automation)
 
-**Settings → Voice**: choose OpenAI transcription and tick the consent box to enable the microphone button (hold to talk, or click to start/stop). Spoken replies can use local Windows voices (offline) or OpenAI voices.
+With observation and control on, Keo works **observe → act → verify**:
+
+- `desktop.inspect_window` reads an allowed window's controls (buttons, tabs, fields, lists, dialogs) through Windows UI Automation and gives each one a short id. Password fields are listed but their contents are never read.
+- `desktop.invoke_element` (click/select/toggle/expand), `desktop.set_text` (replace a field's text, read back to verify) and `desktop.scroll` act on an element from a **recent** observation (≤ 2 minutes). Right before acting, Keo re-reads that element and refuses — sending nothing — if it vanished, changed its name/role, or became disabled.
+- After each action Keo reports what it saw (state changed, control gone, new dialog/window) and stops at any new dialog to ask you.
+
+**Navigation grants.** Approving every click while browsing an app's menus is tedious, so an approval card for a safe navigation step also offers **Approve + allow navigation (10 min)**. That lets Keo inspect, click, scroll and switch sections *in that one window* for up to 10 minutes / 40 actions. Grants live in memory only, show in **Tasks**, are revoked by **Stop** (title bar or companion) and never cover sensitive controls (send, delete, submit, pay, buy, save, upload, sign in, …) or typing — those always ask.
+
+## Browser and screen context
+
+`browser.read_page` reads the active tab of an allowed browser (Chrome, Edge, Brave, Firefox, Opera, Vivaldi, Arc): its address, title, your **selected text** and the visible page text — so “summarize this page”, “explain what I selected” and “compare this with …” work without copying. It uses UI Automation (no extension, no access to cookies or other tabs). Page text is marked untrusted: instructions inside a page never authorize anything. Product research combines the page with Brave Search results and cites sources; prices and availability are stated only when a source shows them, with the date read.
+
+## WhatsApp (desktop app or WhatsApp Web)
+
+Allow WhatsApp (or your browser for WhatsApp Web) in **Access**. Then:
+
+- `whatsapp.open_chat` searches your chats and opens one **only if exactly one name matches**; otherwise it lists the candidates and Keo asks you which one.
+- `whatsapp.read_chat` reads the visible messages of the open chat (who wrote what, delivery state) for summaries and reply drafts.
+- `whatsapp.send_message` **always needs your approval for that exact text and contact** (never covered by a grant). Before pressing Send, Keo re-checks that the open chat is the right contact and that the draft is exactly the approved text; afterwards it confirms the message appears as your latest one. If it can't confirm, the step is marked *outcome uncertain* and is **not retried automatically** (to avoid double-sends); sending the same text again as your latest message is refused unless you ask for a duplicate.
+
+There is no background or ongoing auto-replying: every message is drafted, shown and approved by you. Keo has no official WhatsApp API (none exists for personal accounts); it works through the visible app like you do, so a WhatsApp redesign can make it report “couldn't find the search box” until the adapter is updated.
+
+## Voice, wake word, command bar and companion
+
+**Settings → Voice & shortcuts**
+
+- **Wake word** (off by default): uses the Windows speech recognizer on this PC. Default phrase “hey keo”; add your own (2–4 words) and press *Test* to check Windows understands it. Audio stays local; speech that isn't a wake phrase is discarded. Listening pauses while Keo speaks; mute any time with the mic chip in the title bar or the companion. After the wake phrase, your command is understood by Windows speech (offline) or OpenAI transcription (if configured and consented).
+- **Command bar shortcut**: Ctrl+K by default opens a small command bar over any app (Enter to send, Esc to close). A global shortcut takes that key away from other apps while Keo runs (Ctrl+K is used by browsers, VS Code, Slack), so you can change it (Ctrl+Alt+K, Ctrl+Shift+Space, …) or turn it off; if another app already holds it, Settings says so.
+- **Floating companion**: a small emblem that always shows what Keo is really doing — idle, listening, understanding, planning, acting, verifying, waiting for your approval, speaking, cancelled, error — with the current step (e.g. “Pressing ‘Settings’ · WhatsApp”). It never takes keyboard focus. Hover for controls: open Keo, Stop everything, mute, command bar. Drag to move (position is remembered and kept on screen when monitors change). Respects *reduced motion*.
+
+Push-to-talk in the chat (OpenAI transcription with consent) and spoken replies (Windows voices offline, or OpenAI voices) work as before.
 
 ## Checks
 
@@ -95,7 +125,8 @@ npm run typecheck   # tsc for main/preload/shared and renderer
 npm run lint        # ESLint (incl. bans on dangerouslySetInnerHTML/eval and Node imports in the renderer)
 npm test            # Vitest: unit + integration with fake providers/desktop (no network, no real input)
 npm run build       # production bundles (electron-vite)
-npm run smoke       # builds, then launches the real app twice in a disposable profile
+npm run smoke       # builds, then launches the real app twice in a disposable profile (incl. companion/command bar/shortcut lifecycle)
+npm run e2e:desktop # builds, then drives a disposable WhatsApp-like test app through real UI Automation (moves/clicks inside that test window only)
 npm run check       # typecheck + lint + test + build
 ```
 

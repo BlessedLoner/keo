@@ -8,8 +8,10 @@ import type {
   MemoryItem,
   MemoryRevision,
   Message,
+  NavigationGrant,
   Observation,
   ObservationAnalysis,
+  Presence,
   Project,
   ProjectItem,
   ProviderDiagnostic,
@@ -134,6 +136,26 @@ export const invokeSchemas = {
     .strict(),
   'voice:speak': z.object({ text: z.string().trim().min(1).max(4000) }).strict(),
 
+  'app:quit': empty,
+  'presence:get': empty,
+  'presence:report': z.object({ speaking: z.boolean(), recording: z.boolean(), transcribing: z.boolean() }).strict(),
+  'presence:stopAll': empty,
+  'presence:openMain': z.object({ view: z.enum(['chat', 'tasks', 'settings']).optional() }).strict(),
+  'companion:setInteractive': z.object({ interactive: z.boolean() }).strict(),
+  'companion:drag': z.object({ phase: z.enum(['start', 'end']) }).strict(),
+  'companion:hide': empty,
+  'commandBar:show': empty,
+  'commandBar:hide': empty,
+  'commandBar:conversation': z.object({ fresh: z.boolean().default(false) }).strict(),
+  'wake:status': empty,
+  'wake:setMuted': z.object({ muted: z.boolean() }).strict(),
+  'wake:testPhrase': z.object({ phrase: z.string().trim().min(1).max(40) }).strict(),
+  'wake:listenNow': empty,
+  'wake:cancelListen': empty,
+  'grants:list': empty,
+  'grants:revoke': z.object({ id }).strict(),
+  'grants:revokeAll': empty,
+  'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
 
@@ -204,6 +226,26 @@ export interface InvokeOutputs {
   'vision:delete': { deleted: boolean };
   'voice:transcribe': { text: string };
   'voice:speak': { audio: Uint8Array; mimeType: string };
+  'app:quit': { ok: true };
+  'presence:get': Presence;
+  'presence:report': { ok: true };
+  'presence:stopAll': { cancelledTurns: number; cancelledTasks: number; revokedGrants: number };
+  'presence:openMain': { ok: true };
+  'companion:setInteractive': { ok: true };
+  'companion:drag': { ok: true };
+  'companion:hide': { ok: true };
+  'commandBar:show': { ok: true };
+  'commandBar:hide': { ok: true };
+  'commandBar:conversation': { conversationId: string };
+  'wake:status': WakeStatusInfo;
+  'wake:setMuted': WakeStatusInfo;
+  'wake:testPhrase': { ok: boolean; recognized: boolean; confidence: number; message: string };
+  'wake:listenNow': { text: string | null; reason: string; sent: boolean; conversationId: string | null };
+  'wake:cancelListen': { ok: true };
+  'grants:list': NavigationGrant[];
+  'grants:revoke': { revoked: boolean };
+  'grants:revokeAll': { revoked: number };
+  'grants:approveAndGrant': Task;
   'diagnostics:logs': LogEvent[];
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };
@@ -219,6 +261,14 @@ type _Exhaustive = [InvokeChannel] extends [keyof InvokeOutputs]
 export const _contractIsExhaustive: _Exhaustive = true;
 
 export { pushChannels, INVOKE_PREFIX, type PushChannel } from './channels';
+
+export interface WakeStatusInfo {
+  status: 'off' | 'starting' | 'listening' | 'capturing' | 'error' | 'unavailable';
+  message: string | null;
+  muted: boolean;
+  recognizers: Array<{ culture: string; name: string }>;
+  shortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+}
 
 export interface WebStatus {
   hasKey: boolean;

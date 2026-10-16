@@ -1,0 +1,137 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Services } from '../services';
+
+/**
+ * Development-only physical end-to-end check (KEO_E2E_DESKTOP=1, never in
+ * packaged builds). Launches a disposable WhatsApp-like test app as a separate
+ * process and drives it through Keo's REAL services: Win32/UI Automation
+ * helper, capability registry, orchestrator and approvals. No real accounts,
+ * messages or other applications are touched.
+ */
+export async function runDesktopE2E(s: Services, opts: { electronPath: string; fixtureDir: string; outFile: string; workDir: string }): Promise<void> {
+  const results: Record<string, unknown> = {};
+  const stateFile = path.join(opts.workDir, 'fake-wa-state.json');
+  fs.rmSync(stateFile, { force: true });
+  const env: Record<string, string | undefined> = { ...process.env, FAKE_WA_STATE: stateFile };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_RENDERER_URL;
+  const fake = spawn(opts.electronPath, [path.join(opts.fixtureDir, 'main.cjs'), `--user-data-dir=${path.join(opts.workDir, 'fake-wa-profile')}`], { env, stdio: 'ignore' });
+  const state = () => {
+    try {
+      return JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { pid: number; open: string | null; sent: Array<{ to: string; text: string }>; tab: string };
+    } catch {
+      return null;
+    }
+  };
+  const wait = async (pred: () => boolean, ms = 30000) => {
+    const t = Date.now();
+    while (!pred()) {
+      if (Date.now() - t > ms) throw new Error('e2e wait timed out');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  try {
+    await wait(() => !!state(), 90000).catch(() => {
+      throw new Error('the test app did not start within 90 s');
+    });
+    s.settings.update({
+      permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'electron', label: 'Fake WhatsApp' }] },
+    });
+    let target: { hwnd: string; pid: number; processName: string } | null = null;
+    for (let i = 0; i < 60 && !target; i++) {
+      const ws = await s.desktop.listWindows(s.settings.get(), false);
+      const w = ws.find((x) => x.title === 'Fake WhatsApp — Keo test');
+      if (w) target = { hwnd: w.hwnd, pid: w.pid, processName: w.processName };
+      else await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!target) throw new Error('fake app window not found');
+    results.target = { processName: target.processName };
+
+    const run = async (capabilityId: string, input: Record<string, unknown>, decision: 'approve' | 'deny' | 'none' = 'approve') => {
+      const a = s.registry.admit({ capabilityId, input: { target, ...input }, origin: 'model', correlationId: 'e2e' });
+      if (!a.ok) return { rejected: a.reason };
+      const t = s.tasks.create({ title: capabilityId, rationale: 'e2e', origin: 'model', conversationId: null, correlationId: 'e2e', steps: [{ admission: a, title: capabilityId, dependsOnIndexes: [] }] });
+      s.tasks.submit(t.id);
+      const step = s.tasks.get(t.id)!.steps[0]!;
+      if (step.state === 'awaiting_authorization') {
+        if (decision === 'none') return { state: 'awaiting_authorization', taskId: t.id };
+        if (decision === 'deny') {
+          s.tasks.denyStep(step.id);
+          return { state: s.tasks.get(t.id)!.state };
+        }
+        s.tasks.approveStep(step.id, step.inputHash);
+      } else s.tasks.pump();
+      await wait(() => ['completed', 'failed', 'cancelled', 'outcome_uncertain'].includes(s.tasks.get(t.id)!.state), 90000);
+      const done = s.tasks.get(t.id)!;
+      const st = done.steps[0]!;
+      return { state: done.state, verification: st.verification, detail: st.verificationDetail, error: st.error, result: st.result };
+    };
+
+    // 1. Fresh observation and section navigation.
+    const snap1 = (await run('desktop.inspect_window', {})) as { result: { snapshotId: string; elements: Array<{ id: string; role: string; name: string }> } };
+    const settingsTab = snap1.result.elements.find((e) => e.name === 'Settings' && e.role === 'tabitem');
+    results.inspect = { elements: snap1.result.elements.length, foundSettingsTab: !!settingsTab, roles: [...new Set(snap1.result.elements.map((e) => e.role))].slice(0, 12) };
+    const nav = await run('desktop.invoke_element', { snapshotId: snap1.result.snapshotId, elementId: settingsTab?.id ?? 'e0', action: 'invoke' });
+    await wait(() => state()?.tab === 'settings', 5000).catch(() => undefined);
+    results.navigateToSettings = { state: (nav as { state: string }).state, appTab: state()?.tab };
+    const snap2 = (await run('desktop.inspect_window', {})) as { result: { snapshotId: string; elements: Array<{ id: string; role: string; name: string }> } };
+    results.settingsVisible = snap2.result.elements.some((e) => e.name.includes('Notifications'));
+    const chatsTab = snap2.result.elements.find((e) => e.name === 'Chats' && e.role === 'tabitem');
+    results.backToChats = await run('desktop.invoke_element', { snapshotId: snap2.result.snapshotId, elementId: chatsTab?.id ?? 'e0', action: 'invoke' });
+    await wait(() => state()?.tab === 'chats', 5000).catch(() => undefined);
+    results.appTabAfterChats = state()?.tab;
+    {
+      const raw = await s.desktop.backend.uiaSnapshot(target.hwnd, { maxNodes: 1500, maxDepth: 60, budgetMs: 9000 });
+      const { analyzeWhatsApp } = await import('../desktop/whatsapp');
+      const v = analyzeWhatsApp(raw.nodes, raw.window);
+      results.waView = {
+        window: raw.window,
+        search: v.search ? { name: v.search.name, x: v.search.x, w: v.search.w, off: v.search.offscreen } : null,
+        chats: v.chats.map((c) => c.title),
+        header: v.header,
+        edits: raw.nodes.filter((n) => n.role === 'edit' || n.role === 'document').map((n) => ({ role: n.role, name: n.name, x: n.x, w: n.w, off: n.offscreen ?? false })),
+      };
+    }
+
+    // 2. Re-using an unchanged element from an earlier (fresh) observation is allowed after re-validation.
+    const chatsTab1 = snap1.result.elements.find((e) => e.name === 'Chats' && e.role === 'tabitem');
+    results.reuseUnchanged = (await run('desktop.invoke_element', { snapshotId: snap1.result.snapshotId, elementId: chatsTab1?.id ?? 'e0', action: 'invoke' })) as unknown;
+    // 2b. A control that has since disappeared (the Settings-panel checkbox, hidden now) is refused, nothing dispatched.
+    const notif = snap2.result.elements.find((e) => e.name.includes('Notifications') && e.role === 'checkbox');
+    const stale = (await run('desktop.invoke_element', { snapshotId: snap2.result.snapshotId, elementId: notif?.id ?? 'e0', action: 'toggle' })) as { state: string; error: unknown };
+    results.staleRefused = { found: !!notif, state: stale.state, error: stale.error, appTab: state()?.tab };
+
+    // 3. WhatsApp: ambiguity, exact open, read.
+    results.openAmbiguous = ((await run('whatsapp.open_chat', { contact: 'Daniel' })) as { result: unknown }).result;
+    results.openExact = await run('whatsapp.open_chat', { contact: 'Daniel Okafor' });
+    results.appOpenChat = state()?.open;
+    results.read = ((await run('whatsapp.read_chat', { contact: 'Daniel Okafor' })) as { result: unknown }).result;
+
+    // 4. No send without approval, none after denial.
+    const pending = (await run('whatsapp.send_message', { contact: 'Daniel Okafor', text: 'E2E: not approved' }, 'none')) as { taskId: string };
+    s.tasks.cancel(pending.taskId);
+    await run('whatsapp.send_message', { contact: 'Daniel Okafor', text: 'E2E: denied' }, 'deny');
+    await new Promise((r) => setTimeout(r, 800));
+    results.sentAfterCancelAndDeny = state()?.sent ?? null;
+
+    // 5. Approved send, verified; duplicate protection on repeat.
+    results.send = await run('whatsapp.send_message', { contact: 'Daniel Okafor', text: 'E2E approved message' });
+    await new Promise((r) => setTimeout(r, 500));
+    results.repeat = await run('whatsapp.send_message', { contact: 'Daniel Okafor', text: 'E2E approved message' });
+    await new Promise((r) => setTimeout(r, 500));
+    results.sentFinal = state()?.sent ?? null;
+    results.ok = true;
+  } catch (e) {
+    results.error = (e as Error).message;
+    results.ok = false;
+  } finally {
+    fs.writeFileSync(opts.outFile, JSON.stringify(results, null, 2));
+    try {
+      fake.kill();
+    } catch {
+      /* ignore */
+    }
+  }
+}

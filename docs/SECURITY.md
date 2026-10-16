@@ -62,7 +62,39 @@ Execution (`TaskOrchestrator`):
 - Key combinations exclude the Windows key. Text and key presses require approval every time. Because approval is given in Keo's own window, input actions first bring the re-validated target to the front as part of the approved operation, confirm it is the foreground window, and only then send input; if Windows refuses the switch the step fails with `focus_failed` and nothing is sent.
 - Launch is limited to executables the user registered through a file picker; no arguments, no shell (`shell: false`).
 - The helper is a fixed script embedded in Keo, rewritten from the bundle at each start and run with `-ExecutionPolicy Bypass` **for that child process only** (no system policy change). It is not a shell for the model.
-- Not implemented on purpose: privilege elevation, UI Automation of other processes' internals, credential entry, stealth/background input, remote control.
+- Not implemented on purpose: privilege elevation, credential entry, stealth/background input, remote control, network-accessible control endpoints, device pairing.
+
+### 4a. UI Automation (element-level control)
+
+- Reads go through the public UI Automation control view of **allow-listed windows only**, bounded (≤ 1500 nodes, depth ≤ 60, time budget) and shown to the model as untrusted data. Password fields are reported as such; their value is never read or written.
+- Element ids are bound to a snapshot that expires after 2 minutes and to the window identity. Before any action the element is re-read by its runtime id and the action is refused (`element_gone`, `element_changed`, `element_disabled`, `stale_observation`, `target_changed`) with `dispatched: no` if it no longer matches.
+- Actions use UIA patterns (Invoke/Toggle/SelectionItem/ExpandCollapse/Value/Scroll). A pointer click is used only as a fallback for a control without an Invoke pattern, at the re-read element's centre, under the same foreground and occlusion checks as other clicks.
+- Every action reports what it observed afterwards (state change, element gone, new windows of the process) and treats a new dialog as a decision point for the user.
+- Chromium `TextPattern` can raise access violations inside the helper; those are caught (`HandleProcessCorruptedStateExceptions`) and answered with a safe fallback so the helper survives.
+
+### 4b. Navigation grants
+
+- Created **only by the user** from an approval card (`grants:approveAndGrant`, main window or command bar), never by the model. Bound to one `{hwnd, pid}`; at most 30 minutes and 60 actions (default 10 min / 40); kept in memory only; listed in Tasks; revoked by Stop, by the companion and on shutdown; every use is audited (`approved_by_grant`).
+- Covered capabilities: inspect, invoke element, scroll, focus, navigation keys only (arrows, Tab, Page, Home/End, Esc), browser page reading, WhatsApp open/read. **Never covered:** typing/set text, launching, any sensitive control (names matching send, delete, submit, pay, buy, confirm, post, share, sign in, save, upload, download, …), and `whatsapp.send_message`.
+
+### 4c. WhatsApp
+
+- Works only through the visible, allow-listed app (no API, no stored session data, no access to WhatsApp files).
+- Contact resolution never guesses: an open only happens on one exact (normalised) name match; otherwise candidates are returned for the user to pick.
+- `whatsapp.send_message` needs a per-message approval bound to the hash of `{target, contact, text}`; it is excluded from grants and has `maxAttempts: 1`. Before Send it re-verifies the open chat header and the exact draft; after Send it confirms the message is visible as the latest outgoing one. An unconfirmed send becomes `outcome_uncertain` and is never retried automatically; an identical latest message blocks a repeat unless the user asks for a duplicate.
+- Read messages are untrusted content; instructions inside them are never followed.
+
+### 4d. Browser context
+
+- `browser.read_page` reads only an allow-listed browser's active window via UIA (address bar, document title, selection, visible text, bounded). No extension, no debugging port, no cookies or other tabs. URLs are normalised; page text is untrusted.
+
+## 4e. Voice activation, command bar and companion
+
+- Wake word uses the local Windows (SAPI) recognizer through the fixed helper. Off by default; while on, audio is processed on this PC only and non-matching speech (including a competing dictation grammar used to reject near-misses) is discarded, never stored or sent. Command capture after the wake phrase is local, or OpenAI transcription only when that provider is configured **and** the transcription consent is given. Listening pauses during Keo's speech; muting is immediate.
+- The wake phrase only opens the command flow; it never approves anything. Spoken commands go through the same agent, capability and approval path as typed ones.
+- Each window has a **role** checked on every IPC call (`ipc.role_rejected`): the companion may only read presence, stop, mute, open the main window/command bar and revoke grants; the command bar may additionally chat, see/approve/deny tasks (with the same hash binding) and use voice. Neither can change settings, permissions, keys, memory or desktop targets.
+- The companion is non-focusable, click-through except over its own controls, and shows only state, step title and target app name — never message or page contents.
+- The global shortcut is registered with `globalShortcut` only while enabled and is released when disabled or on quit; conflicts are reported, not forced.
 
 ## 5. Vision
 
@@ -114,5 +146,7 @@ Execution (`TaskOrchestrator`):
 
 - The installer and executable are not code-signed (no certificate available here); Windows SmartScreen will warn.
 - `-ExecutionPolicy Bypass` is required for the helper process; organisations that block PowerShell entirely will see desktop control as unavailable.
-- Verification after input actions is limited to delivery (OS input queue); Keo does not read back what the target application did, and says so (`unverified`).
+- Verification reads back through UI Automation where the application exposes it (text entry, element state, WhatsApp chat/message). Applications that expose little to UIA (games, some custom-drawn UIs) get delivery-only verification, reported as `unverified`.
+- The WhatsApp adapter recognises the app by roles, names and layout; a redesign of WhatsApp can make it fail closed ("not recognized") until updated. It cannot see messages outside the visible area.
+- Windows speech recognition accuracy depends on microphone and accent; a custom phrase may need a phonetic spelling. Ctrl+K as a global shortcut overrides that key in other apps while Keo runs.
 - No remote-control server exists, by design.

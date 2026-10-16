@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../shared/domain';
+import type { AgentEvent, NavigationGrant, Presence } from '../shared/domain';
 import type { InvokeChannel, InvokeInput, InvokeOutputs, IpcResult, PushChannel } from '../shared/ipc';
 
 export interface PushPayloads {
@@ -9,7 +9,19 @@ export interface PushPayloads {
   'conversations:changed': { conversationId: string | null };
   'observations:changed': { observationId: string | null };
   'settings:changed': Record<string, never>;
+  'presence:changed': Presence;
+  'presence:command': PresenceCommand;
+  'grants:changed': { grants: NavigationGrant[] };
 }
+
+/** Instructions from the main process to a window (never from page content). */
+export type PresenceCommand =
+  | { type: 'stop_speaking' }
+  | { type: 'record_command' }
+  | { type: 'focus_input' }
+  | { type: 'navigate'; view: string }
+  | { type: 'transcript'; text: string; conversationId: string | null }
+  | { type: 'listen_result'; reason: string };
 
 export interface KeoBridge {
   invoke<C extends InvokeChannel>(channel: C, input?: InvokeInput<C>): Promise<IpcResult<InvokeOutputs[C]>>;

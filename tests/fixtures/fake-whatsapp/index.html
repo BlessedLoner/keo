@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fake WhatsApp — Keo test</title>
+<style>
+  body { margin: 0; display: flex; height: 100vh; font: 14px 'Segoe UI', sans-serif; background: #f0f2f5; }
+  #left { width: 380px; border-right: 1px solid #ccc; display: flex; flex-direction: column; background: #fff; }
+  nav { display: flex; gap: 6px; padding: 8px; }
+  #search { margin: 8px; padding: 6px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #list li { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; }
+  #list li .time { margin-left: auto; color: #888; }
+  #right { flex: 1; display: flex; flex-direction: column; }
+  header { height: 56px; display: flex; align-items: center; padding: 0 16px; background: #fff; border-bottom: 1px solid #ddd; }
+  #msgs { flex: 1; overflow: auto; padding: 12px; }
+  #msgs li { margin: 6px 0; display: flex; }
+  #msgs li .bubble { max-width: 300px; padding: 6px 10px; border-radius: 8px; background: #fff; }
+  #msgs li.me { justify-content: flex-end; }
+  #msgs li.me .bubble { background: #d9fdd3; }
+  footer { display: flex; gap: 8px; padding: 10px; background: #fff; }
+  #compose { flex: 1; min-height: 24px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
+  #settings { padding: 20px; }
+</style>
+</head>
+<body>
+<div id="left">
+  <nav role="tablist" aria-label="Sections">
+    <button role="tab" id="tChats" aria-selected="true">Chats</button>
+    <button role="tab" id="tSettings" aria-selected="false">Settings</button>
+  </nav>
+  <input id="search" aria-label="Search input textbox" placeholder="Search" />
+  <ul id="list" role="list" aria-label="Chat list"></ul>
+  <div id="settings" hidden role="region" aria-label="Settings panel"><label><input type="checkbox" id="notif" /> Notifications</label></div>
+</div>
+<div id="right">
+  <header id="hdr"></header>
+  <ul id="msgs" role="list" aria-label="Messages"></ul>
+  <footer id="foot" hidden>
+    <div id="compose" role="textbox" contenteditable="true" aria-label="Type a message"></div>
+    <button id="send" aria-label="Send">Send</button>
+  </footer>
+</div>
+<script>
+  const chats = [
+    { title: 'Daniel Okafor', messages: [{ from: 'them', text: 'Hey! Did you find a good microphone?' }, { from: 'me', text: 'Still looking', status: 'Read' }] },
+    { title: 'Daniel Smith', messages: [{ from: 'them', text: 'Meeting at 3?' }] },
+    { title: 'Mum', messages: [{ from: 'them', text: 'Call me later' }] },
+  ];
+  window.__state = { open: null, sent: [], tab: 'chats' };
+  const $ = (id) => document.getElementById(id);
+  function renderList() {
+    const q = $('search').value.toLowerCase();
+    $('list').innerHTML = '';
+    chats.filter((c) => !q || c.title.toLowerCase().includes(q)).forEach((c, i) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'listitem');
+      li.innerHTML = '<span class="title"></span><span class="time">10:4' + i + '</span>';
+      li.querySelector('.title').textContent = c.title;
+      li.addEventListener('click', () => openChat(c.title));
+      $('list').appendChild(li);
+    });
+  }
+  function openChat(title) {
+    window.__state.open = title;
+    $('search').value = '';
+    renderList();
+    const h = $('hdr');
+    h.innerHTML = '';
+    const b = document.createElement('button');
+    b.textContent = title;
+    h.appendChild(b);
+    $('foot').hidden = false;
+    renderMsgs();
+  }
+  function renderMsgs() {
+    const chat = chats.find((c) => c.title === window.__state.open);
+    $('msgs').innerHTML = '';
+    if (!chat) return;
+    chat.messages.forEach((m) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'listitem');
+      li.className = m.from;
+      li.innerHTML = '<div class="bubble"><span class="t"></span> <span class="time">10:50</span>' + (m.status ? ' <span role="img" aria-label="' + m.status + '">✓</span>' : '') + '</div>';
+      li.querySelector('.t').textContent = m.text;
+      $('msgs').appendChild(li);
+    });
+  }
+  $('search').addEventListener('input', renderList);
+  $('send').addEventListener('click', () => {
+    const text = $('compose').innerText.trim();
+    if (!text) return;
+    const chat = chats.find((c) => c.title === window.__state.open);
+    chat.messages.push({ from: 'me', text, status: 'Sent' });
+    window.__state.sent.push({ to: chat.title, text });
+    $('compose').innerText = '';
+    renderMsgs();
+  });
+  function selectTab(t) {
+    window.__state.tab = t;
+    $('tChats').setAttribute('aria-selected', String(t === 'chats'));
+    $('tSettings').setAttribute('aria-selected', String(t === 'settings'));
+    $('settings').hidden = t !== 'settings';
+    $('list').hidden = t !== 'chats';
+    $('search').hidden = t !== 'chats';
+  }
+  $('tChats').addEventListener('click', () => selectTab('chats'));
+  $('tSettings').addEventListener('click', () => selectTab('settings'));
+  renderList();
+</script>
+</body>
+</html>

@@ -1,7 +1,21 @@
 import { useEffect, useId, useRef } from 'react';
 import { levelBus } from '../lib/levelBus';
 
-export type EmblemState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'working' | 'attention' | 'error';
+export type EmblemState =
+  | 'idle'
+  | 'listening'
+  | 'understanding'
+  | 'planning'
+  | 'acting'
+  | 'verifying'
+  | 'awaiting_approval'
+  | 'speaking'
+  | 'cancelled'
+  | 'error'
+  // legacy aliases kept for existing call sites
+  | 'thinking'
+  | 'working'
+  | 'attention';
 
 interface Props {
   state: EmblemState;
@@ -166,9 +180,15 @@ export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
 export const STATE_LABEL: Record<EmblemState, string> = {
   idle: 'Ready',
   listening: 'Listening',
-  thinking: 'Thinking',
+  understanding: 'Understanding',
+  planning: 'Planning',
+  acting: 'Acting',
+  verifying: 'Verifying',
+  awaiting_approval: 'Needs your approval',
   speaking: 'Speaking',
+  cancelled: 'Stopped',
+  error: 'Something went wrong',
+  thinking: 'Thinking',
   working: 'Working',
   attention: 'Needs your approval',
-  error: 'Something went wrong',
 };
