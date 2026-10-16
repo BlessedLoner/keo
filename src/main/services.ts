@@ -35,6 +35,8 @@ export interface ServiceDeps {
   captureSource: WindowCaptureSource;
   imageTools: ImageTools;
   testProvider?: TestProvider | null;
+  /** System clipboard; the app passes Electron's, tests use an in-memory one. */
+  clipboard?: { readText(): Promise<string>; writeText(text: string): Promise<void> };
   /** Override the web service (tests inject fake fetch/DNS). */
   web?: WebService;
   focusSettleMs?: number;
@@ -43,6 +45,16 @@ export interface ServiceDeps {
 }
 
 export type Push = (channel: string, payload: unknown) => void;
+
+export function memoryClipboard(initial = ''): { readText(): Promise<string>; writeText(text: string): Promise<void> } {
+  let v = initial;
+  return {
+    readText: async () => v,
+    writeText: async (t) => {
+      v = t;
+    },
+  };
+}
 
 /** Composition root shared by the Electron app and the integration tests. */
 export class Services {
@@ -103,6 +115,7 @@ export class Services {
       activeProviderId: () => getSettings().activeProvider,
       proposePlan: (plan, ctx) => this.proposePlan(plan, ctx),
       web: this.web,
+      clipboard: d.clipboard ?? memoryClipboard(),
       findUserQuote: (conversationId, quote) => {
         const msgs = this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user');
         const hit = findQuote(msgs.map((m) => ({ id: m.id, text: m.content })), quote);

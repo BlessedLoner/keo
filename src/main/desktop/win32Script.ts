@@ -56,6 +56,7 @@ public static class KeoWin {
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -143,20 +144,50 @@ public static class KeoWin {
     return Describe(h);
   }
 
+  // Releases modifier keys the system believes are held (a stuck Shift/Ctrl/Alt/Win
+  // would otherwise turn typed characters into shortcuts or symbols).
+  public static void ReleaseModifiers() {
+    int[] vks = { 0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C };
+    var ups = new List<INPUT>();
+    foreach (var vk in vks) if ((GetAsyncKeyState(vk) & 0x8000) != 0) ups.Add(Key((ushort)vk, 0, 2));
+    if (ups.Count > 0) { Send(ups); Thread.Sleep(30); }
+  }
+
+  // Types in small chunks so the target can keep up, re-checking before each
+  // chunk that the target is still the foreground window.
   public static int TypeText(IntPtr h, string text) {
     RequireForeground(h);
-    var inputs = new List<INPUT>();
+    ReleaseModifiers();
+    var batch = new List<INPUT>();
+    int done = 0, pending = 0;
     foreach (char c in text) {
-      if (c == '\n') { inputs.Add(Key(0x0D, 0, 0)); inputs.Add(Key(0x0D, 0, 2)); continue; }
-      if (c == '\r') continue;
-      inputs.Add(Key(0, c, 4)); inputs.Add(Key(0, c, 4 | 2));
+      if (c == '\r') { done++; continue; }
+      if (c == '\n') { batch.Add(Key(0x0D, 0, 0)); batch.Add(Key(0x0D, 0, 2)); }
+      else { batch.Add(Key(0, c, 4)); batch.Add(Key(0, c, 4 | 2)); }
+      pending++;
+      if (pending >= 20) {
+        if (GetForegroundWindow() != h) throw new Exception("foreground_lost:" + done);
+        Send(batch); batch.Clear(); done += pending; pending = 0;
+        Thread.Sleep(15);
+      }
     }
-    Send(inputs);
-    return text.Length;
+    if (pending > 0) {
+      if (GetForegroundWindow() != h) throw new Exception("foreground_lost:" + done);
+      Send(batch); done += pending;
+    }
+    return done;
+  }
+
+  // Pastes the clipboard (Ctrl+V) into the foreground target.
+  public static void Paste(IntPtr h) {
+    RequireForeground(h);
+    ReleaseModifiers();
+    Send(new List<INPUT> { Key(0x11, 0, 0), Key(0x56, 0, 0), Key(0x56, 0, 2), Key(0x11, 0, 2) });
   }
 
   public static void Keys(IntPtr h, int[] mods, int key) {
     RequireForeground(h);
+    ReleaseModifiers();
     var inputs = new List<INPUT>();
     foreach (var m in mods) inputs.Add(Key((ushort)m, 0, 0));
     inputs.Add(Key((ushort)key, 0, 0)); inputs.Add(Key((ushort)key, 0, 2));
@@ -186,6 +217,36 @@ public static class KeoWin {
 }
 '@
 
+# Optional: reading text back for verification (UI Automation). Compiled
+# separately so a failure here only disables verification.
+$script:uiaReady = $false
+try {
+  Add-Type -Language CSharp -ReferencedAssemblies UIAutomationClient, UIAutomationTypes -TypeDefinition @'
+using System;
+using System.Text;
+using System.Windows.Automation;
+
+public static class KeoUia {
+  public static string ReadText(IntPtr h) {
+    var root = AutomationElement.FromHandle(h);
+    var cond = new OrCondition(
+      new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document),
+      new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+    var els = root.FindAll(TreeScope.Descendants, cond);
+    var sb = new StringBuilder();
+    foreach (AutomationElement el in els) {
+      object p;
+      if (el.TryGetCurrentPattern(TextPattern.Pattern, out p)) { sb.Append(((TextPattern)p).DocumentRange.GetText(400000)); sb.Append('\n'); }
+      else if (el.TryGetCurrentPattern(ValuePattern.Pattern, out p)) { sb.Append(((ValuePattern)p).Current.Value); sb.Append('\n'); }
+      if (sb.Length > 400000) break;
+    }
+    return sb.ToString();
+  }
+}
+'@
+  $script:uiaReady = $true
+} catch { $script:uiaReady = $false }
+
 function Reply($id, $ok, $payload) {
   $o = @{ id = $id; ok = $ok }
   if ($ok) { $o.result = $payload } else { $o.error = $payload }
@@ -211,6 +272,12 @@ while ($true) {
       'focus' { Reply $req.id $true @{ foreground = [KeoWin]::Focus($h) } }
       'move'  { Reply $req.id $true ([KeoWin]::Move($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.width, [int]$req.args.height)) }
       'type'  { Reply $req.id $true @{ chars = [KeoWin]::TypeText($h, [string]$req.args.text) } }
+      'paste' { [KeoWin]::Paste($h); Reply $req.id $true @{ pasted = $true } }
+      'readtext' {
+        if (-not $script:uiaReady) { Reply $req.id $true @{ available = $false; text = '' } }
+        elseif (-not [KeoWin]::IsWindow($h)) { Reply $req.id $false @{ code = 'helper_error'; message = 'target_gone' } }
+        else { Reply $req.id $true @{ available = $true; text = [KeoUia]::ReadText($h) } }
+      }
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
       'ping'  { Reply $req.id $true @{ pong = $true } }

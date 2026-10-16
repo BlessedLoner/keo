@@ -73,6 +73,13 @@ async function bringToFront(d: CapabilityDeps, target: TargetT, settings: Settin
   await new Promise((res) => setTimeout(res, d.focusSettleMs ?? 150));
 }
 
+
+/** Paste long/multi-line text (exact, atomic); type short single-line text. */
+export function chooseMethod(text: string, method: 'auto' | 'paste' | 'type'): 'paste' | 'type' {
+  if (method !== 'auto') return method;
+  return text.length > 60 || /[\r\n]/.test(text) ? 'paste' : 'type';
+}
+
 const FRESH_TARGET_NOTE = ' Keo brings the window to the front itself as part of the approved action, so you do not need desktop__focus_window first. Take the target from desktop__list_windows in this conversation; never invent handles.';
 
 export interface CapabilityDeps {
@@ -84,6 +91,8 @@ export interface CapabilityDeps {
   activeProviderDestination: () => string;
   activeProviderId: () => string | null;
   web: WebService;
+  /** System clipboard (text only). Used to paste long text exactly. */
+  clipboard: { readText(): Promise<string>; writeText(text: string): Promise<void> };
   /**
    * Finds a recent user message in the conversation that contains `quote`
    * verbatim (whitespace/case-insensitive). Used to ground auto-saved memories.
@@ -497,36 +506,90 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const typeText = defineCapability({
     id: 'desktop.type_text',
-    version: '1.1.0',
+    version: '1.2.0',
     title: 'Type text',
-    description: `Type text into an allow-listed window. Never use it to submit forms, send messages or enter credentials without the user explicitly asking.${FRESH_TARGET_NOTE}`,
-    input: z.object({ target: Target, text: z.string().min(1).max(4000) }).strict(),
-    output: z.object({ chars: z.number() }),
+    description: `Put text into an allow-listed window at its cursor. Long or multi-line text is pasted via the clipboard (exact and fast); short text is typed. Write plain text for plain-text apps like Notepad (no Markdown symbols). Never use it to submit forms, send messages or enter credentials without the user explicitly asking.${FRESH_TARGET_NOTE}`,
+    input: z
+      .object({
+        target: Target,
+        text: z.string().min(1).max(20000),
+        method: z.enum(['auto', 'paste', 'type']).default('auto').describe('auto = paste when long or multi-line, otherwise type'),
+      })
+      .strict(),
+    output: z.object({ chars: z.number(), method: z.enum(['paste', 'type']), clipboardRestored: z.boolean().nullable() }),
     risk: 'high',
     approval: 'always',
     permissions: ['desktop.control'],
     consequential: true,
     idempotent: false,
-    timeoutMs: 40000,
+    timeoutMs: 120000,
     maxAttempts: 1,
     modelVisible: true,
-    verificationPolicy: 'Delivery is confirmed by the OS input queue; the resulting application state is not verified.',
+    verificationPolicy: 'Verified by reading the window’s text back through Windows UI Automation when the application supports it; otherwise reported as not verified.',
     precheck: (i, s) => allowCheck(i.target, s),
-    preview: (i) => ({
-      summary: `Bring ${i.target.processName} to the front and type ${i.text.length} characters`,
-      target: targetLabel(i.target),
-      consequences: [`Text: “${i.text.length > 300 ? `${i.text.slice(0, 300)}…` : i.text}”`, 'Typing cannot be undone automatically. Any newline presses Enter.', 'Avoid using the mouse or keyboard until it finishes.'],
-      dataExport: null,
-    }),
-    auditView: (i) => ({ target: i.target, chars: i.text.length }),
-    async execute(i, ctx) {
-      await bringToFront(d, i.target, ctx.settings);
-      return d.desktop.backend.typeText(i.target.hwnd, i.text);
+    preview: (i) => {
+      const method = chooseMethod(i.text, i.method);
+      return {
+        summary: `Bring ${i.target.processName} to the front and ${method === 'paste' ? 'paste' : 'type'} ${i.text.length.toLocaleString('en-US')} characters`,
+        target: targetLabel(i.target),
+        consequences: [
+          `Text: “${i.text.length > 400 ? `${i.text.slice(0, 400)}…` : i.text}”`,
+          method === 'paste'
+            ? 'Uses the clipboard; your previous clipboard text is restored afterwards (Windows clipboard history, if on, may keep a copy).'
+            : 'Typing cannot be undone automatically. Any newline presses Enter. Avoid using the keyboard until it finishes.',
+        ],
+        dataExport: null,
+      };
     },
-    async verify(i, o) {
-      return o.chars === i.text.length
-        ? { verified: null, detail: 'All keystrokes were delivered; Keo cannot read back what the application did with them.' }
-        : { verified: false, detail: 'Not all characters were delivered.' };
+    auditView: (i) => ({ target: i.target, chars: i.text.length, method: i.method }),
+    async execute(i, ctx) {
+      const method = chooseMethod(i.text, i.method);
+      const text = i.text.replace(/\r\n?/g, '\n');
+      await bringToFront(d, i.target, ctx.settings);
+      if (method === 'type') {
+        const r = await d.desktop.backend.typeText(i.target.hwnd, text);
+        return { chars: r.chars, method, clipboardRestored: null };
+      }
+      let previous: string | null;
+      try {
+        previous = await d.clipboard.readText();
+      } catch {
+        previous = null;
+      }
+      await d.clipboard.writeText(text.replace(/\n/g, '\r\n'));
+      let restored = false;
+      try {
+        await d.desktop.backend.paste(i.target.hwnd);
+        // Give the application time to read the clipboard before restoring it.
+        await new Promise((res) => setTimeout(res, d.focusSettleMs === 0 ? 0 : 400));
+      } finally {
+        try {
+          if (previous !== null) {
+            await d.clipboard.writeText(previous);
+            restored = true;
+          }
+        } catch {
+          restored = false;
+        }
+      }
+      return { chars: text.length, method, clipboardRestored: restored };
+    },
+    async verify(i) {
+      const got = await d.desktop.backend.readText(i.target.hwnd);
+      if (got === null) return { verified: null, detail: 'This application does not expose its text, so Keo could not read back the result.' };
+      const norm = (t: string) => t.replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+      const want = norm(i.text);
+      const have = norm(got);
+      if (have.includes(want)) return { verified: true, detail: 'The full text was read back from the window.' };
+      // Rich editors may auto-format; accept if every non-empty line arrived in order.
+      const lines = want.split('\n').map((l) => l.trim()).filter(Boolean);
+      let at = 0;
+      for (const l of lines) {
+        const k = have.indexOf(l, at);
+        if (k < 0) return { verified: false, detail: 'The text read back from the window does not match what was sent.' };
+        at = k + l.length;
+      }
+      return { verified: true, detail: 'All lines were read back from the window (formatting may differ).' };
     },
   });
 

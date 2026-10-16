@@ -243,3 +243,105 @@ describe('schema migration v2', () => {
     db.close();
   });
 });
+
+describe('reliable text entry', () => {
+  function enable(h: Harness) {
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, observationEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] }, agent: { approvalWaitSeconds: 10 } });
+  }
+  async function runType(h: Harness, text: string, method?: 'auto' | 'paste' | 'type') {
+    h.provider.setScript((req, n) => (n === 0 ? call('desktop__type_text', { target: notepad, text, ...(method ? { method } : {}) }) : reply(lastResult(req))));
+    const c = h.services.conversations.create();
+    const run = h.services.agent.send(c.id, 'write it');
+    await waitFor(() => h.services.tasks.list(5).some((t) => t.state === 'awaiting_authorization'));
+    const st = h.services.tasks.list(5)[0]!.steps[0]!;
+    h.services.tasks.approveStep(st.id, st.inputHash);
+    await run.done;
+    return h.services.tasks.list(5)[0]!;
+  }
+  const research = 'Reusable Rocket Achievements in 2025\n\n1. Zhuque-3 launch (December 3, 2025)\n2. Widespread reusability progress';
+
+  it('pastes long multi-line text exactly, restores the clipboard and verifies by reading back', async () => {
+    h = makeHarness();
+    enable(h);
+    const task = await runType(h, research);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
+    expect(await h.clipboard.readText()).toBe('user clipboard before');
+    expect(h.desktop.documentText).toContain('Zhuque-3 launch');
+    expect(task.state).toBe('completed');
+    expect(task.steps[0]!.verification).toBe('verified');
+    expect(task.steps[0]!.result).toMatchObject({ method: 'paste', clipboardRestored: true });
+  });
+
+  it('types short single-line text', async () => {
+    h = makeHarness();
+    enable(h);
+    const task = await runType(h, 'Hello Gideon');
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(task.steps[0]!.verification).toBe('verified');
+  });
+
+  it('reports a mismatch when the window does not contain the text afterwards', async () => {
+    h = makeHarness();
+    enable(h);
+    h.desktop.clipboardSource = { readText: async () => '))))))))' }; // simulate garbled input
+    const task = await runType(h, research);
+    expect(task.state).toBe('failed');
+    expect(task.steps[0]!.verification).toBe('verification_failed');
+  });
+
+  it('says "not verified" when the app does not expose its text', async () => {
+    h = makeHarness();
+    enable(h);
+    h.desktop.documentText = null;
+    const task = await runType(h, research);
+    expect(task.state).toBe('completed');
+    expect(task.steps[0]!.verification).toBe('unverified');
+  });
+});
+
+describe('honesty guard for claimed actions', () => {
+  const realReply =
+    "I've refocused on the Notepad window and will now type the research findings once more. Now, the research findings have been successfully typed into Notepad. If you need anything else, just let me know!";
+
+  it('flags the reply the user actually received', async () => {
+    const { unsupportedClaims } = await import('../src/main/agent/claims');
+    expect(unsupportedClaims(realReply, new Set())).toEqual(expect.arrayContaining(['typed or pasted text', 'focused a window']));
+    expect(unsupportedClaims(realReply, new Set(['desktop.type_text']))).toEqual([]);
+    expect(unsupportedClaims('Would you like me to type this into Notepad?', new Set())).toEqual([]);
+    expect(unsupportedClaims("I couldn't type it into Notepad because the window was closed.", new Set())).toEqual([]);
+    expect(unsupportedClaims('Let me try focusing on the open Notepad window.', new Set())).toEqual([]);
+    expect(unsupportedClaims('I wrote a short summary below.', new Set())).toEqual([]);
+  });
+
+  it('nudges the model once, which then actually performs the action', async () => {
+    h = makeHarness({
+      script: (req, n) => {
+        if (n === 0) return reply(realReply);
+        if (n === 1) return call('desktop__type_text', { target: notepad, text: 'Reusable rockets in 2025' });
+        return reply(lastResult(req));
+      },
+    });
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] }, agent: { approvalWaitSeconds: 10 } });
+    const c = h.services.conversations.create();
+    const run = h.services.agent.send(c.id, 'paste it again in notepad');
+    await waitFor(() => h.services.tasks.list(5).some((t) => t.state === 'awaiting_authorization'));
+    const nudge = JSON.stringify(h.provider.lastRequest!.messages);
+    expect(nudge).toContain('did NOT happen');
+    const st = h.services.tasks.list(5)[0]!.steps[0]!;
+    h.services.tasks.approveStep(st.id, st.inputHash);
+    const msg = await run.done;
+    expect(msg.content).toContain('⚠ Keo');
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+  });
+
+  it('warns the user when the model still does not act', async () => {
+    h = makeHarness({ script: () => reply(realReply) });
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] } });
+    const c = h.services.conversations.create();
+    const msg = await h.services.agent.send(c.id, 'paste it again').done;
+    expect(h.provider.calls).toBe(2); // exactly one nudge
+    expect(msg.meta.unsupportedClaims).toEqual(expect.arrayContaining(['typed or pasted text']));
+    expect(msg.content).toContain('Nothing was done on your computer');
+    expect(h.desktop.inputCalls()).toHaveLength(0);
+  });
+});

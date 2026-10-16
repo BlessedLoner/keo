@@ -105,6 +105,8 @@ export interface MessageMeta {
   memoryIds?: string[];
   correlationId?: string;
   stopReason?: string;
+  /** Actions the reply claimed that no capability performed (honesty guard). */
+  unsupportedClaims?: string[];
   /** Marks a Keo note about a task outcome (taskId:state). */
   taskNote?: string;
 }

@@ -7,7 +7,7 @@ import { resolveProfile } from '../src/main/env/profile';
 import { Logger } from '../src/main/logging/logger';
 import { TestProvider, type Script } from '../src/main/providers/testProvider';
 import type { SecretCipher } from '../src/main/secrets/secretStore';
-import { Services } from '../src/main/services';
+import { memoryClipboard, Services } from '../src/main/services';
 import type { CaptureOutcome, ImageTools, WindowCaptureSource } from '../src/main/vision/visionService';
 import type { WebService } from '../src/main/web/webService';
 
@@ -80,8 +80,24 @@ export class FakeDesktop implements DesktopBackend {
       return { ...w };
     });
   }
+  /** Text the fake window "contains" (for read-back verification); null = unreadable. */
+  documentText: string | null = '';
+  clipboardSource: { readText(): Promise<string> } | null = null;
   typeText(hwnd: string, text: string) {
-    return this.act('type', [hwnd, text], () => ({ chars: text.length }));
+    return this.act('type', [hwnd, text], () => {
+      if (this.documentText !== null) this.documentText += text;
+      return { chars: text.length };
+    });
+  }
+  async paste(hwnd: string) {
+    const t = (await this.clipboardSource?.readText()) ?? '';
+    return this.act('paste', [hwnd], () => {
+      if (this.documentText !== null) this.documentText += t;
+    });
+  }
+  async readText(hwnd: string) {
+    this.calls.push({ op: 'readtext', args: [hwnd] });
+    return this.documentText;
   }
   keys(hwnd: string, mods: number[], key: number) {
     return this.act('keys', [hwnd, mods, key], () => undefined);
@@ -91,7 +107,7 @@ export class FakeDesktop implements DesktopBackend {
   }
   dispose() {}
   inputCalls() {
-    return this.calls.filter((c) => ['focus', 'move', 'type', 'keys', 'click'].includes(c.op));
+    return this.calls.filter((c) => ['focus', 'move', 'type', 'paste', 'keys', 'click'].includes(c.op));
   }
 }
 
@@ -115,6 +131,7 @@ export interface Harness {
   desktop: FakeDesktop;
   capture: FakeCapture;
   cipher: FakeCipher;
+  clipboard: { readText(): Promise<string>; writeText(text: string): Promise<void> };
   close(): Promise<void>;
 }
 
@@ -125,6 +142,8 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
   const desktop = new FakeDesktop();
   const capture = new FakeCapture();
   const cipher = new FakeCipher();
+  const clipboard = memoryClipboard('user clipboard before');
+  desktop.clipboardSource = clipboard;
   const services = new Services({
     profile,
     cipher,
@@ -134,6 +153,7 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
     testProvider: provider,
     logger: new Logger(profile.logsDir, false),
     focusSettleMs: 0,
+    clipboard,
     ...(opts.web ? { web: opts.web } : {}),
   });
   return {
@@ -143,6 +163,7 @@ export function makeHarness(opts: { dir?: string; script?: Script | null; delayM
     desktop,
     capture,
     cipher,
+    clipboard,
     close: () => services.shutdown(),
   };
 }

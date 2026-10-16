@@ -12,6 +12,7 @@ import type { TaskOrchestrator } from '../tasks/orchestrator';
 import { errorMessage, KeoError } from '../util/errors';
 import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
+import { unsupportedClaims } from './claims';
 import { SYSTEM_PROMPT } from './systemPrompt';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
@@ -129,6 +130,8 @@ export class AgentService {
       phase('thinking');
 
       let usageIn = 0;
+      let claimNudged = false;
+      const succeeded = () => new Set((meta.tools ?? []).filter((t) => t.outcome === 'executed').map((t) => t.capabilityId));
       let usageOut = 0;
       for (let iteration = 0; ; iteration++) {
         if (iteration >= settings.agent.maxToolIterations) {
@@ -166,6 +169,34 @@ export class AgentService {
         }
         if (!result.toolCalls.length) {
           if (result.stopReason === 'max_tokens') text += '\n\n_Response reached the output limit and may be incomplete._';
+          // Honesty guard: the reply claims an action that no capability performed.
+          const claims = unsupportedClaims(result.text, succeeded());
+          if (claims.length && tools.length && !claimNudged && iteration + 1 < settings.agent.maxToolIterations) {
+            claimNudged = true;
+            this.log.warn('agent.unsupported_claim', { claims, nudged: true }, correlationId);
+            const note = `\n\n> ⚠ Keo: the text above says Keo ${claims.join(' and ')}, but no such action was run. Keo asked the model to actually do it or correct itself.\n\n`;
+            text += note;
+            this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: note });
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(no text)' }], native: result.native });
+            messages.push({
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `[Keo application note — not typed by the user] Your last message says you ${claims.join(' and ')}, but you made no tool call for it in this reply, so it did NOT happen. If the user wants it done, call the tool now (for typing: desktop__list_windows, then desktop__type_text with the full text). Otherwise tell the user plainly that it was not done. Never describe an action as done unless a tool result says it succeeded.`,
+                },
+              ],
+            });
+            phase('thinking');
+            continue;
+          }
+          if (claims.length) {
+            this.log.warn('agent.unsupported_claim', { claims, nudged: false }, correlationId);
+            const warn = `\n\n> ⚠ Keo: this reply says Keo ${claims.join(' and ')}, but no such action was run in this reply. Nothing was done on your computer.`;
+            text += warn;
+            this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: warn });
+            meta.unsupportedClaims = claims;
+          }
           break;
         }
         if (result.stopReason === 'max_tokens') {

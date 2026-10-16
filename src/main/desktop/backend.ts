@@ -28,6 +28,10 @@ export interface DesktopBackend {
   focus(hwnd: string): Promise<{ foreground: boolean }>;
   move(hwnd: string, b: { x: number; y: number; width: number; height: number }): Promise<RawWindow>;
   typeText(hwnd: string, text: string): Promise<{ chars: number }>;
+  /** Sends Ctrl+V to the foreground target. */
+  paste(hwnd: string): Promise<void>;
+  /** Reads the window's document text via UI Automation; null when unsupported. */
+  readText(hwnd: string): Promise<string | null>;
   keys(hwnd: string, mods: number[], key: number): Promise<void>;
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void>;
   dispose(): void;
@@ -154,7 +158,21 @@ export class Win32Backend implements DesktopBackend {
   }
 
   typeText(hwnd: string, text: string): Promise<{ chars: number }> {
-    return this.call('type', { hwnd, text }, 30000);
+    // ~20 chars per 15 ms chunk plus overhead; allow generously for long text.
+    return this.call('type', { hwnd, text }, 15000 + text.length * 5);
+  }
+
+  async paste(hwnd: string): Promise<void> {
+    await this.call('paste', { hwnd });
+  }
+
+  async readText(hwnd: string): Promise<string | null> {
+    try {
+      const r = await this.call<{ available: boolean; text: string }>('readtext', { hwnd }, 15000);
+      return r.available ? String(r.text ?? '') : null;
+    } catch {
+      return null;
+    }
   }
 
   async keys(hwnd: string, mods: number[], key: number): Promise<void> {
@@ -181,6 +199,14 @@ function helperError(message: string): CapabilityError {
   const code = message.split(':')[0] ?? 'helper_error';
   if (NOT_DISPATCHED.has(code)) return new CapabilityError(code, describe(code), { dispatched: 'no' });
   if (code === 'partial_input') return new CapabilityError(code, 'Only part of the input was delivered.', { dispatched: 'yes' });
+  if (code === 'foreground_lost') {
+    const sent = Number(message.split(':')[1] ?? '0');
+    return new CapabilityError(
+      code,
+      sent > 0 ? `Another window came to the front after ${sent} characters, so typing stopped.` : 'Another window came to the front before typing started, so nothing was typed.',
+      { dispatched: sent > 0 ? 'yes' : 'no' },
+    );
+  }
   return new CapabilityError('helper_error', `Desktop helper error: ${message.slice(0, 200)}`, { dispatched: 'unknown' });
 }
 

@@ -80,6 +80,8 @@ Everything is off by default. In **Access**:
 
 Every action shows a preview (target, operation, consequences, data leaving the PC) and needs **Approve once** — in the chat or in **Tasks**. Typing, key presses and clicks bring their target window to the front themselves after you approve (approving happens in Keo's window), and send nothing if Windows refuses the switch.
 
+Long or multi-line text is **pasted** through the clipboard (exact and instant; your previous clipboard text is restored); short text is typed in small chunks. Afterwards Keo reads the window's text back (Windows UI Automation) and only marks the step *verified* if your text is really there. If the model ever *says* it did something on your computer without actually running a capability, Keo flags it in the reply, asks the model once to really do it or correct itself, and tells you if nothing was done.
+
 Quick start for Notepad: **Access → Launchable applications → + Notepad** registers Notepad, allows its windows and turns on launching. Then ask Keo to open Notepad and write something.
 
 ## Voice

@@ -46,7 +46,7 @@ All commands below were run in this repository on Windows 11 (10.0.22621) with N
 |---|---|
 | `npm run typecheck` (main+preload+shared, renderer) | pass, 0 errors |
 | `npm run lint` | pass, 0 problems |
-| `npm test` (Vitest) | **98/98 passed** in 8 files |
+| `npm test` (Vitest) | **105/105 passed** in 8 files |
 | `npm run build` | pass (main 233 kB, preload 2.7 kB with only `require("electron")`, renderer 320 kB minified) |
 | `npm run smoke` — real Electron, disposable profile, two launches | **17/17 passed** |
 | Same smoke hooks under `electron-vite dev` (dev server + HMR CSP) | all checks passed |
@@ -54,6 +54,7 @@ All commands below were run in this repository on Windows 11 (10.0.22621) with N
 | `electron-builder --win --dir` and `--win` | unpacked app and `release/Keo-Setup-0.1.0.exe` built; version resources set; **NotSigned** |
 | Win32 helper, read-only: `ping`, `list` | helper compiled (~11 s first start), listed windows with all fields; an input command to a non-existent window was refused with `target_gone` before sending anything |
 | Real Windows focus → type check | With two windows owned by the check itself: typing into the background window was refused (`not_foreground`, the error first reported from use), the helper brought it to the front, and the typed text arrived exactly |
+| Real Windows text-entry check | In a window owned by the check: chunked typing of 229 characters (symbols, parentheses, accents, newlines) and a clipboard paste both arrived exactly; the clipboard was restored; UI Automation read-back found the text |
 | Visual review | screenshots of every view captured from the real app with synthetic data and reviewed; two UI bugs found and fixed (pending approvals not persisted on the message; memory badge not refreshed) |
 | `npm audit --omit=dev` | 0 vulnerabilities in shipped dependencies |
 

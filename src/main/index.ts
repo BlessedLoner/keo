@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pushChannels } from '../shared/ipc';
@@ -195,6 +195,7 @@ app.whenReady().then(() => {
       desktopBackend: new Win32Backend(profile.runtimeDir, log),
       captureSource: new ElectronWindowCapture(),
       imageTools: electronImageTools,
+      clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
     });

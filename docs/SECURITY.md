@@ -73,6 +73,16 @@ Execution (`TaskOrchestrator`):
 - Images are retained for a configurable number of hours (default 24) and then deleted; metadata stays for provenance. Image bytes never enter logs or the audit trail.
 - Screen text and analyses are labelled untrusted when returned to the model.
 
+### Text entry and verification
+
+- `desktop.type_text` pastes long or multi-line text: it saves the current clipboard text, writes the approved text, sends Ctrl+V to the verified foreground target and restores the previous clipboard text. Non-text clipboard content (e.g. an image) is not preserved, and Windows clipboard history, if enabled, may keep a copy; the approval preview says so.
+- Short text is typed in 20-character chunks; before every chunk the helper re-checks that the target is still the foreground window and stops otherwise (partial typing is reported as an uncertain outcome). Modifier keys the system reports as held are released before typing.
+- Verification reads the target's document text through UI Automation and compares it with the approved text. The read text is used only for that comparison — it is not returned to the model, logged or stored.
+
+### Honesty guard
+
+- If a reply states in the past tense that Keo typed, opened, focused, clicked, saved or searched, and no matching capability succeeded in that reply, Keo appends a visible warning, sends the model one correction note, and records `unsupportedClaims` on the message. The guard cannot make the model act; it prevents a false claim from going unflagged.
+
 ## 5a. Web research
 
 - `web.search` sends the query (only) to `api.search.brave.com` with the user's Brave key; `web.fetch_page` downloads public pages. Both are off by default (Access → Web research) and need no per-call approval once enabled; the search capability is hidden from the model until a key is stored.
