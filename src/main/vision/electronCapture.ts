@@ -9,9 +9,12 @@ import type { CaptureOutcome, ImageTools, WindowCaptureSource } from './visionSe
  * fallback.
  */
 export class ElectronWindowCapture implements WindowCaptureSource {
-  async capture(hwnd: string): Promise<CaptureOutcome> {
+  async capture(hwnd: string, size?: { width: number; height: number }): Promise<CaptureOutcome> {
     if (process.platform !== 'win32') return { ok: false, code: 'unsupported', message: 'Window capture is implemented for Windows only.' };
-    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 2560, height: 2560 }, fetchWindowIcons: false });
+    // Thumbnails are scaled to fit this box (up as well as down); asking for the
+    // window's own size keeps image pixels equal to window pixels.
+    const box = size && size.width >= 8 && size.height >= 8 ? { width: Math.min(size.width, 3840), height: Math.min(size.height, 3840) } : { width: 2560, height: 2560 };
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: box, fetchWindowIcons: false });
     const src = sources.find((s) => s.id.startsWith(`window:${hwnd}:`));
     if (!src) return { ok: false, code: 'source_not_found', message: 'Windows did not offer a capture source for this window (it may be protected, cloaked or closed).' };
     const img = src.thumbnail;

@@ -94,7 +94,9 @@ export class FakeDesktop implements DesktopBackend {
   async paste(hwnd: string) {
     const t = (await this.clipboardSource?.readText()) ?? '';
     return this.act('paste', [hwnd], () => {
-      if (this.documentText !== null) this.documentText += t;
+      const app = this.apps.get(hwnd);
+      if (app?.pasted) app.pasted(t);
+      else if (this.documentText !== null) this.documentText += t;
     });
   }
   async readText(hwnd: string) {
@@ -136,9 +138,15 @@ export class FakeDesktop implements DesktopBackend {
     if (this.hang) return new Promise(() => undefined);
     return { method: this.app(hwnd).act(rid, action, text) };
   }
+  async uiaTexts(hwnd: string, rids: string[]): Promise<string[][]> {
+    this.calls.push({ op: 'uia_texts', args: [hwnd, rids] });
+    const a = this.app(hwnd);
+    return rids.map((rid) => a.rawNames?.(rid) ?? []);
+  }
   async uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }> {
     const n = this.app(hwnd).nodes().find((x) => x.rid === rid);
     if (!n) throw new CapabilityError('element_gone', 'gone', { dispatched: 'no' });
+    if (n.offscreen) throw new CapabilityError('element_offscreen', 'offscreen', { dispatched: 'no' });
     return { x: (n.x ?? 0) + (n.w ?? 0) / 2, y: (n.y ?? 0) + (n.h ?? 0) / 2 };
   }
   async browserContext(hwnd: string): Promise<BrowserContextRaw> {
@@ -155,6 +163,7 @@ export class FakeDesktop implements DesktopBackend {
   }
   async clickScreen(hwnd: string, x: number, y: number) {
     this.calls.push({ op: 'click_screen', args: [hwnd, x, y] });
+    this.apps.get(hwnd)?.clickAt?.(x, y);
   }
   async wheel(hwnd: string, x: number, y: number, notches: number) {
     this.calls.push({ op: 'wheel', args: [hwnd, x, y, notches] });
@@ -194,8 +203,10 @@ export class FakeSpeech implements SpeechEngine {
 export class FakeCapture implements WindowCaptureSource {
   next: CaptureOutcome | null = null;
   calls: string[] = [];
-  async capture(hwnd: string): Promise<CaptureOutcome> {
+  sizes: Array<{ width: number; height: number } | undefined> = [];
+  async capture(hwnd: string, size?: { width: number; height: number }): Promise<CaptureOutcome> {
     this.calls.push(hwnd);
+    this.sizes.push(size);
     if (this.next) return this.next;
     // A tiny but valid PNG signature + payload; content is irrelevant to the pipeline.
     return { ok: true, png: Buffer.from(`\x89PNG-fake-${hwnd}-${this.calls.length}`), width: 800, height: 600 };

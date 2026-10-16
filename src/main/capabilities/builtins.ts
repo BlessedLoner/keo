@@ -63,14 +63,17 @@ export function parseKeyCombo(combo: string): { mods: number[]; key: number } | 
  * and only then send input. If Windows refuses, nothing is sent.
  */
 export async function bringToFront(d: CapabilityDeps, target: TargetT, settings: Settings): Promise<void> {
-  await d.desktop.resolve(target, settings);
+  const before = await d.desktop.resolve(target, settings);
   const r = await d.desktop.backend.focus(target.hwnd);
   if (!r.foreground) {
     throw new CapabilityError('focus_failed', `Windows did not let Keo bring ${target.processName} to the front, so no input was sent. Click the window once and try again.`, {
       dispatched: 'no',
     });
   }
-  await new Promise((res) => setTimeout(res, d.focusSettleMs ?? 150));
+  // A window restored from the taskbar animates and repaints first; browsers report
+  // their page as hidden to accessibility until then.
+  const settle = d.focusSettleMs ?? 150;
+  await new Promise((res) => setTimeout(res, before.minimized && settle > 0 ? Math.max(settle, 900) : settle));
 }
 
 

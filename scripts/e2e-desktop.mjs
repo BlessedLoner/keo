@@ -24,6 +24,7 @@ if (!fs.existsSync(out)) {
 const r = JSON.parse(fs.readFileSync(out, 'utf8'));
 const checks = [
   ['window observed through UI Automation', r.inspect?.elements > 0 && r.inspect?.foundSettingsTab],
+  ['real pointer click lands on the element (most-scaled monitor)', r.pointerClick?.active === 'search' && !r.pointerClick?.error],
   ['section navigation (Settings tab)', r.navigateToSettings?.state === 'completed' && r.navigateToSettings?.appTab === 'settings'],
   ['unchanged element re-validated and reused', r.reuseUnchanged?.state === 'completed'],
   ['vanished element refused, nothing dispatched', r.staleRefused?.state === 'failed' && r.staleRefused?.appTab === 'chats'],
@@ -35,6 +36,7 @@ const checks = [
   ['duplicate send prevented', Array.isArray(r.sentFinal) && r.sentFinal.length === 1],
 ];
 let ok = r.ok === true;
+console.log(`Monitors: ${r.display?.count} (scale ${r.display?.scaleFactors?.join(', ')}); test window on scale ${r.display?.used}. Helper: ${JSON.stringify(r.pointerClick?.helper)}`);
 if (r.error) console.log(`ERROR ${r.error}`);
 for (const [name, pass] of checks) {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);

@@ -66,6 +66,8 @@ export interface BrowserContextRaw {
 /** Native desktop operations. Every method acts on exactly one explicit hwnd. */
 export interface DesktopBackend {
   support(): { supported: boolean; reason: string | null };
+  /** Helper diagnostics (e.g. its DPI awareness mode). */
+  helperInfo?(): Promise<{ pong: boolean; dpi?: string }>;
   list(): Promise<RawWindow[]>;
   info(hwnd: string): Promise<RawWindow | null>;
   focus(hwnd: string): Promise<{ foreground: boolean }>;
@@ -82,6 +84,8 @@ export interface DesktopBackend {
   uiaAct(hwnd: string, rid: string, action: UiaAction, text?: string): Promise<{ method: string }>;
   /** Screen coordinates of an element's centre (for the pointer fallback). */
   uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }>;
+  /** For each element, the names found inside it through the raw accessibility view (text a web page hides from the control view). */
+  uiaTexts(hwnd: string, rids: string[]): Promise<string[][]>;
   browserContext(hwnd: string, maxChars: number): Promise<BrowserContextRaw>;
   /** All visible windows of a process, including owned dialogs. */
   processWindows(pid: number): Promise<Array<RawWindow & { owner: string }>>;
@@ -104,6 +108,9 @@ const NOT_DISPATCHED = new Set([
   'element_offscreen',
   'no_invoke_pattern',
   'no_value_pattern',
+  'value_rejected',
+  'not_focusable',
+  'pointer_mismatch',
   'no_scroll_pattern',
   'unsupported_action',
   'password_field',
@@ -219,6 +226,10 @@ export class Win32Backend implements DesktopBackend {
     return r ? normalize(r) : null;
   }
 
+  helperInfo(): Promise<{ pong: boolean; dpi?: string }> {
+    return this.call('ping', {});
+  }
+
   focus(hwnd: string): Promise<{ foreground: boolean }> {
     return this.call('focus', { hwnd });
   }
@@ -242,6 +253,12 @@ export class Win32Backend implements DesktopBackend {
 
   uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null> {
     return this.call('uia_describe', { hwnd, rid }, 15000);
+  }
+
+  async uiaTexts(hwnd: string, rids: string[]): Promise<string[][]> {
+    if (!rids.length) return [];
+    const r = await this.call<string[][] | null>('uia_texts', { hwnd, rids: rids.join('|'), budgetMs: 6000 }, 20000);
+    return Array.isArray(r) ? r.map((x) => (Array.isArray(x) ? x.map(String) : [])) : [];
   }
 
   uiaAct(hwnd: string, rid: string, action: UiaAction, text = ''): Promise<{ method: string }> {
@@ -333,6 +350,12 @@ function describe(code: string): string {
       return 'That control cannot be activated through accessibility.';
     case 'no_value_pattern':
       return 'That control does not accept text through accessibility.';
+    case 'value_rejected':
+      return 'The control refused text set through accessibility; nothing was entered.';
+    case 'pointer_mismatch':
+      return 'The mouse pointer did not arrive where Keo aimed, so nothing was clicked.';
+    case 'not_focusable':
+      return 'The control refused keyboard focus through accessibility; nothing was entered.';
     case 'no_scroll_pattern':
       return 'Nothing scrollable was found around that control.';
     case 'unsupported_action':

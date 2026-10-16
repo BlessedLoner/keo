@@ -14,7 +14,17 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
   const results: Record<string, unknown> = {};
   const stateFile = path.join(opts.workDir, 'fake-wa-state.json');
   fs.rmSync(stateFile, { force: true });
-  const env: Record<string, string | undefined> = { ...process.env, FAKE_WA_STATE: stateFile };
+  // Use the most-scaled monitor: mixed scaling is where pointer coordinates go wrong.
+  const { screen } = await import('electron');
+  const displays = screen.getAllDisplays();
+  const display = [...displays].sort((a, b) => b.scaleFactor - a.scaleFactor)[0] ?? screen.getPrimaryDisplay();
+  results.display = { count: displays.length, scaleFactors: displays.map((x) => x.scaleFactor), used: display.scaleFactor };
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    FAKE_WA_STATE: stateFile,
+    FAKE_WA_X: String(display.workArea.x + 20),
+    FAKE_WA_Y: String(display.workArea.y + 20),
+  };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_RENDERER_URL;
   const fake = spawn(opts.electronPath, [path.join(opts.fixtureDir, 'main.cjs'), `--user-data-dir=${path.join(opts.workDir, 'fake-wa-profile')}`], { env, stdio: 'ignore' });
@@ -93,6 +103,24 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
         header: v.header,
         edits: raw.nodes.filter((n) => n.role === 'edit' || n.role === 'document').map((n) => ({ role: n.role, name: n.name, x: n.x, w: n.w, off: n.offscreen ?? false })),
       };
+    }
+
+    // 1b. A real pointer click lands exactly on the element (DPI / multi-monitor coordinates).
+    {
+      await s.desktop.backend.focus(target.hwnd);
+      // Let Chromium finish restoring its previous focus after activation before clicking.
+      await new Promise((r) => setTimeout(r, 1500));
+      const raw = await s.desktop.backend.uiaSnapshot(target.hwnd, { maxNodes: 1500, maxDepth: 60, budgetMs: 9000 });
+      const searchNode = raw.nodes.find((n) => n.role === 'edit' && /search/i.test(n.name));
+      let error: string | null = null;
+      try {
+        const c = await s.desktop.backend.uiaCenter(target.hwnd, searchNode!.rid);
+        await s.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      await new Promise((r) => setTimeout(r, 600));
+      results.pointerClick = { found: !!searchNode, error, active: (state() as { active?: string } | null)?.active ?? null, helper: (await s.desktop.backend.helperInfo?.().catch(() => null)) ?? null };
     }
 
     // 2. Re-using an unchanged element from an earlier (fresh) observation is allowed after re-validation.

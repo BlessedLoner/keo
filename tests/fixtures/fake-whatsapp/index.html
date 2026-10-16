@@ -7,7 +7,7 @@
   body { margin: 0; display: flex; height: 100vh; font: 14px 'Segoe UI', sans-serif; background: #f0f2f5; }
   #left { width: 380px; border-right: 1px solid #ccc; display: flex; flex-direction: column; background: #fff; }
   nav { display: flex; gap: 6px; padding: 8px; }
-  #search { margin: 8px; padding: 6px; }
+  #search { margin: 8px; padding: 6px; min-height: 20px; border: 1px solid #ccc; border-radius: 6px; }
   ul { list-style: none; margin: 0; padding: 0; }
   #list li { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; }
   #list li .time { margin-left: auto; color: #888; }
@@ -29,7 +29,7 @@
     <button role="tab" id="tChats" aria-selected="true">Chats</button>
     <button role="tab" id="tSettings" aria-selected="false">Settings</button>
   </nav>
-  <input id="search" aria-label="Search input textbox" placeholder="Search" />
+  <div id="search" role="textbox" contenteditable="true" aria-label="Search input textbox" data-tab="3"></div>
   <ul id="list" role="list" aria-label="Chat list"></ul>
   <div id="settings" hidden role="region" aria-label="Settings panel"><label><input type="checkbox" id="notif" /> Notifications</label></div>
 </div>
@@ -48,9 +48,10 @@
     { title: 'Mum', messages: [{ from: 'them', text: 'Call me later' }] },
   ];
   window.__state = { open: null, sent: [], tab: 'chats' };
+  document.addEventListener('focusin', (e) => { window.__state.active = e.target.id || e.target.tagName; });
   const $ = (id) => document.getElementById(id);
   function renderList() {
-    const q = $('search').value.toLowerCase();
+    const q = $('search').innerText.trim().toLowerCase();
     $('list').innerHTML = '';
     chats.filter((c) => !q || c.title.toLowerCase().includes(q)).forEach((c, i) => {
       const li = document.createElement('li');
@@ -63,7 +64,7 @@
   }
   function openChat(title) {
     window.__state.open = title;
-    $('search').value = '';
+    $('search').innerText = '';
     renderList();
     const h = $('hdr');
     h.innerHTML = '';

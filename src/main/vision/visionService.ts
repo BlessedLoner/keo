@@ -17,7 +17,8 @@ export type CaptureOutcome =
 
 /** Captures exactly one native window. Implementations must never fall back to the full desktop. */
 export interface WindowCaptureSource {
-  capture(hwnd: string): Promise<CaptureOutcome>;
+  /** `size` is the window's real pixel size, so the image matches it 1:1 (never upscaled). */
+  capture(hwnd: string, size?: { width: number; height: number }): Promise<CaptureOutcome>;
 }
 
 export interface ImageTools {
@@ -58,7 +59,7 @@ export class VisionService {
     if (w.minimized) {
       throw new CapabilityError('target_minimized', 'The window is minimized, so its contents cannot be captured reliably. Restore it and try again.');
     }
-    const out = await this.source.capture(w.hwnd);
+    const out = await this.source.capture(w.hwnd, { width: w.width, height: w.height });
     if (!out.ok) {
       this.log.warn('vision.capture_failed', { code: out.code, processName: w.processName });
       throw new CapabilityError(out.code, out.message);

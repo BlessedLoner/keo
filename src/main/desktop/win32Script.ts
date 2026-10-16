@@ -52,6 +52,29 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
   [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+  [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
+  [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+  [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int v);
+
+  // Real (physical) pixels on every monitor. Without this, Windows rescales the
+  // helper's coordinates per monitor and clicks miss on mixed-scale setups
+  // (e.g. a laptop at 100% with an external monitor at 150%+). Must run before
+  // any window or UI Automation call.
+  public static string EnableDpiAwareness() {
+    try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return "per_monitor_v2"; } catch (Exception) { }
+    try { if (SetProcessDpiAwareness(2) == 0) return "per_monitor"; } catch (Exception) { }
+    try { if (SetProcessDPIAware()) return "system"; } catch (Exception) { }
+    return "unaware";
+  }
+
+  // Moves the pointer and confirms it really arrived (it can be clamped or
+  // rescaled); refuses to click elsewhere.
+  static void PointerTo(int x, int y) {
+    SetCursorPos(x, y);
+    POINT c;
+    if (!GetCursorPos(out c) || Math.Abs(c.X - x) > 1 || Math.Abs(c.Y - y) > 1) throw new Exception("pointer_mismatch");
+  }
   [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
@@ -117,7 +140,7 @@ public static class KeoWin {
     RequireForeground(h);
     var p = new POINT(); p.X = sx; p.Y = sy;
     if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
-    SetCursorPos(sx, sy);
+    PointerTo(sx, sy);
     var inputs = new List<INPUT>();
     int n = Math.Abs(notches);
     for (int i = 0; i < n; i++) {
@@ -130,7 +153,7 @@ public static class KeoWin {
     RequireForeground(h);
     var p = new POINT(); p.X = sx; p.Y = sy;
     if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
-    SetCursorPos(sx, sy);
+    PointerTo(sx, sy);
     var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = 0x0002;
     var b = new INPUT(); b.type = 0; b.U.mi.dwFlags = 0x0004;
     Send(new List<INPUT> { a, b });
@@ -245,7 +268,7 @@ public static class KeoWin {
     ClientToScreen(h, ref p);
     var hit = WindowFromPoint(p);
     if (GetAncestor(hit, 2) != h) throw new Exception("target_obscured");
-    SetCursorPos(p.X, p.Y);
+    PointerTo(p.X, p.Y);
     uint down = button == "right" ? 0x0008u : 0x0002u;
     uint up = button == "right" ? 0x0010u : 0x0004u;
     var inputs = new List<INPUT>();
@@ -258,6 +281,8 @@ public static class KeoWin {
   }
 }
 '@
+
+$script:dpiMode = [KeoWin]::EnableDpiAwareness()
 
 # Optional: reading text back for verification (UI Automation). Compiled
 # separately so a failure here only disables verification.
@@ -394,6 +419,42 @@ public static class KeoUia {
     return root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.RuntimeIdProperty, ParseRid(rid)));
   }
 
+  // Names inside each element through the RAW view: web pages often hide
+  // their text from the control view (e.g. WhatsApp Web message bubbles).
+  // Bounded per element; password fields are skipped.
+  public static string Texts(IntPtr h, string rids, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var walker = TreeWalker.RawViewWalker;
+    var res = new List<object>();
+    foreach (var rid in rids.Split('|')) {
+      var names = new List<string>();
+      AutomationElement e = null;
+      try { if (sw.ElapsedMilliseconds < budgetMs) e = Find(h, rid); } catch (Exception) { }
+      if (e != null) {
+        var stack = new Stack<AutomationElement>();
+        stack.Push(e);
+        int seen = 0;
+        while (stack.Count > 0 && seen < 300 && names.Count < 60 && sw.ElapsedMilliseconds < budgetMs) {
+          var x = stack.Pop(); seen++;
+          try {
+            var c = x.Current;
+            if (c.IsPassword) continue;
+            var nm = c.Name;
+            // Message text lives in Text elements; other controls only contribute short labels (sender, status, time).
+            bool keep = c.ControlType == ControlType.Text || nm.Length <= 24;
+            if (keep && !string.IsNullOrEmpty(nm) && x != e && (names.Count == 0 || names[names.Count - 1] != nm)) names.Add(nm.Length > 1000 ? nm.Substring(0, 1000) : nm);
+            var kids = new List<AutomationElement>();
+            var ch = walker.GetFirstChild(x);
+            while (ch != null && kids.Count < 100) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
+            for (int k = kids.Count - 1; k >= 0; k--) stack.Push(kids[k]);
+          } catch (Exception) { }
+        }
+      }
+      res.Add(names);
+    }
+    return Json.Serialize(res);
+  }
+
   public static string Describe(IntPtr h, string rid) {
     var e = Find(h, rid);
     if (e == null) return "null";
@@ -447,11 +508,14 @@ public static class KeoUia {
         if (!e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) throw new Exception("unsupported_action");
         ((ExpandCollapsePattern)p).Collapse(); method = "collapse"; break;
       case "focus":
-        e.SetFocus(); method = "focus"; break;
+        // Chromium refuses UIA focus for some web controls; report it instead of a raw exception.
+        try { e.SetFocus(); } catch (Exception) { throw new Exception("not_focusable"); }
+        method = "focus"; break;
       case "set_value":
         if (e.Current.IsPassword) throw new Exception("password_field");
         if (!e.TryGetCurrentPattern(ValuePattern.Pattern, out p) || ((ValuePattern)p).Current.IsReadOnly) throw new Exception("no_value_pattern");
-        ((ValuePattern)p).SetValue(text); method = "value"; break;
+        try { ((ValuePattern)p).SetValue(text); } catch (Exception) { throw new Exception("value_rejected"); }
+        method = "value"; break;
       case "scroll_down": case "scroll_up": case "page_down": case "page_up": {
         var st = ScrollTarget(e);
         if (st == null) throw new Exception("no_scroll_pattern");
@@ -585,13 +649,14 @@ while ($true) {
       'uia_describe' { RequireUia; ReplyRaw $req.id ([KeoUia]::Describe($h, [string]$req.args.rid)) }
       'uia_act'      { RequireUia; ReplyRaw $req.id ([KeoUia]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }
       'uia_center'   { RequireUia; ReplyRaw $req.id ([KeoUia]::Center($h, [string]$req.args.rid)) }
+      'uia_texts'    { RequireUia; ReplyRaw $req.id ([KeoUia]::Texts($h, [string]$req.args.rids, [int]$req.args.budgetMs)) }
       'browser_context' { RequireUia; ReplyRaw $req.id ([KeoUia]::BrowserContext($h, [int]$req.args.maxChars)) }
       'proc_windows' { Reply $req.id $true @([KeoWin]::ProcessWindows([uint32]$req.args.pid)) }
       'click_screen' { [KeoWin]::ClickScreen($h, [int]$req.args.x, [int]$req.args.y); Reply $req.id $true @{ clicked = $true } }
       'wheel'        { [KeoWin]::Wheel($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.notches); Reply $req.id $true @{ scrolled = $true } }
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
-      'ping'  { Reply $req.id $true @{ pong = $true } }
+      'ping'  { Reply $req.id $true @{ pong = $true; dpi = $script:dpiMode } }
       default { Reply $req.id $false @{ code = 'unknown_command'; message = 'Unknown command' } }
     }
   } catch {

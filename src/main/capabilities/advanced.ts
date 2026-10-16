@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { compactNodes, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, headerMatches, lastOutgoing, normName, textMatches, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -43,9 +43,55 @@ async function processWindowSet(d: CapabilityDeps, pid: number): Promise<Set<str
   return new Set((await d.desktop.backend.processWindows(pid).catch(() => [])).map((w) => w.hwnd));
 }
 
+/** Share of named controls reported off-screen (browsers report everything hidden right after a restore). */
+function hiddenShare(nodes: UiaNodeRaw[]): number {
+  const named = nodes.filter((n) => n.name && n.role !== 'window');
+  return named.length ? named.filter((n) => n.offscreen).length / named.length : 0;
+}
+
+/** A fresh observation; waits briefly while the window still reports itself as not painted. */
+async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
+  let raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
+  for (let i = 0; i < 4 && hiddenShare(raw.nodes) > 0.8; i++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 400);
+    raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
+  }
+  return raw;
+}
+
 async function freshView(d: CapabilityDeps, target: TargetT): Promise<{ nodes: UiaNodeRaw[]; view: WaView }> {
-  const raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
-  return { nodes: raw.nodes, view: analyzeWhatsApp(raw.nodes, raw.window) };
+  const raw = await stableSnapshot(d, target);
+  const view = analyzeWhatsApp(raw.nodes, raw.window);
+  // WhatsApp Web hides message text from the control view; read those rows through the raw view.
+  const hidden = view.messages.filter((m) => !m.text && m.row).slice(-40);
+  const names = new Map<WaMessage, string[]>();
+  if (hidden.length) {
+    const texts = await d.desktop.backend.uiaTexts(target.hwnd, hidden.map((m) => m.row!.rid)).catch(() => [] as string[][]);
+    hidden.forEach((m, k) => names.set(m, texts[k] ?? []));
+  }
+  return { nodes: raw.nodes, view: { ...view, messages: completeMessages(view.messages, names, view.header) } };
+}
+
+/** Runs one phase of a workflow; its errors say which phase failed (dispatch status unchanged). */
+async function step<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof CapabilityError) throw new CapabilityError(e.code, `While ${what}: ${e.message}`, { dispatched: e.dispatched });
+    throw e;
+  }
+}
+
+/** Screen centre of an element, allowing a moment for a just-restored window to report it visible. */
+async function centerOf(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw): Promise<{ x: number; y: number }> {
+  for (let i = 0; ; i++) {
+    try {
+      return await d.desktop.backend.uiaCenter(target.hwnd, node.rid);
+    } catch (e) {
+      if (!(e instanceof CapabilityError) || e.code !== 'element_offscreen' || i >= 3) throw e;
+      await sleep(d.focusSettleMs === 0 ? 0 : 350);
+    }
+  }
 }
 
 /** Re-reads one element and refuses to act if it no longer matches the observation. */
@@ -65,12 +111,63 @@ async function actOn(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, actio
     return (await d.desktop.backend.uiaAct(target.hwnd, node.rid, action, text)).method;
   } catch (e) {
     if (action === 'invoke' && e instanceof CapabilityError && e.code === 'no_invoke_pattern') {
-      const c = await d.desktop.backend.uiaCenter(target.hwnd, node.rid);
+      const c = await centerOf(d, target, node);
       await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
       return 'pointer';
     }
     throw e;
   }
+}
+
+/**
+ * Puts text into a field: the accessibility value if the control takes it;
+ * otherwise focus (through accessibility, or a real click on the field when
+ * the app refuses that, e.g. WhatsApp Web in Chrome), select-all and paste.
+ * Only falls back on errors that guarantee nothing was entered.
+ */
+async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string): Promise<'value' | 'paste' | 'click+paste'> {
+  try {
+    await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'set_value', text);
+    return 'value';
+  } catch (e) {
+    if (!(e instanceof CapabilityError) || !['no_value_pattern', 'value_rejected'].includes(e.code)) throw e;
+  }
+  let method: 'paste' | 'click+paste' = 'paste';
+  try {
+    await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'focus');
+  } catch (e) {
+    if (!(e instanceof CapabilityError) || e.code !== 'not_focusable') throw e;
+    const c = await centerOf(d, target, node);
+    await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+    method = 'click+paste';
+  }
+  await sleep(d.focusSettleMs === 0 ? 0 : 150);
+  await d.desktop.backend.keys(target.hwnd, [0x11], 0x41);
+  await pasteViaClipboard(d, target.hwnd, text);
+  return method;
+}
+
+/**
+ * enterText, then reads the field back; if the page did not take the text (rich web editors can
+ * accept an accessibility value without noticing, or a browser hands focus elsewhere right after
+ * activation), clicks the field and pastes it for real. Returns whether the read-back matched.
+ */
+async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string): Promise<boolean> {
+  await enterText(d, target, node, text);
+  await sleep(d.focusSettleMs === 0 ? 0 : 250);
+  const has = async () => {
+    const now = await d.desktop.backend.uiaDescribe(target.hwnd, node.rid).catch(() => null);
+    return now?.value === undefined ? null : textMatches(now.value ?? '', text);
+  };
+  if ((await has()) !== false) return true;
+  await sleep(d.focusSettleMs === 0 ? 0 : 400);
+  const c = await centerOf(d, target, node);
+  await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+  await sleep(d.focusSettleMs === 0 ? 0 : 150);
+  await d.desktop.backend.keys(target.hwnd, [0x11], 0x41);
+  await pasteViaClipboard(d, target.hwnd, text);
+  await sleep(d.focusSettleMs === 0 ? 0 : 250);
+  return (await has()) !== false;
 }
 
 export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
@@ -124,7 +221,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
       if (w.minimized) {
         await bringToFront(d, i.target, ctx.settings);
       }
-      const raw = await d.desktop.backend.uiaSnapshot(i.target.hwnd, SNAP_OPTS);
+      const raw = await stableSnapshot(d, i.target);
       const snap = d.snapshots.put({ hwnd: i.target.hwnd, pid: i.target.pid, processName: i.target.processName }, raw);
       const c = compactNodes(raw.nodes);
       return {
@@ -281,17 +378,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
       const { node } = d.snapshots.resolve(i.snapshotId, i.elementId, i.target);
       await bringToFront(d, i.target, ctx.settings);
       await revalidate(d, i.target, node);
-      let method: string;
-      try {
-        method = await actOn(d, i.target, node, 'set_value', i.text);
-      } catch (e) {
-        if (!(e instanceof CapabilityError) || e.code !== 'no_value_pattern') throw e;
-        // Rich editors (e.g. chat boxes) take text via focus + select-all + paste.
-        await actOn(d, i.target, node, 'focus');
-        await d.desktop.backend.keys(i.target.hwnd, [0x11], 0x41);
-        await pasteViaClipboard(d, i.target.hwnd, i.text);
-        method = 'paste';
-      }
+      const method = await enterText(d, i.target, node, i.text);
       await sleep(d.focusSettleMs === 0 ? 0 : 250);
       const now = await d.desktop.backend.uiaDescribe(i.target.hwnd, node.rid).catch(() => null);
       return { method, field: node.name, readBack: now?.value ?? null };
@@ -445,13 +532,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
       if (headerMatches(view.header, i.contact)) return { opened: true, header: view.header, candidates: [view.header as string], reason: 'already_open' };
       if (!view.search) throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Is WhatsApp open and signed in?', { dispatched: 'no' });
       const searchNode = view.search;
-      try {
-        await d.desktop.backend.uiaAct(i.target.hwnd, searchNode.rid, 'set_value', i.contact);
-      } catch {
-        await d.desktop.backend.uiaAct(i.target.hwnd, searchNode.rid, 'focus');
-        await d.desktop.backend.keys(i.target.hwnd, [0x11], 0x41);
-        await pasteViaClipboard(d, i.target.hwnd, i.contact);
-      }
+      await step('typing the name into the search box', () => enterTextChecked(d, i.target, searchNode, i.contact));
       await sleep(d.focusSettleMs === 0 ? 0 : 900);
       if (ctx.signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
       view = (await freshView(d, i.target)).view;
@@ -463,16 +544,32 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
         return { opened: false, header: view.header, candidates, reason: exact.length > 1 ? 'several chats have this exact name' : candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
       }
       const chat = exact[0]!;
-      try {
-        await actOn(d, i.target, chat.node, 'invoke');
-      } catch (e) {
-        if (!(e instanceof CapabilityError) || !['unsupported_action', 'no_invoke_pattern'].includes(e.code)) throw e;
-        await actOn(d, i.target, chat.node, 'select');
-      }
+      await step(`opening the “${chat.title}” entry`, async () => {
+        try {
+          await actOn(d, i.target, chat.node, 'invoke');
+        } catch (e) {
+          if (!(e instanceof CapabilityError) || !['unsupported_action', 'no_invoke_pattern'].includes(e.code)) throw e;
+          await actOn(d, i.target, chat.node, 'select');
+        }
+      });
       await sleep(d.focusSettleMs === 0 ? 0 : 900);
       view = (await freshView(d, i.target)).view;
       if (!headerMatches(view.header, i.contact)) {
-        throw new CapabilityError('chat_mismatch', `After opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, not “${i.contact}”.`, { dispatched: 'yes' });
+        // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
+        const again = view.chats.filter((c) => normName(c.title) === want);
+        if (again.length === 1) {
+          const entry = again[0]!;
+          await step(`clicking the “${entry.title}” entry`, async () => {
+            const c = await centerOf(d, i.target, entry.titleNode ?? entry.node);
+            await d.desktop.backend.clickScreen(i.target.hwnd, c.x, c.y);
+          });
+          await sleep(d.focusSettleMs === 0 ? 0 : 900);
+          view = (await freshView(d, i.target)).view;
+        }
+      }
+      if (!headerMatches(view.header, i.contact)) {
+        // Opening a chat is repeatable and harmless, so this is a plain “not confirmed”, not an uncertain outcome.
+        return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${i.contact}”` };
       }
       return { opened: true, header: view.header, candidates, reason: null };
     },
@@ -510,12 +607,14 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     }),
     auditView: (i) => ({ target: i.target, maxMessages: i.maxMessages }),
     async execute(i, ctx) {
-      await d.desktop.resolve(i.target, ctx.settings);
+      const w = await d.desktop.resolve(i.target, ctx.settings);
+      // A minimised browser reports its page as hidden; restore it so the chat can be read.
+      if (w.minimized) await bringToFront(d, i.target, ctx.settings);
       const { view } = await freshView(d, i.target);
       if (!headerMatches(view.header, i.contact)) {
         throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${i.contact}”. Open it first with whatsapp__open_chat.`);
       }
-      return { contact: i.contact, header: view.header as string, messages: view.messages.slice(-i.maxMessages), observedAt: new Date().toISOString(), trust: UNTRUSTED };
+      return { contact: i.contact, header: view.header as string, messages: view.messages.slice(-i.maxMessages).map(({ from, text, status }) => ({ from, text, status })), observedAt: new Date().toISOString(), trust: UNTRUSTED };
     },
   });
 
@@ -557,13 +656,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
       }
       if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
       const compose = view.compose;
-      try {
-        await d.desktop.backend.uiaAct(i.target.hwnd, compose.rid, 'set_value', i.text);
-      } catch {
-        await d.desktop.backend.uiaAct(i.target.hwnd, compose.rid, 'focus');
-        await d.desktop.backend.keys(i.target.hwnd, [0x11], 0x41);
-        await pasteViaClipboard(d, i.target.hwnd, i.text);
-      }
+      await step('typing the message into the message box', () => enterTextChecked(d, i.target, compose, i.text));
       await sleep(d.focusSettleMs === 0 ? 0 : 300);
       // Re-verify recipient and draft immediately before the irreversible step.
       view = (await freshView(d, i.target)).view;

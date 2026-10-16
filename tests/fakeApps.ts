@@ -11,6 +11,12 @@ export interface FakeUiaApp {
   browserContext?(): BrowserContextRaw;
   /** Extra top-level windows (dialogs) of the process. */
   extraWindows: Array<{ hwnd: string; title: string }>;
+  /** A real pointer click at window-relative coordinates. */
+  clickAt?(x: number, y: number): void;
+  /** Clipboard paste into whatever has keyboard focus (after select-all). */
+  pasted?(text: string): void;
+  /** Names inside an element through the raw view (text hidden from the control view). */
+  rawNames?(rid: string): string[];
 }
 
 function build(specs: Spec[]): UiaNodeRaw[] {
@@ -107,8 +113,34 @@ export class FakeWhatsApp implements FakeUiaApp {
   dropSends = false;
   /** Switch the open chat right after typing (identity change before send). */
   switchChatAfterCompose: string | null = null;
+  /**
+   * Behave like WhatsApp Web in Chrome: fields refuse accessibility value and
+   * focus, and chat entries ignore accessibility activation — only real
+   * clicks and pasting work.
+   */
+  webLike = false;
+  /** Report every control off-screen for this many reads (a browser repainting after a restore). */
+  hiddenReads = 0;
+  /**
+   * Shaped like WhatsApp Web inside Chrome (as observed): the browser's own
+   * address bar (no position) and window buttons around a page document, and
+   * chat entries nested row › name with screen-reader prefixes.
+   */
+  inBrowser = false;
+  /** Accept accessibility value writes without the page noticing (rich web editors). */
+  ignoreValueWrites = false;
+  focused: 'search' | 'compose' | null = null;
 
   nodes(): UiaNodeRaw[] {
+    const ns = this.layout();
+    if (this.hiddenReads > 0) {
+      this.hiddenReads--;
+      return ns.map((n) => (n.role === 'window' ? n : { ...n, offscreen: true }));
+    }
+    return ns;
+  }
+
+  private layout(): UiaNodeRaw[] {
     const s: Spec[] = [
       { key: 'root', role: 'window', name: 'WhatsApp', x: 0, y: 0, w: 1200, h: 800 },
       { key: 'search', parentKey: 'root', role: 'edit', name: 'Search input textbox', x: 20, y: 70, w: 340, h: 30, patterns: ['value'], value: this.search },
@@ -140,18 +172,87 @@ export class FakeWhatsApp implements FakeUiaApp {
         { key: 'send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 740, w: 50, h: 40, patterns: ['invoke'] },
       );
     }
-    return build(s);
+    return build(this.inBrowser ? this.browserShape(s) : s);
+  }
+
+  private browserShape(specs: Spec[]): Spec[] {
+    const out: Spec[] = [
+      specs[0]!,
+      { key: 'chrome.addr', parentKey: 'root', role: 'edit', name: 'Address and search bar', patterns: ['value'] },
+      { key: 'chrome.min', parentKey: 'root', role: 'button', name: 'Minimize', x: 1060, y: 0, w: 45, h: 26, patterns: ['invoke'] },
+      { key: 'page', parentKey: 'root', role: 'document', name: '', x: 0, y: 40, w: 1200, h: 760 },
+    ];
+    let n = 0;
+    for (const sp of specs.slice(1)) {
+      if (/^chat\.[^.]+\.(title|time)$/.test(sp.key)) continue;
+      // Like WhatsApp Web: bubble text is not in the control view; a sender label is.
+      if (/^msg\.\d+\.(text|time|status)$/.test(sp.key)) continue;
+      if (/^msg\.\d+$/.test(sp.key)) {
+        const m = this.chats.find((c) => c.title === this.open)!.messages[Number(sp.key.slice(4))]!;
+        out.push({ ...sp, parentKey: sp.parentKey === 'root' ? 'page' : sp.parentKey, y: (sp.y ?? 0) + 40, x: 400, w: 800, role: 'dataitem', name: '' });
+        out.push({ key: `${sp.key}.sender`, parentKey: sp.key, role: 'group', name: m.from === 'me' ? 'You:' : `${this.open}:`, x: sp.x, y: (sp.y ?? 0) + 40, w: sp.w, h: sp.h });
+        continue;
+      }
+      const moved: Spec = { ...sp, parentKey: sp.parentKey === 'root' ? 'page' : sp.parentKey, y: sp.y === undefined ? undefined : sp.y + 40 };
+      if (/^chat\.[^.]+$/.test(sp.key)) {
+        const title = sp.key.slice(5);
+        out.push({ ...moved, role: 'dataitem', name: `View status ${moved.name}` });
+        out.push({ key: `${sp.key}.name`, parentKey: sp.key, role: 'dataitem', name: n++ === 1 ? `1 unread message ${title}` : title, x: 70, y: (moved.y ?? 0) + 8, w: 280, h: 24 });
+        continue;
+      }
+      out.push(moved);
+    }
+    return out;
+  }
+
+  clickAt(x: number, y: number): void {
+    const hit = this.nodes()
+      .filter((n) => x >= (n.x ?? 0) && x <= (n.x ?? 0) + (n.w ?? 0) && y >= (n.y ?? 0) && y <= (n.y ?? 0) + (n.h ?? 0))
+      .sort((a, b) => b.depth - a.depth)[0];
+    const k = hit ? keyOf(hit.rid) : '';
+    if (k === 'search' || k === 'compose') this.focused = k;
+    else if (/^chat\.[^.]+/.test(k)) {
+      this.open = k.slice(5).split('.')[0]!;
+      this.search = '';
+    }
+  }
+
+  rawNames(rid: string): string[] {
+    const k = keyOf(rid);
+    const m = /^msg\.(\d+)$/.exec(k);
+    const chat = this.chats.find((c) => c.title === this.open);
+    if (!m || !chat) return [];
+    const msg = chat.messages[Number(m[1])]!;
+    return [msg.from === 'me' ? 'You:' : `${chat.title}:`, msg.text, '10:50', ...(msg.status ? [` ${msg.status} `] : [])];
+  }
+
+  pasted(text: string): void {
+    if (this.focused === 'search') this.search = text;
+    if (this.focused === 'compose') {
+      this.compose = text;
+      if (this.switchChatAfterCompose) this.open = this.switchChatAfterCompose;
+    }
   }
 
   act(rid: string, action: UiaAction, text?: string): string {
     const k = keyOf(rid);
     if (!this.nodes().some((n) => n.rid === rid)) throw new CapabilityError('element_gone', 'gone', { dispatched: 'no' });
+    if (this.ignoreValueWrites && action === 'set_value') return 'value';
+    if (this.webLike) {
+      if (action === 'set_value') throw new CapabilityError('value_rejected', 'rejected', { dispatched: 'no' });
+      if (action === 'focus') throw new CapabilityError('not_focusable', 'no focus', { dispatched: 'no' });
+      if (k.startsWith('chat.') && (action === 'invoke' || action === 'select')) return action; // ignored by the page
+    }
+    if (action === 'focus' && (k === 'search' || k === 'compose')) {
+      this.focused = k;
+      return 'focus';
+    }
     if (k === 'search' && action === 'set_value') {
       this.search = text ?? '';
       return 'value';
     }
     if (k.startsWith('chat.') && (action === 'invoke' || action === 'select')) {
-      this.open = k.slice(5);
+      this.open = k.slice(5).split('.')[0]!;
       this.search = '';
       return action;
     }

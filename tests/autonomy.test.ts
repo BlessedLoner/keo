@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { CapabilityError } from '../src/main/capabilities/types';
 import type { RawWindow } from '../src/main/desktop/backend';
 import { SnapshotStore } from '../src/main/desktop/uia';
-import { analyzeWhatsApp } from '../src/main/desktop/whatsapp';
+import { analyzeWhatsApp, headerMatches } from '../src/main/desktop/whatsapp';
 import { createHandlers } from '../src/main/ipc/handlers';
 import { dispatch, type SenderPolicy } from '../src/main/ipc/router';
 import { channelAllowed } from '../src/main/ipc/roles';
@@ -180,6 +181,79 @@ describe('WhatsApp workflows', () => {
     expect(ok.step?.verification).toBe('verified');
   });
 
+  it('works with WhatsApp Web in Chrome: refused accessibility focus/value fall back to real clicks and paste', async () => {
+    const { wa } = setup();
+    const desktop = h.desktop;
+    wa.webLike = true;
+    const open = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(open.step?.state).toBe('succeeded');
+    expect(open.step?.verification).toBe('verified');
+    expect(wa.open).toBe('Mum');
+    expect(desktop.calls.filter((c) => c.op === 'click_screen').length).toBe(2); // search box, then the chat entry
+    const send = await runCap('whatsapp.send_message', { target: WA, contact: 'Mum', text: 'On my way' });
+    expect(send.step?.verification).toBe('verified');
+    expect(wa.sent).toEqual([{ to: 'Mum', text: 'On my way' }]);
+  });
+
+  it('waits for a just-restored browser to report WhatsApp visible instead of failing “not visible”', async () => {
+    const { wa } = setup();
+    wa.webLike = true;
+    const w = h.desktop.windows.find((x) => x.hwnd === WA.hwnd)!;
+    w.minimized = true;
+    wa.hiddenReads = 3;
+    const open = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(open.step?.state).toBe('succeeded');
+    expect(open.step?.verification).toBe('verified');
+    expect(wa.open).toBe('Mum');
+  });
+
+  it('opens and sends in WhatsApp Web inside Chrome (browser controls around the page)', async () => {
+    const { wa } = setup();
+    wa.inBrowser = true;
+    wa.webLike = true;
+    const open = await runCap('whatsapp.open_chat', { target: WA, contact: 'Daniel Smith' });
+    expect(open.step?.verification).toBe('verified');
+    expect(wa.open).toBe('Daniel Smith');
+    const send = await runCap('whatsapp.send_message', { target: WA, contact: 'Daniel Smith', text: 'See you at 3' });
+    expect(send.step?.verification).toBe('verified');
+    expect(wa.sent).toEqual([{ to: 'Daniel Smith', text: 'See you at 3' }]);
+  });
+
+  it('reads WhatsApp Web messages whose text is hidden from the control view', async () => {
+    const { wa } = setup();
+    wa.inBrowser = true;
+    wa.open = 'Daniel Okafor';
+    const r = await runCap('whatsapp.read_chat', { target: WA, contact: 'Daniel Okafor' });
+    expect((r.step?.result as { messages: unknown[] }).messages).toEqual([
+      { from: 'them', text: 'Hey! Did you find a good microphone?', status: null },
+      { from: 'me', text: 'Still looking', status: 'read' },
+    ]);
+  });
+
+  it('types for real when the page silently ignores an accessibility value write', async () => {
+    const { wa } = setup();
+    wa.inBrowser = true;
+    wa.ignoreValueWrites = true;
+    const open = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(open.step?.verification).toBe('verified');
+    const send = await runCap('whatsapp.send_message', { target: WA, contact: 'Mum', text: 'Calling you at 6' });
+    expect(send.step?.verification).toBe('verified');
+    expect(wa.sent).toEqual([{ to: 'Mum', text: 'Calling you at 6' }]);
+  });
+
+  it('reports a refused focus as “nothing entered”, never as an uncertain outcome', async () => {
+    const { wa } = setup();
+    const desktop = h.desktop;
+    wa.webLike = true;
+    desktop.clickScreen = async () => {
+      throw new CapabilityError('target_obscured', 'covered', { dispatched: 'no' });
+    };
+    const r = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(r.step?.state).toBe('failed');
+    expect(r.step?.errorCode).toBe('target_obscured');
+    expect(wa.open).toBeNull();
+  });
+
   it('reads the open chat only after verifying the recipient', async () => {
     const { wa } = setup();
     wa.open = 'Mum';
@@ -270,6 +344,37 @@ describe('WhatsApp workflows', () => {
     const nodes = wa.nodes().map((n) => (/^rid\.msg\.\d+$/.test(n.rid) ? { ...n, x: 400, w: 800 } : n));
     const v = analyzeWhatsApp(nodes, wa.window);
     expect(v.messages.map((m) => m.from)).toEqual(['them', 'me']);
+  });
+
+  it('in a browser, uses only the WhatsApp page — never the address bar or window buttons', () => {
+    const wa = new FakeWhatsApp();
+    wa.inBrowser = true;
+    let v = analyzeWhatsApp(wa.nodes(), wa.window);
+    expect(v.search?.name).toBe('Search input textbox');
+    expect(v.header).toBeNull(); // not “Minimize”
+    expect(v.chats.map((c) => c.title)).toEqual(['Daniel Okafor', 'Daniel Smith', 'Mum']); // innermost entries, prefixes removed
+    wa.open = 'Mum';
+    v = analyzeWhatsApp(wa.nodes(), wa.window);
+    expect(v.header).toBe('Mum');
+    expect(v.compose?.name).toBe('Type a message');
+  });
+
+  it('matches the header despite WhatsApp’s “click here for contact info” and presence suffixes', () => {
+    expect(headerMatches('Ma Glo click here for contact info', 'Ma Glo')).toBe(true);
+    expect(headerMatches('Ma Glo, online', 'ma glo')).toBe(true);
+    expect(headerMatches('Ma Glo last seen today at 10:02', 'Ma Glo')).toBe(true);
+    expect(headerMatches('Ma Glory click here for contact info', 'Ma Glo')).toBe(false);
+    const wa = new FakeWhatsApp();
+    wa.open = 'Mum';
+    const nodes = wa.nodes().map((n) => (n.rid === 'rid.header' ? { ...n, name: 'Mum click here for contact info' } : n));
+    expect(analyzeWhatsApp(nodes, wa.window).header).toBe('Mum');
+  });
+
+  it('tells the model how to recover from an invented or incomplete window target', () => {
+    setup();
+    const a = h.services.registry.admit({ capabilityId: 'whatsapp.send_message', input: { target: { hwnd: '4001', pid: 0, processName: 'chrome' }, contact: 'Mum', text: 'hi' }, origin: 'model', correlationId: 'c' });
+    expect(a.ok).toBe(false);
+    expect(!a.ok && a.reason).toContain('desktop__list_windows');
   });
 
   it('drops a time stamp glued onto concatenated list-item names (Chromium)', () => {

@@ -182,7 +182,11 @@ export class CapabilityRegistry {
     }
     const parsed = cap.input.safeParse(p.input);
     if (!parsed.success) {
-      return { ok: false, code: 'invalid_input', reason: formatZodError(parsed.error) };
+      const targetIssue = parsed.error.issues.some((i) => i.path[0] === 'target');
+      const hint = targetIssue
+        ? ' The target must be copied exactly ({hwnd, pid, processName}) from the latest desktop__list_windows result; call desktop__list_windows and retry with that window.'
+        : '';
+      return { ok: false, code: 'invalid_input', reason: formatZodError(parsed.error) + hint };
     }
     const s = this.getSettings();
     const avail = this.availability(cap, s);

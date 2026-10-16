@@ -43,6 +43,9 @@ describe('capture provenance', () => {
     expect(o2.id).not.toBe(o.id);
     expect(o2.sha256).not.toBe(o.sha256);
     expect(h.capture.calls).toHaveLength(2); // repeated request = new capture
+    // Requested at the window's own size, so the image is never scaled up past the window's pixels.
+    const w = h.desktop.windows.find((x) => x.hwnd === '1001')!;
+    expect(h.capture.sizes[0]).toEqual({ width: w.width, height: w.height });
   });
 
   it.each([
