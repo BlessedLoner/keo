@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
 import { AnthropicProvider, mapAnthropicError } from '../src/main/providers/anthropic';
-import { mapOpenAIError } from '../src/main/providers/openaiCompat';
+import { mapOpenAIError, OpenAICompatProvider } from '../src/main/providers/openaiCompat';
 import { defaultSettings, mergeSettings } from '../src/shared/settings';
 
 /** Minimal stand-in for the SDK's MessageStream: async-iterable events + finalMessage(). */
@@ -107,6 +107,87 @@ describe('Anthropic adapter (no network)', () => {
     aborted.abort();
     expect(mapAnthropicError(new Error('x'), aborted.signal).kind).toBe('cancelled');
     expect(mapAnthropicError(new SyntaxError('Unexpected token')).kind).toBe('malformed');
+  });
+});
+
+describe('OpenRouter (no network)', () => {
+  const withModel = mergeSettings(defaultSettings(), { activeProvider: 'openrouter', providers: { openrouter: { model: 'vendor/some-model' } } });
+
+  function fakeOpenRouter(capture: { body?: Record<string, unknown>; baseURL?: string; paths: string[] }) {
+    return ({ baseURL }: { apiKey: string; baseURL: string }) => {
+      capture.baseURL = baseURL;
+      return {
+        get: async (path: string) => {
+          capture.paths.push(path);
+          return { data: { label: 'k', limit: 10, limit_remaining: 7.5, is_free_tier: false } };
+        },
+        models: {
+          list: async () => [
+            { id: 'other/model' },
+            { id: 'vendor/some-model', supported_parameters: ['tools', 'max_tokens'], architecture: { input_modalities: ['text', 'image'] }, context_length: 200000 },
+          ],
+        },
+        chat: {
+          completions: {
+            create: async (body: Record<string, unknown>) => {
+              capture.body = body;
+              const chunks = [
+                { choices: [{ delta: { content: 'Hello' }, finish_reason: null }] },
+                { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'memory__search', arguments: '{"query":' } }] }, finish_reason: null }] },
+                { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] }, finish_reason: 'tool_calls' }] },
+                { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 3 } },
+              ];
+              return (async function* () {
+                for (const c of chunks) yield c;
+              })();
+            },
+          },
+        },
+      } as unknown as OpenAI;
+    };
+  }
+
+  it('is a separate, https-only provider that needs its own key', () => {
+    const p = new OpenAICompatProvider('openrouter', () => withModel, () => null);
+    expect(p.label).toBe('OpenRouter');
+    expect(p.supportsAudio).toBe(false);
+    expect(p.destination()).toContain('openrouter.ai');
+    expect(p.status()).toEqual({ kind: 'unconfigured', reason: expect.stringContaining('OpenRouter API key') });
+    const insecure = mergeSettings(withModel, { providers: { openrouter: { baseUrl: 'http://openrouter.ai/api/v1' } } });
+    expect(new OpenAICompatProvider('openrouter', () => insecure, () => 'sk-or-v1-x').status().kind).toBe('error');
+    expect(defaultSettings().permissions.visionExport.openrouter).toBe(false);
+  });
+
+  it('streams text, assembles tool calls and reports usage using max_tokens', async () => {
+    const cap: { body?: Record<string, unknown>; baseURL?: string; paths: string[] } = { paths: [] };
+    const p = new OpenAICompatProvider('openrouter', () => withModel, () => 'sk-or-v1-test', fakeOpenRouter(cap));
+    const deltas: string[] = [];
+    const r = await p.stream(
+      { model: 'vendor/some-model', system: 's', maxOutputTokens: 4000, correlationId: 'c', tools: [{ name: 'memory__search', description: 'd', inputSchema: { type: 'object' } }], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+      { onText: (d) => deltas.push(d) },
+      new AbortController().signal,
+    );
+    expect(cap.baseURL).toBe('https://openrouter.ai/api/v1');
+    expect(cap.body).toMatchObject({ model: 'vendor/some-model', stream: true, max_tokens: 4000 });
+    expect(cap.body).not.toHaveProperty('max_completion_tokens');
+    expect(cap.body).not.toHaveProperty('stream_options');
+    expect(deltas.join('')).toBe('Hello');
+    expect(r.stopReason).toBe('tool_use');
+    expect(r.toolCalls).toEqual([{ id: 'c1', name: 'memory__search', input: { query: 'x' } }]);
+    expect(r.usage).toEqual({ inputTokens: 12, outputTokens: 3 });
+  });
+
+  it('diagnostics verify the key and surface reported capabilities as hints', async () => {
+    const cap: { paths: string[] } = { paths: [] };
+    const p = new OpenAICompatProvider('openrouter', () => withModel, () => 'sk-or-v1-test', fakeOpenRouter(cap));
+    const d = await p.diagnose(new AbortController().signal);
+    expect(cap.paths).toEqual(['/key']);
+    expect(d.ok).toBe(true);
+    expect(d.message).toContain('Key accepted');
+    expect(d.message).toContain('$7.50');
+    expect(d.message).toContain('tools yes, images yes');
+    // Hints never change the declared capabilities.
+    expect(p.models()[0]?.capabilities.vision).toBe(false);
   });
 });
 

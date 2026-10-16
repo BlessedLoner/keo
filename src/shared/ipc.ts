@@ -28,7 +28,7 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{6,64}$/, 'invalid id');
 const empty = z.object({}).strict();
 const text = (max: number) => z.string().max(max);
 
-export const ProviderIdSchema = z.enum(['anthropic', 'openai', 'local', 'test']);
+export const ProviderIdSchema = z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']);
 
 export const invokeSchemas = {
   'app:info': empty,

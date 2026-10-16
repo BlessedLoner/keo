@@ -9,7 +9,9 @@ export type ISODate = string;
 // Providers
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'anthropic' | 'openai' | 'local' | 'test';
+export type ProviderId = 'anthropic' | 'openai' | 'openrouter' | 'local' | 'test';
+/** Providers that can receive exported data (the test provider never leaves the process). */
+export type ExportProviderId = Exclude<ProviderId, 'test'>;
 
 export interface ModelCapabilities {
   tools: boolean;

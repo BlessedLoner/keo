@@ -59,7 +59,7 @@ export const LaunchableApp = z
 export const SettingsSchema = z
   .object({
     version: z.literal(SETTINGS_VERSION).default(SETTINGS_VERSION),
-    activeProvider: z.enum(['anthropic', 'openai', 'local', 'test']).nullable().default(null),
+    activeProvider: z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
     providers: z
       .object({
         anthropic: AnthropicSettings.prefault({}),
@@ -68,6 +68,14 @@ export const SettingsSchema = z
           model: '',
           supportsTools: true,
           supportsVision: true,
+          contextTokens: 128000,
+          maxOutputTokens: 8192,
+        }),
+        openrouter: OpenAICompatSettings.default({
+          baseUrl: 'https://openrouter.ai/api/v1',
+          model: '',
+          supportsTools: true,
+          supportsVision: false,
           contextTokens: 128000,
           maxOutputTokens: 8192,
         }),
@@ -104,6 +112,7 @@ export const SettingsSchema = z
           .object({
             anthropic: z.boolean().default(false),
             openai: z.boolean().default(false),
+            openrouter: z.boolean().default(false),
             local: z.boolean().default(false),
           })
           .strict()

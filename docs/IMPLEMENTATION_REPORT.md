@@ -13,7 +13,7 @@ A Windows desktop agent with:
 | Shell & security | Electron main/preload/renderer split; sandboxed renderer on `app://keo` with strict CSP; renderer network blocked; navigation/new-window/webview blocked; mic-audio-only permission policy; single instance; isolated `%APPDATA%\Keo\<profile>` |
 | IPC | 57 channels, each with a strict Zod schema; sender id/frame/origin validation; structured `{ok, error}` results; allow-list asserted equal to schema table |
 | Storage | `node:sqlite` (built into Electron's Node — no native modules), WAL, foreign keys, append-only migrations with downgrade refusal, online backup |
-| Providers | Anthropic (official SDK, streaming, tools, vision, effort, adaptive thinking defaults, server-side refusal fallback, prompt caching), OpenAI (official SDK, Chat Completions, plus transcription/speech), local OpenAI-compatible (loopback only), deterministic test provider (env-gated, labelled) |
+| Providers | Anthropic (official SDK, streaming, tools, vision, effort, adaptive thinking defaults, server-side refusal fallback, prompt caching), OpenAI (official SDK, Chat Completions, plus transcription/speech), OpenRouter (official OpenAI SDK against OpenRouter's documented OpenAI-compatible API; https only; own key slot; key check via `GET /key`), local OpenAI-compatible (loopback only), deterministic test provider (env-gated, labelled) |
 | Agent | Stable system prompt; bounded context (message limit + character budget + top-K confirmed memories + project state + unresolved tasks); tool loop with per-call admission; truncated tool calls never run; refusal/empty/malformed handling; cancel, retry, interruption recovery |
 | Memory | Provenance (`user_authored` / `user_confirmed` / `model_inferred`), source conversation/message/excerpt, versions + revision history, subject-based conflict detection, supersede, reject, delete, secret refusal, BM25-style bounded retrieval over confirmed items only |
 | Projects | Projects with objectives/decisions/blockers/questions/progress; model items start as proposals; conversation linking |
@@ -46,7 +46,7 @@ All commands below were run in this repository on Windows 11 (10.0.22621) with N
 |---|---|
 | `npm run typecheck` (main+preload+shared, renderer) | pass, 0 errors |
 | `npm run lint` | pass, 0 problems |
-| `npm test` (Vitest) | **79/79 passed** in 7 files |
+| `npm test` (Vitest) | **82/82 passed** in 7 files |
 | `npm run build` | pass (main 233 kB, preload 2.7 kB with only `require("electron")`, renderer 320 kB minified) |
 | `npm run smoke` — real Electron, disposable profile, two launches | **17/17 passed** |
 | Same smoke hooks under `electron-vite dev` (dev server + HMR CSP) | all checks passed |
@@ -63,7 +63,7 @@ What the automated suites cover:
 - **Tasks:** invalid transitions rejected; approval required and hash-bound; denial skips dependents; plan approval requires every reviewed hash; dependency failure propagation; bounded retries; consequential timeout ⇒ uncertain and never retried; cancellation (consequential ⇒ uncertain, safe ⇒ cancelled); duplicate prevention via receipts; finished-receipt reuse; reconciliation; retry needs fresh approval; restart recovery (uncertain / re-authorize / safe requeue).
 - **Agent & security:** streaming + usage; bounded context; missing provider ⇒ honest error; empty response ⇒ error; cancel + retry; unknown capability / extra params / malformed args rejected and audited; model text claiming approval cannot bypass it; denied actions never run; prompt-injected window titles cannot authorize or target non-allow-listed apps; untrusted-output marking; disabled permissions hide tools; truncated tool calls not executed; memory proposals carry evidence; plans validated and non-executable until approved; cancelling a turn cancels its pending approvals; IPC sender/origin/frame validation; unknown channels and invalid inputs rejected; keys never returned to the renderer; permission changes audited; registry contract completeness; consequential-without-approval registration refused; redaction; **log files contain no keys or message text**; production CSP; loopback-only local provider.
 - **Vision/desktop:** identity revalidation (gone / changed pid / not allowed / hwnd reuse); fresh captures distinct with provenance; failed captures create no observation; minimized and disabled observation refused; stored observations marked `fresh:false`; export permission per destination; retention purge keeps metadata; blank-frame detection. **No real input is sent in any automated test** (fake backend records calls; assertions check it stays empty).
-- **Providers (no network):** Anthropic request construction (model, effort, tools with eager streaming, refusal fallback beta, no disabled thinking), streaming deltas/phases, usage incl. cache tokens, native content (thinking blocks) echoed unchanged, tool-result mapping; SDK error mapping (auth, rate limit, quota, network, cancel, malformed) for Anthropic and OpenAI.
+- **Providers (no network):** OpenRouter (separate https-only provider with its own key; `max_tokens`, no `stream_options`; tool-call assembly; usage; `/key` check; reported capabilities never override declared ones); Anthropic request construction (model, effort, tools with eager streaming, refusal fallback beta, no disabled thinking), streaming deltas/phases, usage incl. cache tokens, native content (thinking blocks) echoed unchanged, tool-result mapping; SDK error mapping (auth, rate limit, quota, network, cancel, malformed) for Anthropic and OpenAI.
 
 ## 4. Integrations that require configuration (not live-verified)
 
@@ -71,6 +71,7 @@ What the automated suites cover:
 |---|---|
 | Anthropic API | Implemented with the official SDK; request shape tested with a fake client. **No live call was made** (no key here; live paid calls were out of scope). Add a key in Settings → Providers and use *Test connection* (free model listing). |
 | OpenAI chat | Implemented with the official SDK; not live-tested. Model id and capabilities are user-declared. |
+| OpenRouter | Implemented; request body, streaming/tool-call assembly, usage and the key check are tested with a fake client. **Not live-tested.** OpenRouter-reported model capabilities are shown as hints only. |
 | Local OpenAI-compatible server | Implemented; not tested against a running Ollama/LM Studio here. |
 | Speech-to-text (OpenAI) | Implemented, consent-gated; not live-tested; microphone capture not exercised automatically. |
 | Text-to-speech | Windows voices via `speechSynthesis` and OpenAI TTS implemented; not exercised automatically. |
@@ -96,7 +97,7 @@ All work happened inside `C:\Users\bless\keo` plus disposable directories under 
 
 ## 7. Actions that need your decision
 
-- Supplying provider API keys (Anthropic and/or OpenAI) or running a local model server.
+- Supplying provider API keys (OpenRouter now; Anthropic and/or OpenAI later) or running a local model server.
 - Code-signing certificate, if you want signed builds.
 - Whether to `git init` / commit (not done).
 - Running the installer on a machine.

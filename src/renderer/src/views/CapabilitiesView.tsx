@@ -36,8 +36,8 @@ export function CapabilitiesView() {
               <p className="muted small" style={{ margin: 0 }}>
                 Screenshots are analysed by the active model provider. Allow each destination explicitly; local models keep images on this computer.
               </p>
-              {(['anthropic', 'openai', 'local'] as const).map((p) => (
-                <Toggle key={p} checked={s.permissions.visionExport[p]} onChange={(v) => void patch({ permissions: { visionExport: { [p]: v } } })} label={`Allow sending window captures to ${p === 'local' ? 'the local model server' : p === 'anthropic' ? 'Anthropic' : 'OpenAI'}`} />
+              {(['anthropic', 'openai', 'openrouter', 'local'] as const).map((p) => (
+                <Toggle key={p} checked={s.permissions.visionExport[p]} onChange={(v) => void patch({ permissions: { visionExport: { [p]: v } } })} label={`Allow sending window captures to ${EXPORT_LABEL[p]}`} />
               ))}
             </div>
 
@@ -57,6 +57,8 @@ export function CapabilitiesView() {
     </div>
   );
 }
+
+const EXPORT_LABEL = { anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter (and the model vendor it routes to)', local: 'the local model server' } as const;
 
 const PERMISSION_TEXT = {
   observationEnabled: 'Keo will be able to list windows of applications you allow-list and, with your approval, capture them. Captures are stored locally under the retention policy.',

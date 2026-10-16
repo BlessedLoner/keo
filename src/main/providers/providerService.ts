@@ -23,6 +23,7 @@ export class ProviderService {
     this.providers.set('anthropic', new AnthropicProvider(getSettings, key('anthropic')));
     this.openai = new OpenAICompatProvider('openai', getSettings, key('openai'));
     this.providers.set('openai', this.openai);
+    this.providers.set('openrouter', new OpenAICompatProvider('openrouter', getSettings, key('openrouter')));
     this.providers.set('local', new OpenAICompatProvider('local', getSettings, key('local')));
     if (opts.testProvider) this.providers.set('test', opts.testProvider);
   }

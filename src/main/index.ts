@@ -293,6 +293,11 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
     if (name === 'chat') await js(`[...document.querySelectorAll('.conv-item')].find(b => b.textContent.includes('Plan the week'))?.click();`);
     await wait(900);
     fs.writeFileSync(path.join(dir, `${name}.png`), (await win.webContents.capturePage()).toPNG());
+    if (name === 'settings') {
+      await js(`document.querySelector('section[aria-label="OpenRouter"]')?.scrollIntoView({ block: 'start' });`);
+      await wait(500);
+      fs.writeFileSync(path.join(dir, 'settings-openrouter.png'), (await win.webContents.capturePage()).toPNG());
+    }
   }
   await js(`document.querySelector('nav.rail button[title^="Settings"]')?.click();`);
   await wait(400);

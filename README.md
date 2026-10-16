@@ -53,7 +53,8 @@ Open **Settings → Providers** (or click the provider chip in the title bar):
 
 1. **Anthropic (Claude)** — paste an API key from the Anthropic Console, pick a model (default `claude-opus-5-5`), choose effort, click **Use for chat**, then **Test connection** (it lists models; no tokens are generated). Server-side refusal fallback is on by default and can be turned off on the same card.
 2. **OpenAI** — paste a key, enter a model id (Test connection lists the ids your account offers), declare whether it supports tools and images.
-3. **Local model** — any OpenAI-compatible server on `127.0.0.1`/`localhost` (Ollama: `http://127.0.0.1:11434/v1`). Non-loopback URLs are refused.
+3. **OpenRouter** — paste your OpenRouter key, enter a model id in `vendor/model` form from openrouter.ai/models, click **Use for chat**, then **Test connection**. It checks the key (free, shows remaining key credit when a limit is set) and reports whether OpenRouter says the model supports tools and images; set the two toggles to match. Requests go through OpenRouter to that model’s vendor. OpenRouter is chat-only in Keo — voice features need an OpenAI key.
+4. **Local model** — any OpenAI-compatible server on `127.0.0.1`/`localhost` (Ollama: `http://127.0.0.1:11434/v1`). Non-loopback URLs are refused.
 
 Keys are encrypted with Windows DPAPI (Electron `safeStorage`) and never shown again or logged. Keo does not reuse any other application's credentials.
 

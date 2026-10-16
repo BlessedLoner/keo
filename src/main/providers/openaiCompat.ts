@@ -12,7 +12,9 @@ import {
   type ToolCall,
 } from './types';
 
-type Kind = 'openai' | 'local';
+type Kind = 'openai' | 'openrouter' | 'local';
+
+export type ClientFactory = (opts: { apiKey: string; baseURL: string }) => OpenAI;
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
@@ -25,8 +27,10 @@ export function isLoopbackUrl(url: string): boolean {
 }
 
 /**
- * Chat Completions provider used for two configurations:
+ * Chat Completions provider used for three configurations:
  *  - "openai": OpenAI's hosted API with the user's own key.
+ *  - "openrouter": OpenRouter's OpenAI-compatible gateway with the user's own
+ *              key; it forwards requests to the chosen model's vendor.
  *  - "local":  an OpenAI-compatible server on this computer (e.g. Ollama,
  *              LM Studio). Restricted to loopback addresses so "local" can
  *              never silently send data elsewhere.
@@ -44,15 +48,13 @@ export class OpenAICompatProvider implements ChatProvider {
     private readonly kind: Kind,
     private readonly getSettings: () => Settings,
     private readonly getKey: () => string | null,
+    private readonly clientFactory: ClientFactory = ({ apiKey, baseURL }) => new OpenAI({ apiKey, baseURL, maxRetries: 2, timeout: 10 * 60 * 1000 }),
   ) {
     this.id = kind;
-    this.label = kind === 'openai' ? 'OpenAI' : 'Local model (OpenAI-compatible)';
-    this.description =
-      kind === 'openai'
-        ? 'OpenAI models via the official Chat Completions API, using your own OpenAI API key. Also provides optional speech-to-text and text-to-speech.'
-        : 'A model server running on this computer (Ollama, LM Studio, llama.cpp server) that exposes an OpenAI-compatible API on a loopback address.';
-    this.requiresApiKey = kind === 'openai';
-    this.remote = kind === 'openai';
+    this.label = LABEL[kind];
+    this.description = DESCRIPTION[kind];
+    this.requiresApiKey = kind !== 'local';
+    this.remote = kind !== 'local';
     this.supportsAudio = kind === 'openai';
   }
 
@@ -62,7 +64,8 @@ export class OpenAICompatProvider implements ChatProvider {
 
   destination(): string {
     try {
-      return `${new URL(this.cfg().baseUrl).host}${this.kind === 'local' ? ' (this computer)' : ' (OpenAI)'}`;
+      const suffix = this.kind === 'local' ? ' (this computer)' : this.kind === 'openrouter' ? ' (OpenRouter → model vendor)' : ' (OpenAI)';
+      return `${new URL(this.cfg().baseUrl).host}${suffix}`;
     } catch {
       return 'invalid URL';
     }
@@ -89,8 +92,8 @@ export class OpenAICompatProvider implements ChatProvider {
     if (this.kind === 'local' && !isLoopbackUrl(c.baseUrl)) {
       return { kind: 'error', reason: 'The local provider only accepts loopback addresses (127.0.0.1 / localhost).' };
     }
-    if (this.kind === 'openai' && !c.baseUrl.startsWith('https://')) return { kind: 'error', reason: 'The OpenAI base URL must use https.' };
-    if (this.requiresApiKey && !this.getKey()) return { kind: 'unconfigured', reason: 'Add an OpenAI API key in Settings → Providers.' };
+    if (this.kind !== 'local' && !c.baseUrl.startsWith('https://')) return { kind: 'error', reason: `The ${this.label} base URL must use https.` };
+    if (this.requiresApiKey && !this.getKey()) return { kind: 'unconfigured', reason: `Add an ${this.label} API key in Settings → Providers.` };
     if (!c.model) return { kind: 'unconfigured', reason: 'Enter a model id in Settings → Providers.' };
     return { kind: 'ready' };
   }
@@ -100,7 +103,7 @@ export class OpenAICompatProvider implements ChatProvider {
     if (st.kind === 'error') throw new ProviderError('unconfigured', st.reason);
     const key = this.getKey();
     if (this.requiresApiKey && !key) throw new ProviderError('unconfigured', 'API key is not configured.');
-    return new OpenAI({ apiKey: key ?? 'not-required', baseURL: this.cfg().baseUrl, maxRetries: 2, timeout: 10 * 60 * 1000 });
+    return this.clientFactory({ apiKey: key ?? 'not-required', baseURL: this.cfg().baseUrl });
   }
 
   async stream(req: ChatRequest, handlers: StreamHandlers, signal: AbortSignal): Promise<ChatResult> {
@@ -145,7 +148,8 @@ export class OpenAICompatProvider implements ChatProvider {
       model: req.model,
       messages,
       stream: true,
-      stream_options: { include_usage: true },
+      // OpenRouter always reports usage in the final chunk and does not document stream_options.
+      ...(this.kind === 'openrouter' ? {} : { stream_options: { include_usage: true } }),
       ...(this.kind === 'openai' ? { max_completion_tokens: Math.min(req.maxOutputTokens, c.maxOutputTokens) } : { max_tokens: Math.min(req.maxOutputTokens, c.maxOutputTokens) }),
       ...(tools.length ? { tools } : {}),
     };
@@ -209,19 +213,31 @@ export class OpenAICompatProvider implements ChatProvider {
     if (st.kind === 'error') return { ...base, ok: false, latencyMs: null, message: st.reason };
     if (this.requiresApiKey && !this.getKey()) return { ...base, ok: false, latencyMs: null, message: 'No API key configured.' };
     try {
-      const list = await this.client().models.list({ signal });
+      const client = this.client();
+      // OpenRouter's model list is public, so verify the key separately (free, no tokens).
+      let keyNote = '';
+      if (this.kind === 'openrouter') {
+        const info = await client.get<{ data?: OpenRouterKeyInfo }>('/key', { signal });
+        keyNote = describeOpenRouterKey(info.data);
+      }
+      const list = await client.models.list({ signal });
       const ids: string[] = [];
+      let selectedRaw: unknown = null;
+      const model = this.selectedModel();
       for await (const m of list) {
         ids.push(m.id);
-        if (ids.length >= 500) break;
+        if (m.id === model) selectedRaw = m;
+        if (ids.length >= 2000) break;
       }
-      const model = this.selectedModel();
       const has = !model || ids.includes(model);
+      const hint = selectedRaw ? describeReportedCapabilities(selectedRaw) : '';
       return {
         ...base,
         ok: !!model && has,
         latencyMs: Date.now() - started,
-        message: !model ? `Connected (${ids.length} models listed). Choose a model id.` : has ? `Connected. ${model} is available.` : `Connected, but ${model} was not listed by the server.`,
+        message:
+          keyNote +
+          (!model ? `Connected (${ids.length} models listed). Choose a model id.` : has ? `Connected. ${model} is available.${hint}` : `Connected, but ${model} was not listed by the server.`),
         remoteModels: ids.slice(0, 200),
       };
     } catch (err) {
@@ -252,6 +268,49 @@ export class OpenAICompatProvider implements ChatProvider {
       throw mapOpenAIError(err, signal, this.label);
     }
   }
+}
+
+const LABEL: Record<Kind, string> = { openai: 'OpenAI', openrouter: 'OpenRouter', local: 'Local model (OpenAI-compatible)' };
+const DESCRIPTION: Record<Kind, string> = {
+  openai: 'OpenAI models via the official Chat Completions API, using your own OpenAI API key. Also provides optional speech-to-text and text-to-speech.',
+  openrouter:
+    'Models from many vendors (OpenAI, Anthropic, Google, Meta and others) through OpenRouter’s OpenAI-compatible API, using your own OpenRouter key. Requests pass through OpenRouter to the chosen model’s vendor. No voice features.',
+  local: 'A model server running on this computer (Ollama, LM Studio, llama.cpp server) that exposes an OpenAI-compatible API on a loopback address.',
+};
+
+interface OpenRouterKeyInfo {
+  label?: string;
+  limit?: number | null;
+  limit_remaining?: number | null;
+  usage?: number;
+  is_free_tier?: boolean;
+}
+
+export function describeOpenRouterKey(d: OpenRouterKeyInfo | undefined): string {
+  if (!d) return 'Key accepted. ';
+  const parts = ['Key accepted'];
+  if (d.is_free_tier) parts.push('free tier');
+  if (typeof d.limit_remaining === 'number') parts.push(`$${d.limit_remaining.toFixed(2)} of key limit remaining`);
+  else if (d.limit === null) parts.push('no key spending limit');
+  return `${parts.join(' · ')}. `;
+}
+
+/**
+ * Reads what the server *reports* about a model (OpenRouter includes
+ * supported_parameters and input modalities). Shown as a hint only — Keo still
+ * uses the capabilities the user declares.
+ */
+export function describeReportedCapabilities(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return '';
+  const r = raw as { supported_parameters?: unknown; architecture?: { input_modalities?: unknown }; context_length?: unknown };
+  const params = Array.isArray(r.supported_parameters) ? (r.supported_parameters as unknown[]) : null;
+  const inputs = Array.isArray(r.architecture?.input_modalities) ? (r.architecture?.input_modalities as unknown[]) : null;
+  if (!params && !inputs) return '';
+  const bits: string[] = [];
+  if (params) bits.push(`tools ${params.includes('tools') ? 'yes' : 'no'}`);
+  if (inputs) bits.push(`images ${inputs.includes('image') ? 'yes' : 'no'}`);
+  if (typeof r.context_length === 'number') bits.push(`context ${r.context_length.toLocaleString('en-US')} tokens`);
+  return ` The server reports: ${bits.join(', ')}. Set the toggles below to match.`;
 }
 
 export function mapOpenAIError(err: unknown, signal: AbortSignal | undefined, label: string): ProviderError {

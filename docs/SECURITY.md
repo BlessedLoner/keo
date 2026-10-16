@@ -69,7 +69,7 @@ Execution (`TaskOrchestrator`):
 - Capture uses Electron `desktopCapturer` for exactly the requested HWND. If that source is missing, empty, too small or a single flat colour, the capture fails — there is **no full-desktop fallback**.
 - Minimized windows are refused (`target_minimized`).
 - Each observation records window identity, capture time, dimensions, SHA-256, method and who initiated it. Fresh captures return `fresh: true`; `vision.get_observation` returns stored results with `fresh: false`.
-- Sending an image to a provider requires (a) the per-destination export toggle, (b) a model declared vision-capable, and (c) approval (model-initiated) or an explicit confirmation dialog naming the destination (user-initiated).
+- Sending an image to a provider requires (a) the per-destination export toggle (Anthropic, OpenAI, OpenRouter, local — all off by default; OpenRouter forwards to the model's vendor), (b) a model declared vision-capable, and (c) approval (model-initiated) or an explicit confirmation dialog naming the destination (user-initiated).
 - Images are retained for a configurable number of hours (default 24) and then deleted; metadata stays for provenance. Image bytes never enter logs or the audit trail.
 - Screen text and analyses are labelled untrusted when returned to the model.
 
@@ -81,7 +81,7 @@ Execution (`TaskOrchestrator`):
 
 ## 7. Secrets and privacy
 
-- API keys are encrypted with Electron `safeStorage` (Windows DPAPI, per user) and stored in Keo's profile. If OS encryption is unavailable, Keo refuses to store keys. Keys are never returned to the renderer.
+- API keys (Anthropic, OpenAI, OpenRouter) are encrypted with Electron `safeStorage` (Windows DPAPI, per user) and stored in Keo's profile, one slot per provider. If OS encryption is unavailable, Keo refuses to store keys. Keys are never returned to the renderer.
 - Logs (`src/main/logging`) redact credential patterns and drop content-bearing fields (`prompt`, `content`, `text`, `image`, `audio`, `apiKey`, `authorization`, …). Conversations, prompts, screenshots and audio are not logged; message sizes and ids are.
 - Memory refuses content that looks like a credential. Model-inferred memories cannot be stored as confirmed.
 - Audio: push-to-talk only, kept in memory, sent only to the configured STT provider after explicit consent; the microphone stream is released when recording stops.

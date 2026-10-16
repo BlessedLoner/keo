@@ -155,7 +155,7 @@ function ProviderCard({ p, active, s, patch }: { p: ProviderInfo; active: boolea
       )}
 
       {p.id === 'anthropic' && <AnthropicFields s={s} patch={patch} p={p} />}
-      {(p.id === 'openai' || p.id === 'local') && <CompatFields id={p.id} s={s} patch={patch} />}
+      {(p.id === 'openai' || p.id === 'openrouter' || p.id === 'local') && <CompatFields id={p.id} s={s} patch={patch} />}
 
       <div className="row">
         <button className="btn" onClick={() => void test()} disabled={testing}>
@@ -211,7 +211,7 @@ function AnthropicFields({ s, patch, p }: { s: Settings; patch: Patch; p: Provid
   );
 }
 
-function CompatFields({ id, s, patch }: { id: 'openai' | 'local'; s: Settings; patch: Patch }) {
+function CompatFields({ id, s, patch }: { id: 'openai' | 'openrouter' | 'local'; s: Settings; patch: Patch }) {
   const c = s.providers[id];
   const set = (v: Record<string, unknown>) => void patch({ providers: { [id]: v } });
   return (
@@ -221,10 +221,11 @@ function CompatFields({ id, s, patch }: { id: 'openai' | 'local'; s: Settings; p
           <label htmlFor={`${id}-url`}>Base URL</label>
           <input id={`${id}-url`} className="input" defaultValue={c.baseUrl} onBlur={(e) => e.target.value !== c.baseUrl && set({ baseUrl: e.target.value })} />
           {id === 'local' && <span className="hint">Must be a loopback address (127.0.0.1 / localhost).</span>}
+          {id === 'openrouter' && <span className="hint">OpenRouter forwards requests to the model’s vendor; their data policies apply too.</span>}
         </div>
         <div className="field">
           <label htmlFor={`${id}-model`}>Model id</label>
-          <input id={`${id}-model`} className="input" placeholder={id === 'local' ? 'e.g. llama3.1:8b' : 'model id from your OpenAI account'} defaultValue={c.model} onBlur={(e) => e.target.value !== c.model && set({ model: e.target.value })} />
+          <input id={`${id}-model`} className="input" placeholder={id === 'local' ? 'e.g. llama3.1:8b' : id === 'openrouter' ? 'vendor/model id from openrouter.ai/models' : 'model id from your OpenAI account'} defaultValue={c.model} onBlur={(e) => e.target.value !== c.model && set({ model: e.target.value })} />
           <span className="hint">“Test connection” lists the ids your server or account offers.</span>
         </div>
       </div>

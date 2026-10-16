@@ -42,7 +42,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       p('observationEnabled', before.permissions.observationEnabled, next.permissions.observationEnabled);
       p('desktopControlEnabled', before.permissions.desktopControlEnabled, next.permissions.desktopControlEnabled);
       p('launchEnabled', before.permissions.launchEnabled, next.permissions.launchEnabled);
-      for (const k of ['anthropic', 'openai', 'local'] as const) p(`visionExport.${k}`, before.permissions.visionExport[k], next.permissions.visionExport[k]);
+      for (const k of ['anthropic', 'openai', 'openrouter', 'local'] as const) p(`visionExport.${k}`, before.permissions.visionExport[k], next.permissions.visionExport[k]);
       p('audioExportConsent', before.voice.audioExportConsent, next.voice.audioExportConsent);
       if (next.activeProvider && !s.providers.has(next.activeProvider)) {
         s.settings.update({ activeProvider: before.activeProvider });

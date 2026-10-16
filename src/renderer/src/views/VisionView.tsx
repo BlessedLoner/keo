@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Observation, WindowTarget } from '@shared/domain';
+import type { ExportProviderId, Observation, WindowTarget } from '@shared/domain';
 import { Icon } from '../components/Icon';
 import { Empty, ErrorBanner, Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
@@ -146,7 +146,7 @@ function ObservationCard({ o }: { o: Observation }) {
     };
   }, [o.id, o.hasImage]);
   const provider = app.activeProvider;
-  const exportOk = provider ? provider.id === 'test' || (app.settings.data?.permissions.visionExport[provider.id as 'anthropic' | 'openai' | 'local'] ?? false) : false;
+  const exportOk = provider ? provider.id === 'test' || (app.settings.data?.permissions.visionExport[provider.id as ExportProviderId] ?? false) : false;
   const visionModel = provider?.models.find((m) => m.id === provider.selectedModel)?.capabilities.vision ?? false;
 
   const analyze = async () => {

@@ -109,7 +109,7 @@ describe('settings', () => {
     expect(d.permissions.observationEnabled).toBe(false);
     expect(d.permissions.desktopControlEnabled).toBe(false);
     expect(d.permissions.launchEnabled).toBe(false);
-    expect(d.permissions.visionExport).toEqual({ anthropic: false, openai: false, local: false });
+    expect(d.permissions.visionExport).toEqual({ anthropic: false, openai: false, openrouter: false, local: false });
     expect(d.voice.audioExportConsent).toBe(false);
     expect(d.activeProvider).toBeNull();
   });

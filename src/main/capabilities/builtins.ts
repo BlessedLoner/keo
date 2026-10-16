@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import type { ExportProviderId } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { DesktopService } from '../desktop/desktopService';
 import { isAllowedProcess } from '../desktop/desktopService';
@@ -551,7 +552,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
       const a = allowCheck(i.target, s);
       if (a) return a;
       const pid = d.activeProviderId();
-      if (pid && pid !== 'test' && !s.permissions.visionExport[pid as 'anthropic' | 'openai' | 'local']) {
+      if (pid && pid !== 'test' && !s.permissions.visionExport[pid as ExportProviderId]) {
         return `Screen-content export to ${d.activeProviderDestination()} is not enabled (Capabilities → Screen-content export).`;
       }
       return null;
