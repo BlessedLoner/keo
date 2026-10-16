@@ -42,6 +42,12 @@ export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
   systemExtra: () => string = () => '';
 
+  /**
+   * Handles a user message without the model when Keo itself knows what it is
+   * for (e.g. an answer to a waiting live chat). Returns Keo's reply, or null.
+   */
+  interceptor: ((conversationId: string, text: string) => string | null) | null = null;
+
   private readonly active = new Map<string, ActiveTurn>();
 
   constructor(
@@ -73,6 +79,16 @@ export class AgentService {
     const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
     if (conv.messageCount === 0 && (conv.title === 'New conversation' || !conv.title.trim())) {
       this.conversations.rename(conversationId, deriveTitle(text));
+    }
+    let handled: string | null;
+    try {
+      handled = this.interceptor?.(conversationId, text) ?? null;
+    } catch (e) {
+      handled = `That didn't work: ${errorMessage(e)}`;
+    }
+    if (handled !== null) {
+      const reply = this.conversations.addMessage({ conversationId, role: 'assistant', content: handled, status: 'complete' });
+      return { userMessageId: user.id, done: Promise.resolve(reply) };
     }
     return { userMessageId: user.id, done: this.runTurn(conversationId, user.id) };
   }

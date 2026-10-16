@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RawWindow } from '../src/main/desktop/backend';
+import { unsupportedClaims } from '../src/main/agent/claims';
 import { attentionTopic, parseDecision } from '../src/main/livechat/liveChatService';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import type { LiveChatSession, TaskStep } from '../src/shared/domain';
@@ -230,6 +231,47 @@ describe('live chat sessions', () => {
     await waitFor(() => wa.sent.length === 1, 5000);
   });
 
+  it('“Tell her $100 per shirt” reaches the waiting chat even if the model would only claim it sent it', async () => {
+    const { wa, conv } = await startWithMum('Sell my shirts');
+    agentScript = () => reply('I have sent the message to Mum.'); // what the model did
+    brain.push(decision({ action: 'ask_user', question_for_user: 'Mum asks the price of the shirt. What should I tell her?' }));
+    incoming(wa, 'Mum', "What's the price of the shirt?");
+    await waitFor(() => session().status === 'waiting_user', 5000);
+    brain.push(decision({ action: 'reply', message: 'It is $100 per shirt 😊' }));
+    const r = await h.services.agent.send(conv.id, 'Tell her $100 per shirt').done;
+    expect(agentCalls).toBe(0); // handled without the model
+    expect(r.content).toMatch(/Passed to the live chat with Mum\. Nothing is sent yet/);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('It is $100 per shirt 😊');
+    await waitFor(() => h.services.conversations.messages(conv.id).some((m) => m.content.includes('Sent to Mum')), 5000);
+    // The chat keeps going afterwards.
+    brain.push(decision({ action: 'reply', message: 'Great, I will put one aside for you!' }));
+    incoming(wa, 'Mum', 'Ok I will take one');
+    await waitFor(() => wa.sent.length === 2, 5000);
+    expect(session().status).toBe('active');
+  });
+
+  it('“stop” and “send it” work without the model; unrelated messages still go to the agent', async () => {
+    const { wa, conv } = await startWithMum('Chat');
+    h.desktop.idleMs = 0;
+    brain.push(decision({ action: 'reply', message: 'Hello Mum!' }));
+    incoming(wa, 'Mum', 'Hello');
+    await waitFor(() => !!session().draft, 5000);
+    await h.services.agent.send(conv.id, 'send it').done;
+    await waitFor(() => wa.sent.length === 1, 5000);
+    brain.push(decision({ action: 'ask_user', question_for_user: 'Mum asks where you are.' }));
+    h.desktop.idleMs = 60_000;
+    incoming(wa, 'Mum', 'Where are you?');
+    await waitFor(() => session().status === 'waiting_user', 5000);
+    await h.services.agent.send(conv.id, 'open notepad please').done;
+    expect(agentCalls).toBe(1); // not an answer: the agent handles it
+    expect(session().status).toBe('waiting_user');
+    const stop = await h.services.agent.send(conv.id, 'stop').done;
+    expect(stop.content).toMatch(/Stopped the live chat with Mum/);
+    expect(session().status).toBe('ended');
+    expect(agentCalls).toBe(1);
+  });
+
   it('stops after the reply limit', async () => {
     const { wa } = await startWithMum('Chat', { maxReplies: 1 });
     brain.push(decision({ action: 'reply', message: 'Hi Mum!' }));
@@ -316,6 +358,8 @@ describe('live chat sessions', () => {
     expect(parseDecision('```json\n{"action":"reply","message":"hi"}\n```')).toMatchObject({ action: 'reply', message: 'hi' });
     expect(parseDecision('{"action":"launch_missiles"}')).toBeNull();
     expect(parseDecision('no json')).toBeNull();
+    // Claiming a message went out without sending one is flagged, however it is phrased.
+    for (const t of ['I have told Ma Glo it is $100 per shirt.', "I've let her know the price is $100.", 'I replied to her with the price.']) expect(unsupportedClaims(t, new Set())).not.toEqual([]);
   });
 });
 

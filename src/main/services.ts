@@ -213,6 +213,13 @@ export class Services {
     );
 
     this.agent.systemExtra = () => this.live.agentContext();
+    // Answers to a waiting live chat (and "stop" / "send it") go straight to it — never lost to a model
+    // that only *says* it passed them on. The command bar (voice) may answer any running chat.
+    this.agent.interceptor = (conversationId, text) => {
+      const reply = this.live.routeUserMessage(conversationId, text, { anyConversation: conversationId === getSettings().commandBar.conversationId });
+      if (reply !== null) setTimeout(() => this.push('conversations:changed', { conversationId }), 0);
+      return reply;
+    };
     this.presence = new PresenceService(this.registry);
     this.presence.setAutonomy(getSettings().autonomy.level);
     this.presence.onChange((p) => this.push('presence:changed', p));

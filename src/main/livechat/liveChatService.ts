@@ -141,6 +141,53 @@ export class LiveChatService {
     return { active: all.length, waiting: waiting.length, firstWaiting: waiting[0]?.contact ?? null, ready: ready.length, firstReady: first ? { id: first.id, contact: first.contact } : null };
   }
 
+  /**
+   * Routes a user's chat message straight to a live chat — without the
+   * model — when it is clearly meant for it: "stop" ends the chat(s) of this
+   * conversation, "send it" sends a ready reply, and while a chat waits for
+   * the user an answer-like message ("tell her $100 per shirt", "yes", a
+   * price, the contact's name …) becomes the answer. Anything else returns
+   * null and goes to the agent as usual.
+   */
+  routeUserMessage(conversationId: string, text: string, opts: { anyConversation: boolean }): string | null {
+    const msg = text.trim();
+    if (!msg || msg.length > 1500) return null;
+    const all = [...this.live.values()].filter((r) => r.s.conversationId === conversationId || opts.anyConversation);
+    if (!all.length) return null;
+    const named = (rs: Runtime[]) => {
+      const low = ` ${normName(msg)} `;
+      const hit = rs.filter((r) => low.includes(` ${normName(r.s.contact)} `) || low.includes(` ${normName(r.s.contact).split(' ')[0]} `));
+      return hit.length ? hit : rs;
+    };
+    // Stop.
+    if (/^\s*(keo[,\s]+)?(please\s+)?(stop|end|cancel|quit|enough|that'?s enough|i'?ll take (it )?over|stop (the )?(live )?chat(ting)?)\b/i.test(msg)) {
+      const targets = named(all);
+      for (const r of targets) this.finish(r, 'Stopped by you');
+      return `Stopped the live chat with ${targets.map((r) => r.s.contact).join(', ')}.`;
+    }
+    // Send the ready reply.
+    const withDraft = all.filter((r) => !!r.s.draft);
+    if (withDraft.length && /^\s*(yes[,!.\s]*)?(send( it| that| the reply)?( now)?|go ahead|ok(ay)?,? send)\b/i.test(msg)) {
+      const r = named(withDraft)[0]!;
+      r.sendNow = true;
+      this.schedule(r, 0);
+      return `Sending the reply to ${r.s.contact} now. I'll post “Sent to ${r.s.contact}: …” here when it has gone out.`;
+    }
+    // An answer for a chat that is waiting for the user.
+    const waiting = all.filter((r) => r.s.status === 'waiting_user' || r.s.status === 'paused');
+    if (!waiting.length) return null;
+    const answerLike =
+      /^\s*(tell|say|reply|respond|answer|let (her|him|them) know|send|ask|explain|research|look it up|give|offer|quote|charge|inform|yes|yeah|no|nope|ok(ay)?|sure|of course|it'?s|its|the price|price is|we|i)\b/i.test(msg) ||
+      /[$₦£€]\s?\d|\d+\s?(naira|dollars?|usd|ngn|k\b)/i.test(msg) ||
+      waiting.some((r) => ` ${normName(msg)} `.includes(` ${normName(r.s.contact).split(' ')[0]} `));
+    if (!answerLike) return null;
+    const targets = named(waiting);
+    if (targets.length !== 1) return null; // several chats waiting and no name: let the agent ask which one
+    const r = targets[0]!;
+    this.answer(r.s.id, msg, true);
+    return `Passed to the live chat with ${r.s.contact}. Nothing is sent yet: I'll post “Sent to ${r.s.contact}: …” here as soon as the reply has gone out.`;
+  }
+
   /** Short summary for the agent's system prompt so it can route the user's answers. */
   agentContext(): string {
     const all = [...this.live.values()].map((r) => r.s);
