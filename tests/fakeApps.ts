@@ -128,6 +128,8 @@ export class FakeWhatsApp implements FakeUiaApp {
    * chat entries nested row › name with screen-reader prefixes.
    */
   inBrowser = false;
+  /** How many of the latest messages WhatsApp keeps in the visible list (it trims and shifts). */
+  visibleMessages = 1000;
   /** Search results also list matching people under "Contacts" (duplicates of the chats). */
   searchListsContacts = false;
   /** Accept accessibility value writes without the page noticing (rich web editors). */
@@ -172,6 +174,7 @@ export class FakeWhatsApp implements FakeUiaApp {
       s.push({ key: 'header', parentKey: 'root', role: 'button', name: chat.title, x: 460, y: 15, w: 300, h: 40, patterns: ['invoke'] });
       s.push({ key: 'msgs', parentKey: 'root', role: 'list', name: 'Messages', x: 400, y: 70, w: 800, h: 650 });
       chat.messages.forEach((m, i) => {
+        if (i < chat.messages.length - this.visibleMessages) return; // WhatsApp keeps only the latest few in view
         const x = m.from === 'me' ? 820 : 420;
         s.push(
           { key: `msg.${i}`, parentKey: 'msgs', role: 'listitem', name: '', x, y: 90 + i * 60, w: 340, h: 50 },

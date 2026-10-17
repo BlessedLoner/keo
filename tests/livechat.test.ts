@@ -300,6 +300,42 @@ describe('live chat sessions', () => {
     expect(wa.sent[0]!.text).toBe('You are welcome, Mum!');
   });
 
+  it('keeps replying after an answered reply, while WhatsApp trims and shifts the visible messages', async () => {
+    const { wa } = await startWithMum('Help Mum with Python');
+    wa.visibleMessages = 3; // only the latest three messages are in view
+    brain.push(decision({ action: 'ask_user', question_for_user: 'Mum asks what a variable is.' }));
+    incoming(wa, 'Mum', 'What is a variable in python?');
+    await waitFor(() => session().status === 'waiting_user', 5000);
+    brain.push(decision({ action: 'reply', message: 'A variable is a name for a value, like age = 30.' }));
+    h.services.live.answer(session().id, 'explain it to her', true);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    // Her follow-up: the model first says "wait", Keo asks again and replies.
+    brain.push(decision({ action: 'wait', reason: 'she is just thanking' }));
+    brain.push(decision({ action: 'reply', message: 'You are welcome! Want an example with a list too?' }));
+    incoming(wa, 'Mum', 'Thank you, that really helps me understand');
+    await waitFor(() => wa.sent.length === 2, 5000);
+    expect(wa.sent[1]!.text).toMatch(/You are welcome/);
+    // And the next one, and the next (the visible list keeps shifting).
+    brain.push(decision({ action: 'reply', message: 'Sure: names = ["Ada", "Bo"] stores a list.' }));
+    incoming(wa, 'Mum', 'Yes please show me a list example');
+    await waitFor(() => wa.sent.length === 3, 5000);
+    brain.push(decision({ action: 'reply', message: 'Exactly right!' }));
+    incoming(wa, 'Mum', 'So names[0] is Ada?');
+    await waitFor(() => wa.sent.length === 4, 5000);
+    expect(session().status).toBe('active');
+  });
+
+  it('a repeated identical message from the contact is still new', async () => {
+    const { wa } = await startWithMum('Chat');
+    wa.visibleMessages = 4;
+    brain.push(decision({ action: 'reply', message: 'Hello again!' }));
+    incoming(wa, 'Mum', 'Hello there');
+    await waitFor(() => wa.sent.length === 1, 5000);
+    brain.push(decision({ action: 'reply', message: 'Yes, I am here!' }));
+    incoming(wa, 'Mum', 'Hello there');
+    await waitFor(() => wa.sent.length === 2, 5000);
+  });
+
   it('stops after the reply limit', async () => {
     const { wa } = await startWithMum('Chat', { maxReplies: 1 });
     brain.push(decision({ action: 'reply', message: 'Hi Mum!' }));
