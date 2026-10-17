@@ -1,4 +1,4 @@
-import type { AgentEvent, LiveChatSession, NavigationGrant, Presence } from '../shared/domain';
+import type { AgentEvent, LiveChatSession, NavigationGrant, Presence, UpdateDownload } from '../shared/domain';
 import type { InvokeChannel, InvokeInput, InvokeOutputs, IpcResult, PushChannel } from '../shared/ipc';
 
 export interface PushPayloads {
@@ -13,6 +13,7 @@ export interface PushPayloads {
   'presence:command': PresenceCommand;
   'grants:changed': { grants: NavigationGrant[] };
   'livechat:changed': { sessions: LiveChatSession[] };
+  'update:changed': UpdateDownload;
 }
 
 /** Instructions from the main process to a window (never from page content). */
@@ -23,7 +24,10 @@ export type PresenceCommand =
   | { type: 'navigate'; view: string }
   | { type: 'transcript'; text: string; conversationId: string | null }
   | { type: 'listen_result'; reason: string }
-  | { type: 'announce'; text: string };
+  | { type: 'announce'; text: string }
+  | { type: 'voice_listen'; id: string }
+  | { type: 'voice_say'; id: string; text: string }
+  | { type: 'voice_cancel' };
 
 export interface KeoBridge {
   invoke<C extends InvokeChannel>(channel: C, input?: InvokeInput<C>): Promise<IpcResult<InvokeOutputs[C]>>;

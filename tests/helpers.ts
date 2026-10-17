@@ -245,7 +245,7 @@ export interface Harness {
 }
 
 export function makeHarness(
-  opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming'] } = {},
+  opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming']; voiceIo?: ServiceDeps['voiceIo'] } = {},
 ): Harness {
   const dir = opts.dir ?? tempDir();
   const profile = resolveProfile(dir, { KEO_USER_DATA_DIR: dir }, false);
@@ -268,6 +268,7 @@ export function makeHarness(
     clipboard,
     ...(opts.web ? { web: opts.web } : {}),
     ...(opts.liveChatTiming ? { liveChatTiming: opts.liveChatTiming } : {}),
+    ...(opts.voiceIo ? { voiceIo: opts.voiceIo } : {}),
   });
   return {
     dir,

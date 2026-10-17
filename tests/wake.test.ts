@@ -27,8 +27,11 @@ describe('wake word matching', () => {
     expect(matchWake(['lake view', 'hey kio'], ['hey keo'], [])?.how).toBe('sounds_like');
   });
 
-  it('never learns common words as a wake phrase', () => {
+  it('never learns common words, or sounds unlike the phrase, as a wake phrase', () => {
     expect(learnableVariants(['okay', 'hey', 'a cleo', 'hey keo', 'a cleo'], 'hey keo', [])).toEqual(['a cleo']);
+    expect(learnableVariants(['But all', 'Jamal'], 'hi siri', [])).toEqual([]);
+    // Already-saved implausible versions are ignored when matching.
+    expect(matchWake(['but all'], ['hi siri'], ['but all'])).toBeNull();
   });
 });
 
@@ -48,7 +51,8 @@ describe('wake service', () => {
     const { speech, shown } = await start();
     speech.fire({ event: 'heard', grammar: 'competitor', text: 'hey kio', confidence: 0.4, alts: [] });
     await waitFor(() => speech.cmds().includes('capture'));
-    expect(shown()).toBe(1);
+    expect(shown()).toBe(0);
+    expect(h.services.voiceMode.isActive()).toBe(true);
   });
 
   it('“Hey Keo, look at line 10 …” in one breath is sent at once, without a second listen', async () => {
@@ -87,8 +91,8 @@ describe('wake service', () => {
     } as never);
     speech.nextTest = { recognized: false, confidence: 0.6, heardSomething: true, text: 'a cleo', alts: ['a clear'], grammar: 'competitor' };
     const learned = await handlers['wake:learnSample']({ phrase: 'hey keo' });
-    expect(learned).toMatchObject({ heard: 'a cleo', added: ['a cleo', 'a clear'] });
-    expect(h.services.settings.get().wake.learned).toEqual(['a cleo', 'a clear']);
+    expect(learned).toMatchObject({ heard: 'a cleo', added: ['a cleo'] }); // “a clear” sounds too different to trust
+    expect(h.services.settings.get().wake.learned).toEqual(['a cleo']);
     speech.nextTest = { recognized: false, confidence: 0.6, heardSomething: true, text: 'a cleo', alts: [], grammar: 'competitor' };
     const test = await handlers['wake:testPhrase']({ phrase: 'hey keo' });
     expect(test).toMatchObject({ ok: true });

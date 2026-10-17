@@ -3,7 +3,7 @@ import type { AgentEvent, AgentPhase, Presence, ProviderInfo, Task } from '@shar
 import { emblemFor, usePresence, useVoiceReporting } from '../lib/presence';
 import type { Settings } from '@shared/settings';
 import type { EmblemState } from '../components/KeoEmblem';
-import { subscribe } from '../lib/api';
+import { invoke, subscribe } from '../lib/api';
 import { useInvoke, type Query } from '../lib/hooks';
 import { voice, type VoiceState } from '../lib/voice';
 
@@ -59,8 +59,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }),
     [],
   );
-  // Live chat alerts are spoken from the main window only (no duplicates from other windows).
   const voiceSettings = settings.data?.voice;
+  // Voice mode: this (main) window records and speaks for the main process, even while hidden.
+  useEffect(
+    () =>
+      subscribe('presence:command', (c) => {
+        const vs = voiceSettings;
+        if (c.type === 'voice_listen') {
+          void voice
+            .start({ autoStop: true })
+            .then((text) => invoke('voice:done', { id: c.id, text: text ?? null, reason: text ? 'ok' : voice.get().error ? 'error' : 'silence' }))
+            .catch(() => invoke('voice:done', { id: c.id, text: null, reason: 'error' }).catch(() => undefined));
+        } else if (c.type === 'voice_say') {
+          void voice
+            .speakAndWait(c.text, vs?.ttsEngine ?? 'system', vs?.systemVoice ?? '')
+            .finally(() => void invoke('voice:done', { id: c.id, text: null, reason: 'spoken' }).catch(() => undefined));
+        } else if (c.type === 'voice_cancel') {
+          voice.abort();
+          voice.stopSpeaking();
+        }
+      }),
+    [voiceSettings],
+  );
+  // Live chat alerts are spoken from the main window only (no duplicates from other windows).
   useEffect(
     () =>
       subscribe('presence:command', (c) => {

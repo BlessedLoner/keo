@@ -8,6 +8,9 @@ export const INVOKE_CHANNELS = [
   'app:openDataFolder',
   'app:openLink',
   'app:checkUpdate',
+  'app:installUpdate',
+  'diag:checkComputer',
+  'diag:report',
   'settings:get',
   'settings:update',
   'providers:list',
@@ -79,6 +82,9 @@ export const INVOKE_CHANNELS = [
   'wake:setMuted',
   'wake:testPhrase',
   'wake:learnSample',
+  'voice:done',
+  'voice:modeStart',
+  'voice:modeStop',
   'wake:forgetLearned',
   'wake:listenNow',
   'wake:cancelListen',
@@ -112,6 +118,7 @@ export const pushChannels = [
   'presence:command',
   'grants:changed',
   'livechat:changed',
+  'update:changed',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

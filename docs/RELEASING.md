@@ -21,12 +21,11 @@ If the repository or owner name differs, change `RELEASE` in `src/shared/release
    git tag v1.0.1
    git push origin main v1.0.1
    ```
-4. The *Release* workflow (Windows runner) checks that the tag matches `package.json`, runs typecheck, lint and tests, builds `Keo-Setup-1.0.1.exe`, and publishes it as a GitHub Release with notes. The download page links to it automatically; installed copies see the update within a day.
+4. The *Release* workflow (Windows runner) checks that the tag matches `package.json`, runs typecheck, lint and tests, builds `Keo-Setup-1.0.1.exe`, and publishes it as a GitHub Release with notes, together with `latest.yml` and `Keo-Setup-1.0.1.exe.blockmap`. The download page links to it automatically; installed copies (1.1.0 and later) download it in the background within a day and install it when Keo closes. Copies older than 1.1.0 only show an *Update available* chip, so their users install 1.1.0 once by hand.
 
 Do not mark releases as *pre-release*: the update check and the download button read GitHub's "latest release", which skips pre-releases.
 
 ## Later (v2.1 and beyond)
 
 - **Code signing** removes the *Windows protected your PC* warning: add the certificate as repository secrets and sign in the release workflow.
-- **Automatic install of updates**: replace the notifier with `electron-updater` (new dependency; publishes `latest.yml` alongside the installer).
 - **Accounts and payments**: needs a hosted backend, a privacy policy update and terms of use.

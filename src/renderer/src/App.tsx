@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { UpdateInfo } from '@shared/domain';
+import type { UpdateDownload, UpdateInfo } from '@shared/domain';
 import { Onboarding } from './components/Onboarding';
-import { invoke } from './lib/api';
+import { invoke, subscribe } from './lib/api';
 import { Icon } from './components/Icon';
 import { KeoEmblem, STATE_LABEL } from './components/KeoEmblem';
 import { useApp, type ViewId } from './state/AppState';
@@ -100,13 +100,45 @@ export function App() {
   );
 }
 
-/** "Update available" chip: checks GitHub Releases at most once a day (installed builds only). */
+/**
+ * Update chip: checks GitHub Releases at most once a day (installed builds
+ * only). The new version downloads in the background and installs when Keo
+ * closes, or right away with "Restart to update".
+ */
 function UpdateChip() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [dl, setDl] = useState<UpdateDownload | null>(null);
   useEffect(() => {
-    const t = setTimeout(() => void invoke('app:checkUpdate', { force: false }).then(setInfo).catch(() => undefined), 15_000);
-    return () => clearTimeout(t);
+    const t = setTimeout(
+      () =>
+        void invoke('app:checkUpdate', { force: false })
+          .then((u) => {
+            setInfo(u);
+            if (u?.download) setDl(u.download);
+          })
+          .catch(() => undefined),
+      15_000,
+    );
+    const off = subscribe('update:changed', setDl);
+    return () => {
+      clearTimeout(t);
+      off();
+    };
   }, []);
+  if (dl?.state === 'ready' && dl.version) {
+    return (
+      <button className="chip accent" onClick={() => void invoke('app:installUpdate', {})} title="Keo closes, installs the update (your settings and data are kept) and starts again">
+        <Icon name="download" size={12} /> Restart to update to {dl.version}
+      </button>
+    );
+  }
+  if (dl?.state === 'downloading') {
+    return (
+      <span className="chip" title="Downloading in the background; it installs when Keo closes">
+        <Icon name="download" size={12} /> Downloading {dl.version ?? 'update'}… {dl.percent ?? 0}%
+      </span>
+    );
+  }
   if (!info?.newer || !info.latest) return null;
   return (
     <button className="chip accent" onClick={() => void invoke('app:openLink', { id: 'releases' })} title={info.notes ?? 'Open the download page'}>

@@ -5,6 +5,7 @@ import type { InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc
 import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
 import { validateWakePhrase } from '../voice/wakeService';
+import { diagnosticReport } from '../desktop/diagnosticReport';
 import type { Services } from '../services';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +20,8 @@ export interface HostHooks {
   openExternal?(url: string): Promise<void>;
   /** Checks GitHub Releases (packaged app only unless forced); null when not applicable. */
   checkUpdate?(force: boolean): Promise<UpdateInfo | null>;
+  /** Restarts into a downloaded update; false when none is ready. */
+  installUpdate?(): boolean;
   pickExecutable(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
@@ -30,6 +33,8 @@ export interface HostHooks {
   companionDrag?(phase: 'start' | 'end'): void;
   shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   quit?(): void;
+  /** Connected displays (size and scaling only). */
+  displays?(): Array<{ width: number; height: number; scale: number; primary: boolean }>;
 }
 
 /**
@@ -42,6 +47,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const wakeStatus = async () => ({
     ...s.wake.getState(),
     recognizers: await s.wake.recognizers(),
+    engine: s.wake.engineInfo(),
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
   const webStatus = () => {
@@ -62,6 +68,30 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       if (!host.openExternal) return { opened: false };
       await host.openExternal(LINKS[id]);
       return { opened: true };
+    },
+    'app:installUpdate': () => ({ started: host.installUpdate?.() ?? false }),
+    'diag:checkComputer': () => s.checkComputer(),
+    'diag:report': () => {
+      const info = host.appInfo();
+      const failures = s.tasks
+        .list(30)
+        .flatMap((t) => t.steps)
+        .filter((st) => st.state === 'failed' && st.errorCode)
+        .slice(0, 8)
+        .map((st) => ({ capabilityId: st.capabilityId, code: st.errorCode! }));
+      return {
+        text: diagnosticReport({
+          version: info.version,
+          packaged: info.packaged,
+          electron: info.electron,
+          settings: s.settings.get(),
+          providersWithKeys: (['anthropic', 'openai', 'openrouter', 'brave'] as const).filter((id) => s.secrets.has(id)),
+          speech: { ...s.wake.engineInfo(), wakeStatus: s.wake.getState().status },
+          displays: host.displays?.() ?? [],
+          selfTest: s.lastSelfTest,
+          recentFailures: failures,
+        }),
+      };
     },
     'app:checkUpdate': async ({ force }) => (force || s.settings.get().updates.check ? ((await host.checkUpdate?.(force)) ?? null) : null),
 
@@ -350,6 +380,18 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'wake:setMuted': async ({ muted }) => {
       await s.wake.setMuted(muted);
       return await wakeStatus();
+    },
+    'voice:done': ({ id, text, reason }) => {
+      s.voiceDone(id, text, reason);
+      return { ok: true as const };
+    },
+    'voice:modeStart': () => {
+      s.startVoiceMode();
+      return { ok: true as const };
+    },
+    'voice:modeStop': () => {
+      s.voiceMode.stop('stopped_by_user');
+      return { ok: true as const };
     },
     'wake:learnSample': async ({ phrase }) => {
       const r = await s.wake.learnSample(phrase);

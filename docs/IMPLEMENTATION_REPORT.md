@@ -94,6 +94,19 @@ Bugs found by the real e2e and fixed: Chromium names list items with their conca
 
 Bug found by the real e2e and fixed: a message arriving while Keo was verifying its own send was marked handled; now only messages up to Keo's reply count as handled.
 
+### Voice conversation, screen reading by voice, self-test and automatic updates
+
+| Check | Result |
+|---|---|
+| `tests/voicemode.test.ts` | 10/10: spoken conversation ends on “stop”; command with the wake phrase; two silences end it; short spoken answers requested from the model; approve by “yes please” / deny by “no”; *always ask* never approvable by voice; allowing a not-yet-allowed window by voice adds only that app (no control, no screenshots) and is never auto-approved by hands-free; wake paused and resumed; Stop everything |
+| `tests/selftest.test.ts` | 4/4 on the fake desktop: all steps pass and only the test window receives input, clipboard restored; failing step pinpointed with advice; early stop when focus is refused; diagnostic report has no keys, app names or typed text |
+| `tests/release.test.ts` | +3 updater tests: background download, ready notice, install only on request; setting respected, at most daily; failures reported without details; no updater in development |
+| Real self-test on this PC (`KEO_LIVE_SELFTEST=1`) | **first run failed at typing**: “abc 123” arrived as “bc 123” because the ALT tap used to win the foreground opened the test window's system menu. Fixed (masked ALT, menu-mode check); now 7/7 pass |
+| `npm run package:win` | builds `Keo-Setup-<version>.exe`, `.blockmap` and `latest.yml`; `app-update.yml` points at BlessedLoner/keo; `electron-updater` is inside `app.asar` |
+| Modern Windows speech helper | compiles (~4 s) and starts/pauses wake listening on this PC; recognition accuracy depends on the microphone and was not measured |
+
+Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
+
 ## 4. Integrations that require configuration (not live-verified)
 
 | Integration | Status |

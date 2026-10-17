@@ -62,6 +62,8 @@ Execution (`TaskOrchestrator`):
 - Key combinations exclude the Windows key. Text and key presses require approval every time. Because approval is given in Keo's own window, input actions first bring the re-validated target to the front as part of the approved operation, confirm it is the foreground window, and only then send input; if Windows refuses the switch the step fails with `focus_failed` and nothing is sent.
 - Launch is limited to executables the user registered through a file picker; no arguments, no shell (`shell: false`).
 - The helper is a fixed script embedded in Keo, rewritten from the bundle at each start and run with `-ExecutionPolicy Bypass` **for that child process only** (no system policy change). It is not a shell for the model.
+- Bringing a window to the front first tries without any key press; if Windows refuses, the helper taps ALT **masked by an unassigned key (VK 0xE8)**, so no window's menu opens and swallows the text that follows; if the window still ends up in menu mode, Escape is sent only then (checked with `GetGUIThreadInfo`).
+- **Check this computer** (Settings → Check & help) runs the same helper against a throw-away WinForms window Keo starts itself (separate PowerShell process, closes itself after 60 s). It types and pastes fixed test strings, restores the clipboard, and never touches other windows. The copyable diagnostic report lists versions, display sizes/scaling, switch states, counts and error codes only — no keys, chats, window titles, app names or typed text.
 - Not implemented on purpose: privilege elevation, credential entry, stealth/background input, remote control, network-accessible control endpoints, device pairing.
 
 ### 4a. UI Automation (element-level control)
@@ -109,9 +111,17 @@ Execution (`TaskOrchestrator`):
 
 - Wake word uses the local Windows (SAPI) recognizer through the fixed helper. Off by default; while on, audio is processed on this PC only and non-matching speech (including a competing dictation grammar used to reject near-misses) is discarded, never stored or sent. Command capture after the wake phrase is local, or OpenAI transcription only when that provider is configured **and** the transcription consent is given. Listening pauses during Keo's speech; muting is immediate.
 - The wake phrase only opens the command flow; it never approves anything. Spoken commands go through the same agent, capability and approval path as typed ones.
+- **Voice conversation** (after the wake phrase): Keo answers aloud and listens again until the user says stop, stays silent twice, or presses Stop / Stop everything. The wake listener is paused meanwhile. A pending approval can be answered by voice only for actions whose approval tier is not *always ask*; those (raw clicks, payments, deleting, sensitive buttons…) are announced and left for a click on screen. Voice approvals are audited as `approved_by_voice` / `denied_by_voice` and bound to the same input hash as a click.
+- **Allowing an app by voice** (`access.allow_app`): when the user asks about a window that is not allowed, the model may request access for exactly that window's process. It always needs the user's explicit yes (on screen or by voice) — the hands-free approval levels never run it — and it only adds that process to the allowed list and turns on observation (plus screenshots to the current provider only when the request says so and the preview discloses it). It never turns on desktop control or launch; every action inside the app still needs its own approval. The process name is re-read from the live window, never taken from the model.
 - Each window has a **role** checked on every IPC call (`ipc.role_rejected`): the companion may only read presence, stop, mute, open the main window/command bar and revoke grants; the command bar may additionally chat, see/approve/deny tasks (with the same hash binding) and use voice. Neither can change settings, permissions, keys, memory or desktop targets.
 - The companion is non-focusable, click-through except over its own controls, and shows only state, step title and target app name — never message or page contents.
 - The global shortcut is registered with `globalShortcut` only while enabled and is released when disabled or on quit; conflicts are reported, not forced.
+
+## 4g. Updates
+
+- Installed builds use `electron-updater` against this repository's GitHub Releases only (the feed is fixed at build time in `app-update.yml`; nothing in the app can change it). While *Keep Keo up to date* is on (default), Keo checks at most daily, downloads the new installer in the background, verifies it against the SHA-512 in `latest.yml`, and installs it when Keo closes or when the user clicks *Restart to update*. Turning the setting off stops checks and downloads.
+- The beta is not code-signed, so the updater cannot verify a publisher signature; integrity rests on HTTPS to GitHub and the hash in `latest.yml` from the same release. Code signing (see docs/RELEASING.md) would add publisher verification.
+- Update requests carry no user data. Development runs never update.
 
 ## 5. Vision
 

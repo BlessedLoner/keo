@@ -1,6 +1,6 @@
 # Keo
 
-**[Download Keo for Windows](https://blessedloner.github.io/keo/)** · free beta · Windows 10/11 (64-bit) · no account needed — bring your own AI key (OpenRouter, OpenAI, Anthropic) or use a local model. Run `Keo-Setup-<version>.exe`; this beta is not code-signed, so choose *More info → Run anyway* when Windows warns. A short welcome guides the setup. [Privacy note](https://blessedloner.github.io/keo/privacy.html)
+**[Download Keo for Windows](https://blessedloner.github.io/keo/)** · free beta · Windows 10/11 (64-bit) · no account needed — bring your own AI key (OpenRouter, OpenAI, Anthropic) or use a local model. Run `Keo-Setup-<version>.exe`; this beta is not code-signed, so choose *More info → Run anyway* when Windows warns. A short welcome guides the setup. Installed copies **update themselves**: new versions download in the background and install when Keo closes (or click *Restart to update*); turn this off in *Settings → Privacy & data*. [Privacy note](https://blessedloner.github.io/keo/privacy.html)
 
 Keo is a personal AI agent for Windows: a desktop app that talks with you, remembers what you confirm, tracks your projects, and acts on your computer **only through registered capabilities and only with your approval**.
 
@@ -30,6 +30,10 @@ node node_modules/electron/install.js
 ```
 
 Electron 44 does not download its runtime during `npm install`; the second command fetches it (needed for `npm run dev`, the checks and packaging).
+
+### Testing the latest code on a second PC
+
+You don't need to build an installer to try changes on another computer: clone the repository there (or `git pull` to update), run the two setup commands above, then `npm run dev`. A source run keeps its own settings in `%APPDATA%\Keo\dev`, separate from an installed Keo. If something works on one PC but not the other, open *Settings → Check & help → Run the check* on both and compare (or *Copy diagnostic report* — it contains versions, display scaling, which switches are on and error codes, never keys, chats or window titles).
 
 ## Run in the isolated development profile
 
@@ -138,7 +142,8 @@ The contact's messages are untrusted: they can only ever lead to a reply in that
 
 **Settings → Voice & shortcuts**
 
-- **Wake word** (off by default): uses the Windows speech recognizer on this PC. Default phrase “hey keo”; add your own (2–4 words) and press *Test* to check Windows understands it. Audio stays local; speech that isn't a wake phrase is discarded. Listening pauses while Keo speaks; mute any time with the mic chip in the title bar or the companion. After the wake phrase, your command is understood by Windows speech (offline) or OpenAI transcription (if configured and consented).
+- **Voice conversation**: after the wake phrase Keo stays in a spoken conversation — it answers out loud and listens again, like a voice assistant, until you say “stop”, “that's all”, “thanks Keo” or stay quiet twice (or press Stop). Say a command together with the wake phrase (“Hey Keo, what's on my screen?”) or after it. Approvals can be answered with “yes” / “no”, except actions that always need a click on screen (raw clicks, payments, deleting…). If the window you are talking about isn't allowed yet, Keo asks — by voice — to allow just that app, then reads it.
+- **Wake word** (off by default): uses the Windows speech recognizer on this PC (the modern Windows 10/11 recognizer when available, falling back to the classic one; choose under *Speech engine*). If it mishears your phrase, use *Teach Keo your voice*. Default phrase “hey keo”; add your own (2–4 words) and press *Test* to check Windows understands it. Audio stays local; speech that isn't a wake phrase is discarded. Listening pauses while Keo speaks; mute any time with the mic chip in the title bar or the companion. After the wake phrase, your command is understood by Windows speech (offline) or OpenAI transcription (if configured and consented).
 - **Command bar shortcut**: Ctrl+K by default opens a small command bar over any app (Enter to send, Esc to close). A global shortcut takes that key away from other apps while Keo runs (Ctrl+K is used by browsers, VS Code, Slack), so you can change it (Ctrl+Alt+K, Ctrl+Shift+Space, …) or turn it off; if another app already holds it, Settings says so.
 - **Floating companion**: a small emblem that always shows what Keo is really doing — idle, listening, understanding, planning, acting, verifying, waiting for your approval, speaking, cancelled, error — with the current step (e.g. “Pressing ‘Settings’ · WhatsApp”). It never takes keyboard focus. Hover for controls: open Keo, Stop everything, mute, command bar. Drag to move (position is remembered and kept on screen when monitors change). Respects *reduced motion*.
 
@@ -163,7 +168,11 @@ npm run package:dir   # unpacked app in release/win-unpacked (quick validation)
 npm run package:win   # NSIS installer release/Keo-Setup-<version>.exe
 ```
 
-Nothing is published (`--publish never`, no publish provider). Builds are unsigned unless you add a code-signing certificate.
+electron-builder never uploads anything (`--publish never`). The `publish` block in `electron-builder.yml` only tells installed copies where to look for updates (GitHub Releases of this repository); the release workflow uploads the installer with `latest.yml` and the `.blockmap`. Builds are unsigned unless you add a code-signing certificate.
+
+## Check this computer
+
+*Settings → Check & help → Run the check* opens Keo's own small test window for a few seconds and checks, step by step, that Keo can start its desktop helper, bring the window to the front, type, paste (your clipboard is restored), read it back and press a button. Each failing step comes with a likely cause. A developer can run the same check from a terminal with `KEO_LIVE_SELFTEST=1 npx vitest run tests/live-selftest.test.ts`.
 
 ## Layout
 

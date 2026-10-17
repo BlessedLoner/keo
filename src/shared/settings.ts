@@ -173,6 +173,8 @@ export const SettingsSchema = z
          * say the wake phrase ("Teach Keo your voice"), accepted as the phrase.
          */
         learned: z.array(z.string().trim().min(4).max(40)).max(20).default([]),
+        /** Speech engine: the modern Windows 10/11 recognizer (better with accents), or the classic one. */
+        engine: z.enum(['auto', 'modern', 'classic']).default('auto'),
         /** How a spoken command is turned into text after the wake phrase. */
         commandRecognizer: z.enum(['local', 'openai']).default('local'),
       })

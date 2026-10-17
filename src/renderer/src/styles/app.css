@@ -375,3 +375,5 @@ html.companion-root body, html.command-root body { overflow: hidden; }
 .onboarding-points { padding-left: 18px; display: flex; flex-direction: column; gap: 8px; line-height: 1.5; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
 kbd { padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; background: var(--bg-elev-2); }
+/* voice mode in the companion: captions wrap to two lines */
+.companion.voice .companion-activity { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

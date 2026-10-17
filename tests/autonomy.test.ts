@@ -544,7 +544,7 @@ describe('wake word and voice commands', () => {
     expect(h.services.presence.get().wake.muted).toBe(true);
   });
 
-  it('a detected wake phrase opens the command bar and sends the spoken command', async () => {
+  it('a detected wake phrase starts a voice conversation and sends the spoken command', async () => {
     const speech = new FakeSpeech();
     setup({ speech, script: () => reply('Here is your summary.') });
     let shown = 0;
@@ -553,7 +553,8 @@ describe('wake word and voice commands', () => {
     await waitFor(() => speech.cmds().includes('wake'));
     speech.fire({ event: 'wake', phrase: 'hey keo', confidence: 0.93 });
     await waitFor(() => speech.cmds().includes('capture'));
-    expect(shown).toBe(1);
+    expect(shown).toBe(0); // voice mode: no command bar pops up
+    expect(h.services.presence.get().voiceMode.active).toBe(true);
     expect(h.services.presence.get().state).toBe('listening');
     speech.fire({ event: 'command', text: 'summarize this page', confidence: 0.8 });
     const convId = () => h.services.settings.get().commandBar.conversationId;

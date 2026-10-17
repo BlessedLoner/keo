@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type {
   UpdateInfo,
+  SelfTestResult,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -40,6 +41,9 @@ export const invokeSchemas = {
   'app:openLink': z.object({ id: z.enum(LINK_IDS) }).strict(),
   'app:checkUpdate': z.object({ force: z.boolean().default(false) }).strict(),
   'app:openDataFolder': empty,
+  'app:installUpdate': empty,
+  'diag:checkComputer': empty,
+  'diag:report': empty,
 
   'settings:get': empty,
   'settings:update': z.object({ patch: z.record(z.string(), z.unknown()) }).strict(),
@@ -156,6 +160,9 @@ export const invokeSchemas = {
   'wake:setMuted': z.object({ muted: z.boolean() }).strict(),
   'wake:testPhrase': z.object({ phrase: z.string().trim().min(1).max(40) }).strict(),
   'wake:learnSample': z.object({ phrase: z.string().trim().min(2).max(40) }).strict(),
+  'voice:done': z.object({ id: z.string().regex(/^[vs][a-z0-9]{4,40}$/), text: z.string().max(4000).nullable(), reason: z.string().max(200) }).strict(),
+  'voice:modeStart': empty,
+  'voice:modeStop': empty,
   'wake:forgetLearned': empty,
   'wake:listenNow': empty,
   'wake:cancelListen': empty,
@@ -186,6 +193,9 @@ export interface InvokeOutputs {
   'app:openLink': { opened: boolean };
   'app:checkUpdate': UpdateInfo | null;
   'app:openDataFolder': { opened: boolean };
+  'app:installUpdate': { started: boolean };
+  'diag:checkComputer': SelfTestResult;
+  'diag:report': { text: string };
   'settings:get': Settings;
   'settings:update': Settings;
   'providers:list': ProviderInfo[];
@@ -257,6 +267,9 @@ export interface InvokeOutputs {
   'wake:setMuted': WakeStatusInfo;
   'wake:testPhrase': { ok: boolean; recognized: boolean; confidence: number; message: string };
   'wake:learnSample': { heard: string | null; added: string[]; alreadyRecognized: boolean; learned: string[] };
+  'voice:done': { ok: true };
+  'voice:modeStart': { ok: true };
+  'voice:modeStop': { ok: true };
   'wake:forgetLearned': { learned: string[] };
   'wake:listenNow': { text: string | null; reason: string; sent: boolean; conversationId: string | null };
   'wake:cancelListen': { ok: true };
@@ -293,6 +306,8 @@ export interface WakeStatusInfo {
   muted: boolean;
   recognizers: Array<{ culture: string; name: string }>;
   shortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  /** Speech engine in use ("modern" Windows 10/11 or "classic"), and why modern isn't, if it isn't. */
+  engine: { kind: string | null; fallbackReason: string | null };
 }
 
 export interface WebStatus {

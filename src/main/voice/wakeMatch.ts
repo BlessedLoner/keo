@@ -96,7 +96,8 @@ function restAfter(text: string, n: number): string {
  * Checks the recognizer's reading and its alternates. The wake phrase must be
  * at the start of what was heard; anything after it is the command.
  */
-export function matchWake(readings: string[], phrases: string[], learned: string[]): WakeMatch | null {
+export function matchWake(readings: string[], phrases: string[], learnedAll: string[]): WakeMatch | null {
+  const learned = usableLearned(learnedAll, phrases);
   const targets: Array<{ words: string[]; phrase: string; how: WakeMatch['how'] }> = [
     ...phrases.map((p) => ({ words: normWords(p), phrase: p, how: 'exact' as const })),
     ...learned.map((v) => ({ words: normWords(v), phrase: phrases[0] ?? v, how: 'learned' as const })),
@@ -121,6 +122,23 @@ export function matchWake(readings: string[], phrases: string[], learned: string
   return null;
 }
 
+/**
+ * Whether a learned version is a plausible mishearing of the phrase ("a cleo"
+ * for "hey keo"), not a different sound altogether ("but all" for "hi siri") —
+ * the latter would make ordinary speech wake Keo.
+ */
+export function plausibleVariant(variant: string, phrase: string): boolean {
+  const a = joinKey(normWords(variant));
+  const b = joinKey(normWords(phrase));
+  if (!a || !b) return false;
+  return editDistance(a, b) <= Math.max(1, Math.floor(Math.max(a.length, b.length) * 0.5));
+}
+
+/** Learned versions that are plausible for at least one of the phrases. */
+export function usableLearned(learned: string[], phrases: string[]): string[] {
+  return learned.filter((v) => phrases.some((p) => plausibleVariant(v, p)));
+}
+
 /** Common speech that must never become a learned wake variant. */
 const TOO_COMMON = /^(ok|okay|yes|no|yeah|hey|hi|hello|the|a|and|thanks|thank you|right|so|well|oh|uh|um)$/;
 
@@ -133,7 +151,7 @@ export function learnableVariants(readings: string[], phrase: string, existing: 
     const v = normWords(r).join(' ');
     if (!v || have.has(v) || out.includes(v)) continue;
     const words = v.split(' ');
-    if (words.length > 5 || v.length < 4 || v.length > 40 || TOO_COMMON.test(v)) continue;
+    if (words.length > 5 || v.length < 4 || v.length > 40 || TOO_COMMON.test(v) || !plausibleVariant(v, phrase)) continue;
     out.push(v);
   }
   return out;

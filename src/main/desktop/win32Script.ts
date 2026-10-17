@@ -105,6 +105,8 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+  [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO { public int cbSize; public int flags; public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret; public RECT rcCaret; }
+  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -197,11 +199,19 @@ public static class KeoWin {
   public static bool Focus(IntPtr h) {
     if (!IsWindow(h)) throw new Exception("target_gone");
     if (IsIconic(h)) ShowWindow(h, 9);
-    // A bare ALT tap lets this process take foreground rights (documented SetForegroundWindow rule).
-    Send(new List<INPUT> { Key(0x12, 0, 0), Key(0x12, 0, 2) });
     BringWindowToTop(h);
     SetForegroundWindow(h);
-    Thread.Sleep(100);
+    Thread.Sleep(60);
+    if (GetForegroundWindow() != h) {
+      // An ALT tap lets this process take foreground rights (documented
+      // SetForegroundWindow rule). A bare ALT release would open the menu of
+      // whichever window receives it (and swallow the next keys typed), so an
+      // unassigned key (VK 0xE8) is pressed in between to mask it.
+      Send(new List<INPUT> { Key(0x12, 0, 0), Key(0xE8, 0, 0), Key(0xE8, 0, 2), Key(0x12, 0, 2) });
+      BringWindowToTop(h);
+      SetForegroundWindow(h);
+      Thread.Sleep(100);
+    }
     if (GetForegroundWindow() != h) {
       // Fallback: share input state with the current foreground thread, which
       // Windows permits to hand over the foreground.
@@ -218,7 +228,25 @@ public static class KeoWin {
       AttachThreadInput(me, fgThread, false);
       Thread.Sleep(150);
     }
-    return GetForegroundWindow() == h;
+    if (GetForegroundWindow() != h) return false;
+    LeaveMenuMode(h);
+    return true;
+  }
+
+  // If the window is in menu mode (its menu or system menu was activated),
+  // close it so typed keys reach the document instead of menu shortcuts.
+  // Escape is sent only when Windows reports menu mode.
+  static void LeaveMenuMode(IntPtr h) {
+    uint pidUnused;
+    uint thread = GetWindowThreadProcessId(h, out pidUnused);
+    for (int i = 0; i < 2; i++) {
+      var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+      if (!GetGUIThreadInfo(thread, ref gi)) return;
+      // GUI_INMENUMODE 0x4, GUI_SYSTEMMENUMODE 0x8, GUI_POPUPMENUMODE 0x10
+      if ((gi.flags & 0x1C) == 0) return;
+      Send(new List<INPUT> { Key(0x1B, 0, 0), Key(0x1B, 0, 2) });
+      Thread.Sleep(60);
+    }
   }
 
   public static void RequireForeground(IntPtr h) {

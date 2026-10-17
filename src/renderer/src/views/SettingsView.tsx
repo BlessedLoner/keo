@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ProviderDiagnostic, ProviderInfo } from '@shared/domain';
+import type { ProviderDiagnostic, ProviderInfo, SelfTestResult } from '@shared/domain';
 import type { WakeStatusInfo, WebStatus } from '@shared/ipc';
 import { subscribe } from '../lib/api';
 import type { Settings } from '@shared/settings';
@@ -9,7 +9,7 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 
-type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'appearance' | 'data';
+type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'appearance' | 'data' | 'help';
 
 export function SettingsView() {
   const app = useApp();
@@ -36,6 +36,7 @@ export function SettingsView() {
               ['agent', 'Agent'],
               ['appearance', 'Appearance'],
               ['data', 'Privacy & data'],
+              ['help', 'Check & help'],
             ] as Array<[Section, string]>
           ).map(([k, l]) => (
             <button key={k} role="tab" aria-selected={section === k} onClick={() => setSection(k)}>
@@ -64,6 +65,8 @@ export function SettingsView() {
           <Agent s={s} patch={patch} />
         ) : section === 'appearance' ? (
           <Appearance s={s} patch={patch} />
+        ) : section === 'help' ? (
+          <CheckComputer />
         ) : (
           <Data s={s} patch={patch} />
         )}
@@ -504,6 +507,21 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
             <span className="hint">For the exact phrase. Higher means fewer accidental wakes from TV or conversation. Sound-alikes and learned versions of your voice are accepted regardless.</span>
           </div>
           <div className="field">
+            <label htmlFor="wake-engine">Speech engine</label>
+            <select id="wake-engine" className="select" value={w.engine} onChange={(e) => void patch({ wake: { engine: e.target.value } })}>
+              <option value="auto">Automatic (modern Windows engine when available)</option>
+              <option value="modern">Modern Windows 10/11 engine</option>
+              <option value="classic">Classic Windows engine</option>
+            </select>
+            <span className="hint">
+              {status?.engine.kind === 'modern'
+                ? 'Using the modern engine (the one behind Windows voice typing) — best with accents.'
+                : status?.engine.kind === 'classic'
+                  ? `Using the classic engine${status.engine.fallbackReason ? ` (modern unavailable: ${status.engine.fallbackReason.slice(0, 120)})` : ''}.`
+                  : 'Starts when the wake word is turned on.'}
+            </span>
+          </div>
+          <div className="field">
             <label htmlFor="wake-lang">Language</label>
             <select id="wake-lang" className="select" value={w.culture} onChange={(e) => void patch({ wake: { culture: e.target.value } })}>
               {(status?.recognizers ?? [{ culture: w.culture, name: '' }]).map((r) => (
@@ -807,6 +825,68 @@ function Appearance({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
+/** "Check this computer": a self-test on a throw-away window, and a copyable report without personal content. */
+function CheckComputer() {
+  const ui = useUi();
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<SelfTestResult | null>(null);
+  const run = async () => {
+    setRunning(true);
+    try {
+      setResult(await invoke('diag:checkComputer', {}));
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      const { text } = await invoke('diag:report', {});
+      await navigator.clipboard.writeText(text);
+      ui.toast('Report copied — paste it where you ask for help', 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <section className="card">
+      <h2>Check this computer</h2>
+      <p className="muted small">
+        If Keo opens apps but can’t type, paste or click, run this. Keo opens its own small test window for about ten seconds, types and pastes into it, reads it back and presses a button — none of your apps are touched and your clipboard is put back. Please don’t use the mouse or keyboard while it runs.
+      </p>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn sm" disabled={running} onClick={() => void run()}>
+          {running ? (
+            <>
+              <span className="spinner" /> Checking…
+            </>
+          ) : (
+            'Run the check'
+          )}
+        </button>
+        <button className="btn sm ghost" onClick={() => void copy()}>
+          Copy diagnostic report
+        </button>
+      </div>
+      {result && (
+        <div className="stack" style={{ marginTop: 12, gap: 4 }} aria-live="polite">
+          <strong>{result.ok ? 'Everything works on this computer.' : 'Something is blocking Keo.'}</strong>
+          {result.steps.map((st) => (
+            <div key={st.id} className="small">
+              {st.ok ? '✓' : '✗'} {st.title} <span className="muted">— {st.detail}</span>
+            </div>
+          ))}
+          {result.advice && <p className="small">{result.advice}</p>}
+        </div>
+      )}
+      <p className="hint" style={{ marginTop: 8 }}>
+        The report lists versions, displays, which switches are on and error codes — no API keys, chats, window titles or anything you typed.
+      </p>
+    </section>
+  );
+}
+
 function Data({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [info, setInfo] = useState<{ path: string } | null>(null);
@@ -814,9 +894,9 @@ function Data({ s, patch }: { s: Settings; patch: Patch }) {
     <>
       <section className="card">
         <h2>Updates</h2>
-        <Toggle checked={s.updates.check} onChange={(v) => void patch({ updates: { check: v } })} label="Check for new Keo versions once a day (asks GitHub; nothing about you is sent)" />
+        <Toggle checked={s.updates.check} onChange={(v) => void patch({ updates: { check: v } })} label="Keep Keo up to date: check once a day, download new versions in the background and install them when Keo closes (asks GitHub; nothing about you is sent)" />
         <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn sm" onClick={() => void invoke('app:checkUpdate', { force: true }).then((u) => alert(!u ? 'Update checks run in the installed app.' : u.error ? u.error : u.newer ? `Keo ${u.latest} is available.` : `You have the latest Keo (${u.current}).`))}>
+          <button className="btn sm" onClick={() => void invoke('app:checkUpdate', { force: true }).then((u) => alert(!u ? 'Update checks run in the installed app.' : u.error ? u.error : u.download?.state === 'ready' ? `Keo ${u.download.version} is downloaded — use “Restart to update” at the top.` : u.download?.state === 'downloading' ? `Downloading Keo ${u.latest}… it installs when Keo closes.` : u.newer ? `Keo ${u.latest} is available.` : `You have the latest Keo (${u.current}).`))}>
             Check now
           </button>
           <button className="btn sm ghost" onClick={() => void invoke('app:openLink', { id: 'privacy' })}>

@@ -26,6 +26,7 @@ export class PresenceService {
   private grants = 0;
   private live: Presence['liveChats'] = { active: 0, waiting: 0, firstWaiting: null, ready: 0, firstReady: null };
   private autonomy: AutonomyLevel = 'always_ask';
+  private voiceMode: Presence['voiceMode'] = { active: false, state: 'off', heard: null, said: null };
   private transient: { state: 'cancelled' | 'error'; until: number } | null = null;
   private timer: NodeJS.Timeout | null = null;
   private last = '';
@@ -77,6 +78,11 @@ export class PresenceService {
     this.schedule();
   }
 
+  setVoiceMode(v: Presence['voiceMode']): void {
+    this.voiceMode = { ...v };
+    this.schedule();
+  }
+
   setAutonomy(level: AutonomyLevel): void {
     this.autonomy = level;
     this.schedule();
@@ -121,6 +127,9 @@ export class PresenceService {
     if (this.transient?.state === 'error') {
       state = 'error';
       activity = 'Something went wrong — see Keo';
+    } else if (this.voiceMode.active && this.voiceMode.state === 'confirming') {
+      state = 'awaiting_approval';
+      activity = 'Say yes or no';
     } else if (this.approvals.count > 0) {
       state = 'awaiting_approval';
       activity = this.approvals.first ? `Needs your approval: ${label(this.approvals.first.capabilityId, this.approvals.first.app)}` : 'Needs your approval';
@@ -130,9 +139,9 @@ export class PresenceService {
     } else if (this.live.ready > 0) {
       state = 'awaiting_approval';
       activity = this.live.firstReady ? `Reply to ${this.live.firstReady.contact} ready: Send now?` : 'A reply is ready';
-    } else if (this.voice.recording || this.wake.status === 'capturing') {
+    } else if (this.voice.recording || this.wake.status === 'capturing' || (this.voiceMode.active && this.voiceMode.state === 'listening')) {
       state = 'listening';
-      activity = 'Listening…';
+      activity = this.voiceMode.active ? 'Listening — say “stop” to end' : 'Listening…';
     } else if (this.voice.speaking) {
       state = 'speaking';
       activity = 'Speaking';
@@ -169,6 +178,7 @@ export class PresenceService {
       grants: this.grants,
       liveChats: { ...this.live, firstReady: this.live.firstReady ? { ...this.live.firstReady } : null },
       autonomy: this.autonomy,
+      voiceMode: { ...this.voiceMode },
       updatedAt: new Date(t).toISOString(),
     };
   }

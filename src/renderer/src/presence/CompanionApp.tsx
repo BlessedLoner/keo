@@ -37,10 +37,25 @@ export function CompanionApp() {
   const wake = p?.wake;
   const wakeLabel = !wake || !wake.enabled ? null : wake.muted ? 'Mic muted' : wake.status === 'listening' ? `Listening for “${wake.phrase ?? 'Hey Keo'}”` : wake.status === 'capturing' ? 'Hearing you…' : wake.message ?? wake.status;
 
+  const vm = p?.voiceMode;
+  const voiceLine = !vm?.active
+    ? null
+    : vm.state === 'listening'
+      ? vm.heard
+        ? `You: “${vm.heard}” — listening…`
+        : 'Listening… say “stop” to end'
+      : vm.state === 'speaking' && vm.said
+        ? `Keo: ${vm.said}`
+        : vm.state === 'confirming'
+          ? 'Say yes or no'
+          : vm.heard
+            ? `You: “${vm.heard}”`
+            : 'Thinking…';
+
   return (
     <div className="companion-stage">
       <div
-        className={`companion ${hover ? 'expanded' : ''} state-${state}`}
+        className={`companion ${hover || vm?.active ? 'expanded' : ''} ${vm?.active ? 'voice' : ''} state-${state}`}
         onMouseEnter={() => {
           setHover(true);
           setInteractive(true);
@@ -79,7 +94,16 @@ export function CompanionApp() {
             {STATE_LABEL[state]}
             {!!p?.pendingApprovals && <span className="badge">{p.pendingApprovals}</span>}
           </div>
-          <div className="companion-activity">{p?.activity ?? wakeLabel ?? 'Ctrl+K to ask'}</div>
+          <div className="companion-activity" title={voiceLine ?? undefined}>
+            {voiceLine ?? p?.activity ?? wakeLabel ?? 'Ctrl+K to ask'}
+          </div>
+          {vm?.active && !hover && (
+            <div className="companion-actions">
+              <button className="cbtn danger" aria-label="End voice conversation" title="End voice conversation" onClick={() => void invoke('voice:modeStop')}>
+                <Icon name="stop" size={14} />
+              </button>
+            </div>
+          )}
           {hover && (
             <div className="companion-actions">
               <button className="cbtn" aria-label="Open Keo" title="Open Keo" onClick={() => void invoke('presence:openMain', { view: p?.pendingApprovals ? 'tasks' : 'chat' })}>
@@ -93,6 +117,15 @@ export function CompanionApp() {
                   onClick={() => void invoke('livechat:sendNow', { id: p.liveChats.firstReady!.id })}
                 >
                   <Icon name="send" size={14} />
+                </button>
+              )}
+              {vm?.active ? (
+                <button className="cbtn danger" aria-label="End voice conversation" title="End voice conversation" onClick={() => void invoke('voice:modeStop')}>
+                  <Icon name="mic" size={14} />
+                </button>
+              ) : (
+                <button className="cbtn primary" aria-label="Talk to Keo" title="Talk to Keo (voice conversation)" onClick={() => void invoke('voice:modeStart')}>
+                  <Icon name="mic" size={14} />
                 </button>
               )}
               <button className="cbtn" aria-label="Command bar" title="Command bar" onClick={() => void invoke('commandBar:show')}>

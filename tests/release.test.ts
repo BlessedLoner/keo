@@ -56,3 +56,77 @@ describe('release & updates', () => {
     expect(Object.values(LINKS).every((u) => u.startsWith('https://'))).toBe(true);
   });
 });
+
+describe('automatic updates', () => {
+  class FakeUpdater {
+    autoDownload = false;
+    autoInstallOnAppQuit = false;
+    handlers = new Map<string, (a?: unknown) => void>();
+    checks = 0;
+    installed: unknown[] = [];
+    on(event: string, fn: (a: never) => void) {
+      this.handlers.set(event, fn as (a?: unknown) => void);
+      return this;
+    }
+    emit(event: string, a?: unknown) {
+      this.handlers.get(event)?.(a);
+    }
+    async checkForUpdates() {
+      this.checks++;
+    }
+    quitAndInstall(...args: unknown[]) {
+      this.installed.push(args);
+    }
+  }
+
+  it('downloads in the background, announces once ready, and installs only on request', async () => {
+    const { AutoUpdate } = await import('../src/main/updates/autoUpdate');
+    const u = new FakeUpdater();
+    const states: string[] = [];
+    const ready: string[] = [];
+    const now = 0;
+    const a = new AutoUpdate(u, () => true, log, (s) => states.push(s.state), (v) => ready.push(v), () => now);
+    expect(a.install()).toBe(false); // nothing downloaded yet
+    await a.check();
+    expect(u.autoDownload).toBe(true);
+    expect(u.autoInstallOnAppQuit).toBe(true);
+    u.emit('update-available', { version: '1.2.0' });
+    u.emit('download-progress', { percent: 42.4 });
+    expect(a.status()).toMatchObject({ state: 'downloading', version: '1.2.0', percent: 42 });
+    u.emit('update-downloaded', { version: '1.2.0' });
+    expect(ready).toEqual(['1.2.0']);
+    expect(u.installed).toEqual([]);
+    await a.check(true); // no re-check once ready
+    expect(u.checks).toBe(1);
+    expect(a.install()).toBe(true);
+    expect(u.installed).toEqual([[false, true]]);
+    expect(states).toEqual(['downloading', 'downloading', 'ready']);
+  });
+
+  it('respects the setting, checks at most daily, and reports failures without details', async () => {
+    const { AutoUpdate } = await import('../src/main/updates/autoUpdate');
+    const u = new FakeUpdater();
+    let on = false;
+    let now = 0;
+    const a = new AutoUpdate(u, () => on, log, () => undefined, () => undefined, () => now);
+    await a.check(true);
+    expect(u.checks).toBe(0);
+    on = true;
+    await a.check();
+    await a.check();
+    expect(u.checks).toBe(1);
+    now += 25 * 60 * 60 * 1000;
+    await a.check();
+    expect(u.checks).toBe(2);
+    u.emit('error', new Error('net::ERR_INTERNET_DISCONNECTED at https://x'));
+    expect(a.status()).toMatchObject({ state: 'failed' });
+    expect(a.status().error).not.toMatch(/net::|https/);
+  });
+
+  it('a development run has no updater', async () => {
+    const { AutoUpdate } = await import('../src/main/updates/autoUpdate');
+    const a = new AutoUpdate(null, () => true, log, () => undefined, () => undefined);
+    expect((await a.check(true)).state).toBe('none');
+    expect(a.install()).toBe(false);
+  });
+});

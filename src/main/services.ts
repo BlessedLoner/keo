@@ -1,8 +1,12 @@
+import { AutoSpeechEngine, ModernSpeechEngine } from './voice/modernSpeech';
+import { VoiceMode } from './voice/voiceMode';
+import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type TestWindow } from './desktop/selfTest';
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
 import { AgentService } from './agent/agentService';
 import { advancedCapabilities } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
+import { accessCapabilities } from './capabilities/access';
 import { LiveChatService } from './livechat/liveChatService';
 import { builtinCapabilities, type CapabilityDeps, type PlanInput } from './capabilities/builtins';
 import { SnapshotStore } from './desktop/uia';
@@ -51,6 +55,10 @@ export interface ServiceDeps {
   logger?: Logger;
   /** Local speech engine (Windows SAPI helper in the app; a fake in tests). */
   speechEngine?: SpeechEngine;
+  /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
+  voiceIo?: { listen(): Promise<{ text: string | null; reason: string }>; speak(text: string): Promise<void> };
+  /** Throw-away window for "Check this computer" (tests use a fake). */
+  launchTestWindow?: (title: string) => TestWindow;
   /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
   liveChatTiming?: { pollMs?: number; debounceMs?: number; minGapMs?: number; sleep?: (ms: number) => Promise<void> };
 }
@@ -95,11 +103,18 @@ export class Services {
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
-  ui: { showCommandBar(): void; notify(title: string, body: string): void } = { showCommandBar: () => undefined, notify: () => undefined };
+  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void } = { showCommandBar: () => undefined, notify: () => undefined };
+  readonly voiceMode: VoiceMode;
+  /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
+  private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
   readonly agent: AgentService;
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
   private retentionTimer: NodeJS.Timeout | null = null;
+  private readonly clipboard: { readText(): Promise<string>; writeText(text: string): Promise<void> };
+  private readonly launchTestWindow: (title: string) => TestWindow;
+  private selfTestRunning: Promise<SelfTestReport> | null = null;
+  lastSelfTest: { at: string; report: SelfTestReport } | null = null;
 
   constructor(d: ServiceDeps) {
     this.profile = d.profile;
@@ -124,6 +139,8 @@ export class Services {
     this.voice = new VoiceService(this.providers.openai, getSettings, () => this.secrets.has('openai'), this.log);
     this.web = d.web ?? new WebService(() => this.secrets.get('brave'), this.log);
 
+    this.clipboard = d.clipboard ?? memoryClipboard();
+    this.launchTestWindow = d.launchTestWindow ?? launchPowerShellTestWindow;
     const capDeps: CapabilityDeps = {
       memory: this.memory,
       projects: this.projects,
@@ -137,7 +154,7 @@ export class Services {
       activeProviderId: () => getSettings().activeProvider,
       proposePlan: (plan, ctx) => this.proposePlan(plan, ctx),
       web: this.web,
-      clipboard: d.clipboard ?? memoryClipboard(),
+      clipboard: this.clipboard,
       findUserQuote: (conversationId, quote) => {
         const msgs = this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user');
         const hit = findQuote(msgs.map((m) => ({ id: m.id, text: m.content })), quote);
@@ -168,6 +185,7 @@ export class Services {
     for (const cap of [
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
+      ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
         live: this.live,
@@ -184,6 +202,8 @@ export class Services {
       const level = getSettings().autonomy.level;
       const tier = step.preview.autoTier ?? 'important';
       if (level === 'always_ask' || tier === 'always_ask') return null;
+      // Granting access always needs an explicit yes (on screen or by voice).
+      if (step.capabilityId.startsWith('access.')) return null;
       if (level === 'important_only' && tier !== 'routine') return null;
       // Only actions from a conversation with the user (where "named" can be checked) run without asking.
       if (task.origin === 'plan' || !task.conversationId) return null;
@@ -212,7 +232,12 @@ export class Services {
       },
     );
 
-    this.agent.systemExtra = () => this.live.agentContext() + this.activeWindowContext();
+    this.agent.systemExtra = () =>
+      this.live.agentContext() +
+      this.activeWindowContext() +
+      (this.voiceMode?.isActive()
+        ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Answer in one to three short, natural sentences (no lists, Markdown, tables or code unless asked — those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
+        : '');
     // Answers to a waiting live chat (and "stop" / "send it") go straight to it — never lost to a model
     // that only *says* it passed them on. The command bar (voice) may answer any running chat.
     this.agent.interceptor = (conversationId, text) => {
@@ -238,9 +263,39 @@ export class Services {
       this.presence.setGrants(list.length);
       this.push('grants:changed', { grants: list });
     });
-    this.wake = new WakeService(d.speechEngine ?? new PowerShellSpeechEngine(d.profile.runtimeDir), getSettings, this.log, {
+    this.wake = new WakeService(d.speechEngine ?? new AutoSpeechEngine(new ModernSpeechEngine(d.profile.runtimeDir), new PowerShellSpeechEngine(d.profile.runtimeDir), () => getSettings().wake.engine), getSettings, this.log, {
       onWake: (_phrase, rest) => void this.handleWake(rest),
       onState: (st) => this.presence.setWake({ status: st.status, message: st.message, muted: st.muted, listening: st.status === 'listening', enabled: getSettings().wake.enabled, phrase: getSettings().wake.phrases[0] ?? null }),
+    });
+    this.voiceMode = new VoiceMode({
+      listen: () => (d.voiceIo ? d.voiceIo.listen() : this.voiceListen()),
+      speak: (text) => (d.voiceIo ? d.voiceIo.speak(text) : this.voiceSpeak(text)),
+      send: (text) => {
+        try {
+          const sent = this.agent.send(this.commandConversation(), text);
+          this.push('conversations:changed', { conversationId: this.commandConversation() });
+          return sent;
+        } catch {
+          return null;
+        }
+      },
+      conversationId: () => this.commandConversation(),
+      tasks: this.tasks,
+      audit: this.audit,
+      log: this.log,
+      pauseWake: (p) => this.wake.setVoiceMode(p),
+      showApprovals: () => this.ui.showMain?.('tasks'),
+      changed: (v) => {
+        this.presence.setVoiceMode(v);
+        // Cancel a pending recording or speech when voice mode ends.
+        if (!v.active) {
+          for (const [, w] of this.voiceWaiters) w({ text: null, reason: 'cancelled' });
+          this.voiceWaiters.clear();
+          this.wake.cancelCapture();
+          this.push('presence:command', { type: 'stop_speaking' });
+          this.push('presence:command', { type: 'voice_cancel' });
+        }
+      },
     });
     let lastWake = JSON.stringify(this.settings.get().wake);
     this.settings.onChange((st) => {
@@ -306,6 +361,7 @@ export class Services {
       }
     }
     const revokedGrants = this.grants.revokeAll();
+    this.voiceMode.stop('stop_everything');
     const stoppedLiveChats = this.live.stopAll('Stopped with Stop everything');
     this.wake.cancelCapture();
     this.push('presence:command', { type: 'stop_speaking' });
@@ -327,20 +383,8 @@ export class Services {
 
   private async handleWake(rest = ''): Promise<void> {
     await this.noteActiveWindow();
-    this.ui.showCommandBar();
-    // "Hey Keo, look at line 10 …" in one breath: the rest is the command — no second listen.
-    if (rest.split(/\s+/).filter(Boolean).length >= 2) {
-      const conversationId = this.commandConversation();
-      this.push('presence:command', { type: 'transcript', text: rest, conversationId });
-      try {
-        this.agent.send(conversationId, rest).done.catch((e) => this.log.error('agent.unhandled', { error: String(e) }));
-        this.push('conversations:changed', { conversationId });
-      } catch (e) {
-        this.log.warn('wake.send_failed', { error: String(e) });
-      }
-      return;
-    }
-    await this.listenAndSend();
+    // Hands-free: talk with Keo by voice (no command bar); "stop" ends it.
+    this.voiceMode.start(rest);
   }
 
   /** The window the user was in when they called Keo (wake word or Ctrl+K), for "this", "here", "line 10"… */
@@ -368,7 +412,74 @@ export class Services {
     const target = JSON.stringify({ hwnd: w.hwnd, pid: w.pid, processName: w.processName });
     return w.allowed
       ? `\n\n# Where the user is\nWhen the user called Keo, the active window was “${w.title.slice(0, 120)}” (${w.processName}), target ${target}. Words like “this”, “here”, “the error”, “line 10”, “this page” refer to it. To look at it use desktop__inspect_window (or vision__observe_window for a picture; browser__read_page for a browser) with exactly this target.`
-      : `\n\n# Where the user is\nWhen the user called Keo, the active window was “${w.title.slice(0, 120)}” (${w.processName}), which is NOT in the allowed apps. If the request is about it, tell the user to allow ${w.processName} in Access first; do not try to read it.`;
+      : `\n\n# Where the user is\nWhen the user called Keo, the active window was “${w.title.slice(0, 120)}” (${w.processName}), target ${target}, which is NOT in the allowed apps yet. If the request is about it (“my screen”, “this”, “here”…), call access__allow_app with exactly this target and a short purpose — Keo asks the user (by voice in a voice conversation) — then read it with desktop__inspect_window (browser__read_page for a browser). Do not send the user to Settings, and do not try to read it before access is granted.`;
+  }
+
+  /** "Check this computer": focus, type, paste, read and click on a test window Keo opens itself. */
+  checkComputer(): Promise<SelfTestReport> {
+    if (this.selfTestRunning) return this.selfTestRunning;
+    this.audit.record({ kind: 'diagnostics.self_test', decision: 'started' });
+    this.selfTestRunning = runSelfTest({ backend: this.desktop.backend, launch: this.launchTestWindow, clipboard: this.clipboard })
+      .then((r) => {
+        this.lastSelfTest = { at: new Date().toISOString(), report: r };
+        this.audit.record({ kind: 'diagnostics.self_test', decision: r.ok ? 'passed' : 'failed', detail: { failed: r.steps.filter((s) => !s.ok).map((s) => s.id) } });
+        return r;
+      })
+      .finally(() => {
+        this.selfTestRunning = null;
+      });
+    return this.selfTestRunning;
+  }
+
+  /** Starts or stops voice mode from the UI (companion / title bar). */
+  startVoiceMode(): void {
+    void this.noteActiveWindow().finally(() => this.voiceMode.start());
+  }
+
+  /** One utterance for voice mode: OpenAI transcription in the main window when chosen, else Windows speech. */
+  private async voiceListen(): Promise<{ text: string | null; reason: string }> {
+    const s = this.settings.get();
+    if (s.wake.commandRecognizer === 'openai' && this.voice.sttStatus(s).available) {
+      const id = `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      return new Promise((resolve) => {
+        const t = setTimeout(() => {
+          this.voiceWaiters.delete(id);
+          resolve({ text: null, reason: 'silence' });
+        }, 60_000);
+        this.voiceWaiters.set(id, (v) => {
+          clearTimeout(t);
+          resolve(v);
+        });
+        this.push('presence:command', { type: 'voice_listen', id });
+      });
+    }
+    const r = await this.wake.capture();
+    if (!r.text && r.reason === 'online_speech_off') return { text: null, reason: 'Windows “Online speech recognition” is off — turn it on (Settings → Privacy & security → Speech) or choose OpenAI transcription' };
+    return r;
+  }
+
+  /** Speaks in the main window and resolves when playback ends (bounded by the text length). */
+  private voiceSpeak(text: string): Promise<void> {
+    const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this.voiceWaiters.delete(id);
+        resolve();
+      }, 4000 + text.length * 90);
+      this.voiceWaiters.set(id, () => {
+        clearTimeout(t);
+        resolve();
+      });
+      this.push('presence:command', { type: 'voice_say', id, text });
+    });
+  }
+
+  /** The main window reports a finished recording or utterance. */
+  voiceDone(id: string, text: string | null, reason: string): void {
+    const w = this.voiceWaiters.get(id);
+    if (!w) return;
+    this.voiceWaiters.delete(id);
+    w({ text, reason });
   }
 
   /** Captures one spoken command (locally or via the command bar's recorder) and sends it. */
@@ -379,7 +490,13 @@ export class Services {
       this.push('presence:command', { type: 'record_command' });
       return { text: null, reason: 'recording_in_command_bar', sent: false, conversationId: null };
     }
-    const r = await this.wake.capture();
+    let r = await this.wake.capture();
+    // The modern engine's dictation needs Windows' online speech; use OpenAI if available, else say so.
+    if (!r.text && r.reason === 'online_speech_off' && this.voice.sttStatus(s).available) {
+      this.push('presence:command', { type: 'record_command' });
+      return { text: null, reason: 'recording_in_command_bar', sent: false, conversationId: null };
+    }
+    if (!r.text && r.reason === 'online_speech_off') r = { text: null, reason: 'Turn on Windows “Online speech recognition” (Settings → Privacy & security → Speech) or choose OpenAI transcription for commands.' };
     if (!r.text) {
       this.push('presence:command', { type: 'listen_result', reason: r.reason });
       return { ...r, sent: false, conversationId: null };
@@ -495,6 +612,7 @@ export class Services {
 
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.voiceMode.stop('closing');
     this.wake.stop();
     this.live.stopAll('Keo was closed');
     this.grants.revokeAll();

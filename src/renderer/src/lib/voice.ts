@@ -243,6 +243,15 @@ class VoiceController {
     }
   }
 
+  /** Speaks and resolves once playback has finished (or failed). */
+  async speakAndWait(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<void> {
+    await this.speak(text, engine === 'none' ? 'system' : engine, systemVoice);
+    const started = performance.now();
+    // Wait for speech to begin (system voices start asynchronously), then for it to end.
+    while (!this.state.speaking && performance.now() - started < 2500) await new Promise((r) => setTimeout(r, 50));
+    while (this.state.speaking && performance.now() - started < 120_000) await new Promise((r) => setTimeout(r, 100));
+  }
+
   stopSpeaking(): void {
     if ('speechSynthesis' in window) speechSynthesis.cancel();
     if (this.audio) {

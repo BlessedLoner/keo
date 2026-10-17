@@ -1,7 +1,7 @@
 # Builds, checks and publishes the Windows installer when a version tag is pushed:
 #   git tag v1.0.0 && git push origin v1.0.0
-# The installer appears on GitHub Releases, where the download page and Keo's
-# update check find it. Nothing runs on other pushes.
+# The installer appears on GitHub Releases, where the download page finds it;
+# latest.yml and the .blockmap let installed copies update themselves. Nothing runs on other pushes.
 name: Release
 
 on:
@@ -51,13 +51,14 @@ jobs:
           check lint npm run lint
           check test npm test
           check package npm run package:win
+          check update-files test -f release/latest.yml
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/Keo-Setup-*.exe \
+          gh release create "$GITHUB_REF_NAME" release/Keo-Setup-*.exe release/Keo-Setup-*.exe.blockmap release/latest.yml \
             --title "Keo $GITHUB_REF_NAME" \
             --notes "Download **Keo-Setup-${GITHUB_REF_NAME#v}.exe** below and run it. This beta is not code-signed: Windows shows *Windows protected your PC* — choose *More info → Run anyway*. Your data and settings are kept when you install over an older version." \
             --generate-notes

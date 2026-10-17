@@ -356,6 +356,8 @@ export interface Presence {
   /** Live chats: how many are running and how many wait for the user. */
   liveChats: { active: number; waiting: number; firstWaiting: string | null; ready: number; firstReady: { id: string; contact: string } | null };
   autonomy: AutonomyLevel;
+  /** Hands-free conversation after the wake word. */
+  voiceMode: { active: boolean; state: 'off' | 'listening' | 'thinking' | 'speaking' | 'confirming'; heard: string | null; said: string | null };
   updatedAt: ISODate;
 }
 
@@ -473,6 +475,15 @@ export interface UpdateInfo {
   url: string;
   notes: string | null;
   error: string | null;
+  /** Background download of the new version (installed builds). */
+  download?: UpdateDownload;
+}
+
+export interface UpdateDownload {
+  state: 'none' | 'downloading' | 'ready' | 'failed';
+  version: string | null;
+  percent: number | null;
+  error: string | null;
 }
 
 export interface AppInfo {
@@ -503,3 +514,21 @@ export type AgentEvent =
   | { type: 'tool_activity'; conversationId: string; messageId: string; activity: ToolActivity }
   | { type: 'phase'; conversationId: string; messageId: string; phase: AgentPhase }
   | { type: 'turn_finished'; conversationId: string; message: Message };
+
+// ---------------------------------------------------------------------------
+// "Check this computer" self-test
+
+export interface SelfTestStep {
+  id: 'helper' | 'window' | 'focus' | 'type' | 'paste' | 'read' | 'click';
+  title: string;
+  ok: boolean;
+  ms: number;
+  detail: string;
+}
+
+export interface SelfTestResult {
+  ok: boolean;
+  steps: SelfTestStep[];
+  /** One-line hint for the first failing step. */
+  advice: string | null;
+}

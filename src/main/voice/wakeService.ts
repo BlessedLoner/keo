@@ -5,7 +5,7 @@ import readline from 'node:readline';
 import type { Settings } from '../../shared/settings';
 import type { Logger } from '../logging/logger';
 import { SPEECH_HELPER_SCRIPT } from './speechScript';
-import { learnableVariants, matchWake, normWords, soundKey } from './wakeMatch';
+import { learnableVariants, matchWake, normWords, soundKey, usableLearned } from './wakeMatch';
 
 export type SpeechEvent =
   | { event: 'ready' }
@@ -20,7 +20,8 @@ export type SpeechEvent =
   | { event: 'command'; text: string; confidence: number }
   | { event: 'command_none'; reason: string }
   | { event: 'capture_cancelled' }
-  | { event: 'capture_error'; message: string }
+  | { event: 'capture_error'; message: string; code?: string }
+  | { event: 'quality'; problem: string }
   | { event: 'testing' }
   | { event: 'test_result'; recognized: boolean; confidence: number; heardSomething: boolean; text?: string | null; alts?: string[]; grammar?: string | null }
   | { event: 'recognizers'; list: Array<{ culture: string; name: string }> }
@@ -115,6 +116,10 @@ export class WakeService {
   private pendingCapture: ((r: { text: string | null; reason: string }) => void) | null = null;
   private pendingTest: ((r: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar?: string | null }) => void) | null = null;
   private lastHeardNote = 0;
+  /** Engine preference the running helper was started with (switching restarts it). */
+  private enginePref: string | null = null;
+  /** Voice mode is running: the wake listener stays paused (captures still work). */
+  private voicePaused = false;
   private resumeTimer: NodeJS.Timeout | null = null;
   private lastWakeAt = 0;
   private recognizerCache: Array<{ culture: string; name: string }> | null = null;
@@ -136,8 +141,21 @@ export class WakeService {
     return { ...this.state, muted: this.muted };
   }
 
+  /** Which engine runs ("modern"/"classic") and why the modern one was not used, if it wasn't. */
+  engineInfo(): { kind: string | null; fallbackReason: string | null } {
+    const e = this.engine as { kind?: string | null; fallbackReason?: string | null };
+    return { kind: e.kind ?? null, fallbackReason: e.fallbackReason ?? null };
+  }
+
   private async ensure(): Promise<boolean> {
+    const pref = this.getSettings().wake.engine;
+    if (this.started && this.enginePref !== null && pref !== this.enginePref) {
+      this.engine.stop();
+      this.started = false;
+      this.recognizerCache = null; // each engine has its own languages
+    }
     if (this.started) return true;
+    this.enginePref = pref;
     this.set({ status: 'starting', message: null });
     try {
       await this.engine.start(
@@ -161,6 +179,7 @@ export class WakeService {
   /** Applies current settings: starts, restarts or stops wake listening. */
   async apply(): Promise<void> {
     const w = this.getSettings().wake;
+    if (this.voicePaused) return;
     if (!w.enabled || this.muted) {
       if (this.started) this.engine.send({ cmd: 'pause' });
       this.set({ status: 'off', message: this.muted ? 'Microphone muted.' : null });
@@ -169,6 +188,14 @@ export class WakeService {
     if (!(await this.ensure())) return;
     if (this.pausedForSpeech) return;
     this.engine.send({ cmd: 'wake', phrases: this.grammarPhrases(), culture: w.culture, threshold: w.sensitivity });
+  }
+
+  /** Voice mode on/off: pause wake listening during the conversation, resume afterwards. */
+  setVoiceMode(active: boolean): void {
+    this.voicePaused = active;
+    if (active) {
+      if (this.started && this.state.status === 'listening') this.engine.send({ cmd: 'pause' });
+    } else void this.apply();
   }
 
   setMuted(m: boolean): Promise<void> {
@@ -222,7 +249,7 @@ export class WakeService {
   /** The phrases plus the learned versions of the user's voice, as recognizer grammar. */
   private grammarPhrases(): string[] {
     const w = this.getSettings().wake;
-    return [...new Set([...w.phrases, ...w.learned].map((p) => normWords(p).join(' ')).filter((p) => p.length >= 4))];
+    return [...new Set([...w.phrases, ...usableLearned(w.learned, w.phrases)].map((p) => normWords(p).join(' ')).filter((p) => p.length >= 4))];
   }
 
   /** Listens once and reports whether Keo would have woken up, and what it heard. */
@@ -291,6 +318,22 @@ export class WakeService {
       case 'wake_rejected':
         this.log.debug('wake.rejected_low_confidence', { confidence: e.confidence });
         break;
+      case 'quality': {
+        const tip: Record<string, string> = {
+          TooQuiet: 'Your voice is very quiet — speak up or move closer to the microphone.',
+          TooLoud: 'The microphone is too loud — lower its level in Windows sound settings.',
+          TooNoisy: 'It is noisy around you; Keo may miss the wake phrase.',
+          TooFast: 'Speak a little slower so Keo can catch the wake phrase.',
+          TooSlow: 'Speak a little faster.',
+          NoSignal: 'No audio is reaching Keo. Check the microphone and Windows Settings → Privacy → Microphone (allow desktop apps).',
+        };
+        const m = tip[e.problem];
+        if (m && Date.now() - this.lastHeardNote > 8000) {
+          this.lastHeardNote = Date.now();
+          this.set({ status: this.state.status, message: m });
+        }
+        break;
+      }
       case 'silent_input':
         this.set({ status: 'listening', message: 'No audio is reaching Keo. Check the microphone and Windows Settings → Privacy → Microphone (allow desktop apps).' });
         break;
@@ -307,7 +350,7 @@ export class WakeService {
         const r =
           e.event === 'command'
             ? { text: e.text.trim(), reason: 'ok' }
-            : { text: null, reason: e.event === 'command_none' ? e.reason : e.event === 'capture_error' ? 'error' : 'cancelled' };
+            : { text: null, reason: e.event === 'command_none' ? e.reason : e.event === 'capture_error' ? (e.code === 'online_speech_off' ? 'online_speech_off' : 'error') : 'cancelled' };
         this.log.info('wake.capture_done', { reason: r.reason, chars: r.text?.length ?? 0 });
         this.pendingCapture?.(r);
         this.pendingCapture = null;
@@ -330,7 +373,9 @@ export class WakeService {
             ? 'No microphone is available (or Windows blocks microphone access for desktop apps).'
             : e.code === 'no_recognizer'
               ? `No Windows speech recognizer is installed for ${this.getSettings().wake.culture}. Install the language's speech pack in Windows Settings → Time & language → Speech.`
-              : (e.message ?? e.code);
+              : e.code === 'online_speech_off'
+                ? 'Windows “Online speech recognition” is off, so free dictation is unavailable. Turn it on in Windows Settings → Privacy & security → Speech, or choose OpenAI transcription for commands.'
+                : (e.message ?? e.code);
         this.log.warn('wake.error', { code: e.code });
         this.set({ status: 'error', message: msg });
         this.pendingCapture?.({ text: null, reason: e.code });

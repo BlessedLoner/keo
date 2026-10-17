@@ -1,5 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
+import { AutoUpdate } from './updates/autoUpdate';
+import { autoUpdater } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pushChannels } from '../shared/ipc';
@@ -182,6 +184,7 @@ function push(channel: string, payload: unknown): void {
 }
 
 let presenceWindows: PresenceWindows | null = null;
+let autoUpdate: AutoUpdate | null = null;
 
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
@@ -215,6 +218,17 @@ app.whenReady().then(() => {
       logger: log,
     });
     services.setPush(push);
+    const svcForUpdates = services;
+    // Installed builds only: a development run has no installer to update.
+    autoUpdate = new AutoUpdate(
+      app.isPackaged ? autoUpdater : null,
+      () => svcForUpdates.settings.get().updates.check,
+      log,
+      (st) => push('update:changed', st),
+      (version) => svcForUpdates.ui.notify('Keo update ready', `Keo ${version} is downloaded. It installs when you close Keo, or choose “Restart to update”.`),
+    );
+    // Keo often runs for days in the background: look again every few hours (the check itself is at most daily).
+    setInterval(() => void autoUpdate?.check(), 6 * 60 * 60 * 1000).unref();
     const handlers = createHandlers(services, {
       appInfo: () => ({
         name: 'Keo',
@@ -227,9 +241,18 @@ app.whenReady().then(() => {
         testProviderEnabled: TEST_PROVIDER,
       }),
       openPath: async (p) => (await shell.openPath(p)) === '',
+      displays: () => {
+        const main = screen.getPrimaryDisplay().id;
+        return screen.getAllDisplays().map((d) => ({ width: d.size.width, height: d.size.height, scale: d.scaleFactor, primary: d.id === main }));
+      },
       openExternal: (url) => shell.openExternal(url),
       // Installed builds only (a development run would always look outdated).
-      checkUpdate: (force) => (app.isPackaged || force ? updates.check(force) : Promise.resolve(null)),
+      checkUpdate: async (force) => {
+        if (!app.isPackaged && !force) return null;
+        const [info, download] = await Promise.all([updates.check(force), autoUpdate!.check(force)]);
+        return { ...info, download };
+      },
+      installUpdate: () => autoUpdate?.install() ?? false,
       pickExecutable: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
@@ -251,6 +274,7 @@ app.whenReady().then(() => {
     presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
     svc.ui = {
       showCommandBar: () => presenceWindows?.showCommandBar(),
+      showMain: (view) => showMain(view),
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
       notify: (title, body) => {
         if (!Notification.isSupported()) return;

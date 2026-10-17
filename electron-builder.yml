@@ -1,5 +1,8 @@
-# Windows packaging for Keo. Nothing is published: `--publish never` is used in
-# every script and no publish provider is configured.
+# Windows packaging for Keo. electron-builder itself never uploads anything
+# (`--publish never` in every script); the release workflow uploads the
+# installer, its .blockmap and latest.yml to GitHub Releases. The publish
+# block below only tells the installed app where to look for updates
+# (it is written into app-update.yml inside the package).
 appId: com.keo.desktop
 productName: Keo
 copyright: Copyright © 2026 Keo
@@ -34,4 +37,8 @@ nsis:
   # User data in %APPDATA%\Keo is kept on uninstall; deleting it is an explicit in-app action.
   deleteAppDataOnUninstall: false
   artifactName: Keo-Setup-${version}.${ext}
-publish: null
+publish:
+  provider: github
+  owner: BlessedLoner
+  repo: keo
+  releaseType: release
