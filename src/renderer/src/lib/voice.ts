@@ -205,8 +205,11 @@ class VoiceController {
         return;
       }
       const u = new SpeechSynthesisUtterance(clean);
-      const v = speechSynthesis.getVoices().find((x) => x.name === systemVoice);
+      // The chosen voice; otherwise an English one (Windows' default voice can be another language).
+      const voices = speechSynthesis.getVoices();
+      const v = voices.find((x) => x.name === systemVoice) ?? voices.find((x) => /^en[-_]/i.test(x.lang) && x.localService) ?? voices.find((x) => /^en[-_]/i.test(x.lang));
       if (v) u.voice = v;
+      u.lang = v?.lang ?? 'en-US';
       let env = 0;
       const decay = () => {
         env *= 0.88;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { compactNodes, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, waReadiness, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -44,6 +44,12 @@ async function processWindowSet(d: CapabilityDeps, pid: number): Promise<Set<str
 }
 
 /** Share of named controls reported off-screen (browsers report everything hidden right after a restore). */
+/** A web page (document) is present but nearly empty: its accessibility tree is not ready yet. */
+function sparseWeb(nodes: UiaNodeRaw[]): boolean {
+  const docs = nodes.filter((n) => n.role === 'document');
+  return docs.length > 0 && nodes.length < 25;
+}
+
 function hiddenShare(nodes: UiaNodeRaw[]): number {
   const named = nodes.filter((n) => n.name && n.role !== 'window');
   return named.length ? named.filter((n) => n.offscreen).length / named.length : 0;
@@ -52,7 +58,9 @@ function hiddenShare(nodes: UiaNodeRaw[]): number {
 /** A fresh observation; waits briefly while the window still reports itself as not painted. */
 async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
   let raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
-  for (let i = 0; i < 4 && hiddenShare(raw.nodes) > 0.8; i++) {
+  // Repainting after a restore (everything off-screen), or web content whose accessibility
+  // tree is still being built (Chromium/WebView2 build it on first request): wait a little.
+  for (let i = 0; i < 6 && (hiddenShare(raw.nodes) > 0.8 || sparseWeb(raw.nodes)); i++) {
     await sleep(d.focusSettleMs === 0 ? 0 : 400);
     raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
   }
@@ -218,9 +226,17 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
     if (!view.search && focused) view = { ...view, search: focused };
   }
   if (!view.search) {
-    throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Make sure WhatsApp is signed in and shows the chat list (a very narrow window can hide it), then try again. Settings → Check & help → Check WhatsApp shows what Keo sees.', {
-      dispatched: 'no',
-    });
+    const { nodes } = await freshView(d, target);
+    const state = waReadiness(nodes, view);
+    const why: Record<string, [string, string]> = {
+      signed_out: ['wa_signed_out', 'WhatsApp is not signed in on this computer (it shows the “link a device” / QR code screen). Sign in on WhatsApp first; Keo never signs in for you.'],
+      loading: ['wa_not_ready', 'WhatsApp is still loading its chats. Try again in a moment.'],
+      no_content: ['wa_not_accessible', 'Keo can see the WhatsApp window but not its contents (Windows accessibility returns an empty window). Settings → Check & help → Check WhatsApp shows the details.'],
+      unrecognized: ['not_recognized', 'Keo can read the WhatsApp window but cannot find its chat search box (a very narrow window can hide the chat list). Settings → Check & help → Check WhatsApp shows what Keo sees.'],
+      ready: ['not_recognized', 'Keo cannot find WhatsApp’s chat search box. Settings → Check & help → Check WhatsApp shows what Keo sees.'],
+    };
+    const [code, msg] = why[state]!;
+    throw new CapabilityError(code, msg, { dispatched: 'no' });
   }
   const searchNode = view.search;
   await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, contact));
@@ -360,19 +376,40 @@ export async function whatsappCheck(d: CapabilityDeps, settings: Settings): Prom
   } catch (e) {
     return { ok: false, lines: [(e as Error).message.replace(/“[^”]*”/g, '“…”')] };
   }
+  const info = await d.desktop.backend.info(target.hwnd).catch(() => null);
+  const classes = (await d.desktop.backend.childClasses?.(target.hwnd).catch(() => null)) ?? null;
+  const t0 = Date.now();
   const raw = await stableSnapshot(d, target);
   const v = analyzeWhatsApp(raw.nodes, raw.window);
+  const state = waReadiness(raw.nodes, v);
   const W = Math.max(1, raw.window.w);
   const H = Math.max(1, raw.window.h);
   const where = (n: UiaNodeRaw) => `${(n.x ?? 0) + (n.w ?? 0) / 2 < W / 2 ? 'left' : 'right'}-${(n.y ?? 0) + (n.h ?? 0) / 2 < H / 2 ? 'top' : 'bottom'}`;
   const kind = (n: UiaNodeRaw) => (/search/i.test(n.name) ? 'named search' : /message/i.test(n.name) ? 'named message' : n.name ? 'other name' : 'no name');
   const fields = raw.nodes.filter((n) => ['edit', 'combobox', 'document'].includes(n.role) && !n.password).slice(0, 12);
+  const STATE: Record<string, string> = {
+    ready: 'usable chat screen',
+    signed_out: 'NOT signed in (QR / link-a-device screen)',
+    loading: 'still loading',
+    no_content: 'window contents NOT readable through Windows accessibility',
+    unrecognized: 'readable, but the layout is not recognised',
+  };
   const lines = [
-    `App: ${isBrowser(target.processName) ? 'WhatsApp Web in a browser' : `WhatsApp app (${target.processName})`}, window ${raw.window.w}×${raw.window.h}`,
-    `Elements read: ${raw.nodes.length}${raw.truncated ? ' (limit reached)' : ''}, hidden share ${Math.round(hiddenShare(raw.nodes) * 100)}%`,
-    `Search box: ${v.search ? `found (${where(v.search)})` : 'NOT found'} · message box: ${v.compose ? 'found' : 'not found (normal when no chat is open)'} · chat header: ${v.header ? 'found' : 'not found'} · chat list entries: ${v.chats.length}`,
-    `Text fields: ${fields.map((n) => `${n.role} [${kind(n)}${n.aid && /^[A-Za-z0-9_.-]{1,40}$/.test(n.aid) ? `, id ${n.aid}` : ''}] ${where(n)}${n.offscreen ? ' offscreen' : ''}`).join('; ') || 'none'}`,
+    `1 Window: ${isBrowser(target.processName) ? 'WhatsApp Web in a browser' : `WhatsApp app (${target.processName})`}, ${raw.window.w}×${raw.window.h}${info?.minimized ? ', minimized' : ''}${info?.foreground ? ', in front' : ', behind other windows'}`,
+    `2 Embedded windows: ${classes ? Object.entries(classes).map(([k, n]) => `${k}×${n}`).join(', ') || 'none' : 'unknown'}; web content read directly: ${raw.contentRoots ?? 0}`,
+    `3 Read ${raw.nodes.length} elements in ${Date.now() - t0} ms${raw.truncated ? ' (limit reached)' : ''} — state: ${STATE[state]}`,
+    `4 Search box: ${v.search ? `found (${where(v.search)})` : 'NOT found'} · message box: ${v.compose ? 'found' : 'not found (normal when no chat is open)'} · chat header: ${v.header ? 'found' : 'not found'} · chat list entries: ${v.chats.length}`,
+    `5 Text fields: ${fields.map((n) => `${n.role} [${kind(n)}${n.aid && /^[A-Za-z0-9_.-]{1,40}$/.test(n.aid) ? `, id ${n.aid}` : ''}] ${where(n)}${n.offscreen ? ' offscreen' : ''}`).join('; ') || 'none'}`,
   ];
+  lines.push(
+    v.search
+      ? 'Result: Keo can search chats here.'
+      : state === 'signed_out'
+        ? 'Result: sign in to WhatsApp first.'
+        : state === 'no_content'
+          ? 'Result: Windows gives Keo an empty WhatsApp window. Try WhatsApp Web in Chrome/Edge as a workaround, and send this report.'
+          : 'Result: Keo cannot find the search box. Make the window wider and try again, or send this report.',
+  );
   return { ok: !!v.search, lines };
 }
 

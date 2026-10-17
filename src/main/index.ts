@@ -546,6 +546,8 @@ function runSmoke(win: BrowserWindow): void {
             }
             r.conversationCount = (await call('conversations:list', {})).length;
             r.capabilities = (await call('capabilities:list')).length;
+            // Optional (KEO_SMOKE_DESKTOP=1): the real desktop helper on Keo's own throw-away test window.
+            if (${process.env.KEO_SMOKE_DESKTOP === '1' ? 'true' : 'false'}) { try { r.selfTest = await call('diag:checkComputer', {}); } catch (e) { r.selfTest = { ok: false, error: String(e) }; } }
             try { const x = await fetch('https://example.com'); r.rendererNetwork = 'allowed:' + x.status; } catch (e) { r.rendererNetwork = 'blocked'; }
             r.rootRendered = !!document.querySelector('#root')?.children.length;
             return r;

@@ -22,7 +22,9 @@ function launch(run) {
   const env = { ...process.env, KEO_SMOKE: '1', KEO_ENABLE_TEST_PROVIDER: '1', KEO_USER_DATA_DIR: profile, KEO_SMOKE_OUT: out };
   // A parent Electron-based tool may set this; it would make Electron run as plain Node.
   delete env.ELECTRON_RUN_AS_NODE;
-  const r = spawnSync(electron, [root], {
+  // KEO_SMOKE_APP=<path to Keo.exe> runs the same checks against a packaged build.
+  const app = process.env.KEO_SMOKE_APP;
+  const r = spawnSync(app ?? electron, app ? [] : [root], {
     env,
     timeout: 90_000,
     encoding: 'utf8',
@@ -54,6 +56,10 @@ check('schema migrated', a.schemaVersion >= 1, a.schemaVersion);
 check('OS secret encryption available', a.secretStorage === 'os-encrypted', a.secretStorage);
 check('chat round-trip completes', a.assistantStatus === 'complete', `${a.assistantStatus}: ${a.assistantText}`);
 check('capabilities registered', a.capabilities >= 15, a.capabilities);
+if (process.env.KEO_SMOKE_DESKTOP === '1') {
+  for (const st of a.selfTest?.steps ?? []) check(`desktop helper: ${st.title}`, st.ok, st.detail);
+  check('desktop helper: self-test ran', Array.isArray(a.selfTest?.steps) && a.selfTest.steps.length === 7, a.selfTest?.error ?? a.selfTest?.advice);
+}
 
 const p = a.presence ?? {};
 check('presence: no error', !p.error, p.error);

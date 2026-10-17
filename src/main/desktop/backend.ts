@@ -50,6 +50,8 @@ export interface UiaNodeRaw {
 export interface UiaSnapshotRaw {
   nodes: UiaNodeRaw[];
   truncated: boolean;
+  /** Embedded web-content windows read directly because the frame did not lead into them. */
+  contentRoots?: number;
   ms: number;
   window: { w: number; h: number; x: number; y: number };
 }
@@ -98,6 +100,8 @@ export interface DesktopBackend {
   wheel(hwnd: string, x: number, y: number, notches: number): Promise<void>;
   keys(hwnd: string, mods: number[], key: number): Promise<void>;
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void>;
+  /** Class names of the window's child windows with counts (diagnostics; no titles or content). */
+  childClasses?(hwnd: string): Promise<Record<string, number>>;
   dispose(): void;
 }
 
@@ -288,6 +292,10 @@ export class Win32Backend implements DesktopBackend {
       () => this.call('paste', { hwnd }),
       () => this.call('post_paste', { hwnd }, 30000),
     );
+  }
+
+  childClasses(hwnd: string): Promise<Record<string, number>> {
+    return this.call('child_classes', { hwnd });
   }
 
   uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw> {

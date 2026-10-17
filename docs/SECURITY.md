@@ -63,6 +63,7 @@ Execution (`TaskOrchestrator`):
 - Launch is limited to executables the user registered through a file picker; no arguments, no shell (`shell: false`).
 - The helper is a fixed script embedded in Keo, rewritten from the bundle at each start and run with `-ExecutionPolicy Bypass` **for that child process only** (no system policy change). It is not a shell for the model.
 - Bringing a window to the front first tries without any key press; if Windows refuses, the helper taps ALT **masked by an unassigned key (VK 0xE8)**, so no window's menu opens and swallows the text that follows; if the window still ends up in menu mode, Escape is sent only then (checked with `GetGUIThreadInfo`).
+- **Embedded web content**: apps that host web pages in child windows (WebView2 — e.g. the WhatsApp app — Electron, Chromium) are read through those child windows too when the frame does not lead the accessibility walker into them. Only child windows of the same allow-listed, re-validated target are read; the same element-id validation applies.
 - **Direct delivery** (only when Windows refuses simulated input, `input_blocked`, e.g. security software or input policies): the same approved text, Enter/Backspace-type keys and clicks are posted as window messages to the focused control of the same verified foreground window, with the same foreground checks per chunk. Keyboard shortcuts (Ctrl+…) are not emulated. It never targets background windows and needs the same approvals. `input_blocked` means nothing was sent (not an uncertain outcome).
 - **Check this computer** (Settings → Check & help) runs the same helper against a throw-away WinForms window Keo starts itself (separate PowerShell process, closes itself after 60 s). It types and pastes fixed test strings, restores the clipboard, and never touches other windows. The copyable diagnostic report lists versions, display sizes/scaling, switch states, counts and error codes only — no keys, chats, window titles, app names or typed text.
 - Not implemented on purpose: privilege elevation, credential entry, stealth/background input, remote control, network-accessible control endpoints, device pairing.
@@ -123,6 +124,11 @@ Execution (`TaskOrchestrator`):
 - Installed builds use `electron-updater` against this repository's GitHub Releases only (the feed is fixed at build time in `app-update.yml`; nothing in the app can change it). While *Keep Keo up to date* is on (default), Keo checks at most daily, downloads the new installer in the background, verifies it against the SHA-512 in `latest.yml`, and installs it when Keo closes or when the user clicks *Restart to update*. Turning the setting off stops checks and downloads.
 - The beta is not code-signed, so the updater cannot verify a publisher signature; integrity rests on HTTPS to GitHub and the hash in `latest.yml` from the same release. Code signing (see docs/RELEASING.md) would add publisher verification.
 - Update requests carry no user data. Development runs never update.
+
+## 4h. Language
+
+- Replies are in English by default (system policy). Another language is used only for what the user explicitly asks for (translations, "reply to her in French"); web pages, WhatsApp messages and screen text never change the reply language.
+- If a reply still comes back clearly in another language, Keo rewrites only its text once in English with a tool-free model call; no tool or desktop action runs again. Spoken commands that look misheard (another language or gibberish) are not acted on; Keo asks again.
 
 ## 5. Vision
 

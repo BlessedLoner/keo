@@ -107,6 +107,8 @@ export interface MessageMeta {
   stopReason?: string;
   /** Actions the reply claimed that no capability performed (honesty guard). */
   unsupportedClaims?: string[];
+  /** The reply came back in another language and was rewritten in English (text only; no action repeated). */
+  languageCorrected?: boolean;
   /** Marks a Keo note about a task outcome (taskId:state). */
   taskNote?: string;
 }

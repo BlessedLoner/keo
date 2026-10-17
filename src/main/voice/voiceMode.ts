@@ -2,6 +2,7 @@ import type { Message, Task } from '../../shared/domain';
 import type { Logger } from '../logging/logger';
 import type { AuditRepo } from '../repos/audit';
 import type { TaskOrchestrator } from '../tasks/orchestrator';
+import { transcriptLooksWrong } from '../agent/language';
 
 export type VoiceModeState = 'off' | 'listening' | 'thinking' | 'speaking' | 'confirming';
 
@@ -152,6 +153,13 @@ export class VoiceMode {
         this.set({ heard: text });
         await this.say(session, 'Okay.');
         return this.stop('user_stop');
+      }
+      if (transcriptLooksWrong(text)) {
+        // Probably misheard (another language or gibberish): ask again instead of answering it.
+        this.set({ heard: text });
+        this.d.audit.record({ kind: 'voice.mode', decision: 'unclear_transcript', detail: { words: text.split(/\s+/).length } });
+        await this.say(session, 'Sorry, I didn’t catch that. Could you say it again?');
+        continue;
       }
       await this.handle(session, text);
     }

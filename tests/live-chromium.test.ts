@@ -33,6 +33,13 @@ it.runIf(process.env.KEO_LIVE_CHROMIUM === '1')('direct delivery into a Chromium
     out.focus = await b.focus(hwnd);
     await new Promise((r) => setTimeout(r, 800));
     const find = async (name: RegExp) => (await b.uiaSnapshot(hwnd, { maxNodes: 400, maxDepth: 30, budgetMs: 5000 })).nodes.find((n) => name.test(n.name));
+    let snap = await b.uiaSnapshot(hwnd, { maxNodes: 400, maxDepth: 30, budgetMs: 5000 });
+    for (let i = 0; i < 10 && !snap.nodes.some((n) => /Search input textbox/.test(n.name)); i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      snap = await b.uiaSnapshot(hwnd, { maxNodes: 400, maxDepth: 30, budgetMs: 5000 });
+    }
+    out.snapshot = { nodes: snap.nodes.length, contentRoots: snap.contentRoots, docs: snap.nodes.filter((n) => n.role === 'document').length };
+    out.childClasses = await b.childClasses(hwnd);
     const input = await find(/Search input textbox/);
     await b.uiaAct(hwnd, input!.rid, 'focus');
     out.inputText = await call('post_text', { hwnd, text: 'Kid bro' });

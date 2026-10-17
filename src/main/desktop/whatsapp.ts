@@ -268,3 +268,20 @@ export function completeMessages(messages: WaMessage[], namesByRow: Map<WaMessag
     })
     .filter((m) => m.text);
 }
+
+export type WaReadiness = 'ready' | 'signed_out' | 'loading' | 'no_content' | 'unrecognized';
+
+/**
+ * Whether the WhatsApp window shows a usable chat screen, judged only from the
+ * names of interface elements (never message text): the QR / "link a device"
+ * screen means signed out; the start-up screen or an empty page means loading.
+ */
+export function waReadiness(nodes: UiaNodeRaw[], v: WaView): WaReadiness {
+  if (v.search || v.chats.length > 0) return 'ready';
+  const names = nodes.map((n) => n.name).filter(Boolean).join(' \n ');
+  if (/scan (the )?qr|qr code|link with phone|log in with phone|link a device|use whatsapp on your computer|steps to log in/i.test(names)) return 'signed_out';
+  if (/loading (your )?(chats|messages)|syncing|end-to-end encrypted\s*$|starting whatsapp/i.test(names)) return 'loading';
+  const meaningful = nodes.filter((n) => n.role !== 'window' && n.role !== 'titlebar' && n.role !== 'menubar' && n.role !== 'menuitem' && !(n.role === 'button' && /^(minimi[sz]e|maximi[sz]e|restore|close)$/i.test(n.name)));
+  if (meaningful.length < 8) return 'no_content';
+  return 'unrecognized';
+}

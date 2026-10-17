@@ -439,9 +439,42 @@ using System.Text;
 using System.Windows;
 using System.Windows.Automation;
 using System.Web.Script.Serialization;
+using System.Runtime.InteropServices;
 
 public static class KeoUia {
   static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+  public delegate bool ChildProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, ChildProc cb, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+  // Embedded web content (WebView2 in apps such as the WhatsApp app, Electron,
+  // Chromium) lives in child windows, sometimes in another process. Some hosts
+  // (e.g. WinUI 3 frames) do not lead the classic UI Automation walker into
+  // that content, so it is read from these child windows directly as well.
+  static List<IntPtr> ContentChildren(IntPtr h) {
+    var list = new List<IntPtr>();
+    EnumChildWindows(h, (c, l) => {
+      if (list.Count >= 8) return false;
+      var sb = new StringBuilder(128); GetClassName(c, sb, sb.Capacity);
+      var cls = sb.ToString();
+      if (IsWindowVisible(c) && (cls == "Chrome_RenderWidgetHostHWND" || cls == "Windows.UI.Core.CoreWindow")) list.Add(c);
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
+
+  /** Class names of the window's child windows (diagnostics only; no titles). */
+  public static string ChildClasses(IntPtr h) {
+    var counts = new Dictionary<string, int>();
+    EnumChildWindows(h, (c, l) => {
+      var sb = new StringBuilder(128); GetClassName(c, sb, sb.Capacity);
+      var k = sb.ToString() + (IsWindowVisible(c) ? "" : " (hidden)");
+      int n; counts.TryGetValue(k, out n); counts[k] = n + 1;
+      return counts.Count < 40;
+    }, IntPtr.Zero);
+    return Json.Serialize(counts);
+  }
 
   // UIA text ranges from browsers can fault (access violation) when the page
   // changes mid-read; these methods catch that instead of crashing the helper.
@@ -452,9 +485,16 @@ public static class KeoUia {
     var cond = new OrCondition(
       new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document),
       new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-    var els = root.FindAll(TreeScope.Descendants, cond);
+    var all = new List<AutomationElement>();
+    foreach (AutomationElement el in root.FindAll(TreeScope.Descendants, cond)) all.Add(el);
+    if (all.Count == 0) {
+      // Embedded web content the walker cannot reach from the frame (see ContentChildren).
+      foreach (var child in ContentChildren(h)) {
+        try { foreach (AutomationElement el in AutomationElement.FromHandle(child).FindAll(TreeScope.Subtree, cond)) all.Add(el); } catch { }
+      }
+    }
     var sb = new StringBuilder();
-    foreach (AutomationElement el in els) {
+    foreach (AutomationElement el in all) {
       object p;
       if (el.Current.IsPassword) continue;
       try {
@@ -549,8 +589,38 @@ public static class KeoUia {
       } catch { }
       for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
     }
+    var seen = new HashSet<string>();
+    foreach (var n in list) seen.Add((string)n["rid"]);
+    int extraRoots = 0;
+    foreach (var child in ContentChildren(h)) {
+      if (truncated) break;
+      AutomationElement croot;
+      try { croot = AutomationElement.FromHandle(child); } catch { continue; }
+      string crid; try { crid = Rid(croot); } catch { continue; }
+      if (seen.Contains(crid)) continue;
+      extraRoots++;
+      var cstack = new Stack<Tuple<AutomationElement, int, int>>();
+      cstack.Push(Tuple.Create(croot, 1, 0));
+      while (cstack.Count > 0) {
+        if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+        var t = cstack.Pop();
+        Dictionary<string, object> n;
+        try { n = Node(t.Item1, win, t.Item2, t.Item3); } catch { continue; }
+        var r = (string)n["rid"];
+        if (seen.Contains(r)) continue;
+        seen.Add(r);
+        int idx = list.Count; n["i"] = idx; list.Add(n);
+        if (t.Item2 >= maxDepth) continue;
+        var kids = new List<AutomationElement>();
+        try {
+          var ch = walker.GetFirstChild(t.Item1);
+          while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
+        } catch { }
+        for (int k = kids.Count - 1; k >= 0; k--) cstack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+      }
+    }
     var res = new Dictionary<string, object>();
-    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds;
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["contentRoots"] = extraRoots;
     var wd = new Dictionary<string, object>(); wd["w"] = (int)win.Width; wd["h"] = (int)win.Height; wd["x"] = (int)win.X; wd["y"] = (int)win.Y;
     res["window"] = wd;
     return Json.Serialize(res);
@@ -559,7 +629,18 @@ public static class KeoUia {
   static AutomationElement Find(IntPtr h, string rid) {
     var root = AutomationElement.FromHandle(h);
     if (Rid(root) == rid) return root;
-    return root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.RuntimeIdProperty, ParseRid(rid)));
+    var cond = new PropertyCondition(AutomationElement.RuntimeIdProperty, ParseRid(rid));
+    var hit = root.FindFirst(TreeScope.Descendants, cond);
+    if (hit != null) return hit;
+    foreach (var child in ContentChildren(h)) {
+      try {
+        var croot = AutomationElement.FromHandle(child);
+        if (Rid(croot) == rid) return croot;
+        hit = croot.FindFirst(TreeScope.Descendants, cond);
+        if (hit != null) return hit;
+      } catch { }
+    }
+    return null;
   }
 
   // Names inside each element through the RAW view: web pages often hide
@@ -792,6 +873,7 @@ while ($true) {
         elseif (-not [KeoWin]::IsWindow($h)) { Reply $req.id $false @{ code = 'helper_error'; message = 'target_gone' } }
         else { Reply $req.id $true @{ available = $true; text = [KeoUia]::ReadText($h) } }
       }
+      'child_classes' { RequireUia; ReplyRaw $req.id ([KeoUia]::ChildClasses($h)) }
       'uia_snapshot' { RequireUia; ReplyRaw $req.id ([KeoUia]::Snapshot($h, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
       'uia_describe' { RequireUia; ReplyRaw $req.id ([KeoUia]::Describe($h, [string]$req.args.rid)) }
       'uia_act'      { RequireUia; ReplyRaw $req.id ([KeoUia]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }

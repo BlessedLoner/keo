@@ -135,11 +135,22 @@ export class FakeWhatsApp implements FakeUiaApp {
   /** Accept accessibility value writes without the page noticing (rich web editors). */
   ignoreValueWrites = false;
   focused: 'search' | 'compose' | null = null;
+  /** What the window shows instead of the chat screen. */
+  screen: 'chats' | 'signed_out' | 'loading' | 'empty' = 'chats';
   /** Control names (WhatsApp in other languages, or unnamed fields). */
   searchName = 'Search input textbox';
   composeName = 'Type a message';
 
   nodes(): UiaNodeRaw[] {
+    if (this.screen !== 'chats') {
+      const root: Spec = { key: 'root', role: 'window', name: 'WhatsApp', x: 0, y: 0, w: 1200, h: 800 };
+      if (this.screen === 'empty') return build([root, { key: 'close', parentKey: 'root', role: 'button', name: 'Close', x: 1150, y: 0, w: 40, h: 30 }]);
+      const texts =
+        this.screen === 'signed_out'
+          ? ['Use WhatsApp on your computer', 'Steps to log in', 'Scan the QR code', 'Link with phone number instead']
+          : ['WhatsApp', 'Loading your chats', 'End-to-end encrypted'];
+      return build([root, ...texts.map((t, k): Spec => ({ key: `t${k}`, parentKey: 'root', role: 'text', name: t, x: 400, y: 200 + k * 40, w: 400, h: 30 }))]);
+    }
     const ns = this.layout();
     if (this.hiddenReads > 0) {
       this.hiddenReads--;

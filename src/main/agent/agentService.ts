@@ -6,7 +6,7 @@ import type { Logger } from '../logging/logger';
 import type { AuditRepo } from '../repos/audit';
 import type { ConversationRepo } from '../repos/conversations';
 import type { ProviderService } from '../providers/providerService';
-import { ProviderError, type NeutralMessage, type ToolCall } from '../providers/types';
+import { ProviderError, type ChatProvider, type NeutralMessage, type ToolCall } from '../providers/types';
 import { TERMINAL_TASK } from '../tasks/stateMachine';
 import type { TaskOrchestrator } from '../tasks/orchestrator';
 import { errorMessage, KeoError } from '../util/errors';
@@ -14,6 +14,7 @@ import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { SYSTEM_PROMPT } from './systemPrompt';
+import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
 const UNTRUSTED_OUTPUT = new Set([
@@ -112,6 +113,22 @@ export class AgentService {
     return true;
   }
 
+  /** One tool-free call that translates a reply into English; null if it fails or is not English either. */
+  private async rewriteInEnglish(provider: Pick<ChatProvider, 'stream'>, model: string, reply: string, correlationId: string, signal: AbortSignal): Promise<string | null> {
+    try {
+      const r = await provider.stream(
+        { model, system: REWRITE_IN_ENGLISH, messages: [{ role: 'user', content: [{ type: 'text', text: reply }] }], tools: [], maxOutputTokens: 2048, correlationId },
+        { onText: () => undefined, onPhase: () => undefined },
+        signal,
+      );
+      const out = r.text.trim();
+      return out && !clearlyNotEnglish(out) && !r.toolCalls.length ? out : null;
+    } catch (e) {
+      this.log.warn('agent.language_rewrite_failed', { error: (e as Error).name }, correlationId);
+      return null;
+    }
+  }
+
   private async runTurn(conversationId: string, sourceMessageId: string): Promise<Message> {
     const correlationId = newCorrelationId();
     const settings = this.getSettings();
@@ -199,6 +216,17 @@ export class AgentService {
           break;
         }
         if (!result.toolCalls.length) {
+          // Language guard: English unless the user asked for another language. Only the text is
+          // rewritten (one bounded call, no tools), so no action can run again.
+          if (result.text && clearlyNotEnglish(result.text) && !asksForOtherLanguage(this.conversations.getMessage(sourceMessageId)?.content ?? '')) {
+            const english = await this.rewriteInEnglish(provider, model, result.text, correlationId, signal);
+            if (english && text.endsWith(result.text)) {
+              text = text.slice(0, text.length - result.text.length) + english;
+              result.text = english;
+              meta.languageCorrected = true;
+              this.log.warn('agent.language_corrected', { chars: english.length }, correlationId);
+            }
+          }
           if (result.stopReason === 'max_tokens') text += '\n\n_Response reached the output limit and may be incomplete._';
           // Honesty guard: the reply claims an action that no capability performed.
           const claims = unsupportedClaims(result.text, succeeded());

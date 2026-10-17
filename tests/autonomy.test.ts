@@ -652,3 +652,25 @@ describe('WhatsApp in other languages and layouts', () => {
     expect(h.desktop.inputCalls()).toEqual([]);
   });
 });
+
+describe('WhatsApp not ready', () => {
+  for (const [screen, code, words] of [
+    ['signed_out', 'wa_signed_out', /not signed in/],
+    ['loading', 'wa_not_ready', /still loading/],
+    ['empty', 'wa_not_accessible', /not its contents/],
+  ] as const) {
+    it(`explains a ${screen} WhatsApp window instead of a generic failure, and types nothing`, async () => {
+      const { wa } = setup();
+      wa.screen = screen;
+      const r = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+      const step = r.task?.steps[0];
+      expect(step?.state).toBe('failed');
+      expect(step?.errorCode).toBe(code);
+      expect(step?.error).toMatch(words);
+      expect(h.desktop.inputCalls().filter((c) => c.op === 'type' || c.op === 'paste' || c.op === 'uia_act')).toEqual([]);
+      const check = await h.services.checkWhatsApp();
+      expect(check.ok).toBe(false);
+      expect(check.lines.join('\n')).toMatch(/state: /);
+    });
+  }
+});
