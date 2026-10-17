@@ -125,6 +125,15 @@ async function actOn(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, actio
  * the app refuses that, e.g. WhatsApp Web in Chrome), select-all and paste.
  * Only falls back on errors that guarantee nothing was entered.
  */
+/** Shortcuts are skipped (not failed) on PCs that block simulated input; fields Keo fills are normally empty. */
+const ignoreBlocked = (e: unknown) => {
+  if (!(e instanceof CapabilityError) || e.code !== 'input_blocked') throw e;
+};
+
+async function selectAll(d: CapabilityDeps, target: TargetT): Promise<void> {
+  await d.desktop.backend.keys(target.hwnd, [0x11], 0x41).catch(ignoreBlocked);
+}
+
 async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string): Promise<'value' | 'paste' | 'click+paste'> {
   try {
     await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'set_value', text);
@@ -142,7 +151,7 @@ async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, t
     method = 'click+paste';
   }
   await sleep(d.focusSettleMs === 0 ? 0 : 150);
-  await d.desktop.backend.keys(target.hwnd, [0x11], 0x41);
+  await selectAll(d, target);
   await pasteViaClipboard(d, target.hwnd, text);
   return method;
 }
@@ -164,7 +173,7 @@ async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNod
   const c = await centerOf(d, target, node);
   await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
   await sleep(d.focusSettleMs === 0 ? 0 : 150);
-  await d.desktop.backend.keys(target.hwnd, [0x11], 0x41);
+  await selectAll(d, target);
   await pasteViaClipboard(d, target.hwnd, text);
   await sleep(d.focusSettleMs === 0 ? 0 : 250);
   return (await has()) !== false;
@@ -201,7 +210,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   }
   if (!view.search && !isBrowser(target.processName)) {
     // WhatsApp Desktop: Ctrl+F puts the cursor in the chat search (in a browser it would open the page finder instead).
-    await d.desktop.backend.keys(target.hwnd, [0x11], 0x46);
+    await d.desktop.backend.keys(target.hwnd, [0x11], 0x46).catch(ignoreBlocked);
     await sleep(d.focusSettleMs === 0 ? 0 : 500);
     const fresh = await freshView(d, target);
     view = fresh.view;

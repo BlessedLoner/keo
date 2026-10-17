@@ -263,12 +263,12 @@ export class OpenAICompatProvider implements ChatProvider {
 
   // -- audio (OpenAI only) -----------------------------------------------------
 
-  async transcribe(audio: Uint8Array, mimeType: string, model: string, signal: AbortSignal): Promise<string> {
+  async transcribe(audio: Uint8Array, mimeType: string, model: string, signal: AbortSignal, opts: { language?: string; prompt?: string } = {}): Promise<string> {
     if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Speech-to-text is only available through the OpenAI provider.');
     try {
       const ext = mimeType === 'audio/wav' ? 'wav' : mimeType === 'audio/ogg' ? 'ogg' : 'webm';
       const file = await toFile(Buffer.from(audio), `speech.${ext}`, { type: mimeType });
-      const r = await this.client().audio.transcriptions.create({ file, model }, { signal });
+      const r = await this.client().audio.transcriptions.create({ file, model, ...(opts.language ? { language: opts.language } : {}), ...(opts.prompt ? { prompt: opts.prompt } : {}) }, { signal });
       return r.text ?? '';
     } catch (err) {
       throw mapOpenAIError(err, signal, this.label);

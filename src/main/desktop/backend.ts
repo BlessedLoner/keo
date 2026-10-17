@@ -76,7 +76,8 @@ export interface DesktopBackend {
   info(hwnd: string): Promise<RawWindow | null>;
   focus(hwnd: string): Promise<{ foreground: boolean }>;
   move(hwnd: string, b: { x: number; y: number; width: number; height: number }): Promise<RawWindow>;
-  typeText(hwnd: string, text: string): Promise<{ chars: number }>;
+  /** method "direct": Windows refused simulated keys, so characters were posted to the focused field. */
+  typeText(hwnd: string, text: string): Promise<{ chars: number; method?: 'keys' | 'direct' }>;
   /** Sends Ctrl+V to the foreground target. */
   paste(hwnd: string): Promise<void>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
@@ -102,6 +103,7 @@ export interface DesktopBackend {
 
 /** Helper error codes that guarantee nothing was sent to the target. */
 const NOT_DISPATCHED = new Set([
+  'input_blocked',
   'target_gone',
   'not_foreground',
   'outside_client_area',
@@ -252,13 +254,40 @@ export class Win32Backend implements DesktopBackend {
     return normalize(await this.call<RawWindow>('move', { hwnd, ...b }));
   }
 
-  typeText(hwnd: string, text: string): Promise<{ chars: number }> {
+  /**
+   * Some PCs refuse simulated input from Keo entirely (security software, input
+   * policies). Then the same text, key or click is posted directly to the
+   * focused control of the same verified foreground window.
+   */
+  private directMode = false;
+
+  private async orDirect<T>(simulated: () => Promise<T>, direct: () => Promise<T>): Promise<T> {
+    if (!this.directMode) {
+      try {
+        return await simulated();
+      } catch (e) {
+        if (!(e instanceof CapabilityError) || e.code !== 'input_blocked') throw e;
+        this.directMode = true;
+        this.log.warn('desktop.input_blocked_direct', { detail: e.message.slice(0, 120) });
+      }
+    }
+    return direct();
+  }
+
+  async typeText(hwnd: string, text: string): Promise<{ chars: number; method?: 'keys' | 'direct' }> {
     // ~20 chars per 15 ms chunk plus overhead; allow generously for long text.
-    return this.call('type', { hwnd, text }, 15000 + text.length * 5);
+    const t = 15000 + text.length * 5;
+    return this.orDirect<{ chars: number; method: 'keys' | 'direct' }>(
+      async () => ({ ...(await this.call<{ chars: number }>('type', { hwnd, text }, t)), method: 'keys' as const }),
+      async () => ({ ...(await this.call<{ chars: number }>('post_text', { hwnd, text }, t)), method: 'direct' as const }),
+    );
   }
 
   async paste(hwnd: string): Promise<void> {
-    await this.call('paste', { hwnd });
+    await this.orDirect(
+      () => this.call('paste', { hwnd }),
+      () => this.call('post_paste', { hwnd }, 30000),
+    );
   }
 
   uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw> {
@@ -293,7 +322,10 @@ export class Win32Backend implements DesktopBackend {
   }
 
   async clickScreen(hwnd: string, x: number, y: number): Promise<void> {
-    await this.call('click_screen', { hwnd, x, y });
+    await this.orDirect(
+      () => this.call('click_screen', { hwnd, x, y }),
+      () => this.call('post_click_screen', { hwnd, x, y }),
+    );
   }
 
   async wheel(hwnd: string, x: number, y: number, notches: number): Promise<void> {
@@ -310,7 +342,14 @@ export class Win32Backend implements DesktopBackend {
   }
 
   async keys(hwnd: string, mods: number[], key: number): Promise<void> {
-    await this.call('keys', { hwnd, mods, key });
+    await this.orDirect(
+      () => this.call('keys', { hwnd, mods, key }),
+      async () => {
+        // Shortcuts need real modifier state, which direct delivery cannot give.
+        if (mods.length) throw new CapabilityError('input_blocked', describe('input_blocked'), { dispatched: 'no' });
+        await this.call('post_key', { hwnd, key });
+      },
+    );
   }
 
   async click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void> {
@@ -346,6 +385,8 @@ function helperError(message: string): CapabilityError {
 
 function describe(code: string): string {
   switch (code) {
+    case 'input_blocked':
+      return 'Windows blocked Keo’s simulated keyboard/mouse input, so nothing was sent. This happens when the app runs as administrator (run Keo the same way) or when security software blocks simulated input. Keo types text directly where it can, but keyboard shortcuts need simulated input.';
     case 'target_gone':
       return 'The target window no longer exists.';
     case 'not_foreground':

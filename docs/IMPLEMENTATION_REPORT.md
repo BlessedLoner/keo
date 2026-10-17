@@ -107,6 +107,12 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.1.2 fixes (second laptop, WhatsApp Desktop)
+
+- Every simulated key/click was refused on that laptop (WhatsApp Desktop and Brave alike), shown as *Only part of the input was delivered / outcome uncertain*. Now a refused send is reported as `input_blocked` (nothing sent) and Keo switches to direct delivery for text, single keys and clicks. Verified live on this PC: WinForms text (with accents and new lines), Backspace and a button click; Chromium (Edge test page) input and rich-text box. Not verified on that laptop.
+- OpenAI transcription now uses the wake-word language and a short context prompt, and drops phrases speech-to-text invents for silence (“Gracias.”, subtitle credits), so short or quiet answers are no longer “heard” in Spanish.
+- The wake word comes back on its own after a conversation: a watchdog restarts listening when it should be on but is not (failed restart, lost “finished speaking” signal, recognizer error); the modern helper retries starting once.
+
 ### 1.1.1 fixes (reported from the second laptop)
 
 - *“Only part of the input was delivered”* when bringing WhatsApp to the front: the masked ALT tap could be partly refused by Windows and failed the whole action (and could leave ALT held). It is now best effort and modifiers are released afterwards. Live self-test 7/7.

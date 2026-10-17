@@ -107,6 +107,14 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
   [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO { public int cbSize; public int flags; public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret; public RECT rcCaret; }
   [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] static extern uint MapVirtualKeyW(uint code, uint type);
+  [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(IntPtr owner);
+  [DllImport("user32.dll")] static extern bool CloseClipboard();
+  [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
+  [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr h);
+  [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr h);
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -193,6 +201,8 @@ public static class KeoWin {
   static void Send(List<INPUT> inputs) {
     var arr = inputs.ToArray();
     uint sent = SendInput((uint)arr.Length, arr, Marshal.SizeOf(typeof(INPUT)));
+    // Nothing inserted: Windows (or security software) refuses simulated input from Keo.
+    if (sent == 0) throw new Exception("input_blocked:" + Marshal.GetLastWin32Error());
     if (sent != arr.Length) throw new Exception("partial_input:" + sent + "/" + arr.Length);
   }
 
@@ -252,6 +262,81 @@ public static class KeoWin {
       Send(new List<INPUT> { Key(0x1B, 0, 0), Key(0x1B, 0, 2) });
       Thread.Sleep(60);
     }
+  }
+
+  // ---- Direct delivery: used only when Windows refuses simulated input. The
+  // same characters/keys/clicks are posted as window messages to the focused
+  // control of the verified foreground target (never to a background window).
+  static IntPtr FocusOf(IntPtr h) {
+    uint pidUnused;
+    uint thread = GetWindowThreadProcessId(h, out pidUnused);
+    var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+    if (GetGUIThreadInfo(thread, ref gi) && gi.hwndFocus != IntPtr.Zero && GetAncestor(gi.hwndFocus, 2) == h) return gi.hwndFocus;
+    return h;
+  }
+
+  static IntPtr KeyL(uint vk, bool up) {
+    uint scan = MapVirtualKeyW(vk, 0);
+    long l = 1 | ((long)scan << 16);
+    if (up) l |= 0xC0000000L;
+    return new IntPtr(l);
+  }
+
+  public static int PostText(IntPtr h, string text) {
+    RequireForeground(h);
+    var f = FocusOf(h);
+    int n = 0;
+    foreach (char c in text) {
+      if (c == '\r') { n++; continue; }
+      if (n % 20 == 0 && GetForegroundWindow() != h) throw new Exception("foreground_lost:" + n);
+      if (c == '\n') {
+        PostMessageW(f, 0x0100, new IntPtr(0x0D), KeyL(0x0D, false));
+        PostMessageW(f, 0x0102, new IntPtr(13), KeyL(0x0D, false));
+        PostMessageW(f, 0x0101, new IntPtr(0x0D), KeyL(0x0D, true));
+      } else PostMessageW(f, 0x0102, new IntPtr(c), new IntPtr(1));
+      n++;
+      if (n % 20 == 0) Thread.Sleep(10);
+    }
+    Thread.Sleep(60);
+    return n;
+  }
+
+  public static void PostKey(IntPtr h, int vk) {
+    RequireForeground(h);
+    var f = FocusOf(h);
+    PostMessageW(f, 0x0100, new IntPtr(vk), KeyL((uint)vk, false));
+    int ch = vk == 0x0D ? 13 : vk == 0x09 ? 9 : vk == 0x08 ? 8 : vk == 0x1B ? 27 : 0;
+    if (ch != 0) PostMessageW(f, 0x0102, new IntPtr(ch), KeyL((uint)vk, false));
+    PostMessageW(f, 0x0101, new IntPtr(vk), KeyL((uint)vk, true));
+    Thread.Sleep(60);
+  }
+
+  public static int PostPaste(IntPtr h) {
+    string text = null;
+    for (int i = 0; i < 5 && text == null; i++) {
+      if (OpenClipboard(IntPtr.Zero)) {
+        try {
+          var data = GetClipboardData(13); // CF_UNICODETEXT
+          if (data != IntPtr.Zero) { var ptr = GlobalLock(data); if (ptr != IntPtr.Zero) { text = Marshal.PtrToStringUni(ptr); GlobalUnlock(data); } }
+          if (text == null) text = "";
+        } finally { CloseClipboard(); }
+      } else Thread.Sleep(30);
+    }
+    if (text == null) throw new Exception("clipboard_busy");
+    return PostText(h, text);
+  }
+
+  public static void PostClickScreen(IntPtr h, int sx, int sy) {
+    RequireForeground(h);
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    var hit = WindowFromPoint(p);
+    if (GetAncestor(hit, 2) != h) throw new Exception("target_obscured");
+    ScreenToClient(hit, ref p);
+    var l = new IntPtr((p.Y << 16) | (p.X & 0xFFFF));
+    PostMessageW(hit, 0x0200, IntPtr.Zero, l);
+    PostMessageW(hit, 0x0201, new IntPtr(1), l);
+    PostMessageW(hit, 0x0202, IntPtr.Zero, l);
+    Thread.Sleep(60);
   }
 
   public static void RequireForeground(IntPtr h) {
@@ -698,6 +783,10 @@ while ($true) {
       'move'  { Reply $req.id $true ([KeoWin]::Move($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.width, [int]$req.args.height)) }
       'type'  { Reply $req.id $true @{ chars = [KeoWin]::TypeText($h, [string]$req.args.text) } }
       'paste' { [KeoWin]::Paste($h); Reply $req.id $true @{ pasted = $true } }
+      'post_text' { Reply $req.id $true @{ chars = [KeoWin]::PostText($h, [string]$req.args.text) } }
+      'post_key' { [KeoWin]::PostKey($h, [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
+      'post_paste' { Reply $req.id $true @{ chars = [KeoWin]::PostPaste($h) } }
+      'post_click_screen' { [KeoWin]::PostClickScreen($h, [int]$req.args.x, [int]$req.args.y); Reply $req.id $true @{ clicked = $true } }
       'readtext' {
         if (-not $script:uiaReady) { Reply $req.id $true @{ available = $false; text = '' } }
         elseif (-not [KeoWin]::IsWindow($h)) { Reply $req.id $false @{ code = 'helper_error'; message = 'target_gone' } }

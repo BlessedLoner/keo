@@ -169,3 +169,57 @@ describe('reliable listening', () => {
     expect(spoken).toEqual(['Okay.']);
   });
 });
+
+describe('wake word always comes back', () => {
+  it('resumes listening even when the “finished speaking” signal was lost', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    h.services.settings.update({ wake: { enabled: true } });
+    await waitFor(() => speech.cmds().includes('wake'));
+    h.services.wake.setSpeaking(true); // Keo starts speaking, then playback is cut off without a "done"
+    expect(speech.cmds().at(-1)).toBe('pause');
+    const wakes = speech.cmds().filter((c) => c === 'wake').length;
+    const realNow = Date.now;
+    Date.now = () => realNow() + 3 * 60_000;
+    try {
+      await h.services.wake.heal();
+    } finally {
+      Date.now = realNow;
+    }
+    expect(speech.cmds().filter((c) => c === 'wake').length).toBe(wakes + 1);
+  });
+
+  it('restarts listening after a recognizer error', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    h.services.settings.update({ wake: { enabled: true } });
+    await waitFor(() => speech.cmds().includes('wake'));
+    const wakes = speech.cmds().filter((c) => c === 'wake').length;
+    speech.fire({ event: 'error', code: 'speech_error', message: 'audio device busy' });
+    await h.services.wake.heal();
+    expect(speech.cmds().filter((c) => c === 'wake').length).toBe(wakes + 1);
+  });
+
+  it('does not restart while it is already listening, muted, or in a conversation', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    h.services.settings.update({ wake: { enabled: true } });
+    await waitFor(() => speech.cmds().includes('wake'));
+    const n = speech.sent.length;
+    await h.services.wake.heal();
+    expect(speech.sent.length).toBe(n);
+    h.services.wake.setVoiceMode(true);
+    speech.fire({ event: 'error', code: 'speech_error' });
+    const m = speech.sent.length;
+    await h.services.wake.heal();
+    expect(speech.sent.length).toBe(m);
+  });
+});
+
+describe('transcription', () => {
+  it('drops phrases speech-to-text invents for silence, keeps real short answers', async () => {
+    const { dropHallucination } = await import('../src/main/voice/voiceService');
+    for (const t of ['Thanks for watching!', 'Gracias.', 'Subtítulos realizados por la comunidad de Amara.org', '...', 'you']) expect(dropHallucination(t)).toBe('');
+    for (const t of ['Okay', 'Thank you', 'yes please', 'open WhatsApp', 'no']) expect(dropHallucination(t)).toBe(t);
+  });
+});

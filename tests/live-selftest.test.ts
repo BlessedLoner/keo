@@ -24,3 +24,33 @@ it.runIf(process.env.KEO_LIVE_SELFTEST === '1')('live self-test', async () => {
   fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
   b.dispose();
 }, 90000);
+
+/** Direct delivery (used when Windows refuses simulated input), on the same test window. */
+it.runIf(process.env.KEO_LIVE_SELFTEST === '1')('live direct delivery', async () => {
+  const dir = path.join(os.tmpdir(), 'keo-live-selftest');
+  const b = new Win32Backend(dir, new Logger(dir, false));
+  const call = (cmd: string, args: Record<string, unknown>) => (b as unknown as { call(c: string, a: Record<string, unknown>, t?: number): Promise<unknown> }).call(cmd, args, 20000);
+  const w = launchPowerShellTestWindow('Keo self-test direct');
+  let hwnd = '';
+  for (let i = 0; i < 60 && !hwnd; i++) {
+    hwnd = (await b.list()).find((x) => x.pid === w.pid)?.hwnd ?? '';
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const out: Record<string, unknown> = {};
+  try {
+    out.focus = await b.focus(hwnd);
+    out.text = await call('post_text', { hwnd, text: 'direct é 123\nline two' });
+    out.key = await call('post_key', { hwnd, key: 0x08 }); // backspace
+    out.readBack = await b.readText(hwnd);
+    const snap = await b.uiaSnapshot(hwnd, { maxNodes: 50, maxDepth: 6, budgetMs: 3000 });
+    const btn = snap.nodes.find((n) => n.role === 'button' && /press me/i.test(n.name))!;
+    const c = await b.uiaCenter(hwnd, btn.rid);
+    out.click = await call('post_click_screen', { hwnd, x: Math.round(c.x), y: Math.round(c.y) });
+    await new Promise((r) => setTimeout(r, 200));
+    out.button = (await b.uiaDescribe(hwnd, btn.rid))?.name;
+  } finally {
+    fs.writeFileSync(path.join(dir, 'direct.json'), JSON.stringify(out, null, 1));
+    w.close();
+    b.dispose();
+  }
+}, 90000);

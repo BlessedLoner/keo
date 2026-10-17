@@ -100,10 +100,10 @@ export async function runSelfTest(d: SelfTestDeps): Promise<SelfTestReport> {
 
       const typed = `typed ${nonce} 123`;
       await step('type', 'Type text', async () => {
-        await d.backend.typeText(hwnd!, typed);
+        const t = await d.backend.typeText(hwnd!, typed);
         await new Promise((r) => setTimeout(r, 150));
         if (!(await read()).includes(typed)) fail('the text did not appear');
-        return `${typed.length} characters`;
+        return t.method === 'direct' ? `${typed.length} characters — typed directly, because Windows blocks simulated keys from Keo on this PC (shortcuts like Ctrl+T can’t work)` : `${typed.length} characters`;
       });
 
       const pasted = `pasted ${nonce} ✓ 456`;

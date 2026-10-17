@@ -120,7 +120,9 @@ public static class KeoVoice {
     };
     wakeRec = r;
     mode = "wake";
-    WaitAction(r.ContinuousRecognitionSession.StartAsync(), 15);
+    // The microphone can still be held for a moment by a capture that just ended.
+    try { WaitAction(r.ContinuousRecognitionSession.StartAsync(), 15); }
+    catch (Exception) { Thread.Sleep(700); if (gen != generation) return; WaitAction(r.ContinuousRecognitionSession.StartAsync(), 15); }
     Emit(Ev("listening"));
   }
 

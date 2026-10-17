@@ -120,6 +120,11 @@ export class WakeService {
   private captureTimer: NodeJS.Timeout | null = null;
   /** Automatic restarts of a crashed speech helper (recent timestamps, bounded). */
   private restarts: number[] = [];
+  /** Whether the helper really runs wake listening right now (the shown status stays "listening" while paused for speech). */
+  private helperListening = false;
+  private speakingSince = 0;
+  private watchdog: NodeJS.Timeout | null = null;
+  private healing = false;
   private pendingTest: ((r: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar?: string | null }) => void) | null = null;
   private lastHeardNote = 0;
   /** Engine preference the running helper was started with (switching restarts it). */
@@ -168,6 +173,7 @@ export class WakeService {
         (e) => this.onEvent(e),
         (code) => {
           this.started = false;
+          this.helperListening = false;
           this.log.warn('wake.helper_exit', { code });
           this.finishCapture({ text: null, reason: 'helper_exited' });
           // Restart on its own (a few times per 10 minutes) so the wake word stays ready.
@@ -193,10 +199,11 @@ export class WakeService {
     const w = this.getSettings().wake;
     if (this.voicePaused) return;
     if (!w.enabled || this.muted) {
-      if (this.started) this.engine.send({ cmd: 'pause' });
+      if (this.started) this.sendPause();
       this.set({ status: 'off', message: this.muted ? 'Microphone muted.' : null });
       return;
     }
+    this.startWatchdog();
     if (!(await this.ensure())) return;
     if (this.pausedForSpeech) return;
     this.engine.send({ cmd: 'wake', phrases: this.grammarPhrases(), culture: w.culture, threshold: w.sensitivity });
@@ -206,7 +213,7 @@ export class WakeService {
   setVoiceMode(active: boolean): void {
     this.voicePaused = active;
     if (active) {
-      if (this.started && this.state.status === 'listening') this.engine.send({ cmd: 'pause' });
+      if (this.started && this.state.status === 'listening') this.sendPause();
     } else void this.apply();
   }
 
@@ -220,8 +227,9 @@ export class WakeService {
   /** Keo is speaking: stop listening so playback can never trigger a wake. */
   setSpeaking(speaking: boolean): void {
     if (speaking) {
+      if (!this.pausedForSpeech) this.speakingSince = Date.now();
       if (this.resumeTimer) clearTimeout(this.resumeTimer);
-      if (!this.pausedForSpeech && this.state.status === 'listening') this.engine.send({ cmd: 'pause' });
+      if (!this.pausedForSpeech && this.state.status === 'listening') this.sendPause();
       this.pausedForSpeech = true;
     } else if (this.pausedForSpeech) {
       if (this.resumeTimer) clearTimeout(this.resumeTimer);
@@ -326,9 +334,11 @@ export class WakeService {
   private onEvent(e: SpeechEvent): void {
     switch (e.event) {
       case 'listening':
+        this.helperListening = true;
         this.set({ status: 'listening', message: null });
         break;
       case 'paused':
+        this.helperListening = false;
         if (this.state.status === 'listening') this.set({ status: this.muted ? 'off' : 'listening', message: this.pausedForSpeech ? 'Paused while Keo speaks.' : null });
         break;
       case 'wake':
@@ -377,6 +387,7 @@ export class WakeService {
         break;
       case 'capturing':
         if (e.id && e.id !== this.captureId) break;
+        this.helperListening = false;
         this.set({ status: 'capturing', message: null });
         break;
       case 'level':
@@ -419,6 +430,7 @@ export class WakeService {
                 ? 'Windows “Online speech recognition” is off, so free dictation is unavailable. Turn it on in Windows Settings → Privacy & security → Speech, or choose OpenAI transcription for commands.'
                 : (e.message ?? e.code);
         this.log.warn('wake.error', { code: e.code });
+        this.helperListening = false;
         this.set({ status: 'error', message: msg });
         this.finishCapture({ text: null, reason: e.code });
         this.pendingTest?.({ recognized: false, confidence: 0, heardSomething: false, text: null, alts: [] });
@@ -439,7 +451,46 @@ export class WakeService {
     this.handlers.onWake(phrase, rest);
   }
 
+  /**
+   * Self-healing: every few seconds, if wake listening should be on but the
+   * helper is not listening (a failed restart after a conversation, a lost
+   * "finished speaking" signal, an error), it is started again — so the wake
+   * word works without touching the mic button.
+   */
+  private sendPause(): void {
+    this.helperListening = false;
+    this.engine.send({ cmd: 'pause' });
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdog) return;
+    this.watchdog = setInterval(() => void this.heal(), 5000);
+    this.watchdog.unref?.();
+  }
+
+  /** Exposed for tests. */
+  async heal(): Promise<void> {
+    const w = this.getSettings().wake;
+    if (this.healing || !w.enabled || this.muted || this.voicePaused || this.pendingCapture || this.pendingTest) return;
+    // Keo speaks for at most a couple of minutes; a pause older than that lost its "done" signal.
+    if (this.pausedForSpeech && Date.now() - this.speakingSince > 120_000) {
+      this.log.warn('wake.speaking_pause_expired', {});
+      this.pausedForSpeech = false;
+    }
+    if (this.pausedForSpeech || this.helperListening || this.state.status === 'starting') return;
+    this.healing = true;
+    try {
+      this.log.info('wake.heal', { status: this.state.status });
+      await this.apply();
+    } finally {
+      this.healing = false;
+    }
+  }
+
   stop(): void {
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
+    this.helperListening = false;
     this.engine.stop();
     this.started = false;
     if (this.resumeTimer) clearTimeout(this.resumeTimer);
