@@ -66,6 +66,9 @@ export function headerMatches(header: string | null, contact: string): boolean {
 }
 
 const GENERIC_HEADER = /^(search|menu|more options|new chat|profile details|contact info|end icon button|start icon button|read more|voice message|emojis, gifs, stickers|disappearing messages|encrypted|click here for contact info|video call|voice call|call|chats|status|channels|communities|settings|profile|get the app|attach|emoji|archived|filter|unread|all|groups|favourites|favorites|whatsapp|back|close|search\.\.\.|search messages?)$/i;
+/** "Search" in WhatsApp's common interface languages. */
+const SEARCH = /search|pesquis|buscar|busca|rechercher|recherche|suchen|suche|cerca|zoek|szukaj|\bara\b|arama|поиск|пошук|بحث|搜索|検索|검색|tìm|cari|ค้นหา|חיפוש|αναζήτηση|hľadať|hledat|keresés|sök|søg|søk|haku|caută/i;
+const COMPOSE = /type a message|message|compose|write|mensagem|mensaje|nachricht|messaggio|bericht|сообщение/i;
 const TIME = /^\s*(\d{1,2}:\d{2}(\s?[ap]\.?m\.?)?|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/i;
 const STATUS = /\b(pending|sent|delivered|read)\b/i;
 
@@ -142,13 +145,19 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
   const H = Math.max(1, win.h);
   const editable = (n: UiaNodeRaw) => (n.role === 'edit' || n.role === 'combobox' || n.role === 'document') && !n.password && !n.offscreen && hasBox(n);
 
-  const searchCandidates = nodes.filter((n) => editable(n) && /search/i.test(`${n.name} ${n.aid ?? ''}`) && cx(n) < W * 0.5);
-  const search = searchCandidates.sort((a, b) => (a.y ?? 0) - (b.y ?? 0))[0] ?? null;
+  const searchCandidates = nodes.filter((n) => editable(n) && SEARCH.test(`${n.name} ${n.aid ?? ''}`) && cx(n) < W * 0.5);
+  // Other languages or unnamed fields: the top-most single-line field at the top of the chat list.
+  const byPlace = nodes.filter(
+    (n) => (n.role === 'edit' || n.role === 'combobox') && editable(n) && cx(n) < W * 0.45 && cy(n) < H * 0.3 && !COMPOSE.test(`${n.name} ${n.aid ?? ''}`),
+  );
+  const search = searchCandidates.sort((a, b) => (a.y ?? 0) - (b.y ?? 0))[0] ?? byPlace.sort((a, b) => (a.y ?? 0) - (b.y ?? 0))[0] ?? null;
 
   const composeCandidates = nodes.filter(
-    (n) => editable(n) && n !== search && /(type a message|message|compose|write)/i.test(`${n.name} ${n.aid ?? ''}`) && !/search/i.test(n.name) && cx(n) > W * 0.3,
+    (n) => editable(n) && n !== search && COMPOSE.test(`${n.name} ${n.aid ?? ''}`) && !SEARCH.test(n.name) && cx(n) > W * 0.3,
   );
-  const compose = composeCandidates.sort((a, b) => (b.y ?? 0) - (a.y ?? 0))[0] ?? null;
+  // Other languages: the bottom-most field in the lower part of the conversation pane.
+  const composeByPlace = nodes.filter((n) => editable(n) && n !== search && !SEARCH.test(`${n.name} ${n.aid ?? ''}`) && cx(n) > W * 0.35 && cy(n) > H * 0.7);
+  const compose = composeCandidates.sort((a, b) => (b.y ?? 0) - (a.y ?? 0))[0] ?? composeByPlace.sort((a, b) => (b.y ?? 0) - (a.y ?? 0))[0] ?? null;
 
   const send = nodes.find((n) => n.role === 'button' && /^send\b/i.test(n.name.trim()) && !n.offscreen) ?? null;
 

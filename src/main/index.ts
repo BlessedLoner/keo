@@ -140,7 +140,7 @@ app.on('web-contents-created', (_e, contents) => {
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
-function createWindow(): BrowserWindow {
+function createWindow(show = true): BrowserWindow {
   nativeTheme.themeSource = 'dark';
   const win = new BrowserWindow({
     width: 1360,
@@ -164,10 +164,14 @@ function createWindow(): BrowserWindow {
       webviewTag: false,
       spellcheck: true,
       devTools: !app.isPackaged,
+      // Hands-free voice records and speaks in this window; keep its timers and
+      // audio running at full speed while it is minimized or in the background.
+      backgroundThrottling: false,
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
   win.once('ready-to-show', () => {
-    if (!SMOKE && !E2E_DESKTOP) win.show();
+    if (show && !SMOKE && !E2E_DESKTOP) win.show();
   });
   win.on('closed', () => {
     mainWindow = null;
@@ -185,6 +189,22 @@ function push(channel: string, payload: unknown): void {
 
 let presenceWindows: PresenceWindows | null = null;
 let autoUpdate: AutoUpdate | null = null;
+
+/**
+ * Voice mode records and speaks through the main window. If the user closed it
+ * (Keo keeps running with the companion), a hidden one is loaded for that.
+ */
+function ensureVoiceWindow(): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) return Promise.resolve();
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(false);
+  const wc = mainWindow.webContents;
+  return new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 1200); // let the app subscribe to voice commands
+    if (!wc.isLoading()) return done();
+    wc.once('did-finish-load', done);
+    setTimeout(resolve, 15000);
+  });
+}
 
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
@@ -276,6 +296,7 @@ app.whenReady().then(() => {
       showCommandBar: () => presenceWindows?.showCommandBar(),
       showMain: (view) => showMain(view),
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
+      ensureVoiceWindow: () => ensureVoiceWindow(),
       notify: (title, body) => {
         if (!Notification.isSupported()) return;
         const n = new Notification({ title, body: body.slice(0, 240), silent: false });

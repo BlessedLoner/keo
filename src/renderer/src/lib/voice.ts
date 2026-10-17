@@ -84,14 +84,30 @@ class VoiceController {
           return;
         }
       }
-      this.raf = requestAnimationFrame(loop);
+      this.raf = this.next(loop, from);
     };
-    cancelAnimationFrame(this.raf);
-    this.raf = requestAnimationFrame(loop);
+    this.cancelTick();
+    this.raf = this.next(loop, from);
+  }
+
+  /**
+   * The microphone meter (and its silence detection) runs on a timer, not on
+   * animation frames: those stop while the window is minimized or hidden, and
+   * hands-free listening must keep working then.
+   */
+  private tickIsTimer = false;
+  private next(fn: () => void, from: 'mic' | 'playback'): number {
+    this.tickIsTimer = from === 'mic' || document.hidden;
+    return this.tickIsTimer ? window.setTimeout(fn, 40) : requestAnimationFrame(fn);
+  }
+
+  private cancelTick(): void {
+    if (this.tickIsTimer) window.clearTimeout(this.raf);
+    else cancelAnimationFrame(this.raf);
   }
 
   private stopMeter(): void {
-    cancelAnimationFrame(this.raf);
+    this.cancelTick();
     levelBus.reset();
   }
 
@@ -195,11 +211,11 @@ class VoiceController {
       const decay = () => {
         env *= 0.88;
         levelBus.set(env, 'playback');
-        this.raf = requestAnimationFrame(decay);
+        this.raf = this.next(decay, 'playback');
       };
       u.onstart = () => {
         this.set({ speaking: true, speakingSync: 'word-boundaries' });
-        this.raf = requestAnimationFrame(decay);
+        this.raf = this.next(decay, 'playback');
       };
       u.onboundary = () => {
         env = 0.85;

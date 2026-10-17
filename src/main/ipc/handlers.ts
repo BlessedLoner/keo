@@ -71,6 +71,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'app:installUpdate': () => ({ started: host.installUpdate?.() ?? false }),
     'diag:checkComputer': () => s.checkComputer(),
+    'diag:checkWhatsApp': () => s.checkWhatsApp(),
     'diag:report': () => {
       const info = host.appInfo();
       const failures = s.tasks
@@ -89,6 +90,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
           speech: { ...s.wake.engineInfo(), wakeStatus: s.wake.getState().status },
           displays: host.displays?.() ?? [],
           selfTest: s.lastSelfTest,
+          whatsapp: s.lastWhatsAppCheck,
           recentFailures: failures,
         }),
       };

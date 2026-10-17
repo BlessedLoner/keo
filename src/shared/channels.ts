@@ -11,6 +11,7 @@ export const INVOKE_CHANNELS = [
   'app:installUpdate',
   'diag:checkComputer',
   'diag:report',
+  'diag:checkWhatsApp',
   'settings:get',
   'settings:update',
   'providers:list',

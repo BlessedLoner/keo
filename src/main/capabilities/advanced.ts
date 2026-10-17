@@ -194,7 +194,25 @@ export interface WaSendResult {
 export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: string, signal: AbortSignal): Promise<WaOpenResult> {
   let { view } = await freshView(d, target);
   if (headerMatches(view.header, contact)) return { opened: true, header: view.header, candidates: [view.header as string], reason: 'already_open' };
-  if (!view.search) throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Is WhatsApp open and signed in?', { dispatched: 'no' });
+  if (!view.search) {
+    // A window just brought to the front can expose its page a moment late.
+    await sleep(d.focusSettleMs === 0 ? 0 : 800);
+    view = (await freshView(d, target)).view;
+  }
+  if (!view.search && !isBrowser(target.processName)) {
+    // WhatsApp Desktop: Ctrl+F puts the cursor in the chat search (in a browser it would open the page finder instead).
+    await d.desktop.backend.keys(target.hwnd, [0x11], 0x46);
+    await sleep(d.focusSettleMs === 0 ? 0 : 500);
+    const fresh = await freshView(d, target);
+    view = fresh.view;
+    const focused = fresh.nodes.find((n) => n.focused && !n.password && (n.role === 'edit' || n.role === 'combobox'));
+    if (!view.search && focused) view = { ...view, search: focused };
+  }
+  if (!view.search) {
+    throw new CapabilityError('not_recognized', 'Could not find WhatsApp’s chat search box in this window. Make sure WhatsApp is signed in and shows the chat list (a very narrow window can hide it), then try again. Settings → Check & help → Check WhatsApp shows what Keo sees.', {
+      dispatched: 'no',
+    });
+  }
   const searchNode = view.search;
   await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, contact));
   await sleep(d.focusSettleMs === 0 ? 0 : 900);
@@ -319,6 +337,34 @@ export async function resolveWhatsApp(d: CapabilityDeps, given: TargetT | undefi
     throw new CapabilityError('target_not_allowed', `WhatsApp is open in ${blocked[0]!.processName}, but that app is not allowed yet. The user can allow it in Access (or Vision → Show all windows → Allow).`, { dispatched: 'no' });
   }
   throw new CapabilityError('target_gone', 'No WhatsApp window is open. Ask the user to open WhatsApp Web (with its tab in front) or the WhatsApp app.', { dispatched: 'no' });
+}
+
+/**
+ * Read-only "Check WhatsApp" for Settings → Check & help: what Keo recognises
+ * in the WhatsApp window — layout facts only (field kinds, positions, counts),
+ * never names, chat titles or message text. Nothing is clicked or typed.
+ */
+export async function whatsappCheck(d: CapabilityDeps, settings: Settings): Promise<{ ok: boolean; lines: string[] }> {
+  let target: TargetT;
+  try {
+    target = await resolveWhatsApp(d, undefined, settings);
+  } catch (e) {
+    return { ok: false, lines: [(e as Error).message.replace(/“[^”]*”/g, '“…”')] };
+  }
+  const raw = await stableSnapshot(d, target);
+  const v = analyzeWhatsApp(raw.nodes, raw.window);
+  const W = Math.max(1, raw.window.w);
+  const H = Math.max(1, raw.window.h);
+  const where = (n: UiaNodeRaw) => `${(n.x ?? 0) + (n.w ?? 0) / 2 < W / 2 ? 'left' : 'right'}-${(n.y ?? 0) + (n.h ?? 0) / 2 < H / 2 ? 'top' : 'bottom'}`;
+  const kind = (n: UiaNodeRaw) => (/search/i.test(n.name) ? 'named search' : /message/i.test(n.name) ? 'named message' : n.name ? 'other name' : 'no name');
+  const fields = raw.nodes.filter((n) => ['edit', 'combobox', 'document'].includes(n.role) && !n.password).slice(0, 12);
+  const lines = [
+    `App: ${isBrowser(target.processName) ? 'WhatsApp Web in a browser' : `WhatsApp app (${target.processName})`}, window ${raw.window.w}×${raw.window.h}`,
+    `Elements read: ${raw.nodes.length}${raw.truncated ? ' (limit reached)' : ''}, hidden share ${Math.round(hiddenShare(raw.nodes) * 100)}%`,
+    `Search box: ${v.search ? `found (${where(v.search)})` : 'NOT found'} · message box: ${v.compose ? 'found' : 'not found (normal when no chat is open)'} · chat header: ${v.header ? 'found' : 'not found'} · chat list entries: ${v.chats.length}`,
+    `Text fields: ${fields.map((n) => `${n.role} [${kind(n)}${n.aid && /^[A-Za-z0-9_.-]{1,40}$/.test(n.aid) ? `, id ${n.aid}` : ''}] ${where(n)}${n.offscreen ? ' offscreen' : ''}`).join('; ') || 'none'}`,
+  ];
+  return { ok: !!v.search, lines };
 }
 
 export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {

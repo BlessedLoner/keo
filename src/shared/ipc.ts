@@ -44,6 +44,7 @@ export const invokeSchemas = {
   'app:installUpdate': empty,
   'diag:checkComputer': empty,
   'diag:report': empty,
+  'diag:checkWhatsApp': empty,
 
   'settings:get': empty,
   'settings:update': z.object({ patch: z.record(z.string(), z.unknown()) }).strict(),
@@ -196,6 +197,7 @@ export interface InvokeOutputs {
   'app:installUpdate': { started: boolean };
   'diag:checkComputer': SelfTestResult;
   'diag:report': { text: string };
+  'diag:checkWhatsApp': { ok: boolean; lines: string[] };
   'settings:get': Settings;
   'settings:update': Settings;
   'providers:list': ProviderInfo[];

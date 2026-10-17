@@ -36,6 +36,17 @@ const STOP = /^\s*(ok(ay)?[,.\s]+)?(stop|that'?s all|that is all|that'?ll be all
 const YES = /\b(yes|yeah|yep|yup|sure|ok(ay)?|go ahead|do it|approve|approved|please do|confirm|correct|send it)\b/i;
 const NO = /\b(no|nope|don'?t|do not|cancel|stop|deny|wait|not now)\b/i;
 
+const TRANSIENT = new Set(['error', 'timeout', 'helper_exited', 'busy']);
+
+/** What to say when listening failed (never a raw error code). */
+function listenProblem(reason: string): string {
+  if (reason === 'no_microphone') return 'I can’t reach a microphone. Check that one is connected and that Windows allows desktop apps to use it.';
+  if (reason === 'no_recognizer') return 'Windows speech recognition isn’t installed for your language. You can add it in Windows speech settings, or use OpenAI transcription in Keo’s settings.';
+  if (reason === 'muted') return 'The microphone is muted in Keo.';
+  if (TRANSIENT.has(reason)) return 'I’m having trouble hearing you right now. Say the wake word to try again.';
+  return reason.length > 20 ? reason : 'I couldn’t listen just now. Say the wake word to try again.';
+}
+
 /** Plain, speakable text: no Markdown, code or URLs; long answers end with a pointer to the screen. */
 export function spokenVersion(md: string, max = 600): string {
   const t = md
@@ -112,6 +123,7 @@ export class VoiceMode {
   private async loop(session: number, first: string | null): Promise<void> {
     let pending = first;
     let quiet = 0;
+    let hiccups = 0;
     while (this.alive(session)) {
       let text = pending;
       pending = null;
@@ -121,14 +133,21 @@ export class VoiceMode {
         if (!this.alive(session)) return;
         text = r.text?.trim() || null;
         if (!text) {
-          if (++quiet >= 2 || (r.reason !== 'silence' && r.reason !== 'no_speech' && r.reason !== 'unclear')) {
-            if (r.reason !== 'silence' && r.reason !== 'no_speech' && r.reason !== 'unclear' && r.reason !== 'cancelled') await this.say(session, `I couldn't listen: ${r.reason}`);
+          const quietReason = r.reason === 'silence' || r.reason === 'no_speech' || r.reason === 'unclear';
+          // A hiccup of the recognizer (microphone briefly busy, helper restarting) is retried once.
+          if (!quietReason && TRANSIENT.has(r.reason) && hiccups++ < 1) {
+            await new Promise((res) => setTimeout(res, 600));
+            continue;
+          }
+          if (++quiet >= 2 || !quietReason) {
+            if (!quietReason && r.reason !== 'cancelled') await this.say(session, listenProblem(r.reason));
             return this.stop(r.reason);
           }
           continue;
         }
       }
       quiet = 0;
+      hiccups = 0;
       if (STOP.test(text)) {
         this.set({ heard: text });
         await this.say(session, 'Okay.');

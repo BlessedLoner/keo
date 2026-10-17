@@ -124,33 +124,54 @@ public static class KeoVoice {
     Emit(Ev("listening"));
   }
 
+  static string capId = "";
+
+  static Dictionary<string, object> CapEv(string name, string id) { var d = Ev(name); d["id"] = id; return d; }
+
   public static void Capture(string culture, int initialMs, int endMs, int maxMs) {
+    var hadWake = wakeRec != null;
     StopAll();
     var gen = generation;
-    var r = Make(culture);
-    r.Constraints.Add(new SpeechRecognitionTopicConstraint(SpeechRecognitionScenario.Dictation, "dictation"));
-    var comp = Wait(r.CompileConstraintsAsync(), 20);
-    if (comp.Status != SpeechRecognitionResultStatus.Success) { r.Dispose(); throw new Exception("online_speech_off:" + comp.Status); }
-    r.Timeouts.InitialSilenceTimeout = TimeSpan.FromMilliseconds(initialMs);
-    r.Timeouts.EndSilenceTimeout = TimeSpan.FromMilliseconds(endMs);
-    r.Timeouts.BabbleTimeout = TimeSpan.FromMilliseconds(maxMs);
-    capRec = r;
+    var id = capId;
     mode = "capture";
-    Emit(Ev("capturing"));
     new Thread(() => {
-      try {
-        var res = Wait(r.RecognizeAsync(), (maxMs / 1000) + 30);
-        if (gen != generation) return;
-        mode = "idle";
-        if (res.Status == SpeechRecognitionResultStatus.Success && !string.IsNullOrEmpty(res.Text)) {
-          var d = Ev("command"); d["text"] = res.Text; d["confidence"] = Conf(res); Emit(d);
-        } else {
-          var n = Ev("command_none"); n["reason"] = res.Status == SpeechRecognitionResultStatus.TimeoutExceeded ? "silence" : res.Status.ToString(); Emit(n);
+      // The microphone can still be held for a moment by the wake session that
+      // was just stopped; a failed first attempt is retried once.
+      if (hadWake) Thread.Sleep(250);
+      for (int attempt = 0; attempt < 2; attempt++) {
+        SpeechRecognizer r = null;
+        try {
+          r = Make(culture);
+          r.Constraints.Add(new SpeechRecognitionTopicConstraint(SpeechRecognitionScenario.Dictation, "dictation"));
+          var comp = Wait(r.CompileConstraintsAsync(), 20);
+          if (comp.Status != SpeechRecognitionResultStatus.Success) throw new Exception("online_speech_off:" + comp.Status);
+          r.Timeouts.InitialSilenceTimeout = TimeSpan.FromMilliseconds(initialMs);
+          r.Timeouts.EndSilenceTimeout = TimeSpan.FromMilliseconds(endMs);
+          r.Timeouts.BabbleTimeout = TimeSpan.FromMilliseconds(maxMs);
+          if (gen != generation) { r.Dispose(); Emit(CapEv("capture_cancelled", id)); return; }
+          capRec = r;
+          if (attempt == 0) Emit(CapEv("capturing", id));
+          var res = Wait(r.RecognizeAsync(), (maxMs / 1000) + 30);
+          if (gen != generation) { Emit(CapEv("capture_cancelled", id)); return; }
+          mode = "idle";
+          if (res.Status == SpeechRecognitionResultStatus.Success && !string.IsNullOrEmpty(res.Text)) {
+            var d = CapEv("command", id); d["text"] = res.Text; d["confidence"] = Conf(res); Emit(d);
+          } else {
+            var n = CapEv("command_none", id); n["reason"] = res.Status == SpeechRecognitionResultStatus.TimeoutExceeded ? "silence" : res.Status.ToString(); Emit(n);
+          }
+          return;
+        } catch (Exception e) {
+          if (gen != generation) { Emit(CapEv("capture_cancelled", id)); return; }
+          var code = e.Message.Split(':')[0];
+          if (attempt == 0 && code != "online_speech_off" && code != "no_recognizer") {
+            try { if (r != null) r.Dispose(); } catch { }
+            Thread.Sleep(600);
+            continue;
+          }
+          mode = "idle";
+          var er = CapEv("capture_error", id); er["message"] = e.Message; er["code"] = code; Emit(er);
+          return;
         }
-      } catch (Exception e) {
-        if (gen != generation) { Emit(Ev("capture_cancelled")); return; }
-        mode = "idle";
-        var er = Ev("capture_error"); er["message"] = e.Message; er["code"] = e.Message.Split(':')[0]; Emit(er);
       }
     }) { IsBackground = true }.Start();
   }
@@ -209,8 +230,8 @@ public static class KeoVoice {
       }
       case "wake": StartWake(Strings(cmd["phrases"]), (string)cmd["culture"], Convert.ToDouble(cmd["threshold"], System.Globalization.CultureInfo.InvariantCulture)); break;
       case "pause": StopAll(); Emit(Ev("paused")); break;
-      case "capture": Capture((string)cmd["culture"], Convert.ToInt32(cmd["initialMs"]), Convert.ToInt32(cmd["endMs"]), Convert.ToInt32(cmd["maxMs"])); break;
-      case "cancel_capture": if (mode == "capture") StopAll(); Emit(Ev("capture_cancelled")); break;
+      case "capture": capId = cmd.ContainsKey("id") ? Convert.ToString(cmd["id"]) : ""; Capture((string)cmd["culture"], Convert.ToInt32(cmd["initialMs"]), Convert.ToInt32(cmd["endMs"]), Convert.ToInt32(cmd["maxMs"])); break;
+      case "cancel_capture": if (mode == "capture") StopAll(); Emit(CapEv("capture_cancelled", capId)); break;
       case "test": Test(Strings(cmd["phrases"]), (string)cmd["culture"], Convert.ToInt32(cmd["seconds"])); break;
       default: { var d = Ev("error"); d["code"] = "unknown_command"; Emit(d); break; }
     }

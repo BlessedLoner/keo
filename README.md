@@ -172,7 +172,7 @@ electron-builder never uploads anything (`--publish never`). The `publish` block
 
 ## Check this computer
 
-*Settings → Check & help → Run the check* opens Keo's own small test window for a few seconds and checks, step by step, that Keo can start its desktop helper, bring the window to the front, type, paste (your clipboard is restored), read it back and press a button. Each failing step comes with a likely cause. A developer can run the same check from a terminal with `KEO_LIVE_SELFTEST=1 npx vitest run tests/live-selftest.test.ts`.
+*Settings → Check & help → Run the check* opens Keo's own small test window for a few seconds and checks, step by step, that Keo can start its desktop helper, bring the window to the front, type, paste (your clipboard is restored), read it back and press a button. Each failing step comes with a likely cause. *Check WhatsApp* reads the WhatsApp window (nothing is clicked or typed) and shows whether Keo finds the search box, message box, header and chat list — layout facts only, never names or messages. A developer can run the same check from a terminal with `KEO_LIVE_SELFTEST=1 npx vitest run tests/live-selftest.test.ts`.
 
 ## Layout
 

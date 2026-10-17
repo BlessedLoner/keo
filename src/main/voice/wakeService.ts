@@ -15,12 +15,12 @@ export type SpeechEvent =
   | { event: 'wake_rejected'; confidence: number }
   | { event: 'heard'; grammar: string | null; text: string | null; confidence: number; alts: string[] }
   | { event: 'silent_input' }
-  | { event: 'capturing' }
+  | { event: 'capturing'; id?: string }
   | { event: 'level'; level: number }
-  | { event: 'command'; text: string; confidence: number }
-  | { event: 'command_none'; reason: string }
-  | { event: 'capture_cancelled' }
-  | { event: 'capture_error'; message: string; code?: string }
+  | { event: 'command'; text: string; confidence: number; id?: string }
+  | { event: 'command_none'; reason: string; id?: string }
+  | { event: 'capture_cancelled'; id?: string }
+  | { event: 'capture_error'; message: string; code?: string; id?: string }
   | { event: 'quality'; problem: string }
   | { event: 'testing' }
   | { event: 'test_result'; recognized: boolean; confidence: number; heardSomething: boolean; text?: string | null; alts?: string[]; grammar?: string | null }
@@ -114,6 +114,12 @@ export class WakeService {
   private muted = false;
   private pausedForSpeech = false;
   private pendingCapture: ((r: { text: string | null; reason: string }) => void) | null = null;
+  /** Id of the running capture; events of older captures (late or duplicate) are ignored. */
+  private captureId: string | null = null;
+  private captureSeq = 0;
+  private captureTimer: NodeJS.Timeout | null = null;
+  /** Automatic restarts of a crashed speech helper (recent timestamps, bounded). */
+  private restarts: number[] = [];
   private pendingTest: ((r: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar?: string | null }) => void) | null = null;
   private lastHeardNote = 0;
   /** Engine preference the running helper was started with (switching restarts it). */
@@ -163,9 +169,15 @@ export class WakeService {
         (code) => {
           this.started = false;
           this.log.warn('wake.helper_exit', { code });
-          if (this.state.status !== 'off') this.set({ status: 'error', message: 'The speech helper stopped. Toggle the wake word to restart it.' });
-          this.pendingCapture?.({ text: null, reason: 'helper_exited' });
-          this.pendingCapture = null;
+          this.finishCapture({ text: null, reason: 'helper_exited' });
+          // Restart on its own (a few times per 10 minutes) so the wake word stays ready.
+          const now = Date.now();
+          this.restarts = this.restarts.filter((t) => now - t < 10 * 60_000);
+          if (this.state.status !== 'off' && this.restarts.length < 5) {
+            this.restarts.push(now);
+            this.set({ status: 'starting', message: 'Restarting speech recognition…' });
+            setTimeout(() => void this.apply(), 1500 * this.restarts.length).unref?.();
+          } else if (this.state.status !== 'off') this.set({ status: 'error', message: 'The speech helper keeps stopping. Toggle the wake word to try again.' });
         },
       );
       this.started = true;
@@ -224,16 +236,42 @@ export class WakeService {
   async capture(): Promise<{ text: string | null; reason: string }> {
     if (this.muted) return { text: null, reason: 'muted' };
     if (!(await this.ensure())) return { text: null, reason: this.state.message ?? 'unavailable' };
-    if (this.pendingCapture) return { text: null, reason: 'busy' };
+    // A newer request wins over a capture still running (it is cancelled, never left blocking).
+    if (this.pendingCapture) this.cancelCapture();
     const w = this.getSettings().wake;
+    const maxMs = 20000;
+    const id = `c${++this.captureSeq}`;
     return new Promise((resolve) => {
       this.pendingCapture = resolve;
-      this.engine.send({ cmd: 'capture', culture: w.culture, initialMs: 6000, endMs: 1100, maxMs: 20000 });
+      this.captureId = id;
+      // Watchdog: a helper that never answers must not block listening.
+      this.captureTimer = setTimeout(() => {
+        if (this.captureId !== id) return;
+        this.log.warn('wake.capture_timeout', {});
+        this.engine.send({ cmd: 'cancel_capture' });
+        this.finishCapture({ text: null, reason: 'timeout' });
+        void this.apply();
+      }, maxMs + 15000);
+      this.captureTimer.unref?.();
+      this.engine.send({ cmd: 'capture', id, culture: w.culture, initialMs: 6000, endMs: 1100, maxMs });
     });
   }
 
+  /** Stops a running capture right away (its late events are ignored). */
   cancelCapture(): void {
-    if (this.pendingCapture) this.engine.send({ cmd: 'cancel_capture' });
+    if (!this.pendingCapture) return;
+    this.engine.send({ cmd: 'cancel_capture' });
+    this.finishCapture({ text: null, reason: 'cancelled' });
+    if (this.state.status === 'capturing') this.set({ status: this.getSettings().wake.enabled && !this.muted ? 'listening' : 'off', message: null });
+  }
+
+  private finishCapture(r: { text: string | null; reason: string }): void {
+    if (this.captureTimer) clearTimeout(this.captureTimer);
+    this.captureTimer = null;
+    const p = this.pendingCapture;
+    this.pendingCapture = null;
+    this.captureId = null;
+    p?.(r);
   }
 
   /** Speech recognizers installed in Windows (queried from the helper, then cached). */
@@ -338,6 +376,7 @@ export class WakeService {
         this.set({ status: 'listening', message: 'No audio is reaching Keo. Check the microphone and Windows Settings → Privacy → Microphone (allow desktop apps).' });
         break;
       case 'capturing':
+        if (e.id && e.id !== this.captureId) break;
         this.set({ status: 'capturing', message: null });
         break;
       case 'level':
@@ -347,13 +386,16 @@ export class WakeService {
       case 'command_none':
       case 'capture_cancelled':
       case 'capture_error': {
+        if (e.id && e.id !== this.captureId) {
+          this.log.info('wake.capture_stale_event', { event: e.event });
+          break;
+        }
         const r =
           e.event === 'command'
             ? { text: e.text.trim(), reason: 'ok' }
-            : { text: null, reason: e.event === 'command_none' ? e.reason : e.event === 'capture_error' ? (e.code === 'online_speech_off' ? 'online_speech_off' : 'error') : 'cancelled' };
+            : { text: null, reason: e.event === 'command_none' ? e.reason : e.event === 'capture_error' ? (e.code && ['online_speech_off', 'no_microphone', 'no_recognizer'].includes(e.code) ? e.code : 'error') : 'cancelled' };
         this.log.info('wake.capture_done', { reason: r.reason, chars: r.text?.length ?? 0 });
-        this.pendingCapture?.(r);
-        this.pendingCapture = null;
+        this.finishCapture(r);
         void this.apply(); // back to wake listening (if enabled)
         if (this.state.status === 'capturing') this.set({ status: this.getSettings().wake.enabled && !this.muted ? 'listening' : 'off', message: null });
         break;
@@ -378,8 +420,7 @@ export class WakeService {
                 : (e.message ?? e.code);
         this.log.warn('wake.error', { code: e.code });
         this.set({ status: 'error', message: msg });
-        this.pendingCapture?.({ text: null, reason: e.code });
-        this.pendingCapture = null;
+        this.finishCapture({ text: null, reason: e.code });
         this.pendingTest?.({ recognized: false, confidence: 0, heardSomething: false, text: null, alts: [] });
         this.pendingTest = null;
         break;

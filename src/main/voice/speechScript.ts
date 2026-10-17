@@ -124,8 +124,13 @@ public static class KeoSpeech {
     }) { IsBackground = true }.Start();
   }
 
+  static string capId = "";
+
+  static Dictionary<string, object> CapEv(string name, string id) { var d = Ev(name); d["id"] = id; return d; }
+
   public static void Capture(string culture, int initialMs, int endMs, int maxMs) {
     Dispose();
+    var id = capId;
     eng = Make(culture);
     eng.LoadGrammar(new DictationGrammar() { Name = "dictation" });
     eng.InitialSilenceTimeout = TimeSpan.FromMilliseconds(initialMs);
@@ -134,17 +139,17 @@ public static class KeoSpeech {
     eng.RecognizeCompleted += (s, a) => {
       if (mode != "capture") return;
       mode = "idle";
-      if (a.Cancelled) { Emit(Ev("capture_cancelled")); return; }
-      if (a.Error != null) { var er = Ev("capture_error"); er["message"] = a.Error.Message; Emit(er); return; }
+      if (a.Cancelled) { Emit(CapEv("capture_cancelled", id)); return; }
+      if (a.Error != null) { var er = CapEv("capture_error", id); er["message"] = a.Error.Message; Emit(er); return; }
       if (a.Result != null && !string.IsNullOrEmpty(a.Result.Text)) {
-        var d = Ev("command"); d["text"] = a.Result.Text; d["confidence"] = Math.Round(a.Result.Confidence, 3); Emit(d);
+        var d = CapEv("command", id); d["text"] = a.Result.Text; d["confidence"] = Math.Round(a.Result.Confidence, 3); Emit(d);
       } else {
-        var n = Ev("command_none"); n["reason"] = a.InitialSilenceTimeout ? "silence" : a.BabbleTimeout ? "unclear" : "no_speech"; Emit(n);
+        var n = CapEv("command_none", id); n["reason"] = a.InitialSilenceTimeout ? "silence" : a.BabbleTimeout ? "unclear" : "no_speech"; Emit(n);
       }
     };
     mode = "capture";
     eng.RecognizeAsync(RecognizeMode.Single);
-    Emit(Ev("capturing"));
+    Emit(CapEv("capturing", id));
   }
 
   public static void Test(string[] phrases, string culture, int seconds) {
@@ -203,8 +208,13 @@ public static class KeoSpeech {
         break;
       }
       case "pause": Dispose(); Emit(Ev("paused")); break;
-      case "capture": Capture((string)cmd["culture"], Convert.ToInt32(cmd["initialMs"]), Convert.ToInt32(cmd["endMs"]), Convert.ToInt32(cmd["maxMs"])); break;
-      case "cancel_capture": if (eng != null && mode == "capture") { try { eng.RecognizeAsyncCancel(); } catch { } } else Emit(Ev("capture_cancelled")); break;
+      case "capture": {
+        capId = cmd.ContainsKey("id") ? Convert.ToString(cmd["id"]) : "";
+        try { Capture((string)cmd["culture"], Convert.ToInt32(cmd["initialMs"]), Convert.ToInt32(cmd["endMs"]), Convert.ToInt32(cmd["maxMs"])); }
+        catch (Exception e) { mode = "idle"; var er = CapEv("capture_error", capId); er["message"] = e.Message; er["code"] = e.Message.Split(':')[0]; Emit(er); }
+        break;
+      }
+      case "cancel_capture": if (eng != null && mode == "capture") { try { eng.RecognizeAsyncCancel(); } catch { } } else Emit(CapEv("capture_cancelled", capId)); break;
       case "test": {
         var phrases = Strings(cmd["phrases"]);
         Test(phrases, (string)cmd["culture"], Convert.ToInt32(cmd["seconds"]));

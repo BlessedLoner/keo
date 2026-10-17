@@ -613,3 +613,42 @@ describe('window roles', () => {
     expect(channelAllowed('companion', 'tasks:approveStep')).toBe(false);
   });
 });
+
+describe('WhatsApp in other languages and layouts', () => {
+  it('finds the search and message boxes when they are named in another language or not at all', async () => {
+    const { analyzeWhatsApp } = await import('../src/main/desktop/whatsapp');
+    for (const [searchName, composeName] of [
+      ['Rechercher ou démarrer une discussion', 'Écrivez un message'],
+      ['Pesquisar ou começar uma nova conversa', 'Digite uma mensagem'],
+      ['', ''],
+    ]) {
+      const wa = new FakeWhatsApp();
+      wa.searchName = searchName!;
+      wa.composeName = composeName!;
+      wa.open = 'Mum';
+      const v = analyzeWhatsApp(wa.nodes(), wa.window);
+      expect(v.search?.rid).toBe('rid.search');
+      expect(v.compose?.rid).toBe('rid.compose');
+    }
+  });
+
+  it('opens a chat in a French WhatsApp', async () => {
+    const { wa } = setup();
+    wa.searchName = 'Rechercher ou démarrer une discussion';
+    const r = await runCap('whatsapp.open_chat', { target: WA, contact: 'Mum' });
+    expect(r.task?.steps[0]?.state).toBe('succeeded');
+    expect(wa.open).toBe('Mum');
+  });
+
+  it('“Check WhatsApp” reports layout facts only — no chat names', async () => {
+    const { wa } = setup();
+    wa.open = 'Daniel Okafor';
+    const r = await h.services.checkWhatsApp();
+    expect(r.ok).toBe(true);
+    const text = r.lines.join('\n');
+    expect(text).toMatch(/Search box: found \(left-top\)/);
+    expect(text).toMatch(/chat list entries: 3/);
+    expect(text).not.toMatch(/Daniel|Mum|microphone|Okafor/);
+    expect(h.desktop.inputCalls()).toEqual([]);
+  });
+});

@@ -135,6 +135,9 @@ export class FakeWhatsApp implements FakeUiaApp {
   /** Accept accessibility value writes without the page noticing (rich web editors). */
   ignoreValueWrites = false;
   focused: 'search' | 'compose' | null = null;
+  /** Control names (WhatsApp in other languages, or unnamed fields). */
+  searchName = 'Search input textbox';
+  composeName = 'Type a message';
 
   nodes(): UiaNodeRaw[] {
     const ns = this.layout();
@@ -148,7 +151,7 @@ export class FakeWhatsApp implements FakeUiaApp {
   private layout(): UiaNodeRaw[] {
     const s: Spec[] = [
       { key: 'root', role: 'window', name: 'WhatsApp', x: 0, y: 0, w: 1200, h: 800 },
-      { key: 'search', parentKey: 'root', role: 'edit', name: 'Search input textbox', x: 20, y: 70, w: 340, h: 30, patterns: ['value'], value: this.search },
+      { key: 'search', parentKey: 'root', role: 'edit', name: this.searchName, x: 20, y: 70, w: 340, h: 30, patterns: ['value'], value: this.search },
       { key: 'list', parentKey: 'root', role: 'list', name: 'Chat list', x: 0, y: 110, w: 380, h: 690 },
     ];
     const visible = this.chats.filter((c) => !this.search || c.title.toLowerCase().includes(this.search.toLowerCase()));
@@ -184,7 +187,7 @@ export class FakeWhatsApp implements FakeUiaApp {
         if (m.status) s.push({ key: `msg.${i}.status`, parentKey: `msg.${i}`, role: 'image', name: ` ${m.status} `, x: x + 320, y: 120 + i * 60, w: 14, h: 14 });
       });
       s.push(
-        { key: 'compose', parentKey: 'root', role: 'edit', name: 'Type a message', x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.compose },
+        { key: 'compose', parentKey: 'root', role: 'edit', name: this.composeName, x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.compose },
         { key: 'send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 740, w: 50, h: 40, patterns: ['invoke'] },
       );
     }

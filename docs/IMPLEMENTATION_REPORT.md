@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.1.1 fixes (reported from the second laptop)
+
+- *“Only part of the input was delivered”* when bringing WhatsApp to the front: the masked ALT tap could be partly refused by Windows and failed the whole action (and could leave ALT held). It is now best effort and modifiers are released afterwards. Live self-test 7/7.
+- *“Could not find WhatsApp’s chat search box”*: recognition now accepts other interface languages and unnamed fields (by position), waits once for a late page, and in the WhatsApp app tries Ctrl+F. *Check WhatsApp* reports what Keo sees. Not verified against that laptop's WhatsApp.
+- *“Couldn't listen”* after the first answer: a cancelled capture the helper never confirmed blocked every later one (“busy”). Captures now carry ids, cancel immediately, have a watchdog, retry once after a microphone hiccup, and a crashed speech helper restarts on its own. Both helpers compile and answer on this PC.
+- Not answering while minimized: silence detection ran on animation frames, which stop for minimized windows; it now runs on a timer, the window is not throttled in the background, and a hidden window is loaded for voice if Keo's window was closed.
+
 ## 4. Integrations that require configuration (not live-verified)
 
 | Integration | Status |

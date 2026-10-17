@@ -12,6 +12,8 @@ export interface DiagnosticInput {
   speech: { kind: string | null; fallbackReason: string | null; wakeStatus: string };
   displays: Array<{ width: number; height: number; scale: number; primary: boolean }>;
   selfTest: { at: string; report: SelfTestResult } | null;
+  /** Layout facts from "Check WhatsApp" (no names or messages). */
+  whatsapp?: { at: string; ok: boolean; lines: string[] } | null;
   /** Recent failed task steps: capability id and error code only. */
   recentFailures: Array<{ capabilityId: string; code: string }>;
 }
@@ -39,6 +41,7 @@ export function diagnosticReport(d: DiagnosticInput): string {
     lines.push(`Self-test ${d.selfTest.at}: ${r.ok ? 'PASSED' : 'FAILED'}`);
     for (const st of r.steps) lines.push(`  ${st.ok ? '✓' : '✗'} ${st.title} (${st.ms} ms)${st.ok ? '' : ` — ${st.detail}`}`);
   } else lines.push('Self-test: not run');
+  if (d.whatsapp) lines.push(`WhatsApp check ${d.whatsapp.at}: ${d.whatsapp.ok ? 'OK' : 'PROBLEM'}`, ...d.whatsapp.lines.map((l) => `  ${l}`));
   if (d.recentFailures.length) lines.push(`Recent errors: ${d.recentFailures.map((f) => `${f.capabilityId}:${f.code}`).join(', ')}`);
   return lines.join('\n');
 }

@@ -207,7 +207,12 @@ public static class KeoWin {
       // SetForegroundWindow rule). A bare ALT release would open the menu of
       // whichever window receives it (and swallow the next keys typed), so an
       // unassigned key (VK 0xE8) is pressed in between to mask it.
-      Send(new List<INPUT> { Key(0x12, 0, 0), Key(0xE8, 0, 0), Key(0xE8, 0, 2), Key(0x12, 0, 2) });
+      // Best effort: some PCs accept only part of injected input here (security
+      // software, another program's input block). That must not fail the focus
+      // or leave ALT held down, which would turn every typed key into a shortcut.
+      var tap = new List<INPUT> { Key(0x12, 0, 0), Key(0xE8, 0, 0), Key(0xE8, 0, 2), Key(0x12, 0, 2) }.ToArray();
+      SendInput((uint)tap.Length, tap, Marshal.SizeOf(typeof(INPUT)));
+      ReleaseModifiers();
       BringWindowToTop(h);
       SetForegroundWindow(h);
       Thread.Sleep(100);

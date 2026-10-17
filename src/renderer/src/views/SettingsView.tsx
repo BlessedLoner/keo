@@ -830,6 +830,14 @@ function CheckComputer() {
   const ui = useUi();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SelfTestResult | null>(null);
+  const [wa, setWa] = useState<{ ok: boolean; lines: string[] } | null>(null);
+  const checkWa = async () => {
+    try {
+      setWa(await invoke('diag:checkWhatsApp', {}));
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
   const run = async () => {
     setRunning(true);
     try {
@@ -865,10 +873,23 @@ function CheckComputer() {
             'Run the check'
           )}
         </button>
+        <button className="btn sm" onClick={() => void checkWa()} title="Reads the WhatsApp window only — nothing is clicked or typed">
+          Check WhatsApp
+        </button>
         <button className="btn sm ghost" onClick={() => void copy()}>
           Copy diagnostic report
         </button>
       </div>
+      {wa && (
+        <div className="stack" style={{ marginTop: 12, gap: 4 }} aria-live="polite">
+          <strong>{wa.ok ? 'Keo recognises WhatsApp.' : 'Keo can’t find WhatsApp’s search box.'}</strong>
+          {wa.lines.map((l, i) => (
+            <div key={i} className="small muted">
+              {l}
+            </div>
+          ))}
+        </div>
+      )}
       {result && (
         <div className="stack" style={{ marginTop: 12, gap: 4 }} aria-live="polite">
           <strong>{result.ok ? 'Everything works on this computer.' : 'Something is blocking Keo.'}</strong>

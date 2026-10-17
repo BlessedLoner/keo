@@ -118,3 +118,54 @@ describe('wake service', () => {
     expect(system).toMatch(/“the error”, “line 10”/);
   });
 });
+
+describe('reliable listening', () => {
+  it('a cancelled capture never blocks the next one, and its late events are ignored', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    const first = h.services.wake.capture();
+    await waitFor(() => speech.cmds().includes('capture'));
+    const firstId = speech.lastCaptureId();
+    h.services.wake.cancelCapture(); // the helper never answers this cancel
+    expect((await first).reason).toBe('cancelled');
+    const second = h.services.wake.capture();
+    await waitFor(() => speech.lastCaptureId() !== firstId);
+    speech.fire({ event: 'capture_cancelled', id: firstId }); // late event of the old capture
+    speech.fire({ event: 'command', text: 'open notepad', confidence: 0.9, id: speech.lastCaptureId() });
+    expect(await second).toEqual({ text: 'open notepad', reason: 'ok' });
+  });
+
+  it('a new capture replaces one still running instead of answering “busy”', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    const first = h.services.wake.capture();
+    await waitFor(() => speech.cmds().includes('capture'));
+    const second = h.services.wake.capture();
+    expect((await first).reason).toBe('cancelled');
+    await waitFor(() => speech.cmds().filter((c) => c === 'capture').length === 2);
+    speech.fire({ event: 'command', text: 'hello', confidence: 0.9, id: speech.lastCaptureId() });
+    expect((await second).text).toBe('hello');
+  });
+
+  it('restarts a crashed speech helper on its own so the wake word stays ready', async () => {
+    const speech = new FakeSpeech();
+    h = makeHarness({ speech, script: () => reply('ok') });
+    h.services.settings.update({ wake: { enabled: true } });
+    await waitFor(() => speech.cmds().includes('wake'));
+    const before = speech.started;
+    speech.crash();
+    await waitFor(() => speech.started > before, 5000);
+    await waitFor(() => h.services.wake.getState().status === 'listening', 5000);
+  });
+
+  it('voice mode retries once after a recognizer hiccup instead of ending with an error', async () => {
+    const speech = new FakeSpeech();
+    const spoken: string[] = [];
+    const results = [{ text: null, reason: 'error' }, { text: 'stop', reason: 'ok' }];
+    h = makeHarness({ speech, script: () => reply('ok'), voiceIo: { listen: async () => results.shift() ?? { text: null, reason: 'silence' }, speak: async (t) => void spoken.push(t) } });
+    h.services.ui = { showCommandBar: () => undefined, notify: () => undefined, showMain: () => undefined };
+    h.services.voiceMode.start();
+    await waitFor(() => !h.services.voiceMode.isActive(), 5000);
+    expect(spoken).toEqual(['Okay.']);
+  });
+});

@@ -189,10 +189,12 @@ export class FakeSpeech implements SpeechEngine {
   failStart: string | null = null;
   /** What the next "test" (or teach sample) hears. */
   nextTest: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar: string | null } | null = null;
-  async start(onEvent: (e: SpeechEvent) => void) {
+  private exit: ((code: number | null) => void) | null = null;
+  async start(onEvent: (e: SpeechEvent) => void, onExit?: (code: number | null) => void) {
     this.started++;
     if (this.failStart) throw new Error(this.failStart);
     this.emit = onEvent;
+    this.exit = onExit ?? null;
     onEvent({ event: 'ready' });
   }
   send(cmd: Record<string, unknown>) {
@@ -209,6 +211,17 @@ export class FakeSpeech implements SpeechEngine {
   }
   fire(e: SpeechEvent) {
     this.emit?.(e);
+  }
+  /** The helper process dies. */
+  crash() {
+    const x = this.exit;
+    this.emit = null;
+    this.exit = null;
+    x?.(1);
+  }
+  /** Id of the last capture request. */
+  lastCaptureId() {
+    return [...this.sent].reverse().find((c) => c.cmd === 'capture')?.id as string | undefined;
   }
   stop() {
     this.emit = null;

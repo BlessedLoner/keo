@@ -4,7 +4,7 @@ import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type Test
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
 import { AgentService } from './agent/agentService';
-import { advancedCapabilities } from './capabilities/advanced';
+import { advancedCapabilities, whatsappCheck } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
 import { LiveChatService } from './livechat/liveChatService';
@@ -103,7 +103,7 @@ export class Services {
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
-  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void } = { showCommandBar: () => undefined, notify: () => undefined };
+  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void> } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
   private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
@@ -115,6 +115,7 @@ export class Services {
   private readonly launchTestWindow: (title: string) => TestWindow;
   private selfTestRunning: Promise<SelfTestReport> | null = null;
   lastSelfTest: { at: string; report: SelfTestReport } | null = null;
+  lastWhatsAppCheck: { at: string; ok: boolean; lines: string[] } | null = null;
 
   constructor(d: ServiceDeps) {
     this.profile = d.profile;
@@ -431,6 +432,14 @@ export class Services {
     return this.selfTestRunning;
   }
 
+  /** Read-only: what Keo recognises in the WhatsApp window (layout facts only). */
+  async checkWhatsApp(): Promise<{ ok: boolean; lines: string[] }> {
+    const r = await whatsappCheck(this.capDeps, this.settings.get());
+    this.lastWhatsAppCheck = { at: new Date().toISOString(), ...r };
+    this.audit.record({ kind: 'diagnostics.whatsapp_check', decision: r.ok ? 'passed' : 'failed' });
+    return r;
+  }
+
   /** Starts or stops voice mode from the UI (companion / title bar). */
   startVoiceMode(): void {
     void this.noteActiveWindow().finally(() => this.voiceMode.start());
@@ -440,6 +449,7 @@ export class Services {
   private async voiceListen(): Promise<{ text: string | null; reason: string }> {
     const s = this.settings.get();
     if (s.wake.commandRecognizer === 'openai' && this.voice.sttStatus(s).available) {
+      await this.ui.ensureVoiceWindow?.();
       const id = `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       return new Promise((resolve) => {
         const t = setTimeout(() => {
@@ -459,7 +469,8 @@ export class Services {
   }
 
   /** Speaks in the main window and resolves when playback ends (bounded by the text length). */
-  private voiceSpeak(text: string): Promise<void> {
+  private async voiceSpeak(text: string): Promise<void> {
+    await this.ui.ensureVoiceWindow?.();
     const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     return new Promise((resolve) => {
       const t = setTimeout(() => {
