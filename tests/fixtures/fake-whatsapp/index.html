@@ -49,6 +49,8 @@
   ];
   window.__state = { open: null, sent: [], tab: 'chats' };
   document.addEventListener('focusin', (e) => { window.__state.active = e.target.id || e.target.tagName; });
+  // What a real mouse press landed on (independent of where focus ends up).
+  document.addEventListener('mousedown', (e) => { const el = e.target.closest('[id]'); window.__state.pressed = el ? el.id : e.target.tagName; }, true);
   const $ = (id) => document.getElementById(id);
   function renderList() {
     const q = $('search').innerText.trim().toLowerCase();

@@ -1,4 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import type { UpdateInfo } from '@shared/domain';
+import { Onboarding } from './components/Onboarding';
 import { invoke } from './lib/api';
 import { Icon } from './components/Icon';
 import { KeoEmblem, STATE_LABEL } from './components/KeoEmblem';
@@ -40,6 +42,16 @@ export function App() {
   }, [app]);
 
   const provider = app.activeProvider;
+  // First run: show the welcome until it is finished or skipped. An installation that already has a
+  // working provider (e.g. after an update) is simply marked as set up.
+  const settingsLoaded = !!app.settings.data;
+  const onboarded = app.settings.data?.ui.onboarded ?? true;
+  const ready = provider?.status.kind === 'ready';
+  const [welcomeClosed, setWelcomeClosed] = useState(false);
+  useEffect(() => {
+    if (settingsLoaded && !onboarded && ready) void invoke('settings:update', { patch: { ui: { onboarded: true } } }).catch(() => undefined);
+  }, [settingsLoaded, onboarded, ready]);
+  const showWelcome = settingsLoaded && !onboarded && !ready && !welcomeClosed;
   const providerChip = !provider ? (
     <button className="chip warn" onClick={() => app.setView('settings')}>
       <span className="dot" /> No model provider configured
@@ -83,7 +95,23 @@ export function App() {
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>
+      {showWelcome && <Onboarding onDone={() => setWelcomeClosed(true)} />}
     </div>
+  );
+}
+
+/** "Update available" chip: checks GitHub Releases at most once a day (installed builds only). */
+function UpdateChip() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => void invoke('app:checkUpdate', { force: false }).then(setInfo).catch(() => undefined), 15_000);
+    return () => clearTimeout(t);
+  }, []);
+  if (!info?.newer || !info.latest) return null;
+  return (
+    <button className="chip accent" onClick={() => void invoke('app:openLink', { id: 'releases' })} title={info.notes ?? 'Open the download page'}>
+      <Icon name="download" size={12} /> Update {info.latest} available
+    </button>
   );
 }
 
@@ -114,6 +142,7 @@ function TitleControls() {
           <Icon name="shield" size={12} /> {p.autonomy === 'hands_free' ? 'Hands-free' : 'Asks for important only'}
         </button>
       )}
+      <UpdateChip />
       <button className="chip" onClick={() => void invoke('commandBar:show')} title="Open the command bar">
         <Icon name="chat" size={12} /> {s?.shortcuts.commandBarEnabled ? s.shortcuts.commandBar.replace('Control', 'Ctrl') : 'Command bar'}
       </button>

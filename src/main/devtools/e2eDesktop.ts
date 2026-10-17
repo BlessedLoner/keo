@@ -128,7 +128,7 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
         error = (e as Error).message;
       }
       await new Promise((r) => setTimeout(r, 600));
-      results.pointerClick = { found: !!searchNode, error, active: (state() as { active?: string } | null)?.active ?? null, helper: (await s.desktop.backend.helperInfo?.().catch(() => null)) ?? null };
+      results.pointerClick = { found: !!searchNode, error, pressed: (state() as { pressed?: string } | null)?.pressed ?? null, active: (state() as { active?: string } | null)?.active ?? null, helper: (await s.desktop.backend.helperInfo?.().catch(() => null)) ?? null };
     }
 
     // 2. Re-using an unchanged element from an earlier (fresh) observation is allowed after re-validation.

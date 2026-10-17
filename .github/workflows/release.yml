@@ -1,0 +1,39 @@
+# Builds, checks and publishes the Windows installer when a version tag is pushed:
+#   git tag v1.0.0 && git push origin v1.0.0
+# The installer appears on GitHub Releases, where the download page and Keo's
+# update check find it. Nothing runs on other pushes.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: The tag must match package.json
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run package:win
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/Keo-Setup-*.exe \
+            --title "Keo $GITHUB_REF_NAME" \
+            --notes "Download **Keo-Setup-${GITHUB_REF_NAME#v}.exe** below and run it. This beta is not code-signed: Windows shows *Windows protected your PC* — choose *More info → Run anyway*. Your data and settings are kept when you install over an older version." \
+            --generate-notes

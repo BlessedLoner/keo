@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  UpdateInfo,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -21,6 +22,7 @@ import type {
   WindowTarget,
 } from './domain';
 import type { Settings } from './settings';
+import { LINK_IDS } from './release';
 
 /**
  * The complete renderer -> main contract. Every channel has a strict input
@@ -35,6 +37,8 @@ export const ProviderIdSchema = z.enum(['anthropic', 'openai', 'openrouter', 'lo
 
 export const invokeSchemas = {
   'app:info': empty,
+  'app:openLink': z.object({ id: z.enum(LINK_IDS) }).strict(),
+  'app:checkUpdate': z.object({ force: z.boolean().default(false) }).strict(),
   'app:openDataFolder': empty,
 
   'settings:get': empty,
@@ -177,6 +181,8 @@ export type ParsedInput<C extends InvokeChannel> = z.output<(typeof invokeSchema
 
 export interface InvokeOutputs {
   'app:info': AppInfo;
+  'app:openLink': { opened: boolean };
+  'app:checkUpdate': UpdateInfo | null;
   'app:openDataFolder': { opened: boolean };
   'settings:get': Settings;
   'settings:update': Settings;

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { UpdateService } from './updates/updateService';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pushChannels } from '../shared/ipc';
@@ -31,11 +32,13 @@ const TRUSTED_ORIGIN = (DEV_URL ? originOf(DEV_URL) : null) ?? 'app://keo';
 const RENDERER_DIR = path.join(__dirname, '../renderer');
 const TEST_PROVIDER = process.env.KEO_ENABLE_TEST_PROVIDER === '1';
 const SMOKE = process.env.KEO_SMOKE === '1';
+
 const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
 const log = new Logger(profile.logsDir, !app.isPackaged && !SMOKE);
+const updates = new UpdateService(app.getVersion(), log);
 log.info('app.starting', { version: app.getVersion(), profile: profile.profile, packaged: app.isPackaged, electron: process.versions.electron });
 
 if (!app.requestSingleInstanceLock()) {
@@ -224,6 +227,9 @@ app.whenReady().then(() => {
         testProviderEnabled: TEST_PROVIDER,
       }),
       openPath: async (p) => (await shell.openPath(p)) === '',
+      openExternal: (url) => shell.openExternal(url),
+      // Installed builds only (a development run would always look outdated).
+      checkUpdate: (force) => (app.isPackaged || force ? updates.check(force) : Promise.resolve(null)),
       pickExecutable: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
@@ -337,6 +343,15 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   win.webContents.setBackgroundThrottling(false);
   const js = (code: string) => win.webContents.executeJavaScript(`(async () => { const call = async (ch, input) => { const r = await window.keo.invoke(ch, input); if (!r.ok) throw new Error(r.error.message); return r.value; }; ${code} })()`);
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // The first-run welcome, as a brand-new user sees it (no provider yet).
+  await js(`await call('settings:update', { patch: { activeProvider: null, ui: { onboarded: false } } });`);
+  await wait(1200);
+  fs.writeFileSync(path.join(dir, 'welcome.png'), (await win.webContents.capturePage()).toPNG());
+  await js(`[...document.querySelectorAll('.onboarding button')].find(b => b.textContent.trim() === 'Next')?.click();`);
+  await wait(700);
+  fs.writeFileSync(path.join(dir, 'welcome-provider.png'), (await win.webContents.capturePage()).toPNG());
+  await js(`await call('settings:update', { patch: { activeProvider: 'test', ui: { onboarded: true } } });`);
+  await wait(500);
   await js(`
     await call('settings:update', { patch: { permissions: { desktopControlEnabled: true, observationEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] } } });
     await call('memory:create', { kind: 'preference', subject: 'style.answers', content: 'Prefers short, direct answers with concrete next steps.' });

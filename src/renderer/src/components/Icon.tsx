@@ -11,6 +11,7 @@ const PATHS: Record<string, string> = {
   chevronRight: 'M9 6l6 6-6 6',
   chevronDown: 'M6 9l6 6 6-6',
   send: 'M4 12l16-8-6 16-3-7-7-1z',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   stop: 'M7 7h10v10H7z',
   mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
   speaker: 'M4 9h4l5-4v14l-5-4H4V9zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11',

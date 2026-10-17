@@ -755,6 +755,18 @@ function Data({ s, patch }: { s: Settings; patch: Patch }) {
   return (
     <>
       <section className="card">
+        <h2>Updates</h2>
+        <Toggle checked={s.updates.check} onChange={(v) => void patch({ updates: { check: v } })} label="Check for new Keo versions once a day (asks GitHub; nothing about you is sent)" />
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn sm" onClick={() => void invoke('app:checkUpdate', { force: true }).then((u) => alert(!u ? 'Update checks run in the installed app.' : u.error ? u.error : u.newer ? `Keo ${u.latest} is available.` : `You have the latest Keo (${u.current}).`))}>
+            Check now
+          </button>
+          <button className="btn sm ghost" onClick={() => void invoke('app:openLink', { id: 'privacy' })}>
+            Privacy note
+          </button>
+        </div>
+      </section>
+      <section className="card">
         <h2>Screen captures</h2>
         <div className="field" style={{ maxWidth: 320 }}>
           <label htmlFor="ret">Keep capture images for (hours)</label>

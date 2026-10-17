@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keo — your personal AI agent for Windows</title>
+<meta name="description" content="Keo is a personal AI agent for Windows that chats, researches, remembers and — only with your permission — works in your apps. Runs on your PC with your own AI key." />
+<link rel="icon" href="icon.png" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./"><img src="icon.png" alt="" width="28" height="28" /> Keo</a>
+  <nav><a href="#features">Features</a><a href="#start">Get started</a><a href="#faq">FAQ</a><a href="privacy.html">Privacy</a></nav>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="hero-text">
+      <span class="badge">Free beta · Windows 10 &amp; 11</span>
+      <h1>Your personal AI agent, on your own PC.</h1>
+      <p class="lead">Keo chats, researches the web, remembers what matters to you and — only when you allow it — works in your apps: writes in Notepad, reads the page you are on, keeps a WhatsApp conversation going until you say stop.</p>
+      <div class="cta">
+        <a id="download" class="btn primary" href="https://github.com/BlessedLoner/keo/releases/latest">Download for Windows</a>
+        <span id="version" class="muted">Latest version on GitHub</span>
+      </div>
+      <p class="small muted">No account needed. Bring your own AI key (OpenRouter, OpenAI, Anthropic) or use a free local model.</p>
+    </div>
+    <img class="hero-img" src="screenshot.png" alt="Keo's chat window with the floating companion" onerror="this.remove()" />
+  </section>
+
+  <section id="features" class="grid">
+    <article><h3>Works in your apps — with permission</h3><p>Allow only the apps you choose. Keo clicks, types and reads through Windows accessibility and checks the result. Every action asks first unless you pick a hands-free level.</p></article>
+    <article><h3>Live WhatsApp chats</h3><p>“Reply to John and keep the conversation going.” Keo answers for you and stops to ask about prices, payments, meetings or anything personal.</p></article>
+    <article><h3>Research with sources</h3><p>Web search with links, page summaries, and “explain what I selected” in your browser. No invented prices.</p></article>
+    <article><h3>Memory &amp; projects</h3><p>Keo remembers facts you confirm and keeps project notes, all stored on your computer.</p></article>
+    <article><h3>Voice &amp; Ctrl+K</h3><p>Say “Hey Keo” (processed on your PC) or press Ctrl+K anywhere for a quick command.</p></article>
+    <article><h3>Stop, any time</h3><p>One Stop button halts replies, actions and live chats. Everything Keo does is listed in Tasks and the audit log.</p></article>
+  </section>
+
+  <section id="start" class="steps">
+    <h2>Get started in 3 minutes</h2>
+    <ol>
+      <li><strong>Download and run</strong> <code>Keo-Setup.exe</code>. Because this beta is not code-signed yet, Windows shows “Windows protected your PC”: click <em>More info</em> → <em>Run anyway</em>.</li>
+      <li><strong>Connect an AI provider.</strong> The welcome screen helps you paste a key — <a href="https://openrouter.ai/keys" rel="noopener">OpenRouter</a> is the easiest (one key, many models). You pay the provider directly for what you use.</li>
+      <li><strong>Optional:</strong> add a <a href="https://api-dashboard.search.brave.com/app/keys" rel="noopener">Brave Search key</a> for web research, and allow the apps Keo may use in <em>Access</em>.</li>
+    </ol>
+  </section>
+
+  <section id="faq" class="faq">
+    <h2>Questions</h2>
+    <details><summary>Does Keo send my data to you?</summary><p>No. There is no Keo account and no Keo server. Your conversations, memory, settings and keys stay on your PC. Messages go only to the AI provider you connect (and to Brave Search if you enable web search). Keo checks GitHub once a day for a newer version — you can turn that off. <a href="privacy.html">Privacy note</a></p></details>
+    <details><summary>Is it free?</summary><p>Keo itself is free during the beta. AI providers charge for usage on your own key; local models are free.</p></details>
+    <details><summary>Why does Windows warn about the installer?</summary><p>The beta is not yet code-signed, so Windows does not recognise the publisher. Signed builds come with a later version.</p></details>
+    <details><summary>Can Keo do things on my computer without asking?</summary><p>Not by default. Using your apps is off until you allow specific apps, and every action asks for approval. You can choose “Ask only for important things” or “Hands-free”, but payments, deleting, sensitive buttons and messaging people you didn't name always ask.</p></details>
+    <details><summary>How do updates work?</summary><p>Keo tells you when a new version is out; download and run the new installer — your data and settings are kept.</p></details>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>© 2026 Keo · Beta</span>
+  <a href="privacy.html">Privacy</a>
+  <a href="https://github.com/BlessedLoner/keo/releases" rel="noopener">All releases</a>
+</footer>
+
+<script>
+  // Link the button straight to the newest installer (falls back to the releases page).
+  (async () => {
+    try {
+      const r = await fetch('https://api.github.com/repos/BlessedLoner/keo/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+      if (!r.ok) return;
+      const rel = await r.json();
+      const exe = (rel.assets || []).find((a) => /^Keo-Setup-.*\.exe$/.test(a.name));
+      if (exe && /^https:\/\/github\.com\/BlessedLoner\/keo\//.test(exe.browser_download_url)) document.getElementById('download').href = exe.browser_download_url;
+      if (rel.tag_name) document.getElementById('version').textContent = `Version ${String(rel.tag_name).replace(/^v/, '')} · ${exe ? Math.round(exe.size / 1048576) + ' MB' : ''}`;
+    } catch {
+      /* keep the releases-page link */
+    }
+  })();
+</script>
+</body>
+</html>

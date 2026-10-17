@@ -464,6 +464,17 @@ export interface AuditRecord {
   correlationId: string | null;
 }
 
+/** Result of checking GitHub Releases for a newer Keo. */
+export interface UpdateInfo {
+  current: string;
+  latest: string | null;
+  newer: boolean;
+  /** Release page to download from (always on Keo's own GitHub repository). */
+  url: string;
+  notes: string | null;
+  error: string | null;
+}
+
 export interface AppInfo {
   name: string;
   version: string;

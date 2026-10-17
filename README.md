@@ -1,5 +1,7 @@
 # Keo
 
+**[Download Keo for Windows](https://blessedloner.github.io/keo/)** · free beta · Windows 10/11 (64-bit) · no account needed — bring your own AI key (OpenRouter, OpenAI, Anthropic) or use a local model. Run `Keo-Setup-<version>.exe`; this beta is not code-signed, so choose *More info → Run anyway* when Windows warns. A short welcome guides the setup. [Privacy note](https://blessedloner.github.io/keo/privacy.html)
+
 Keo is a personal AI agent for Windows: a desktop app that talks with you, remembers what you confirm, tracks your projects, and acts on your computer **only through registered capabilities and only with your approval**.
 
 - **Conversation** — streaming replies, history, rename/delete/search, stop, retry, interruption recovery.

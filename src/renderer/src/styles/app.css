@@ -114,6 +114,7 @@ a { color: var(--accent); }
 .field > label, .field-label { font-size: 12px; color: var(--text-2); font-weight: 500; }
 .field .hint { font-size: 12px; color: var(--text-3); }
 .row { display: flex; gap: 10px; align-items: center; }
+.row .grow { flex: 1; min-width: 0; }
 .row.wrap { flex-wrap: wrap; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
@@ -366,3 +367,11 @@ html.companion-root body, html.command-root body { overflow: hidden; }
 .lc-line.note .lc-who { display: none; }
 .lc-text { white-space: pre-wrap; word-break: break-word; }
 .chip.level { cursor: pointer; }
+
+/* ---- first-run welcome ---- */
+.onboarding-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 8, 14, 0.72); backdrop-filter: blur(3px); }
+.onboarding { width: min(640px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 22px 24px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow); }
+.onboarding p { line-height: 1.55; }
+.onboarding-points { padding-left: 18px; display: flex; flex-direction: column; gap: 8px; line-height: 1.5; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
+kbd { padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; background: var(--bg-elev-2); }

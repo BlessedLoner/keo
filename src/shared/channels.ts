@@ -6,6 +6,8 @@
 export const INVOKE_CHANNELS = [
   'app:info',
   'app:openDataFolder',
+  'app:openLink',
+  'app:checkUpdate',
   'settings:get',
   'settings:update',
   'providers:list',

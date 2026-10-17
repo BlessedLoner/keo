@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keo privacy note</title>
+<link rel="icon" href="icon.png" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./"><img src="icon.png" alt="" width="28" height="28" /> Keo</a>
+  <nav><a href="./">Home</a></nav>
+</header>
+<main class="doc">
+  <h1>Privacy note</h1>
+  <p class="muted">Applies to the Keo desktop app (beta). Last updated October 2026.</p>
+
+  <h2>The short version</h2>
+  <p>Keo runs on your computer. There is no Keo account and no Keo server that receives your conversations, files or keys. What you type and what Keo reads from your screen go only to the AI provider <em>you</em> connect.</p>
+
+  <h2>What stays on your PC</h2>
+  <ul>
+    <li>Conversations, memories, projects, tasks, the audit log and settings — in your Windows profile (<code>%APPDATA%\Keo</code>).</li>
+    <li>API keys — encrypted with Windows' own data protection; Keo never shows them again.</li>
+    <li>Screen captures you take in Keo — kept for 24 hours by default (adjustable), then deleted.</li>
+    <li>Wake-word audio (“Hey Keo”) — processed by Windows speech recognition on your PC and discarded.</li>
+  </ul>
+
+  <h2>What leaves your PC, and only when you use it</h2>
+  <ul>
+    <li><strong>Your AI provider</strong> (OpenRouter, OpenAI, Anthropic, or none for a local model): your messages, the relevant context Keo includes (recent conversation, confirmed memories), and content Keo read for a task you approved — for example the text of a web page or the visible messages of a WhatsApp chat during a live chat. Their own privacy policies apply.</li>
+    <li><strong>Brave Search</strong>, if you add a key: your search queries.</li>
+    <li><strong>OpenAI speech-to-text</strong>, only if you turn it on and consent: recorded voice commands.</li>
+    <li><strong>GitHub</strong>: once a day Keo asks GitHub for the latest version number. No personal data is sent; you can turn this off in Settings → Privacy &amp; data.</li>
+    <li><strong>WhatsApp</strong>: messages you approve (or allow in a live chat) are sent from your own WhatsApp, as if you typed them.</li>
+  </ul>
+
+  <h2>Your control</h2>
+  <ul>
+    <li>Using your apps is off until you allow specific apps; actions ask for approval by default.</li>
+    <li>Delete any memory, conversation or capture — or everything — in the app (Settings → Privacy &amp; data → Delete all data).</li>
+    <li>Uninstalling keeps your data folder so a reinstall can continue; delete it in the app first if you want it gone.</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>Questions or problems: open an issue on <a href="https://github.com/BlessedLoner/keo/issues" rel="noopener">GitHub</a>.</p>
+</main>
+<footer class="foot"><span>© 2026 Keo · Beta</span><a href="./">Home</a></footer>
+</body>
+</html>

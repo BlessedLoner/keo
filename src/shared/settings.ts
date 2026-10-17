@@ -231,6 +231,13 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Ask GitHub once a day whether a newer Keo is out (nothing else is sent). */
+    updates: z
+      .object({
+        check: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
     privacy: z
       .object({
         observationRetentionHours: z.number().int().min(0).max(24 * 30).default(24),
@@ -240,6 +247,8 @@ export const SettingsSchema = z
     ui: z
       .object({
         reducedMotion: z.enum(['system', 'reduce', 'full']).default('system'),
+        /** The first-run welcome has been completed or skipped. */
+        onboarded: z.boolean().default(false),
       })
       .strict()
       .prefault({}),

@@ -1,4 +1,6 @@
 import type { AppInfo } from '../../shared/domain';
+import { LINKS } from '../../shared/release';
+import type { UpdateInfo } from '../../shared/domain';
 import type { InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc';
 import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
@@ -13,6 +15,10 @@ export type HandlerMap = { [C in InvokeChannel]: Handler<C> };
 export interface HostHooks {
   appInfo(): Omit<AppInfo, 'schemaVersion' | 'secretStorage' | 'userDataPath' | 'profile'>;
   openPath(p: string): Promise<boolean>;
+  /** Opens one of Keo's allow-listed web pages in the default browser. */
+  openExternal?(url: string): Promise<void>;
+  /** Checks GitHub Releases (packaged app only unless forced); null when not applicable. */
+  checkUpdate?(force: boolean): Promise<UpdateInfo | null>;
   pickExecutable(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
@@ -52,6 +58,12 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       secretStorage: s.secrets.available() ? 'os-encrypted' : 'unavailable',
     }),
     'app:openDataFolder': async () => ({ opened: await host.openPath(s.profile.userData) }),
+    'app:openLink': async ({ id }) => {
+      if (!host.openExternal) return { opened: false };
+      await host.openExternal(LINKS[id]);
+      return { opened: true };
+    },
+    'app:checkUpdate': async ({ force }) => (force || s.settings.get().updates.check ? ((await host.checkUpdate?.(force)) ?? null) : null),
 
     'settings:get': () => s.settings.get(),
     'settings:update': ({ patch }) => {

@@ -1,7 +1,7 @@
 {
   "name": "keo",
   "productName": "Keo",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Keo — a permission-controlled personal AI agent for Windows.",
   "private": true,
   "license": "UNLICENSED",
@@ -11,42 +11,17 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
-    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
-    "smoke": "npm run build && node scripts/smoke.mjs",
-    "e2e:desktop": "npm run build && node scripts/e2e-desktop.mjs",
-    "package:dir": "npm run build && electron-builder --win --dir --publish never",
-    "package:win": "npm run build && electron-builder --win --publish never"
-  },
   "dependencies": {
     "@anthropic-ai/sdk": "0.134.0",
     "openai": "7.34.0",
     "zod": "4.6.7"
   },
-  "devDependencies": {
-    "@eslint/js": "10.0.1",
-    "@types/node": "24.19.2",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "6.1.2",
-    "electron": "44.7.2",
-    "electron-builder": "26.15.3",
-    "electron-vite": "6.0.0",
-    "eslint": "10.12.0",
-    "eslint-plugin-react-hooks": "7.1.1",
-    "globals": "17.13.0",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "typescript": "5.9.3",
-    "typescript-eslint": "8.71.2",
-    "vite": "8.3.4",
-    "vitest": "5.0.5"
+  "homepage": "https://blessedloner.github.io/keo/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BlessedLoner/keo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BlessedLoner/keo/issues"
   }
 }
