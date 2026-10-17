@@ -38,6 +38,7 @@ interface Decision {
   message: string;
   question: string;
   covered: boolean;
+  reason?: string;
 }
 
 export function parseDecision(raw: string): Decision | null {
@@ -48,7 +49,7 @@ export function parseDecision(raw: string): Decision | null {
     const action = j.action;
     if (action !== 'reply' && action !== 'ask_user' && action !== 'wait' && action !== 'end') return null;
     const str = (v: unknown, n: number) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
-    return { action, message: str(j.message, 1500), question: str(j.question_for_user, 400), covered: j.covered_by_guidance === true };
+    return { action, message: str(j.message, 1500), question: str(j.question_for_user, 400), covered: j.covered_by_guidance === true, reason: str(j.reason, 200) };
   } catch {
     return null;
   }
@@ -172,6 +173,31 @@ export class LiveChatService {
       r.sendNow = true;
       this.schedule(r, 0);
       return `Sending the reply to ${r.s.contact} now. I'll post “Sent to ${r.s.contact}: …” here when it has gone out.`;
+    }
+    // "Continue the conversation" / "reply to her (last message)": answer the contact's latest message now.
+    if (/^\s*(please\s+)?(continue|carry on|keep (going|chatting|the conversation)|go on|reply( to (her|him|them|it))?( (last|latest) message)?|respond( to (her|him|them))?|answer (her|him|them))\b/i.test(msg)) {
+      const active = all.filter((r) => r.s.status === 'active' || r.s.status === 'paused' || r.s.status === 'waiting_user');
+      // "reply to John" names someone else: not for these chats.
+      const known = new Set(active.flatMap((r) => normName(r.s.contact).split(' ')).concat(['keo', 'whatsapp', 'i']));
+      const otherName = msg
+        .split(/\s+/)
+        .slice(1)
+        .some((w) => /^[A-Z][\p{L}'’-]+/u.test(w) && !known.has(normName(w)));
+      const targets = otherName ? [] : named(active);
+      if (targets.length === 1) {
+        const r = targets[0]!;
+        if (r.s.status === 'waiting_user') {
+          this.answer(r.s.id, msg, true);
+        } else {
+          r.s.status = 'active';
+          r.s.question = null;
+          r.answered = true;
+          r.reportSend = true;
+          this.replyToLatest(r.s.id);
+          this.changed();
+        }
+        return `Replying to ${r.s.contact}'s latest message now. I'll post “Sent to ${r.s.contact}: …” here when it has gone out.`;
+      }
     }
     // An answer for a chat that is waiting for the user.
     const waiting = all.filter((r) => r.s.status === 'waiting_user' || r.s.status === 'paused');
@@ -384,7 +410,8 @@ export class LiveChatService {
     }
     if (!view || !headerMatches(view.header, r.s.contact)) return;
 
-    const incoming = this.newIncoming(r.handled, view.messages);
+    const sentByUs = new Set(r.s.transcript.filter((l) => l.from === 'keo' || l.from === 'you').map((l) => normName(l.text)));
+    const incoming = this.newIncoming(r.handled, view.messages, sentByUs);
     if (r.s.draft) {
       if (incoming.length) {
         // The contact wrote more before the reply went out: think again with everything.
@@ -395,7 +422,7 @@ export class LiveChatService {
         return;
       }
     }
-    this.d.log.debug('livechat.tick', { sessionId: r.s.id, status: r.s.status, messages: view.messages.length, incoming: incoming.length, handled: r.handled.length, pendingMs: r.pending ? t - r.pending.since : null });
+    this.d.log.debug('livechat.tick', { sessionId: r.s.id, status: r.s.status, messages: view.messages.length, incoming: incoming.length, handled: r.handled.length, pendingMs: r.pending ? t - r.pending.since : null, lastFrom: view.messages.slice(-3).map((m) => m.from) });
     if (!incoming.length) {
       r.pending = null;
       // The user gave an instruction with nothing new from the contact (e.g. "tell her I'll call at 7"): act on it.
@@ -448,7 +475,9 @@ export class LiveChatService {
       return;
     }
     if (d.action === 'wait') {
-      r.s.activity = 'Nothing to reply to';
+      r.s.activity = 'Did not reply (nothing to answer)';
+      this.line(r, 'note', `Keo did not reply${d.reason ? `: ${d.reason}` : ' (nothing to answer)'}. Say “reply to her” to answer anyway.`);
+      this.d.audit.record({ kind: 'livechat', decision: 'waited', detail: { sessionId: r.s.id } });
       this.changed();
       return;
     }
@@ -614,7 +643,7 @@ export class LiveChatService {
    * last few known messages are lined up with the current ones and only what
    * follows counts (and only after the user's/Keo's latest own message).
    */
-  private newIncoming(handled: string[], messages: WaMessage[]): string[] {
+  private newIncoming(handled: string[], messages: WaMessage[], sentByUs: Set<string> = new Set()): string[] {
     const cur = this.keys(messages);
     const recent = messages.slice(-30);
     let k = -1;
@@ -627,9 +656,10 @@ export class LiveChatService {
     }
     const after = recent.slice(k + 1);
     const lastMine = after.map((m) => m.from).lastIndexOf('me');
+    // A message whose sender Keo cannot tell is the contact's, unless it is something Keo or the user sent.
     return after
       .slice(lastMine + 1)
-      .filter((m) => m.from === 'them')
+      .filter((m) => m.from === 'them' || (m.from === 'unknown' && !sentByUs.has(normName(m.text))))
       .map((m) => m.text)
       .slice(-8);
   }
@@ -691,9 +721,9 @@ Rules:
 - When the user tells you to explain something, answer a question, help with a problem or research something for ${s.contact}, you may use your own knowledge (and any web research provided) to write a correct, clear, friendly answer — WhatsApp length, plain text, short code snippets only if needed. Say so honestly if you are not sure.
 - If ${s.contact} asks whether they are talking to a bot, an AI or an assistant, choose ask_user. Never deny it and never claim to be human.
 - Choose ask_user for: money, prices, discounts, payments, bank or account details, codes; addresses, meetings, times, commitments; calls, files, documents; personal, emotional or urgent matters; anything you cannot answer from the instructions above; or whenever you are unsure.
-- When ${s.contact}'s message needs no answer (an emoji, "ok", a thank-you you already acknowledged), choose wait. When the conversation has clearly finished, choose end (with an optional short goodbye in "message").
+- You are keeping this conversation going for the user, so normally reply. Choose wait ONLY when ${s.contact}'s latest message is a pure acknowledgement that a reply would make awkward (a lone emoji or "ok" right after your own message, a thank-you you already answered). When in doubt, reply. When the conversation has clearly finished, choose end (with an optional short goodbye in "message").
 - Set covered_by_guidance to true only when your reply relies on a specific numbered instruction above that directly answers what ${s.contact} asked.
 
 Answer with ONE JSON object and nothing else:
-{"action":"reply"|"ask_user"|"wait"|"end","message":"<the WhatsApp message to send, for reply/end>","question_for_user":"<for ask_user: one short question to the user, e.g. 'Ma Glo is asking the price of the blender. What should I tell her?'>","covered_by_guidance":true|false}`;
+{"action":"reply"|"ask_user"|"wait"|"end","message":"<the WhatsApp message to send, for reply/end>","question_for_user":"<for ask_user: one short question to the user, e.g. 'Ma Glo is asking the price of the blender. What should I tell her?'>","covered_by_guidance":true|false,"reason":"<for wait: why no reply is needed>"}`;
 }

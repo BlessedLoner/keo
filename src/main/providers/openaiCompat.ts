@@ -43,6 +43,12 @@ export class OpenAICompatProvider implements ChatProvider {
   readonly requiresApiKey: boolean;
   readonly remote: boolean;
   readonly supportsAudio: boolean;
+  /**
+   * Models that reject function tools together with their default reasoning on
+   * Chat Completions (e.g. gpt-6-*): requests with tools send reasoning_effort
+   * "none" for them, learned from OpenAI's 400 the first time.
+   */
+  private readonly noReasoningWithTools = new Set<string>();
 
   constructor(
     private readonly kind: Kind,
@@ -152,6 +158,7 @@ export class OpenAICompatProvider implements ChatProvider {
       ...(this.kind === 'openrouter' ? {} : { stream_options: { include_usage: true } }),
       ...(this.kind === 'openai' ? { max_completion_tokens: Math.min(req.maxOutputTokens, c.maxOutputTokens) } : { max_tokens: Math.min(req.maxOutputTokens, c.maxOutputTokens) }),
       ...(tools.length ? { tools } : {}),
+      ...(tools.length && this.noReasoningWithTools.has(req.model) ? { reasoning_effort: 'none' as const } : {}),
     };
 
     let text = '';
@@ -159,7 +166,16 @@ export class OpenAICompatProvider implements ChatProvider {
     let usage: ChatResult['usage'] = null;
     const partial = new Map<number, { id: string; name: string; args: string }>();
     try {
-      const stream = await client.chat.completions.create(body, { signal });
+      let stream;
+      try {
+        stream = await client.chat.completions.create(body, { signal });
+      } catch (err) {
+        // "Function tools with reasoning_effort are not supported for <model> … set reasoning_effort to 'none'".
+        const status = (err as { status?: number }).status;
+        if (status !== 400 || !tools.length || body.reasoning_effort === 'none' || !/reasoning_effort/i.test(String((err as Error).message))) throw err;
+        this.noReasoningWithTools.add(req.model);
+        stream = await client.chat.completions.create({ ...body, reasoning_effort: 'none' }, { signal });
+      }
       handlers.onPhase?.('generating');
       for await (const chunk of stream) {
         if (chunk.usage) usage = { inputTokens: chunk.usage.prompt_tokens ?? 0, outputTokens: chunk.usage.completion_tokens ?? 0 };

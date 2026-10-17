@@ -272,6 +272,34 @@ describe('live chat sessions', () => {
     expect(agentCalls).toBe(1);
   });
 
+  it('answers a message whose sender cannot be told, and shows when it chose not to reply', async () => {
+    const { wa } = await startWithMum('Chat with Mum');
+    brain.push(decision({ action: 'wait', reason: 'just an emoji' }));
+    incoming(wa, 'Mum', '👍');
+    await waitFor(() => session().transcript.some((l) => l.from === 'note' && /did not reply: just an emoji/.test(l.text)), 5000);
+    expect(wa.sent).toEqual([]);
+    // Its sender cannot be told (no label, centred): it still counts as hers — no answer from the user needed.
+    brain.push(decision({ action: 'reply', message: 'Yes, it was a great game!' }));
+    wa.chats.find((c) => c.title === 'Mum')!.messages.push({ from: 'them', text: 'Did you watch the football', unlabeled: true });
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('Yes, it was a great game!');
+  });
+
+  it('“reply to her last message” goes straight to the chat; “reply to John …” is left to the agent', async () => {
+    const { wa, conv } = await startWithMum('Chat with Mum');
+    brain.push(decision({ action: 'wait', reason: 'thanks only' }));
+    incoming(wa, 'Mum', 'Thanks!');
+    await waitFor(() => session().transcript.some((l) => l.from === 'note' && /did not reply/.test(l.text)), 5000);
+    await h.services.agent.send(conv.id, 'reply to John on WhatsApp').done;
+    expect(agentCalls).toBe(1);
+    brain.push(decision({ action: 'reply', message: 'You are welcome, Mum!' }));
+    const r = await h.services.agent.send(conv.id, 'reply to her last message').done;
+    expect(r.content).toMatch(/Replying to Mum's latest message now/);
+    expect(agentCalls).toBe(1);
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toBe('You are welcome, Mum!');
+  });
+
   it('stops after the reply limit', async () => {
     const { wa } = await startWithMum('Chat', { maxReplies: 1 });
     brain.push(decision({ action: 'reply', message: 'Hi Mum!' }));

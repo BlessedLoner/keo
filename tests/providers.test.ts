@@ -192,6 +192,44 @@ describe('OpenRouter (no network)', () => {
 });
 
 describe('OpenAI-compatible adapter (no network)', () => {
+  it('gpt-6 models: retries tool requests with reasoning_effort "none" when OpenAI requires it, and remembers', async () => {
+    const st = mergeSettings(defaultSettings(), { activeProvider: 'openai', providers: { openai: { model: 'gpt-6-luna' } } });
+    const bodies: Array<Record<string, unknown>> = [];
+    const factory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (body: Record<string, unknown>) => {
+              bodies.push(body);
+              if (body.tools && body.reasoning_effort !== 'none') {
+                throw new OpenAI.BadRequestError(400, { message: "Function tools with reasoning_effort are not supported for gpt-6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'." }, undefined, new Headers());
+              }
+              return (async function* () {
+                yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    const p = new OpenAICompatProvider('openai', () => st, () => 'sk-test', factory);
+    const req = (tools: boolean) => ({
+      model: 'gpt-6-luna',
+      system: 's',
+      maxOutputTokens: 1000,
+      correlationId: 'c',
+      tools: tools ? [{ name: 'memory__search', description: 'd', inputSchema: { type: 'object' } }] : [],
+      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }],
+    });
+    const r1 = await p.stream(req(true), { onText: () => undefined }, new AbortController().signal);
+    expect(r1.text).toBe('ok');
+    expect(bodies.map((b) => b.reasoning_effort ?? null)).toEqual([null, 'none']);
+    await p.stream(req(true), { onText: () => undefined }, new AbortController().signal);
+    expect(bodies.at(-1)?.reasoning_effort).toBe('none'); // learned: no failing first attempt
+    expect(bodies).toHaveLength(3);
+    await p.stream(req(false), { onText: () => undefined }, new AbortController().signal);
+    expect(bodies.at(-1)).not.toHaveProperty('reasoning_effort'); // without tools the model keeps its reasoning
+  });
+
   it('maps quota and rate limits distinctly', () => {
     const h = new Headers();
     expect(mapOpenAIError(new OpenAI.RateLimitError(429, { message: 'You exceeded your current quota' }, undefined, h), undefined, 'OpenAI').kind).toBe('quota');

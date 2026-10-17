@@ -93,7 +93,8 @@ export class FakeSettingsApp implements FakeUiaApp {
 
 export interface FakeChat {
   title: string;
-  messages: Array<{ from: 'me' | 'them'; text: string; status?: string }>;
+  /** unlabeled: no sender label and a centred bubble, so the direction cannot be told. */
+  messages: Array<{ from: 'me' | 'them'; text: string; status?: string; unlabeled?: boolean }>;
 }
 
 /** A WhatsApp-like UI: search, chat list, header, message pane, compose box and Send button. */
@@ -202,7 +203,8 @@ export class FakeWhatsApp implements FakeUiaApp {
       if (/^msg\.\d+$/.test(sp.key)) {
         const m = this.chats.find((c) => c.title === this.open)!.messages[Number(sp.key.slice(4))]!;
         out.push({ ...sp, parentKey: sp.parentKey === 'root' ? 'page' : sp.parentKey, y: (sp.y ?? 0) + 40, x: 400, w: 800, role: 'dataitem', name: '' });
-        out.push({ key: `${sp.key}.sender`, parentKey: sp.key, role: 'group', name: m.from === 'me' ? 'You:' : `${this.open}:`, x: sp.x, y: (sp.y ?? 0) + 40, w: sp.w, h: sp.h });
+        if (m.unlabeled) out.push({ key: `${sp.key}.sender`, parentKey: sp.key, role: 'group', name: '', x: 640, y: (sp.y ?? 0) + 40, w: 300, h: sp.h });
+        else out.push({ key: `${sp.key}.sender`, parentKey: sp.key, role: 'group', name: m.from === 'me' ? 'You:' : `${this.open}:`, x: sp.x, y: (sp.y ?? 0) + 40, w: sp.w, h: sp.h });
         continue;
       }
       const moved: Spec = { ...sp, parentKey: sp.parentKey === 'root' ? 'page' : sp.parentKey, y: sp.y === undefined ? undefined : sp.y + 40 };
@@ -235,7 +237,7 @@ export class FakeWhatsApp implements FakeUiaApp {
     const chat = this.chats.find((c) => c.title === this.open);
     if (!m || !chat) return [];
     const msg = chat.messages[Number(m[1])]!;
-    return [msg.from === 'me' ? 'You:' : `${chat.title}:`, msg.text, '10:50', ...(msg.status ? [` ${msg.status} `] : [])];
+    return [...(msg.unlabeled ? [] : [msg.from === 'me' ? 'You:' : `${chat.title}:`]), msg.text, '10:50', ...(msg.status ? [` ${msg.status} `] : [])];
   }
 
   pasted(text: string): void {
