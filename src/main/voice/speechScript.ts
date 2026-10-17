@@ -72,6 +72,21 @@ public static class KeoSpeech {
     return e;
   }
 
+  // What the recognizer heard: best text plus up to 5 alternative readings. Used
+  // by Keo to accept sound-alike wake phrases; never written anywhere.
+  static Dictionary<string, object> Heard(string name, RecognitionResult r) {
+    var d = Ev(name);
+    d["grammar"] = r != null && r.Grammar != null ? r.Grammar.Name : null;
+    d["text"] = r != null ? r.Text : null;
+    d["confidence"] = r != null ? Math.Round(r.Confidence, 3) : 0.0;
+    var alts = new List<string>();
+    if (r != null) {
+      try { foreach (var a in r.Alternates) { if (alts.Count >= 5) break; if (!string.IsNullOrEmpty(a.Text)) alts.Add(a.Text); } } catch { }
+    }
+    d["alts"] = alts;
+    return d;
+  }
+
   public static List<Dictionary<string, object>> Recognizers() {
     var list = new List<Dictionary<string, object>>();
     foreach (var r in SpeechRecognitionEngine.InstalledRecognizers()) {
@@ -88,11 +103,17 @@ public static class KeoSpeech {
     eng.LoadGrammar(new Grammar(gb) { Name = "wake" });
     eng.LoadGrammar(new DictationGrammar() { Name = "competitor" });
     eng.SpeechRecognized += (s, a) => {
-      if (mode != "wake" || a.Result == null || a.Result.Grammar == null || a.Result.Grammar.Name != "wake") return;
-      if (a.Result.Confidence < threshold) {
-        var low = Ev("wake_rejected"); low["confidence"] = Math.Round(a.Result.Confidence, 3); Emit(low); return;
+      if (mode != "wake" || a.Result == null) return;
+      bool isWake = a.Result.Grammar != null && a.Result.Grammar.Name == "wake";
+      if (isWake && a.Result.Confidence >= threshold) {
+        var d = Ev("wake"); d["phrase"] = a.Result.Text; d["confidence"] = Math.Round(a.Result.Confidence, 3); Emit(d); return;
       }
-      var d = Ev("wake"); d["phrase"] = a.Result.Text; d["confidence"] = Math.Round(a.Result.Confidence, 3); Emit(d);
+      // Not a confident wake: Keo checks whether it *sounds like* the phrase.
+      Emit(Heard("heard", a.Result));
+    };
+    eng.SpeechRecognitionRejected += (s, a) => {
+      if (mode != "wake" || a.Result == null || string.IsNullOrEmpty(a.Result.Text)) return;
+      Emit(Heard("heard", a.Result));
     };
     mode = "wake"; started = DateTime.UtcNow; heardAudio = false;
     eng.RecognizeAsync(RecognizeMode.Multiple);
@@ -136,10 +157,9 @@ public static class KeoSpeech {
     eng.BabbleTimeout = TimeSpan.FromSeconds(seconds);
     eng.RecognizeCompleted += (s, a) => {
       mode = "idle";
-      var d = Ev("test_result");
       var r = a.Result;
+      var d = Heard("test_result", r);
       d["recognized"] = r != null && r.Grammar != null && r.Grammar.Name == "wake";
-      d["confidence"] = r != null ? Math.Round(r.Confidence, 3) : 0.0;
       d["heardSomething"] = r != null;
       Emit(d);
     };

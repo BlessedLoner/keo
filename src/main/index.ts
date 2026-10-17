@@ -437,6 +437,8 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
   r.companionMemoryList = await tryCall(comp, 'memory:list', {});
   r.companionChatSend = await tryCall(comp, 'chat:send', { conversationId: 'x', text: 'x' });
   pw.showCommandBar();
+  // The bar appears after Keo notes the active window (bounded to well under a second).
+  for (let i = 0; i < 40 && !pw.command; i++) await new Promise((res) => setTimeout(res, 50));
   const cmd = pw.command!;
   await loaded(cmd);
   await new Promise((res) => setTimeout(res, 600));

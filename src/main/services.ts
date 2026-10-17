@@ -212,7 +212,7 @@ export class Services {
       },
     );
 
-    this.agent.systemExtra = () => this.live.agentContext();
+    this.agent.systemExtra = () => this.live.agentContext() + this.activeWindowContext();
     // Answers to a waiting live chat (and "stop" / "send it") go straight to it — never lost to a model
     // that only *says* it passed them on. The command bar (voice) may answer any running chat.
     this.agent.interceptor = (conversationId, text) => {
@@ -239,7 +239,7 @@ export class Services {
       this.push('grants:changed', { grants: list });
     });
     this.wake = new WakeService(d.speechEngine ?? new PowerShellSpeechEngine(d.profile.runtimeDir), getSettings, this.log, {
-      onWake: () => void this.handleWake(),
+      onWake: (_phrase, rest) => void this.handleWake(rest),
       onState: (st) => this.presence.setWake({ status: st.status, message: st.message, muted: st.muted, listening: st.status === 'listening', enabled: getSettings().wake.enabled, phrase: getSettings().wake.phrases[0] ?? null }),
     });
     let lastWake = JSON.stringify(this.settings.get().wake);
@@ -325,9 +325,50 @@ export class Services {
     return c.id;
   }
 
-  private async handleWake(): Promise<void> {
+  private async handleWake(rest = ''): Promise<void> {
+    await this.noteActiveWindow();
     this.ui.showCommandBar();
+    // "Hey Keo, look at line 10 …" in one breath: the rest is the command — no second listen.
+    if (rest.split(/\s+/).filter(Boolean).length >= 2) {
+      const conversationId = this.commandConversation();
+      this.push('presence:command', { type: 'transcript', text: rest, conversationId });
+      try {
+        this.agent.send(conversationId, rest).done.catch((e) => this.log.error('agent.unhandled', { error: String(e) }));
+        this.push('conversations:changed', { conversationId });
+      } catch (e) {
+        this.log.warn('wake.send_failed', { error: String(e) });
+      }
+      return;
+    }
     await this.listenAndSend();
+  }
+
+  /** The window the user was in when they called Keo (wake word or Ctrl+K), for "this", "here", "line 10"… */
+  private activeWindow: { at: number; hwnd: string; pid: number; processName: string; title: string; allowed: boolean } | null = null;
+
+  /**
+   * Remembers the foreground window right before Keo's own command bar takes
+   * focus. Bounded to a few hundred ms so it never delays the command bar much.
+   */
+  async noteActiveWindow(): Promise<void> {
+    const look = async () => {
+      const a = await this.desktop.backend.userActivity();
+      if (!a.foreground) return;
+      const all = await this.desktop.listWindows(this.settings.get(), true);
+      const w = all.find((x) => x.hwnd === a.foreground);
+      if (!w) return; // Keo's own windows and hidden/tool windows are not listed
+      this.activeWindow = { at: Date.now(), hwnd: w.hwnd, pid: w.pid, processName: w.processName, title: w.title, allowed: w.allowed };
+    };
+    await Promise.race([look().catch(() => undefined), new Promise((r) => setTimeout(r, 600))]);
+  }
+
+  private activeWindowContext(): string {
+    const w = this.activeWindow;
+    if (!w || Date.now() - w.at > 5 * 60_000) return '';
+    const target = JSON.stringify({ hwnd: w.hwnd, pid: w.pid, processName: w.processName });
+    return w.allowed
+      ? `\n\n# Where the user is\nWhen the user called Keo, the active window was “${w.title.slice(0, 120)}” (${w.processName}), target ${target}. Words like “this”, “here”, “the error”, “line 10”, “this page” refer to it. To look at it use desktop__inspect_window (or vision__observe_window for a picture; browser__read_page for a browser) with exactly this target.`
+      : `\n\n# Where the user is\nWhen the user called Keo, the active window was “${w.title.slice(0, 120)}” (${w.processName}), which is NOT in the allowed apps. If the request is about it, tell the user to allow ${w.processName} in Access first; do not try to read it.`;
   }
 
   /** Captures one spoken command (locally or via the command bar's recorder) and sends it. */

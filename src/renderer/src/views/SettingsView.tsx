@@ -369,6 +369,63 @@ function ApprovalsAndLiveChat({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
+/**
+ * "Teach Keo your voice": the user says the phrase a few times; whatever
+ * Windows makes of their pronunciation is remembered as that phrase.
+ */
+function TeachVoice({ phrase, learned, disabled }: { phrase: string; learned: string[]; disabled: boolean }) {
+  const [round, setRound] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState<string[]>([]);
+  const ROUNDS = 3;
+  const sample = async () => {
+    setBusy(true);
+    setLog((l) => [...l, `Say “${phrase}” now…`]);
+    try {
+      const r = await invoke('wake:learnSample', { phrase });
+      const line = !r.heard
+        ? 'Heard nothing — check the microphone and try again.'
+        : r.alreadyRecognized
+          ? `Windows understood “${r.heard}” exactly — this sample already works.`
+          : r.added.length
+            ? `Windows heard “${r.heard}” — learned ${r.added.map((a) => `“${a}”`).join(', ')}.`
+            : `Windows heard “${r.heard}” — nothing new to learn.`;
+      setLog((l) => [...l.slice(0, -1), line]);
+      setRound((n) => n + 1);
+    } catch (e) {
+      setLog((l) => [...l.slice(0, -1), errText(e)]);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="field">
+      <span className="field-label">Teach Keo your voice</span>
+      <span className="hint">
+        Windows' recognizer is tuned for US/UK accents. Say your phrase {ROUNDS} times the way you normally would; Keo remembers how Windows hears <em>your</em> voice and accepts it from then on. Everything stays on this PC.
+      </span>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="btn sm primary" disabled={busy || disabled} onClick={() => void sample()}>
+          {busy ? 'Listening…' : round === 0 ? `Start (say “${phrase}”)` : round < ROUNDS ? `Again (${round + 1}/${ROUNDS})` : 'One more'}
+        </button>
+        {learned.length > 0 && (
+          <button className="btn sm ghost" disabled={busy} onClick={() => void invoke('wake:forgetLearned').then(() => setLog([]))}>
+            Forget learned ({learned.length})
+          </button>
+        )}
+      </div>
+      {log.length > 0 && (
+        <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+          {log.map((l, k) => (
+            <li key={k}>{l}</li>
+          ))}
+        </ul>
+      )}
+      {learned.length > 0 && <span className="hint">Keo also accepts: {learned.map((l) => `“${l}”`).join(', ')}</span>}
+    </div>
+  );
+}
+
 function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [status, setStatus] = useState<WakeStatusInfo | null>(null);
@@ -439,11 +496,12 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
           <span className="hint">2–4 words, letters only. Distinctive phrases trigger less by accident. If “Keo” isn’t recognised reliably, add a spelling that sounds the same to Windows (e.g. “hey kio”) and test it.</span>
           {testMsg && <div className="small" style={{ marginTop: 6 }}>{testMsg}</div>}
         </div>
+        <TeachVoice phrase={w.phrases[0] ?? 'hey keo'} learned={w.learned} disabled={!!testing} />
         <div className="grid-2">
           <div className="field">
             <label htmlFor="wake-sens">Required confidence: {w.sensitivity.toFixed(2)}</label>
             <input id="wake-sens" type="range" min={0.5} max={0.98} step={0.01} defaultValue={w.sensitivity} onMouseUp={(e) => void patch({ wake: { sensitivity: Number((e.target as HTMLInputElement).value) } })} onKeyUp={(e) => void patch({ wake: { sensitivity: Number((e.target as HTMLInputElement).value) } })} />
-            <span className="hint">Higher means fewer accidental wakes from TV or conversation, but you may need to speak more clearly.</span>
+            <span className="hint">For the exact phrase. Higher means fewer accidental wakes from TV or conversation. Sound-alikes and learned versions of your voice are accepted regardless.</span>
           </div>
           <div className="field">
             <label htmlFor="wake-lang">Language</label>

@@ -155,6 +155,8 @@ export const invokeSchemas = {
   'wake:status': empty,
   'wake:setMuted': z.object({ muted: z.boolean() }).strict(),
   'wake:testPhrase': z.object({ phrase: z.string().trim().min(1).max(40) }).strict(),
+  'wake:learnSample': z.object({ phrase: z.string().trim().min(2).max(40) }).strict(),
+  'wake:forgetLearned': empty,
   'wake:listenNow': empty,
   'wake:cancelListen': empty,
   'grants:list': empty,
@@ -254,6 +256,8 @@ export interface InvokeOutputs {
   'wake:status': WakeStatusInfo;
   'wake:setMuted': WakeStatusInfo;
   'wake:testPhrase': { ok: boolean; recognized: boolean; confidence: number; message: string };
+  'wake:learnSample': { heard: string | null; added: string[]; alreadyRecognized: boolean; learned: string[] };
+  'wake:forgetLearned': { learned: string[] };
   'wake:listenNow': { text: string | null; reason: string; sent: boolean; conversationId: string | null };
   'wake:cancelListen': { ok: true };
   'grants:list': NavigationGrant[];

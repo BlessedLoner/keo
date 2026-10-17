@@ -5,6 +5,7 @@ import readline from 'node:readline';
 import type { Settings } from '../../shared/settings';
 import type { Logger } from '../logging/logger';
 import { SPEECH_HELPER_SCRIPT } from './speechScript';
+import { learnableVariants, matchWake, normWords, soundKey } from './wakeMatch';
 
 export type SpeechEvent =
   | { event: 'ready' }
@@ -12,6 +13,7 @@ export type SpeechEvent =
   | { event: 'paused' }
   | { event: 'wake'; phrase: string; confidence: number }
   | { event: 'wake_rejected'; confidence: number }
+  | { event: 'heard'; grammar: string | null; text: string | null; confidence: number; alts: string[] }
   | { event: 'silent_input' }
   | { event: 'capturing' }
   | { event: 'level'; level: number }
@@ -20,7 +22,7 @@ export type SpeechEvent =
   | { event: 'capture_cancelled' }
   | { event: 'capture_error'; message: string }
   | { event: 'testing' }
-  | { event: 'test_result'; recognized: boolean; confidence: number; heardSomething: boolean }
+  | { event: 'test_result'; recognized: boolean; confidence: number; heardSomething: boolean; text?: string | null; alts?: string[]; grammar?: string | null }
   | { event: 'recognizers'; list: Array<{ culture: string; name: string }> }
   | { event: 'error'; code: string; message?: string };
 
@@ -111,7 +113,8 @@ export class WakeService {
   private muted = false;
   private pausedForSpeech = false;
   private pendingCapture: ((r: { text: string | null; reason: string }) => void) | null = null;
-  private pendingTest: ((r: { recognized: boolean; confidence: number; heardSomething: boolean }) => void) | null = null;
+  private pendingTest: ((r: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar?: string | null }) => void) | null = null;
+  private lastHeardNote = 0;
   private resumeTimer: NodeJS.Timeout | null = null;
   private lastWakeAt = 0;
   private recognizerCache: Array<{ culture: string; name: string }> | null = null;
@@ -121,7 +124,7 @@ export class WakeService {
     private readonly engine: SpeechEngine,
     private readonly getSettings: () => Settings,
     private readonly log: Logger,
-    private readonly handlers: { onWake(phrase: string): void; onState(s: WakeState & { muted: boolean }): void; onLevel?(level: number): void },
+    private readonly handlers: { onWake(phrase: string, rest: string): void; onState(s: WakeState & { muted: boolean }): void; onLevel?(level: number): void },
   ) {}
 
   private set(s: WakeState): void {
@@ -165,7 +168,7 @@ export class WakeService {
     }
     if (!(await this.ensure())) return;
     if (this.pausedForSpeech) return;
-    this.engine.send({ cmd: 'wake', phrases: w.phrases, culture: w.culture, threshold: w.sensitivity });
+    this.engine.send({ cmd: 'wake', phrases: this.grammarPhrases(), culture: w.culture, threshold: w.sensitivity });
   }
 
   setMuted(m: boolean): Promise<void> {
@@ -216,13 +219,43 @@ export class WakeService {
     });
   }
 
-  async testPhrase(phrase: string, seconds = 8): Promise<{ recognized: boolean; confidence: number; heardSomething: boolean }> {
+  /** The phrases plus the learned versions of the user's voice, as recognizer grammar. */
+  private grammarPhrases(): string[] {
+    const w = this.getSettings().wake;
+    return [...new Set([...w.phrases, ...w.learned].map((p) => normWords(p).join(' ')).filter((p) => p.length >= 4))];
+  }
+
+  /** Listens once and reports whether Keo would have woken up, and what it heard. */
+  async testPhrase(phrase: string, seconds = 8): Promise<{ recognized: boolean; confidence: number; heardSomething: boolean; heard: string | null; how: string | null }> {
     if (!(await this.ensure())) throw new Error(this.state.message ?? 'Speech recognition unavailable');
     const w = this.getSettings().wake;
-    return new Promise((resolve) => {
+    const r = await new Promise<{ recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[] }>((resolve) => {
       this.pendingTest = resolve;
-      this.engine.send({ cmd: 'test', phrases: [phrase], culture: w.culture, seconds });
+      this.engine.send({ cmd: 'test', phrases: [...new Set([phrase, ...w.learned])], culture: w.culture, seconds });
     });
+    const m = r.text ? matchWake([r.text, ...r.alts], [phrase], w.learned) : null;
+    const ok = (r.recognized && r.confidence >= w.sensitivity) || !!m;
+    return { recognized: ok, confidence: r.confidence, heardSomething: r.heardSomething, heard: r.text, how: m?.how ?? (ok ? 'exact' : null) };
+  }
+
+  /**
+   * "Teach Keo your voice": the user says their phrase; whatever the
+   * recognizer makes of it (best reading and alternates) is remembered as a
+   * version of the phrase. Returns what was heard and what was added.
+   */
+  async learnSample(phrase: string): Promise<{ heard: string | null; added: string[]; alreadyRecognized: boolean }> {
+    if (!(await this.ensure())) throw new Error(this.state.message ?? 'Speech recognition unavailable');
+    const w = this.getSettings().wake;
+    const r = await new Promise<{ recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar?: string | null }>((resolve) => {
+      this.pendingTest = resolve;
+      // Dictation competes with the phrase, so a mispronounced phrase comes back as what it sounded like.
+      this.engine.send({ cmd: 'test', phrases: [phrase], culture: w.culture, seconds: 8 });
+    });
+    if (!r.text) return { heard: null, added: [], alreadyRecognized: false };
+    const confident = r.grammar === 'wake' && r.confidence >= w.sensitivity;
+    const readings = r.grammar === 'wake' ? r.alts.filter((a) => normWords(a).join(' ') !== normWords(phrase).join(' ')) : [r.text, ...r.alts];
+    const added = confident ? [] : learnableVariants(readings.slice(0, 3), phrase, w.learned).slice(0, 3);
+    return { heard: r.text, added, alreadyRecognized: confident };
   }
 
   private onEvent(e: SpeechEvent): void {
@@ -233,12 +266,26 @@ export class WakeService {
       case 'paused':
         if (this.state.status === 'listening') this.set({ status: this.muted ? 'off' : 'listening', message: this.pausedForSpeech ? 'Paused while Keo speaks.' : null });
         break;
-      case 'wake': {
-        const now = Date.now();
-        if (now - this.lastWakeAt < 2500) break; // debounce double detections
-        this.lastWakeAt = now;
-        this.log.info('wake.detected', { confidence: e.confidence });
-        this.handlers.onWake(e.phrase);
+      case 'wake':
+        this.woke(e.phrase, '', 'exact', e.confidence);
+        break;
+      case 'heard': {
+        // Not a confident exact hit: does it sound like the phrase (or a learned version of it)?
+        const w = this.getSettings().wake;
+        const readings = [e.text ?? '', ...(e.alts ?? [])].filter(Boolean);
+        const m = matchWake(readings, w.phrases, w.learned);
+        if (m) {
+          this.woke(m.phrase, m.rest, m.how, e.confidence);
+          break;
+        }
+        // Tell the user about near misses only (something starting like the phrase) — never other speech.
+        const first = normWords(w.phrases[0] ?? '')[0] ?? '';
+        const heardFirst = normWords(e.text ?? '')[0] ?? '';
+        const near = e.grammar === 'wake' || (!!first && soundKey(first) === soundKey(heardFirst));
+        if (near && Date.now() - this.lastHeardNote > 4000) {
+          this.lastHeardNote = Date.now();
+          this.set({ status: 'listening', message: `Heard “${(e.text ?? '').slice(0, 40)}” — not quite your wake phrase. Use “Teach Keo your voice” in Settings so Keo learns how you say it.` });
+        }
         break;
       }
       case 'wake_rejected':
@@ -273,7 +320,7 @@ export class WakeService {
         for (const r of this.pendingRecognizers.splice(0)) r(e.list);
         break;
       case 'test_result':
-        this.pendingTest?.(e);
+        this.pendingTest?.({ recognized: e.recognized, confidence: e.confidence, heardSomething: e.heardSomething, text: e.text ?? null, alts: e.alts ?? [], grammar: e.grammar ?? null });
         this.pendingTest = null;
         void this.apply();
         break;
@@ -288,13 +335,22 @@ export class WakeService {
         this.set({ status: 'error', message: msg });
         this.pendingCapture?.({ text: null, reason: e.code });
         this.pendingCapture = null;
-        this.pendingTest?.({ recognized: false, confidence: 0, heardSomething: false });
+        this.pendingTest?.({ recognized: false, confidence: 0, heardSomething: false, text: null, alts: [] });
         this.pendingTest = null;
         break;
       }
       default:
         break;
     }
+  }
+
+  private woke(phrase: string, rest: string, how: string, confidence: number): void {
+    const now = Date.now();
+    if (now - this.lastWakeAt < 2500) return; // debounce double detections
+    this.lastWakeAt = now;
+    this.log.info('wake.detected', { how, confidence, withCommand: rest.length > 0 });
+    if (this.state.message) this.set({ status: this.state.status, message: null });
+    this.handlers.onWake(phrase, rest);
   }
 
   stop(): void {

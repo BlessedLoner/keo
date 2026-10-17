@@ -168,6 +168,11 @@ export const SettingsSchema = z
         culture: z.string().regex(/^[a-z]{2}-[A-Z]{2}$/).default('en-US'),
         /** Minimum recognizer confidence for the wake phrase (higher = fewer false wakes). */
         sensitivity: z.number().min(0.5).max(0.98).default(0.82),
+        /**
+         * How the user's own voice comes out of the Windows recognizer when they
+         * say the wake phrase ("Teach Keo your voice"), accepted as the phrase.
+         */
+        learned: z.array(z.string().trim().min(4).max(40)).max(20).default([]),
         /** How a spoken command is turned into text after the wake phrase. */
         commandRecognizer: z.enum(['local', 'openai']).default('local'),
       })

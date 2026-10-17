@@ -78,6 +78,8 @@ export const INVOKE_CHANNELS = [
   'wake:status',
   'wake:setMuted',
   'wake:testPhrase',
+  'wake:learnSample',
+  'wake:forgetLearned',
   'wake:listenNow',
   'wake:cancelListen',
   'grants:list',

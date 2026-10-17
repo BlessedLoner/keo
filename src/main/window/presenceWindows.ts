@@ -177,6 +177,14 @@ export class PresenceWindows {
   }
 
   showCommandBar(): void {
+    // Remember what the user was looking at before the bar takes focus ("explain this error").
+    void this.services
+      .noteActiveWindow()
+      .catch(() => undefined)
+      .finally(() => this.revealCommandBar());
+  }
+
+  private revealCommandBar(): void {
     const win = this.command && !this.command.isDestroyed() ? this.command : this.createCommand();
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     win.setBounds({ x: Math.round(d.x + (d.width - COMMAND_W) / 2), y: Math.round(d.y + d.height * 0.18), width: COMMAND_W, height: COMMAND_H });

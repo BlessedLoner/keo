@@ -351,20 +351,33 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       await s.wake.setMuted(muted);
       return await wakeStatus();
     },
+    'wake:learnSample': async ({ phrase }) => {
+      const r = await s.wake.learnSample(phrase);
+      const learned = [...new Set([...s.settings.get().wake.learned, ...r.added])].slice(-20);
+      if (r.added.length) s.settings.update({ wake: { learned } });
+      s.audit.record({ kind: 'voice.wake', decision: 'learned_sample', detail: { added: r.added.length } });
+      return { ...r, learned };
+    },
+    'wake:forgetLearned': () => {
+      s.settings.update({ wake: { learned: [] } });
+      return { learned: [] };
+    },
     'wake:testPhrase': async ({ phrase }) => {
       const invalid = validateWakePhrase(phrase);
       if (invalid) return { ok: false, recognized: false, confidence: 0, message: invalid };
       try {
         const r = await s.wake.testPhrase(phrase.toLowerCase(), 8);
-        const thr = s.settings.get().wake.sensitivity;
+        const heard = r.heard ? `“${r.heard.slice(0, 60)}”` : 'something';
         const message = r.recognized
-          ? r.confidence >= thr
-            ? `Recognised (confidence ${r.confidence.toFixed(2)}). This phrase works.`
-            : `Recognised, but confidence ${r.confidence.toFixed(2)} is below your sensitivity ${thr.toFixed(2)}. Speak more clearly or lower the sensitivity.`
+          ? r.how === 'learned'
+            ? `Recognised — Windows heard ${heard}, which Keo learned as your way of saying it.`
+            : r.how === 'sounds_like'
+              ? `Recognised — Windows heard ${heard}, which sounds like your phrase.`
+              : `Recognised (confidence ${r.confidence.toFixed(2)}). This phrase works.`
           : r.heardSomething
-            ? 'Heard speech, but not the phrase. Try again, or choose a phrase with clearer words.'
+            ? `Windows heard ${heard}, not your phrase. Use “Teach Keo your voice” below so Keo learns how you say it.`
             : 'Heard nothing within 8 seconds. Check the microphone.';
-        return { ok: r.recognized && r.confidence >= thr, recognized: r.recognized, confidence: r.confidence, message };
+        return { ok: r.recognized, recognized: r.recognized, confidence: r.confidence, message };
       } catch (e) {
         return { ok: false, recognized: false, confidence: 0, message: e instanceof Error ? e.message : String(e) };
       }

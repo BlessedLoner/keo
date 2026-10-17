@@ -187,6 +187,8 @@ export class FakeSpeech implements SpeechEngine {
   started = 0;
   private emit: ((e: SpeechEvent) => void) | null = null;
   failStart: string | null = null;
+  /** What the next "test" (or teach sample) hears. */
+  nextTest: { recognized: boolean; confidence: number; heardSomething: boolean; text: string | null; alts: string[]; grammar: string | null } | null = null;
   async start(onEvent: (e: SpeechEvent) => void) {
     this.started++;
     if (this.failStart) throw new Error(this.failStart);
@@ -199,6 +201,11 @@ export class FakeSpeech implements SpeechEngine {
     if (cmd.cmd === 'pause') this.emit?.({ event: 'paused' });
     if (cmd.cmd === 'capture') this.emit?.({ event: 'capturing' });
     if (cmd.cmd === 'recognizers') this.emit?.({ event: 'recognizers', list: [{ culture: 'en-US', name: 'Fake recognizer' }] });
+    if (cmd.cmd === 'test' && this.nextTest) {
+      const r = this.nextTest;
+      this.nextTest = null;
+      setTimeout(() => this.emit?.({ event: 'test_result', ...r }), 0);
+    }
   }
   fire(e: SpeechEvent) {
     this.emit?.(e);
