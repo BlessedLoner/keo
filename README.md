@@ -26,9 +26,10 @@ See [docs/SECURITY.md](docs/SECURITY.md) for boundaries and [docs/IMPLEMENTATION
 
 ```bash
 npm install
+node node_modules/electron/install.js
 ```
 
-If `npm install` could not download the Electron binary (e.g. behind a proxy), run `node node_modules/electron/install.js`.
+Electron 44 does not download its runtime during `npm install`; the second command fetches it (needed for `npm run dev`, the checks and packaging).
 
 ## Run in the isolated development profile
 
