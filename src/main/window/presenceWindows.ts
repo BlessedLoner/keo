@@ -4,7 +4,7 @@ import type { Logger } from '../logging/logger';
 import type { Services } from '../services';
 
 const COMPANION_W = 300;
-const COMPANION_H = 120;
+const COMPANION_H = 270; // room for up to four task chips above the companion (the window is click-through)
 const COMMAND_W = 680;
 const COMMAND_H = 500;
 

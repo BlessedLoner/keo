@@ -92,10 +92,21 @@ export class FakeDesktop implements DesktopBackend {
       return { chars: text.length };
     });
   }
+  /** A file put on the clipboard (pasted as an attachment). */
+  clipboardFile: string | null = null;
+  async setClipboardFiles(path: string) {
+    this.calls.push({ op: 'clipboard_files', args: [path] });
+    this.clipboardFile = path;
+  }
   async paste(hwnd: string) {
     const t = (await this.clipboardSource?.readText()) ?? '';
+    const file = this.clipboardFile;
     return this.act('paste', [hwnd], () => {
       const app = this.apps.get(hwnd);
+      if (file && app?.pastedFile) {
+        app.pastedFile(file);
+        return;
+      }
       if (app?.pasted) app.pasted(t);
       else if (this.documentText !== null) this.documentText += t;
     });

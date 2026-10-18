@@ -368,7 +368,7 @@ function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveTe
       {tools.length > 0 && (
         <div className="tool-list">
           {tools.map((t) => (
-            <ToolCard key={t.callId} t={t} />
+            <ToolCard key={t.callId} t={t} conversationId={m.conversationId} />
           ))}
         </div>
       )}
@@ -452,7 +452,7 @@ const OUTCOME: Record<ToolActivity['outcome'], { label: string; cls: string }> =
   awaiting_authorization: { label: 'Needs approval', cls: 'warn' },
 };
 
-function ToolCard({ t }: { t: ToolActivity }) {
+function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: string }) {
   const app = useApp();
   const task = useMemo(() => (t.taskId ? app.tasks.data?.find((x) => x.id === t.taskId) : undefined), [app.tasks.data, t.taskId]);
   const step = task?.steps[0];
@@ -471,6 +471,7 @@ function ToolCard({ t }: { t: ToolActivity }) {
       detail = step?.error ?? detail;
     } else if (task.state === 'cancelled') o = step?.state === 'denied' ? OUTCOME.denied : { label: 'Cancelled', cls: 'danger' };
   }
+  if (t.cards) return <ProductCards data={t.cards} />;
   return (
     <div className={`tool-card ${t.outcome}`}>
       <Icon name={task?.state === 'running' ? 'pulse' : 'shield'} size={15} />
@@ -478,6 +479,15 @@ function ToolCard({ t }: { t: ToolActivity }) {
         <div>{t.summary}</div>
         <div className="cap">{t.capabilityId}</div>
         {detail && <div className="muted small">{detail}</div>}
+        {t.choices && t.choices.length > 0 && (
+          <div className="choices" role="group" aria-label="Choose one">
+            {t.choices.map((c) => (
+              <button key={c} className="btn sm" onClick={() => void invoke('chat:send', { conversationId, text: c }).catch(() => undefined)}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <span className={`chip ${o.cls}`}>{o.label}</span>
       {t.taskId && (
@@ -486,6 +496,57 @@ function ToolCard({ t }: { t: ToolActivity }) {
         </button>
       )}
     </div>
+  );
+}
+
+/** Product comparison cards; every price/merchant/image comes from a page Keo fetched (shown with its source). */
+function ProductCards({ data }: { data: NonNullable<ToolActivity['cards']> }) {
+  return (
+    <section className="product-cards" aria-label="Product comparison">
+      {data.criteria.length > 0 && <div className="muted small">Compared on: {data.criteria.join(' · ')}</div>}
+      <div className="product-grid">
+        {data.cards.map((c) => (
+          <article key={c.url} className="product-card">
+            {c.image ? <img src={c.image} alt={c.name} /> : <div className="no-image" aria-hidden="true"><Icon name="camera" size={22} /></div>}
+            <div className="product-body">
+              <h4>{c.name}</h4>
+              <div className="price">
+                {c.price ? `${c.currency ? `${c.currency} ` : ''}${c.price}` : 'Price not stated on the page'}
+                {c.merchant && <span className="muted"> · {c.merchant}</span>}
+              </div>
+              {c.availability && <div className="muted small">{c.availability}</div>}
+              {c.fit && <p className="small">{c.fit}</p>}
+              {c.specs.length > 0 && (
+                <ul className="specs">
+                  {c.specs.map((s) => (
+                    <li key={s}>{s}</li>
+                  ))}
+                </ul>
+              )}
+              {(c.pros.length > 0 || c.cons.length > 0) && (
+                <div className="pros-cons small">
+                  {c.pros.map((p) => (
+                    <div key={`+${p}`} className="pro">+ {p}</div>
+                  ))}
+                  {c.cons.map((p) => (
+                    <div key={`-${p}`} className="con">− {p}</div>
+                  ))}
+                </div>
+              )}
+              <button className="btn ghost sm link" title={c.url} onClick={() => void invoke('app:openUrl', { url: c.url }).catch(() => undefined)}>
+                {c.pageTitle || new URL(c.url).hostname}
+              </button>
+              <div className="muted tiny">
+                {c.priceFrom === 'page data' ? 'Price from the page’s product data' : c.priceFrom === 'page text' ? 'Price found in the page text' : 'No price on the page'} · read {new Date(c.fetchedAt).toLocaleString()}. Pros, cons and specs are Keo’s reading of the page.
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+      {data.dropped.length > 0 && (
+        <div className="muted small">Not shown (could not be traced to a page Keo read): {data.dropped.map((x) => x.name).join(', ')}</div>
+      )}
+    </section>
   );
 }
 

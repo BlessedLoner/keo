@@ -452,13 +452,20 @@ public static class KeoUia {
   // Chromium) lives in child windows, sometimes in another process. Some hosts
   // (e.g. WinUI 3 frames) do not lead the classic UI Automation walker into
   // that content, so it is read from these child windows directly as well.
-  static List<IntPtr> ContentChildren(IntPtr h) {
+  // Chromium render widgets, WebView2 hosts (also windowless ones inside WinUI 3, such as the
+  // WhatsApp app: their accessibility tree switches on only when their own window is asked),
+  // WinUI 3 content bridges and UWP core windows.
+  public static bool IsContentClass(string cls) {
+    return cls == "Chrome_RenderWidgetHostHWND" || cls == "Chrome_WidgetWin_0" || cls == "Chrome_WidgetWin_1" || cls == "Microsoft.UI.Content.DesktopChildSiteBridge" || cls == "Windows.UI.Core.CoreWindow";
+  }
+
+  public static List<IntPtr> ContentChildren(IntPtr h) {
     var list = new List<IntPtr>();
     EnumChildWindows(h, (c, l) => {
       if (list.Count >= 8) return false;
       var sb = new StringBuilder(128); GetClassName(c, sb, sb.Capacity);
       var cls = sb.ToString();
-      if (IsWindowVisible(c) && (cls == "Chrome_RenderWidgetHostHWND" || cls == "Windows.UI.Core.CoreWindow")) list.Add(c);
+      if (IsWindowVisible(c) && IsContentClass(cls)) list.Add(c);
       return true;
     }, IntPtr.Zero);
     return list;
@@ -596,28 +603,29 @@ public static class KeoUia {
       if (truncated) break;
       AutomationElement croot;
       try { croot = AutomationElement.FromHandle(child); } catch { continue; }
-      string crid; try { crid = Rid(croot); } catch { continue; }
-      if (seen.Contains(crid)) continue;
-      extraRoots++;
       var cstack = new Stack<Tuple<AutomationElement, int, int>>();
       cstack.Push(Tuple.Create(croot, 1, 0));
+      bool added = false;
       while (cstack.Count > 0) {
         if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
         var t = cstack.Pop();
         Dictionary<string, object> n;
         try { n = Node(t.Item1, win, t.Item2, t.Item3); } catch { continue; }
         var r = (string)n["rid"];
-        if (seen.Contains(r)) continue;
-        seen.Add(r);
-        int idx = list.Count; n["i"] = idx; list.Add(n);
+        // An element already seen (e.g. the host pane, empty when reached from the frame) is
+        // not added again, but its children are read from here.
+        int idx;
+        if (seen.Contains(r)) idx = -1; else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); added = true; }
         if (t.Item2 >= maxDepth) continue;
         var kids = new List<AutomationElement>();
         try {
           var ch = walker.GetFirstChild(t.Item1);
           while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
         } catch { }
-        for (int k = kids.Count - 1; k >= 0; k--) cstack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+        int parentIdx = idx >= 0 ? idx : t.Item3;
+        for (int k = kids.Count - 1; k >= 0; k--) cstack.Push(Tuple.Create(kids[k], t.Item2 + 1, parentIdx));
       }
+      if (added) extraRoots++;
     }
     var res = new Dictionary<string, object>();
     res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["contentRoots"] = extraRoots;
@@ -831,6 +839,7 @@ public static class KeoUia {
   $script:uiaReady = $true
 } catch { $script:uiaReady = $false }
 
+
 function ReplyRaw($id, $json) {
   [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"result":' + $json + '}')
   [Console]::Out.Flush()
@@ -885,9 +894,403 @@ while ($true) {
       'wheel'        { [KeoWin]::Wheel($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.notches); Reply $req.id $true @{ scrolled = $true } }
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
+      'clipboard_files' {
+        # One existing file, as if copied in Explorer (for attaching it with Ctrl+V).
+        $p = [string]$req.args.path
+        if (-not [System.IO.File]::Exists($p)) { throw 'file_missing' }
+        Add-Type -AssemblyName System.Windows.Forms
+        $c = New-Object System.Collections.Specialized.StringCollection
+        [void]$c.Add($p)
+        [System.Windows.Forms.Clipboard]::SetFileDropList($c)
+        Reply $req.id $true @{ set = $true }
+      }
       'ping'  { Reply $req.id $true @{ pong = $true; dpi = $script:dpiMode } }
       'idle'  { Reply $req.id $true @{ idleMs = [KeoWin]::IdleMs(); foreground = [KeoWin]::ForegroundHwnd() } }
       'covered' { Reply $req.id $true @{ share = [KeoWin]::CoveredShare($h) } }
+      default { Reply $req.id $false @{ code = 'unknown_command'; message = 'Unknown command' } }
+    }
+  } catch {
+    $msg = $_.Exception.Message
+    if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+    $rid = 0
+    if ($req) { $rid = $req.id }
+    Reply $rid $false @{ code = 'helper_error'; message = [string]$msg }
+  }
+}
+`;
+
+/**
+ * Second helper, only for the modern (COM) UI Automation client. It must run in
+ * its own process: once the classic .NET client has been used in a process,
+ * the COM client there also sees WinUI 3 / WebView2 apps (the WhatsApp app) as
+ * an empty frame. Started on first need; same line-based JSON protocol.
+ */
+export const MODERN_UIA_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+[Console]::InputEncoding = $utf8
+Add-Type -Language CSharp -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Web.Script.Serialization;
+
+// Modern UI Automation (the COM client Narrator and Inspect use). The classic
+// .NET client sees WinUI 3 apps that host web content without a child window
+// (e.g. the WhatsApp app) as empty; this one reads them. Used only for windows
+// the classic reader returns empty, with the same JSON shapes.
+[ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoUia {
+  void CompareElements(); void CompareRuntimeIds(); void GetRootElement();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement ElementFromHandle(IntPtr hwnd);
+  void ElementFromPoint(); void GetFocusedElement(); void GetRootElementBuildCache(); void ElementFromHandleBuildCache();
+  void ElementFromPointBuildCache(); void GetFocusedElementBuildCache(); void CreateTreeWalker();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaWalker GetControlViewWalker();
+  void GetContentViewWalker();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaWalker GetRawViewWalker();
+}
+
+[ComImport, Guid("4042c624-389c-4afc-a630-9df854a541fc"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoUiaWalker {
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement GetParentElement([MarshalAs(UnmanagedType.Interface)] IKeoUiaElement e);
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement GetFirstChildElement([MarshalAs(UnmanagedType.Interface)] IKeoUiaElement e);
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement GetLastChildElement([MarshalAs(UnmanagedType.Interface)] IKeoUiaElement e);
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement GetNextSiblingElement([MarshalAs(UnmanagedType.Interface)] IKeoUiaElement e);
+}
+
+[ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoUiaElement {
+  void SetFocus();
+  [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_I4)] int[] GetRuntimeId();
+  void FindFirst(); void FindAll(); void FindFirstBuildCache(); void FindAllBuildCache(); void BuildUpdatedCache();
+  [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int propertyId);
+  void GetCurrentPropertyValueEx(); void GetCachedPropertyValue(); void GetCachedPropertyValueEx(); void GetCurrentPatternAs(); void GetCachedPatternAs();
+  [return: MarshalAs(UnmanagedType.IUnknown)] object GetCurrentPattern(int patternId);
+}
+
+[ComImport, Guid("fb377fbe-8ea6-46d5-9c73-6499642d3059"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoInvoke { void Invoke(); }
+[ComImport, Guid("a94cd8b1-0844-4cd6-9d2d-640537ab39e9"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoValue { void SetValue([MarshalAs(UnmanagedType.BStr)] string v); }
+[ComImport, Guid("94cf8058-9b8d-4ab9-8bfd-4cd0a33c8c70"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoToggle { void Toggle(); }
+[ComImport, Guid("a8efa66a-0fda-421a-9194-38021f3578ea"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoSelectionItem { void Select(); }
+[ComImport, Guid("619be086-1f4e-4ee4-bafa-210128738730"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoExpandCollapse { void Expand(); void Collapse(); }
+[ComImport, Guid("88f4d42a-e881-459d-a77c-73bbbb7e02dc"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoScroll { void Scroll(int horizontal, int vertical); }
+
+public static class KeoUia3 {
+  static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+  public delegate bool ChildProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, ChildProc cb, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+  // Same embedded-content windows as the classic reader (WebView2 hosts, WinUI 3 bridges, ...).
+  static List<IntPtr> ContentChildren(IntPtr h) {
+    var list = new List<IntPtr>();
+    EnumChildWindows(h, (c, l) => {
+      if (list.Count >= 8) return false;
+      var sb = new StringBuilder(128); GetClassName(c, sb, sb.Capacity);
+      var cls = sb.ToString();
+      if (IsWindowVisible(c) && (cls == "Chrome_RenderWidgetHostHWND" || cls == "Chrome_WidgetWin_0" || cls == "Chrome_WidgetWin_1" || cls == "Microsoft.UI.Content.DesktopChildSiteBridge" || cls == "Windows.UI.Core.CoreWindow")) list.Add(c);
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
+  static IKeoUia uia;
+  static IKeoUia U() {
+    if (uia == null) uia = (IKeoUia)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
+    return uia;
+  }
+
+  // Elements of the latest snapshot per window, so actions find them without a new walk.
+  static readonly Dictionary<string, IKeoUiaElement> last = new Dictionary<string, IKeoUiaElement>();
+  static IntPtr lastWindow = IntPtr.Zero;
+
+  const int P_RECT = 30001, P_TYPE = 30003, P_LCT = 30004, P_NAME = 30005, P_FOCUS = 30008, P_ENABLED = 30010, P_AID = 30011,
+    P_PASSWORD = 30019, P_OFFSCREEN = 30022, P_HAS_EXPAND = 30028, P_HAS_INVOKE = 30031, P_HAS_SCROLL = 30034, P_HAS_SELITEM = 30036,
+    P_HAS_TEXT = 30040, P_HAS_TOGGLE = 30041, P_HAS_VALUE = 30043, P_VALUE = 30045, P_VALUE_RO = 30046, P_EXPSTATE = 30070,
+    P_SELECTED = 30079, P_TOGGLESTATE = 30086;
+  const int PAT_INVOKE = 10000, PAT_SCROLL = 10004, PAT_EXPAND = 10005, PAT_VALUE = 10002, PAT_SELITEM = 10010, PAT_TOGGLE = 10015;
+
+  static readonly Dictionary<int, string> Types = new Dictionary<int, string> {
+    {50000,"button"},{50001,"calendar"},{50002,"checkbox"},{50003,"combobox"},{50004,"edit"},{50005,"hyperlink"},{50006,"image"},
+    {50007,"listitem"},{50008,"list"},{50009,"menu"},{50010,"menubar"},{50011,"menuitem"},{50012,"progressbar"},{50013,"radiobutton"},
+    {50014,"scrollbar"},{50015,"slider"},{50016,"spinner"},{50017,"statusbar"},{50018,"tab"},{50019,"tabitem"},{50020,"text"},
+    {50021,"toolbar"},{50022,"tooltip"},{50023,"tree"},{50024,"treeitem"},{50025,"custom"},{50026,"group"},{50027,"thumb"},
+    {50028,"datagrid"},{50029,"dataitem"},{50030,"document"},{50031,"splitbutton"},{50032,"window"},{50033,"pane"},{50034,"header"},
+    {50035,"headeritem"},{50036,"table"},{50037,"titlebar"},{50038,"separator"},{50039,"semanticzoom"},{50040,"appbar"} };
+
+  static object Prop(IKeoUiaElement e, int id) { try { return e.GetCurrentPropertyValue(id); } catch { return null; } }
+  static bool B(IKeoUiaElement e, int id) { var v = Prop(e, id); return v is bool && (bool)v; }
+  static string S(IKeoUiaElement e, int id) { var v = Prop(e, id) as string; return v ?? ""; }
+
+  static string Rid(IKeoUiaElement e) {
+    var r = e.GetRuntimeId();
+    if (r == null) return "";
+    var parts = new string[r.Length];
+    for (int i = 0; i < r.Length; i++) parts[i] = r[i].ToString();
+    return string.Join(".", parts);
+  }
+
+  static string Clip(string s, int n) {
+    if (s == null) return "";
+    s = s.Replace("\r", " ").Replace("\n", " ").Trim();
+    return s.Length > n ? s.Substring(0, n) + "…" : s;
+  }
+
+  static double[] Rect(IKeoUiaElement e) { return Prop(e, P_RECT) as double[]; }
+
+  static Dictionary<string, object> Node(IKeoUiaElement e, double wx, double wy, int depth, int parent) {
+    var d = new Dictionary<string, object>();
+    d["rid"] = Rid(e);
+    var t = Prop(e, P_TYPE);
+    string role; d["role"] = (t is int && Types.TryGetValue((int)t, out role)) ? role : "custom";
+    var lct = S(e, P_LCT); if (lct.Length > 0) d["lct"] = Clip(lct, 40);
+    d["name"] = Clip(S(e, P_NAME), 200);
+    var aid = S(e, P_AID); if (aid.Length > 0) d["aid"] = Clip(aid, 80);
+    var r = Rect(e);
+    if (r != null && r.Length == 4 && !double.IsInfinity(r[0]) && !double.IsNaN(r[0]) && r[2] > 0) { d["x"] = (int)(r[0] - wx); d["y"] = (int)(r[1] - wy); d["w"] = (int)r[2]; d["h"] = (int)r[3]; }
+    d["depth"] = depth; d["parent"] = parent;
+    if (!B(e, P_ENABLED)) d["disabled"] = true;
+    if (B(e, P_OFFSCREEN)) d["offscreen"] = true;
+    if (B(e, P_FOCUS)) d["focused"] = true;
+    bool pw = B(e, P_PASSWORD); if (pw) d["password"] = true;
+    var pats = new List<string>();
+    if (B(e, P_HAS_INVOKE)) pats.Add("invoke");
+    if (B(e, P_HAS_TOGGLE)) { pats.Add("toggle"); var ts = Prop(e, P_TOGGLESTATE); d["toggle"] = ts is int ? ((int)ts == 1 ? "on" : (int)ts == 2 ? "indeterminate" : "off") : "off"; }
+    if (B(e, P_HAS_SELITEM)) { pats.Add("select"); if (B(e, P_SELECTED)) d["selected"] = true; }
+    if (B(e, P_HAS_EXPAND)) { pats.Add("expand"); var es = Prop(e, P_EXPSTATE); d["expanded"] = es is int ? ((int)es == 1 ? "expanded" : (int)es == 2 ? "partiallyexpanded" : (int)es == 3 ? "leafnode" : "collapsed") : "collapsed"; }
+    if (B(e, P_HAS_VALUE)) {
+      pats.Add("value");
+      if (B(e, P_VALUE_RO)) d["readonly"] = true;
+      if (!pw) d["value"] = Clip(S(e, P_VALUE), 400);
+    }
+    if (B(e, P_HAS_SCROLL)) pats.Add("scroll");
+    if (B(e, P_HAS_TEXT)) pats.Add("text");
+    if (pats.Count > 0) d["patterns"] = pats;
+    return d;
+  }
+
+  public static string Snapshot(IntPtr h, int maxNodes, int maxDepth, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var root = U().ElementFromHandle(h);
+    var wr = Rect(root) ?? new double[] { 0, 0, 0, 0 };
+    var walker = U().GetControlViewWalker();
+    var list = new List<Dictionary<string, object>>();
+    last.Clear(); lastWindow = h;
+    var stack = new Stack<Tuple<IKeoUiaElement, int, int>>();
+    stack.Push(Tuple.Create(root, 0, -1));
+    bool truncated = false;
+    while (stack.Count > 0) {
+      if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+      var t = stack.Pop();
+      Dictionary<string, object> n;
+      try { n = Node(t.Item1, wr[0], wr[1], t.Item2, t.Item3); } catch { continue; }
+      int idx = list.Count; n["i"] = idx; list.Add(n);
+      last[(string)n["rid"]] = t.Item1;
+      if (t.Item2 >= maxDepth) continue;
+      var kids = new List<IKeoUiaElement>();
+      try {
+        var ch = walker.GetFirstChildElement(t.Item1);
+        while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSiblingElement(ch); }
+      } catch { }
+      for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+    }
+    // Embedded web content read from its own windows (see KeoUia.ContentChildren).
+    var seen = new HashSet<string>();
+    foreach (var n in list) seen.Add((string)n["rid"]);
+    int extraRoots = 0;
+    var children = ContentChildren(h);
+    foreach (var child in children) {
+      if (truncated) break;
+      IKeoUiaElement croot;
+      try { croot = U().ElementFromHandle(child); } catch { continue; }
+      var cstack = new Stack<Tuple<IKeoUiaElement, int, int>>();
+      cstack.Push(Tuple.Create(croot, 1, 0));
+      bool added = false;
+      while (cstack.Count > 0) {
+        if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+        var t = cstack.Pop();
+        Dictionary<string, object> n;
+        try { n = Node(t.Item1, wr[0], wr[1], t.Item2, t.Item3); } catch { continue; }
+        var r = (string)n["rid"];
+        int idx;
+        if (seen.Contains(r)) { idx = -1; } else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); last[r] = t.Item1; added = true; }
+        if (t.Item2 >= maxDepth) continue;
+        var kids = new List<IKeoUiaElement>();
+        try { var ch = walker.GetFirstChildElement(t.Item1); while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSiblingElement(ch); } } catch { }
+        int parentIdx = idx >= 0 ? idx : t.Item3;
+        for (int k = kids.Count - 1; k >= 0; k--) cstack.Push(Tuple.Create(kids[k], t.Item2 + 1, parentIdx));
+      }
+      if (added) extraRoots++;
+    }
+    var res = new Dictionary<string, object>();
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["engine"] = "uia3"; res["contentRoots"] = extraRoots;
+    var wd = new Dictionary<string, object>(); wd["w"] = (int)wr[2]; wd["h"] = (int)wr[3]; wd["x"] = (int)wr[0]; wd["y"] = (int)wr[1];
+    res["window"] = wd;
+    return Json.Serialize(res);
+  }
+
+  static IKeoUiaElement Find(IntPtr h, string rid) {
+    IKeoUiaElement e;
+    if (lastWindow == h && last.TryGetValue(rid, out e)) {
+      try { if (Rid(e) == rid) return e; } catch { }
+    }
+    // Bounded walk for an element of an older observation.
+    var walker = U().GetControlViewWalker();
+    var stack = new Stack<IKeoUiaElement>();
+    stack.Push(U().ElementFromHandle(h));
+    var sw = Stopwatch.StartNew(); int seen = 0;
+    while (stack.Count > 0 && seen < 5000 && sw.ElapsedMilliseconds < 4000) {
+      var cur = stack.Pop(); seen++;
+      try { if (Rid(cur) == rid) return cur; } catch { continue; }
+      try { var ch = walker.GetFirstChildElement(cur); while (ch != null) { stack.Push(ch); ch = walker.GetNextSiblingElement(ch); } } catch { }
+    }
+    return null;
+  }
+
+  public static string Describe(IntPtr h, string rid) {
+    var e = Find(h, rid);
+    if (e == null) return "null";
+    var wr = Rect(U().ElementFromHandle(h)) ?? new double[] { 0, 0, 0, 0 };
+    var n = Node(e, wr[0], wr[1], 0, -1);
+    return Json.Serialize(n);
+  }
+
+  public static string Center(IntPtr h, string rid) {
+    var e = Find(h, rid);
+    if (e == null) throw new Exception("element_gone");
+    if (B(e, P_OFFSCREEN)) throw new Exception("element_offscreen");
+    var r = Rect(e);
+    if (r == null || r[2] <= 0 || r[3] <= 0) throw new Exception("element_offscreen");
+    var d = new Dictionary<string, object>(); d["x"] = (int)(r[0] + r[2] / 2); d["y"] = (int)(r[1] + r[3] / 2);
+    return Json.Serialize(d);
+  }
+
+  static T Pat<T>(IKeoUiaElement e, int id) where T : class { try { return e.GetCurrentPattern(id) as T; } catch { return null; } }
+
+  public static string Act(IntPtr h, string rid, string action, string text) {
+    var e = Find(h, rid);
+    if (e == null) throw new Exception("element_gone");
+    if (!B(e, P_ENABLED)) throw new Exception("element_disabled");
+    string method = "";
+    switch (action) {
+      case "invoke": {
+        var inv = Pat<IKeoInvoke>(e, PAT_INVOKE);
+        if (inv != null) { inv.Invoke(); method = "invoke"; break; }
+        var sel = Pat<IKeoSelectionItem>(e, PAT_SELITEM);
+        if (sel != null) { sel.Select(); method = "select"; break; }
+        var tg = Pat<IKeoToggle>(e, PAT_TOGGLE);
+        if (tg != null) { tg.Toggle(); method = "toggle"; break; }
+        var ex = Pat<IKeoExpandCollapse>(e, PAT_EXPAND);
+        if (ex != null) { ex.Expand(); method = "expand"; break; }
+        throw new Exception("no_invoke_pattern");
+      }
+      case "toggle": { var p = Pat<IKeoToggle>(e, PAT_TOGGLE); if (p == null) throw new Exception("unsupported_action"); p.Toggle(); method = "toggle"; break; }
+      case "select": { var p = Pat<IKeoSelectionItem>(e, PAT_SELITEM); if (p == null) throw new Exception("unsupported_action"); p.Select(); method = "select"; break; }
+      case "expand": { var p = Pat<IKeoExpandCollapse>(e, PAT_EXPAND); if (p == null) throw new Exception("unsupported_action"); p.Expand(); method = "expand"; break; }
+      case "collapse": { var p = Pat<IKeoExpandCollapse>(e, PAT_EXPAND); if (p == null) throw new Exception("unsupported_action"); p.Collapse(); method = "collapse"; break; }
+      case "focus": try { e.SetFocus(); } catch (Exception) { throw new Exception("not_focusable"); } method = "focus"; break;
+      case "set_value": {
+        if (B(e, P_PASSWORD)) throw new Exception("password_field");
+        var p = Pat<IKeoValue>(e, PAT_VALUE);
+        if (p == null || B(e, P_VALUE_RO)) throw new Exception("no_value_pattern");
+        try { p.SetValue(text); } catch (Exception) { throw new Exception("value_rejected"); }
+        method = "value"; break;
+      }
+      case "scroll_down": case "scroll_up": case "page_down": case "page_up": {
+        // ScrollAmount: 0 LargeDecrement, 1 SmallDecrement, 2 NoAmount, 3 LargeIncrement, 4 SmallIncrement
+        IKeoScroll sp = null; var walker = U().GetControlViewWalker(); var cur = e;
+        for (int i = 0; i < 12 && cur != null && sp == null; i++) { if (B(cur, P_HAS_SCROLL)) sp = Pat<IKeoScroll>(cur, PAT_SCROLL); if (sp == null) { try { cur = walker.GetParentElement(cur); } catch { cur = null; } } }
+        if (sp == null) throw new Exception("no_scroll_pattern");
+        int amt = action == "scroll_down" ? 4 : action == "scroll_up" ? 1 : action == "page_down" ? 3 : 0;
+        sp.Scroll(2, amt); method = "scroll"; break;
+      }
+      default: throw new Exception("unsupported_action");
+    }
+    var d = new Dictionary<string, object>(); d["method"] = method;
+    return Json.Serialize(d);
+  }
+
+  /** Names inside each element through the RAW view (bounded); password fields skipped. */
+  public static string Texts(IntPtr h, string rids, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var walker = U().GetRawViewWalker();
+    var outer = new List<List<string>>();
+    foreach (var rid in rids.Split('|')) {
+      var names = new List<string>();
+      IKeoUiaElement e = null;
+      try { if (sw.ElapsedMilliseconds < budgetMs) e = Find(h, rid); } catch { }
+      if (e != null) {
+        var stack = new Stack<IKeoUiaElement>(); stack.Push(e); int seen = 0;
+        while (stack.Count > 0 && seen < 200 && sw.ElapsedMilliseconds < budgetMs) {
+          var cur = stack.Pop(); seen++;
+          if (B(cur, P_PASSWORD)) continue;
+          var nm = S(cur, P_NAME); if (nm.Length > 0 && names.Count < 40) names.Add(Clip(nm, 400));
+          try { var ch = walker.GetFirstChildElement(cur); var tmp = new List<IKeoUiaElement>(); while (ch != null && tmp.Count < 100) { tmp.Add(ch); ch = walker.GetNextSiblingElement(ch); } for (int k = tmp.Count - 1; k >= 0; k--) stack.Push(tmp[k]); } catch { }
+        }
+      }
+      outer.Add(names);
+    }
+    return Json.Serialize(outer);
+  }
+
+  /** Document/edit values (for read-back), from the latest snapshot's elements or a fresh one. */
+  public static string ReadText(IntPtr h) {
+    if (lastWindow != h || last.Count == 0) Snapshot(h, 1500, 60, 6000);
+    var sb = new StringBuilder();
+    foreach (var e in last.Values) {
+      try {
+        var t = Prop(e, P_TYPE);
+        if (!(t is int) || ((int)t != 50004 && (int)t != 50030)) continue;
+        if (B(e, P_PASSWORD)) continue;
+        var v = S(e, P_VALUE); if (v.Length == 0) v = S(e, P_NAME);
+        sb.Append(v); sb.Append('\n');
+      } catch { }
+      if (sb.Length > 400000) break;
+    }
+    return sb.ToString();
+  }
+}
+'@
+
+function ReplyRaw($id, $json) {
+  [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"result":' + $json + '}')
+  [Console]::Out.Flush()
+}
+function Reply($id, $ok, $payload) {
+  $o = @{ id = $id; ok = $ok }
+  if ($ok) { $o.result = $payload } else { $o.error = $payload }
+  [Console]::Out.WriteLine((ConvertTo-Json $o -Compress -Depth 6))
+  [Console]::Out.Flush()
+}
+
+[Console]::Out.WriteLine('{"ready":true}')
+[Console]::Out.Flush()
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($line -eq $null) { break }
+  if ($line.Trim().Length -eq 0) { continue }
+  $req = $null
+  try {
+    $req = ConvertFrom-Json $line
+    $h = [IntPtr]::Zero
+    if ($req.args -and $req.args.hwnd) { $h = [IntPtr][long]$req.args.hwnd }
+    switch ($req.cmd) {
+      'uia3_snapshot' { ReplyRaw $req.id ([KeoUia3]::Snapshot($h, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
+      'uia3_describe' { ReplyRaw $req.id ([KeoUia3]::Describe($h, [string]$req.args.rid)) }
+      'uia3_act'      { ReplyRaw $req.id ([KeoUia3]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }
+      'uia3_center'   { ReplyRaw $req.id ([KeoUia3]::Center($h, [string]$req.args.rid)) }
+      'uia3_texts'    { ReplyRaw $req.id ([KeoUia3]::Texts($h, [string]$req.args.rids, [int]$req.args.budgetMs)) }
+      'uia3_readtext' { Reply $req.id $true @{ available = $true; text = [KeoUia3]::ReadText($h) } }
+      'ping'          { Reply $req.id $true @{ pong = $true } }
       default { Reply $req.id $false @{ code = 'unknown_command'; message = 'Unknown command' } }
     }
   } catch {

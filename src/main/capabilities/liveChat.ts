@@ -39,6 +39,7 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     input: z
       .object({
         target: Target.optional(),
+        which: z.enum(['app', 'web']).optional().describe('When both are open: "app" = WhatsApp desktop app, "web" = WhatsApp Web.'),
         contact: z.string().trim().min(1).max(120),
         goal: z.string().trim().min(1).max(600),
         instructions: z.array(z.string().trim().min(1).max(400)).max(10).default([]),
@@ -87,7 +88,7 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
       const target = await d.desktop.exclusive(
         `whatsapp.live_chat_start:${ctx.correlationId}`,
         async () => {
-          const t = await resolveWhatsApp(d, i.target, ctx.settings);
+          const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
           await bringToFront(d, t, ctx.settings);
           const o = await waOpenChat(d, t, i.contact, ctx.signal);
           if (!o.opened) {

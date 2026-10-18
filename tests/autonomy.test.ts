@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CapabilityError } from '../src/main/capabilities/types';
 import type { RawWindow } from '../src/main/desktop/backend';
@@ -11,7 +13,7 @@ import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { validateWakePhrase } from '../src/main/voice/wakeService';
 import { SettingsSchema } from '../src/shared/settings';
 import { FakeBrowser, FakeSettingsApp, FakeWhatsApp } from './fakeApps';
-import { FakeSpeech, makeHarness, waitFor, type Harness } from './helpers';
+import { FakeSpeech, makeHarness, tempDir, waitFor, type Harness } from './helpers';
 
 let h: Harness;
 afterEach(async () => {
@@ -675,4 +677,85 @@ describe('WhatsApp not ready', () => {
       expect(check.lines.join('\n')).toMatch(/state: /);
     });
   }
+});
+
+describe('WhatsApp app or WhatsApp Web', () => {
+  it('asks “WhatsApp app” or “WhatsApp Web” when both are open, then uses the one chosen — no window ids needed', async () => {
+    const { wa } = setup();
+    const desktopWa = new FakeWhatsApp();
+    h.desktop.addApp({ hwnd: '4002', pid: 999, processName: 'WhatsApp.Root', title: 'WhatsApp', className: 'WinUIDesktopWin32WindowClass', minimized: false, x: 0, y: 0, width: 1200, height: 800, foreground: false }, desktopWa);
+    h.services.settings.update({ permissions: { allowedApps: [{ processName: 'chrome', label: 'Chrome' }, { processName: 'WhatsApp.Root', label: 'WhatsApp' }] } });
+    const r = await runCap('whatsapp.open_chat', { contact: 'Mum' });
+    expect(r.task?.steps[0]?.errorCode).toBe('ambiguous_target');
+    expect(r.task?.steps[0]?.error).toMatch(/“WhatsApp app” or “WhatsApp Web”/);
+    const app = await runCap('whatsapp.open_chat', { contact: 'Mum', which: 'app' });
+    expect(app.task?.steps[0]?.state).toBe('succeeded');
+    expect(desktopWa.open).toBe('Mum');
+    expect(wa.open).toBeNull();
+  });
+});
+
+describe('WhatsApp app header forms', () => {
+  it('your own chat: “Name (You) Message yourself” matches “Name” and “Name (You)”', async () => {
+    const { headerMatches, sameChat } = await import('../src/main/desktop/whatsapp');
+    expect(headerMatches('Emmanuel (You) Message yourself', 'Emmanuel')).toBe(true);
+    expect(headerMatches('Emmanuel (You)', 'Emmanuel (You)')).toBe(true);
+    expect(headerMatches('Emmanuel Okafor', 'Emmanuel')).toBe(false);
+    expect(sameChat('Emmanuel (You)', 'Emmanuel')).toBe(true);
+    expect(sameChat('Emmanuel', 'Emma')).toBe(false);
+  });
+});
+
+describe('WhatsApp file sending', () => {
+  async function sendViaAgent(userText: string, file: string, approve: boolean) {
+    const { wa } = setup({
+      script: (req) => {
+        const last = req.messages.at(-1);
+        return last?.role === 'user' && !JSON.stringify(last.content).includes('tool_result') && req.tools.length
+          ? ({ text: '', toolCalls: [{ id: `f${Math.random()}`, name: 'whatsapp__send_file', input: { contact: 'Mum', path: file, caption: 'the shirt' } }], stopReason: 'tool_use', usage: null, model: 'keo-test-1', native: undefined } as ChatResult)
+          : reply('Done.');
+      },
+    });
+    wa.open = 'Mum';
+    const conv = h.services.conversations.create('f');
+    const turn = h.services.agent.send(conv.id, userText);
+    if (approve) {
+      await waitFor(() => h.services.tasks.list(5).some((t) => t.steps.some((s) => s.state === 'awaiting_authorization')), 5000);
+      for (const t of h.services.tasks.list(5)) for (const s of t.steps) if (s.state === 'awaiting_authorization') h.services.tasks.approveStep(s.id, s.inputHash);
+    }
+    await turn.done;
+    const step = h.services.tasks.list(5).flatMap((t) => t.steps).find((s) => s.capabilityId === 'whatsapp.send_file');
+    return { wa, step };
+  }
+
+  it('sends a file the user named, with its caption, after a click approval, and finds it in the chat', async () => {
+    const file = path.join(tempDir(), 'shirt photo.jpg');
+    fs.writeFileSync(file, 'jpg');
+    const { wa, step } = await sendViaAgent(`Send ${file} to Mum on WhatsApp`, file, true);
+    expect(step?.preview.autoTier).toBe('always_ask');
+    expect(step?.state).toBe('succeeded');
+    expect(step?.verification).toBe('verified');
+    expect(wa.sentFiles).toEqual([{ to: 'Mum', file: 'shirt photo.jpg', caption: 'the shirt' }]);
+    expect(h.desktop.calls.some((c) => c.op === 'clipboard_files')).toBe(true);
+  });
+
+  it('refuses a file the user never named (the model cannot choose files to send)', async () => {
+    const file = path.join(tempDir(), 'secret.pdf');
+    fs.writeFileSync(file, 'pdf');
+    const { wa, step } = await sendViaAgent('Send Mum the document', file, true);
+    expect(step?.errorCode).toBe('file_not_named');
+    expect(wa.sentFiles).toEqual([]);
+  });
+
+  it('never sends programs or scripts, and nothing without approval', async () => {
+    const exe = path.join(tempDir(), 'tool.exe');
+    fs.writeFileSync(exe, 'MZ');
+    const { sendableFile } = await import('../src/main/capabilities/advanced');
+    expect(sendableFile(exe)).toMatch(/never sent/);
+    expect(sendableFile('relative\file.jpg')).toMatch(/full path/);
+    const file = path.join(tempDir(), 'a.jpg');
+    fs.writeFileSync(file, 'x');
+    const { wa } = await sendViaAgent(`Send ${file} to Mum`, file, false);
+    expect(wa.sentFiles).toEqual([]);
+  });
 });

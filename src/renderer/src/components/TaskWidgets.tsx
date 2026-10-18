@@ -192,6 +192,21 @@ export function TaskCard({ task, defaultOpen }: { task: Task; defaultOpen?: bool
             <span className="mono" title="Correlation id">
               {task.correlationId}
             </span>
+            {task.state === 'completed' && task.steps.length > 0 && (
+              <button
+                className="btn ghost sm"
+                style={{ marginLeft: 'auto' }}
+                disabled={busy}
+                onClick={() =>
+                  void act(async () => {
+                    const name = window.prompt('Name this workflow (you can ask Keo to run it again later):', task.title.slice(0, 60));
+                    if (name?.trim()) await invoke('workflows:saveFromTask', { taskId: task.id, name: name.trim() });
+                  })
+                }
+              >
+                Save as workflow
+              </button>
+            )}
             {!terminal && task.state !== 'cancelling' && (
               <button className="btn danger sm" style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => void act(() => invoke('tasks:cancel', { id: task.id }))}>
                 Cancel task

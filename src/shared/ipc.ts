@@ -39,10 +39,19 @@ export const ProviderIdSchema = z.enum(['anthropic', 'openai', 'openrouter', 'lo
 export const invokeSchemas = {
   'app:info': empty,
   'app:openLink': z.object({ id: z.enum(LINK_IDS) }).strict(),
+  /** Opens a source page Keo read (research cards) in the default browser. */
+  'app:openUrl': z.object({ url: z.string().min(8).max(2000) }).strict(),
   'app:checkUpdate': z.object({ force: z.boolean().default(false) }).strict(),
   'app:openDataFolder': empty,
   'app:installUpdate': empty,
   'diag:checkComputer': empty,
+  'projects:pickWorkspace': z.object({ projectId: z.string().min(1).max(80) }).strict(),
+  'workflows:list': empty,
+  'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
+  'workflows:delete': z.object({ id: z.string().regex(/^wf_[a-z0-9]{6,20}$/) }).strict(),
+  'data:export': empty,
+  'data:import': empty,
+  'projects:clearWorkspace': z.object({ projectId: z.string().min(1).max(80) }).strict(),
   'diag:report': empty,
   'diag:checkWhatsApp': empty,
 
@@ -192,10 +201,18 @@ export type ParsedInput<C extends InvokeChannel> = z.output<(typeof invokeSchema
 export interface InvokeOutputs {
   'app:info': AppInfo;
   'app:openLink': { opened: boolean };
+  'app:openUrl': { opened: boolean };
   'app:checkUpdate': UpdateInfo | null;
   'app:openDataFolder': { opened: boolean };
   'app:installUpdate': { started: boolean };
   'diag:checkComputer': SelfTestResult;
+  'projects:pickWorkspace': { path: string | null; scripts: string[] };
+  'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
+  'workflows:saveFromTask': { id: string; name: string };
+  'workflows:delete': { deleted: boolean };
+  'data:export': { path: string | null; projects: number; workflows: number };
+  'data:import': { projects: number; workflows: number; skipped: number } | null;
+  'projects:clearWorkspace': { cleared: boolean };
   'diag:report': { text: string };
   'diag:checkWhatsApp': { ok: boolean; lines: string[] };
   'settings:get': Settings;

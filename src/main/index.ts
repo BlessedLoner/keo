@@ -273,6 +273,18 @@ app.whenReady().then(() => {
         return { ...info, download };
       },
       installUpdate: () => autoUpdate?.install() ?? false,
+      pickSaveFile: async (defaultName) => {
+        const r = await dialog.showSaveDialog(mainWindow ?? undefined!, { title: 'Export projects and workflows', defaultPath: defaultName, filters: [{ name: 'Keo export', extensions: ['json'] }] });
+        return r.canceled ? null : (r.filePath ?? null);
+      },
+      pickOpenFile: async () => {
+        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import projects and workflows', properties: ['openFile'], filters: [{ name: 'Keo export', extensions: ['json'] }] });
+        return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
+      pickFolder: async (title) => {
+        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title, properties: ['openDirectory', 'createDirectory'] });
+        return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
       pickExecutable: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
@@ -298,6 +310,7 @@ app.whenReady().then(() => {
       showMain: (view) => showMain(view),
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
       ensureVoiceWindow: () => ensureVoiceWindow(),
+      mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
       notify: (title, body) => {
         if (!Notification.isSupported()) return;
         const n = new Notification({ title, body: body.slice(0, 240), silent: false });

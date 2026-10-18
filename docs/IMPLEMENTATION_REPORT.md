@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.3 iteration: WhatsApp app, research cards, sub-agents, workspaces, workflows
+
+- **WhatsApp app (verified live on this PC, WhatsApp 2.2640.100.0):** the window is WinUI 3 hosting WebView2 windowlessly. Root causes: (1) Keo only treated `Chrome_RenderWidgetHostHWND` as embedded content; the app uses `Chrome_WidgetWin_0` inside `Microsoft.UI.Content.DesktopChildSiteBridge`; (2) once the classic .NET UI Automation client has been used in a process, the COM client in that process also sees an empty frame. Fix: content roots include those classes, and a modern (COM) reader runs in its own helper process, chosen automatically per window. Live: classic 15 elements / modern 782–1094, search box and 8 chats found; your own chat (“Emmanuel (You)”) searched, opened and header-verified (header form “Name (You) Message yourself” now understood). Nothing was sent.
+- WhatsApp app-or-web choice (`which`), choice buttons for questions, open questions saved across restarts, Store-app publishers (live: Calculator → Microsoft Corporation, WhatsApp → WhatsApp Inc.).
+- New: `research.show_products` (cards), `agents.research` (parallel sub-agents), `files.*` (workspaces), `whatsapp.send_file`, `workflows.*`, export/import, task chips, notification preferences.
+- Not done: app icons in lists; a trained wake-word model (Windows speech recognition remains the engine; custom phrases work as well as Windows recognises them).
+
 ### Next iteration (uncommitted): shortcuts, app discovery, browser profiles, desktop ownership, open questions
 
 - Ctrl+K = voice conversation, Ctrl+Shift+K = mini-chat; both registered by one manager that releases its previous registrations first; conflicts reported per shortcut; one-time move of the old Ctrl+K mini-chat default.

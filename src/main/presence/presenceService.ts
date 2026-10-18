@@ -62,6 +62,12 @@ export class PresenceService {
     this.schedule();
   }
 
+  private taskList: Presence['tasks'] = [];
+  setTasks(list: Presence['tasks']): void {
+    this.taskList = list.slice(0, 4);
+    this.schedule();
+  }
+
   setApprovals(count: number, first: { capabilityId: string; app: string | null } | null): void {
     this.approvals = { count, first };
     this.schedule();
@@ -179,6 +185,7 @@ export class PresenceService {
       liveChats: { ...this.live, firstReady: this.live.firstReady ? { ...this.live.firstReady } : null },
       autonomy: this.autonomy,
       voiceMode: { ...this.voiceMode },
+      tasks: this.taskList.map((t) => ({ ...t })),
       updatedAt: new Date(t).toISOString(),
     };
   }

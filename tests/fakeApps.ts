@@ -15,6 +15,8 @@ export interface FakeUiaApp {
   clickAt?(x: number, y: number): void;
   /** Clipboard paste into whatever has keyboard focus (after select-all). */
   pasted?(text: string): void;
+  /** A file pasted from the clipboard (attachment). */
+  pastedFile?(path: string): void;
   /** Names inside an element through the raw view (text hidden from the control view). */
   rawNames?(rid: string): string[];
 }
@@ -135,6 +137,12 @@ export class FakeWhatsApp implements FakeUiaApp {
   /** Accept accessibility value writes without the page noticing (rich web editors). */
   ignoreValueWrites = false;
   focused: 'search' | 'compose' | null = null;
+  /** A pasted file waiting in WhatsApp's attachment preview (caption box + Send). */
+  attachment: { name: string; caption: string } | null = null;
+  sentFiles: Array<{ to: string; file: string; caption: string }> = [];
+  pastedFile(path: string): void {
+    if (this.focused === 'compose' && this.open) this.attachment = { name: path.split(/[\\/]/).pop()!, caption: '' };
+  }
   /** What the window shows instead of the chat screen. */
   screen: 'chats' | 'signed_out' | 'loading' | 'empty' = 'chats';
   /** Control names (WhatsApp in other languages, or unnamed fields). */
@@ -197,10 +205,19 @@ export class FakeWhatsApp implements FakeUiaApp {
         );
         if (m.status) s.push({ key: `msg.${i}.status`, parentKey: `msg.${i}`, role: 'image', name: ` ${m.status} `, x: x + 320, y: 120 + i * 60, w: 14, h: 14 });
       });
-      s.push(
-        { key: 'compose', parentKey: 'root', role: 'edit', name: this.composeName, x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.compose },
-        { key: 'send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 740, w: 50, h: 40, patterns: ['invoke'] },
-      );
+      if (this.attachment) {
+        // Attachment preview: file name, caption box and its own Send button over the chat.
+        s.push(
+          { key: 'att.name', parentKey: 'root', role: 'text', name: this.attachment.name, x: 500, y: 400, w: 400, h: 24 },
+          { key: 'att.caption', parentKey: 'root', role: 'edit', name: 'Add a caption', x: 420, y: 700, w: 680, h: 40, patterns: ['value'], value: this.attachment.caption },
+          { key: 'att.send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 700, w: 50, h: 40, patterns: ['invoke'] },
+        );
+      } else {
+        s.push(
+          { key: 'compose', parentKey: 'root', role: 'edit', name: this.composeName, x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.compose },
+          { key: 'send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 740, w: 50, h: 40, patterns: ['invoke'] },
+        );
+      }
     }
     return build(this.inBrowser ? this.browserShape(s) : s);
   }
@@ -291,6 +308,19 @@ export class FakeWhatsApp implements FakeUiaApp {
       this.compose = text ?? '';
       if (this.switchChatAfterCompose) this.open = this.switchChatAfterCompose;
       return 'value';
+    }
+    if (k === 'att.caption' && action === 'set_value' && this.attachment) {
+      this.attachment.caption = text ?? '';
+      return 'value';
+    }
+    if (k === 'att.send' && action === 'invoke' && this.attachment) {
+      const chat = this.chats.find((c) => c.title === this.open)!;
+      if (!this.dropSends) {
+        chat.messages.push({ from: 'me', text: `${this.attachment.name}${this.attachment.caption ? ` ${this.attachment.caption}` : ''}`, status: 'Sent' });
+        this.sentFiles.push({ to: chat.title, file: this.attachment.name, caption: this.attachment.caption });
+      }
+      this.attachment = null;
+      return 'invoke';
     }
     if (k === 'send' && action === 'invoke') {
       const chat = this.chats.find((c) => c.title === this.open)!;

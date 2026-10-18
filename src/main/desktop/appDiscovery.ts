@@ -6,6 +6,8 @@ export interface StartApp {
   name: string;
   /** Windows app id: an AUMID for packaged/Store apps ("Pkg_hash!App"), a path-like id for desktop apps. */
   appId: string;
+  /** Publisher shown by Windows for Store apps (from the package manifest), when known. */
+  publisher?: string | null;
 }
 
 export interface DiscoveredApp extends StartApp {
@@ -56,7 +58,8 @@ export class AppDiscovery {
       // Uninstallers, help files and web links are not apps to open.
       if (/^(uninstall|remove)\b|\buninstall(er)?\b/i.test(name) || /^https?:/i.test(appId) || /\.(chm|txt|pdf|url|html?)$/i.test(appId)) continue;
       seen.add(appId.toLowerCase());
-      apps.push({ name, appId, kind: appId.includes('!') ? 'store' : 'desktop' });
+      const publisher = typeof a.publisher === 'string' && a.publisher.trim() && !/^ms-resource:/i.test(a.publisher) ? a.publisher.trim().slice(0, 80) : null;
+      apps.push({ name, appId, kind: appId.includes('!') ? 'store' : 'desktop', publisher });
     }
     apps.sort((x, y) => x.name.localeCompare(y.name));
     this.cache = { at: this.now(), apps };
@@ -91,10 +94,16 @@ export function listStartApps(): Promise<StartApp[]> {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') return resolve([]);
     const exe = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const script = '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress';
+    // Publisher for Store apps: the package manifest's display name, else the O= part of the package identity.
+    const script = [
+      '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+      '$pub = @{}',
+      "Get-AppxPackage | ForEach-Object { $d = $null; try { $m = [xml](Get-Content -LiteralPath (Join-Path $_.InstallLocation 'AppxManifest.xml') -ErrorAction Stop); $d = [string]$m.Package.Properties.PublisherDisplayName } catch {}; if ((-not $d -or $d -like 'ms-resource:*') -and $_.Publisher -match 'O=([^,]+)') { $d = $Matches[1] }; $pub[$_.PackageFamilyName] = $d }",
+      "Get-StartApps | ForEach-Object { $pfn = ($_.AppID -split '!')[0]; [pscustomobject]@{ Name = $_.Name; AppID = $_.AppID; Publisher = $pub[$pfn] } } | ConvertTo-Json -Compress",
+    ].join('; ');
     const p = spawn(exe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
-    const timer = setTimeout(() => p.kill(), 20_000);
+    const timer = setTimeout(() => p.kill(), 45_000);
     p.stdout.setEncoding('utf8');
     p.stdout.on('data', (d: string) => {
       if (out.length < 4_000_000) out += d;
@@ -106,8 +115,9 @@ export function listStartApps(): Promise<StartApp[]> {
     p.on('close', () => {
       clearTimeout(timer);
       try {
-        const j = JSON.parse(out.replace(/^\ufeff/, '') || '[]') as Array<{ Name?: string; AppID?: string }> | { Name?: string; AppID?: string };
-        resolve((Array.isArray(j) ? j : [j]).map((x) => ({ name: x.Name ?? '', appId: x.AppID ?? '' })));
+        type Row = { Name?: string; AppID?: string; Publisher?: string | null };
+        const j = JSON.parse(out.replace(/^\ufeff/, '') || '[]') as Row[] | Row;
+        resolve((Array.isArray(j) ? j : [j]).map((x) => ({ name: x.Name ?? '', appId: x.AppID ?? '', publisher: x.Publisher ?? null })));
       } catch {
         reject(new Error('Windows did not return the list of apps.'));
       }

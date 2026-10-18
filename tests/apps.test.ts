@@ -245,3 +245,34 @@ describe('clarification continuity', () => {
     expect(h.services.agent.pendingQuestion(conv.id)).toBeNull();
   });
 });
+
+describe('open questions survive a restart', () => {
+  it('keeps the question after restarting with the same profile, within its expiry', async () => {
+    const { tempDir } = await import('./helpers');
+    const dir = tempDir();
+    const deps = { browsers: () => [{ id: 'chrome' as const, label: 'Google Chrome', exe: 'C:/PF/chrome.exe', profiles: profilesFromLocalState(LOCAL_STATE) }] };
+    h = makeHarness({ dir, deps, script: (req: ChatRequest) => (JSON.stringify(req.messages.at(-1)?.content ?? '').includes('research') && req.tools.length ? call('browser__open_tab', { browser: 'chrome', search: 'mics' }) : reply('Which profile?')) });
+    h.services.settings.update({ permissions: { launchEnabled: true }, autonomy: { level: 'hands_free' } });
+    const conv = h.services.conversations.create('a');
+    await h.services.agent.send(conv.id, 'research mics in Chrome').done;
+    expect(h.services.agent.pendingQuestion(conv.id)?.capabilityId).toBe('browser.open_tab');
+    await h.close();
+    h = makeHarness({ dir, deps, script: () => reply('ok') });
+    expect(h.services.agent.pendingQuestion(conv.id)?.question).toMatch(/several profiles/);
+  });
+});
+
+describe('choice buttons', () => {
+  it('offers the profile names as buttons when Keo must ask', async () => {
+    h = makeHarness({
+      script: (req: ChatRequest) => (JSON.stringify(req.messages.at(-1)?.content ?? '').includes('research') && req.tools.length ? call('browser__open_tab', { browser: 'chrome', search: 'mics' }) : reply('Which profile?')),
+      deps: { browsers: () => [{ id: 'chrome', label: 'Google Chrome', exe: 'C:/PF/chrome.exe', profiles: profilesFromLocalState(LOCAL_STATE) }] },
+    });
+    h.services.settings.update({ permissions: { launchEnabled: true }, autonomy: { level: 'hands_free' } });
+    const conv = h.services.conversations.create('a');
+    const m = await h.services.agent.send(conv.id, 'research mics in Chrome').done;
+    const t = m.meta.tools?.find((x) => x.capabilityId === 'browser.open_tab');
+    expect(t?.choices).toEqual(['Person 1', 'Blessed2 (Profile 1)', 'Blessed2 (Profile 2)', 'Work']);
+    expect(matchProfiles(profilesFromLocalState(LOCAL_STATE), 'Blessed2 (Profile 2)').map((p) => p.dir)).toEqual(['Profile 2']);
+  });
+});

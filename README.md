@@ -107,6 +107,9 @@ With observation and control on, Keo works **observe → act → verify**:
 
 ## WhatsApp (desktop app or WhatsApp Web)
 
+The **WhatsApp app** (Microsoft Store) hosts WhatsApp Web inside WinUI 3 + WebView2 without a child window; the classic .NET UI Automation reader sees it as an empty frame. Keo reads such windows with the modern UI Automation client in a separate helper process (verified on the WhatsApp app 2.2640: search, chat list, header and message box recognised; opening a chat verified). If both the app and WhatsApp Web are open, Keo asks which one. Files can be sent with a caption (`whatsapp.send_file`): only a file whose full path you wrote, never programs or scripts, always with a click approval.
+
+
 Allow WhatsApp (or your browser for WhatsApp Web) in **Access**. Then:
 
 - `whatsapp.open_chat` searches your chats and opens one **only if exactly one name matches**; otherwise it lists the candidates and Keo asks you which one.
@@ -119,6 +122,14 @@ There is no background or ongoing auto-replying: every message is drafted, shown
 
 - **Open apps by name**, including Microsoft Store apps (Calculator, WhatsApp, Settings…): Keo uses Windows' own list of startable apps (`Get-StartApps`: names and app ids) and starts them through `explorer.exe shell:AppsFolder\<app id>` — no executable paths to register. If a window of the app is already open, Keo switches to it. If several apps match ("WhatsApp" and "WhatsApp Web"), Keo asks which one. Opening needs your OK (by click or "yes"); typing or clicking inside an app still needs it in the allowed apps. Requires *Access → Launch applications*.
 - **Browser profiles** (Chrome, Edge, Brave): Keo reads only the profile names from the browser's profile list and opens a web address or search in a **new tab** of the profile you choose — your open tabs are not touched. With several profiles Keo asks which one (also when two profiles share a name) and continues the original request after your answer.
+
+## Research, projects and workflows
+
+- **Product research cards**: after reading product pages, Keo can show comparison cards (image, price, merchant, specs, pros/cons, source). Price, merchant and image come from the pages Keo actually fetched — never from the model alone; images are downloaded and shrunk by Keo.
+- **Parallel research**: for multi-part questions Keo runs up to four research sub-agents at once. They can only search and read the web, and only findings tied to pages they read are kept.
+- **Project workspaces** (*Projects → Workspace folder*): Keo lists and reads files in the folder you choose, edits files only with your approval (diff shown, backup in `.keo-backups`, atomic write, refused if the file changed meanwhile) and runs only the project's own `package.json` scripts, with a click each time.
+- **Workflows**: save a finished task (*Tasks → Save as workflow*) and ask Keo to run it again later; Keo re-plans against the current screen and asks for approval as usual. *Settings → Privacy & data → Export/Import* moves projects and workflows between PCs (no keys, settings or chats).
+- **Task chips** above the companion show unfinished tasks with their real state (working, queued, needs you, check result) and a cancel button. Choose which task events notify you in *Settings → Approvals & live chat*.
 
 ## Approval levels
 

@@ -30,6 +30,15 @@ const UNTRUSTED_OUTPUT = new Set([
 ]);
 
 /** Read-only capabilities that gather context (shown as "gathering context"). */
+export interface PendingQuestion {
+  capabilityId: string;
+  toolName: string;
+  input: unknown;
+  question: string;
+  at: number;
+  turnsLeft: number;
+}
+
 /** Error codes that mean: the user must choose (app, profile, window, contact) before the action can run. */
 const NEEDS_CHOICE = new Set(['ambiguous_app', 'ambiguous_profile', 'profile_not_found', 'ambiguous_target', 'ambiguous_contact']);
 
@@ -52,18 +61,45 @@ export class AgentService {
    * instead of starting a new one. Expires after two turns or ten minutes;
    * cleared when that action succeeds. A choice is never an approval.
    */
-  private readonly pending = new Map<string, { capabilityId: string; toolName: string; input: unknown; question: string; at: number; turnsLeft: number }>();
+  private readonly pending = new Map<string, PendingQuestion>();
+
+  /** Where open questions are kept across restarts (Services sets a file in the profile). */
+  pendingStore: { load(): Record<string, PendingQuestion>; save(all: Record<string, PendingQuestion>): void } | null = null;
+  private pendingLoaded = false;
+
+  private loadPending(): void {
+    if (this.pendingLoaded) return;
+    this.pendingLoaded = true;
+    try {
+      for (const [id, p] of Object.entries(this.pendingStore?.load() ?? {})) {
+        if (p && typeof p.capabilityId === 'string' && typeof p.question === 'string' && Date.now() - p.at < 10 * 60_000) this.pending.set(id, p);
+      }
+    } catch {
+      /* unreadable file: start without open questions */
+    }
+  }
+
+  private savePending(): void {
+    try {
+      this.pendingStore?.save(Object.fromEntries(this.pending));
+    } catch (e) {
+      this.log.warn('agent.pending_save_failed', { error: (e as Error).name });
+    }
+  }
 
   pendingQuestion(conversationId: string): { capabilityId: string; question: string } | null {
+    this.loadPending();
     const p = this.pending.get(conversationId);
     return p ? { capabilityId: p.capabilityId, question: p.question } : null;
   }
 
   private pendingContext(conversationId: string): string {
+    this.loadPending();
     const p = this.pending.get(conversationId);
     if (!p) return '';
     if (p.turnsLeft < 0 || Date.now() - p.at > 10 * 60_000) {
       this.pending.delete(conversationId);
+      this.savePending();
       return '';
     }
     return `\n\n# Open question in this conversation\nAn earlier ${p.toolName} call needed the user to choose: ${p.question.slice(0, 600)}\nOriginal input: ${JSON.stringify(p.input).slice(0, 400)}\nIf the user's latest message answers this (even with just a name, "the first one", "the one already open"), call ${p.toolName} again with the original input plus their choice. If they correct an earlier choice, use the correction. If their message is a different request, ignore this question. Their choice is not an approval; Keo still asks for approval where needed.`;
@@ -165,15 +201,26 @@ export class AgentService {
     }
     const code = typeof parsed.code === 'string' ? parsed.code : null;
     if (code && NEEDS_CHOICE.has(code)) {
+      // The options (quoted names in the question), minus what the request itself said, become buttons.
+      const question = typeof parsed.error === 'string' ? parsed.error : r.activity.detail;
+      const asked = new Set(Object.values((call.input ?? {}) as Record<string, unknown>).filter((v): v is string => typeof v === 'string').map((v) => v.toLowerCase()));
+      const choices = [...new Set([...question.matchAll(/“([^”]{1,80})”/g)].map((m) => m[1]!.trim()))].filter((c) => c && !asked.has(c.toLowerCase()));
+      if (choices.length >= 2) r.activity.choices = choices.slice(0, 8);
       this.pending.set(conversationId, { capabilityId: r.activity.capabilityId, toolName: call.name, input: call.input, question: typeof parsed.error === 'string' ? parsed.error : r.activity.detail, at: Date.now(), turnsLeft: 2 });
+      this.savePending();
     } else if (r.activity.outcome === 'executed' && this.pending.get(conversationId)?.capabilityId === r.activity.capabilityId) {
       this.pending.delete(conversationId);
+      this.savePending();
     }
   }
 
   private async runTurn(conversationId: string, sourceMessageId: string): Promise<Message> {
+    this.loadPending();
     const open = this.pending.get(conversationId);
-    if (open) open.turnsLeft--;
+    if (open) {
+      open.turnsLeft--;
+      this.savePending();
+    }
     const correlationId = newCorrelationId();
     const settings = this.getSettings();
     const controller = new AbortController();
@@ -435,7 +482,10 @@ export class AgentService {
         this.dataChanged(cap.id);
         const savedMemory = cap.id === 'memory.propose' && (out as { status?: string }).status !== 'proposed';
         const outcome = savedMemory ? 'executed' : cap.id === 'task.propose_plan' || cap.id.endsWith('.propose') || cap.id.endsWith('.propose_item') ? 'proposed' : 'executed';
-        return { activity: { ...base, summary, outcome, detail: brief(out) }, content: wrap(cap.id, { status: 'succeeded', result: out }), isError: false };
+        const cards = cap.id === 'research.show_products' ? (out as ToolActivity['cards']) : undefined;
+        // The model gets the cards without the image bytes.
+        const forModel = cards ? { ...cards, cards: cards.cards.map((c) => ({ ...c, image: c.image ? '(image shown to the user)' : null })) } : out;
+        return { activity: { ...base, summary, outcome, detail: brief(forModel), ...(cards ? { cards } : {}) }, content: wrap(cap.id, { status: 'succeeded', result: forModel }), isError: false };
       } catch (err) {
         if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
         const msg = errorMessage(err);

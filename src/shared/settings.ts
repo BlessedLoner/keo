@@ -187,6 +187,8 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Project id → workspace folder the user chose with the folder picker. */
+    projectWorkspaces: z.record(z.string().regex(/^[\w-]{1,80}$/), z.string().min(3).max(400)).default({}),
     shortcuts: z
       .object({
         commandBarEnabled: z.boolean().default(true),
@@ -212,6 +214,15 @@ export const SettingsSchema = z
       .strict()
       .prefault({}),
     /** Defaults and limits for live WhatsApp chat sessions. */
+    /** Which task events show a Windows notification (only while Keo's window is not in front). */
+    notifications: z
+      .object({
+        approvals: z.boolean().default(true),
+        finished: z.boolean().default(true),
+        failed: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
     liveChat: z
       .object({
         maxMinutes: z.number().int().min(5).max(720).default(120),

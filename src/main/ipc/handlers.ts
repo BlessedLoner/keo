@@ -6,6 +6,8 @@ import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
 import { validateWakePhrase } from '../voice/wakeService';
 import { diagnosticReport } from '../desktop/diagnosticReport';
+import { packageScripts } from '../projects/workspace';
+import { importBundle } from '../workflows/portability';
 import type { Services } from '../services';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +25,11 @@ export interface HostHooks {
   /** Restarts into a downloaded update; false when none is ready. */
   installUpdate?(): boolean;
   pickExecutable(): Promise<string | null>;
+  /** Folder picker (project workspace). */
+  pickFolder?(title: string): Promise<string | null>;
+  /** Save/open dialogs for export/import (JSON). */
+  pickSaveFile?(defaultName: string): Promise<string | null>;
+  pickOpenFile?(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
   openMain?(view?: 'chat' | 'tasks' | 'settings'): void;
@@ -73,6 +80,45 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'app:installUpdate': () => ({ started: host.installUpdate?.() ?? false }),
     'diag:checkComputer': () => s.checkComputer(),
+    'workflows:list': () => s.workflows.list().map((w) => ({ id: w.id, name: w.name, description: w.description, steps: w.steps.length, imported: w.imported, createdAt: w.createdAt })),
+    'workflows:saveFromTask': ({ taskId, name }) => {
+      const task = s.tasks.get(taskId);
+      if (!task) throw new KeoError('not_found', 'Task not found.');
+      const wf = s.workflows.fromTask(task, name);
+      return { id: wf.id, name: wf.name };
+    },
+    'workflows:delete': ({ id }) => ({ deleted: s.workflows.delete(id) }),
+    // Projects (with their items) and workflows; never settings, keys or conversations.
+    'data:export': async () => {
+      const file = await host.pickSaveFile?.(`keo-export-${new Date().toISOString().slice(0, 10)}.json`);
+      if (!file) return { path: null, projects: 0, workflows: 0 };
+      const projects = s.projects.list().map((p) => ({ name: p.name, description: p.description, status: p.status, items: s.projects.items(p.id).filter((it) => it.status !== 'proposed').map((it) => ({ type: it.type, content: it.content, status: it.status })) }));
+      const workflows = s.workflows.list().map(({ name, description, steps }) => ({ name, description, steps }));
+      fs.writeFileSync(file, JSON.stringify({ format: 'keo-export', version: 1, exportedAt: new Date().toISOString(), projects, workflows }, null, 1));
+      return { path: file, projects: projects.length, workflows: workflows.length };
+    },
+    'data:import': async () => {
+      const file = await host.pickOpenFile?.();
+      if (!file) return null;
+      const r = importBundle(s, fs.readFileSync(file, 'utf8'));
+      return r;
+    },
+    // A project's workspace is only ever set by the user choosing a folder in the picker.
+    'projects:pickWorkspace': async ({ projectId }) => {
+      if (!s.projects.get(projectId)) throw new KeoError('not_found', 'Project not found.');
+      const dir = (await host.pickFolder?.('Choose the project folder')) ?? null;
+      if (!dir) return { path: null, scripts: [] };
+      s.settings.update({ projectWorkspaces: { ...s.settings.get().projectWorkspaces, [projectId]: dir } });
+      s.audit.record({ kind: 'project.workspace', decision: 'set', detail: { projectId } });
+      return { path: dir, scripts: Object.keys(packageScripts(dir)) };
+    },
+    'projects:clearWorkspace': ({ projectId }) => {
+      const next = { ...s.settings.get().projectWorkspaces };
+      const had = projectId in next;
+      delete next[projectId];
+      s.settings.replace({ ...s.settings.get(), projectWorkspaces: next });
+      return { cleared: had };
+    },
     'diag:checkWhatsApp': () => s.checkWhatsApp(),
     'diag:report': () => {
       const info = host.appInfo();
@@ -96,6 +142,13 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
           recentFailures: failures,
         }),
       };
+    },
+    // Only pages Keo actually read (shown as research sources) can be opened from the app.
+    'app:openUrl': async ({ url }) => {
+      const page = s.web.visitedPage(url);
+      if (!page || !/^https?:\/\//i.test(page.finalUrl) || !host.openExternal) return { opened: false };
+      await host.openExternal(page.finalUrl);
+      return { opened: true };
     },
     'app:checkUpdate': async ({ force }) => (force || s.settings.get().updates.check ? ((await host.checkUpdate?.(force)) ?? null) : null),
 

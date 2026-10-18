@@ -65,6 +65,49 @@ export function ProjectsView() {
   );
 }
 
+/** The project's workspace folder: Keo reads files there, edits them with your approval, and runs its scripts with your approval. */
+function WorkspaceCard({ projectId }: { projectId: string }) {
+  const ui = useUi();
+  const app = useApp();
+  const folder = app.settings.data?.projectWorkspaces[projectId] ?? null;
+  const [scripts, setScripts] = useState<string[] | null>(null);
+  const choose = async () => {
+    try {
+      const r = await invoke('projects:pickWorkspace', { projectId });
+      if (r.path) setScripts(r.scripts);
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <section className="card" aria-label="Workspace folder">
+      <div className="row">
+        <h3 style={{ margin: 0, fontSize: 14 }}>Workspace folder</h3>
+        <div style={{ flex: 1 }} />
+        <button className="btn sm" onClick={() => void choose()}>
+          <Icon name="folder" size={13} /> {folder ? 'Change…' : 'Choose…'}
+        </button>
+        {folder && (
+          <button className="btn ghost sm" onClick={() => void invoke('projects:clearWorkspace', { projectId }).catch((e) => ui.error(errText(e)))}>
+            Remove
+          </button>
+        )}
+      </div>
+      {folder ? (
+        <p className="small" style={{ marginBottom: 0 }}>
+          <span className="mono">{folder}</span>
+          <br />
+          <span className="muted">
+            Keo can list and read files here. Every edit shows a diff and needs your OK (a backup is kept in .keo-backups); running a script{scripts && scripts.length ? ` (${scripts.join(', ')})` : ''} needs a click each time.
+          </span>
+        </p>
+      ) : (
+        <p className="muted small" style={{ marginBottom: 0 }}>Choose a folder to let Keo work on this project’s files (code, websites, documents). Keo never touches files outside it.</p>
+      )}
+    </section>
+  );
+}
+
 function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: () => void }) {
   const ui = useUi();
   const app = useApp();
@@ -113,6 +156,7 @@ function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: ()
           Delete
         </button>
       </div>
+      <WorkspaceCard projectId={project.id} />
       <div className="field">
         <label htmlFor="proj-desc">Description</label>
         <textarea id="proj-desc" className="textarea" value={desc} maxLength={2000} onChange={(e) => setDesc(e.target.value)} onBlur={() => desc !== project.description && void run(invoke('projects:update', { id: project.id, description: desc }))} />

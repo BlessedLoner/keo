@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { CapabilityError } from '../capabilities/types';
 import type { Logger } from '../logging/logger';
-import { WIN32_HELPER_SCRIPT } from './win32Script';
+import { MODERN_UIA_SCRIPT, WIN32_HELPER_SCRIPT } from './win32Script';
 
 export interface RawWindow {
   hwnd: string;
@@ -82,6 +82,8 @@ export interface DesktopBackend {
   typeText(hwnd: string, text: string): Promise<{ chars: number; method?: 'keys' | 'direct' }>;
   /** Sends Ctrl+V to the foreground target. */
   paste(hwnd: string): Promise<void>;
+  /** Puts one file on the clipboard as a file (like Copy in Explorer), for attaching it by pasting. */
+  setClipboardFiles?(path: string): Promise<void>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
   readText(hwnd: string): Promise<string | null>;
   /** Bounded UI Automation tree of one window. */
@@ -102,6 +104,8 @@ export interface DesktopBackend {
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void>;
   /** Class names of the window's child windows with counts (diagnostics; no titles or content). */
   childClasses?(hwnd: string): Promise<Record<string, number>>;
+  /** Which accessibility reader a window uses (diagnostics). */
+  uiaEngine?(hwnd: string): 'classic' | 'modern';
   dispose(): void;
 }
 
@@ -142,7 +146,20 @@ export class Win32Backend implements DesktopBackend {
   constructor(
     private readonly runtimeDir: string,
     private readonly log: Logger,
+    /** Which helper this process runs (the main one, or the modern UI Automation reader). */
+    private readonly helper: { script: string; file: string } = { script: WIN32_HELPER_SCRIPT, file: 'keo-win32-helper.ps1' },
   ) {}
+
+  /** Separate process for the modern UI Automation reader (see MODERN_UIA_SCRIPT), started on first need. */
+  private modernProc: Win32Backend | null = null;
+  private modern(): Win32Backend {
+    return (this.modernProc ??= new Win32Backend(this.runtimeDir, this.log, { script: MODERN_UIA_SCRIPT, file: 'keo-uia-modern.ps1' }));
+  }
+
+  /** Routes modern-reader commands to its own process. */
+  private uiCall<T>(cmd: string, args: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+    return cmd.startsWith('uia3_') ? this.modern().call<T>(cmd, args, timeoutMs) : this.call<T>(cmd, args, timeoutMs);
+  }
 
   support(): { supported: boolean; reason: string | null } {
     if (process.platform !== 'win32') return { supported: false, reason: 'Desktop interaction is implemented for Windows only.' };
@@ -155,8 +172,8 @@ export class Win32Backend implements DesktopBackend {
       const sup = this.support();
       if (!sup.supported) return reject(new CapabilityError('unsupported', sup.reason ?? 'Unsupported'));
       fs.mkdirSync(this.runtimeDir, { recursive: true });
-      const scriptPath = path.join(this.runtimeDir, 'keo-win32-helper.ps1');
-      fs.writeFileSync(scriptPath, `\ufeff${WIN32_HELPER_SCRIPT}`, 'utf8');
+      const scriptPath = path.join(this.runtimeDir, this.helper.file);
+      fs.writeFileSync(scriptPath, `\ufeff${this.helper.script}`, 'utf8');
       const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
       const exe = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       // -ExecutionPolicy Bypass applies to this child process only; it does not change system policy.
@@ -294,30 +311,70 @@ export class Win32Backend implements DesktopBackend {
     );
   }
 
+  async setClipboardFiles(path: string): Promise<void> {
+    await this.call('clipboard_files', { path }, 15000);
+  }
+
   childClasses(hwnd: string): Promise<Record<string, number>> {
     return this.call('child_classes', { hwnd });
   }
 
-  uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw> {
-    return this.call('uia_snapshot', { hwnd, ...opts }, opts.budgetMs + 15000);
+  /**
+   * Windows read with the modern UI Automation client: the classic .NET client
+   * returns WinUI 3 apps that host web content without a child window (the
+   * WhatsApp app) as an empty frame. Decided per window from what each sees.
+   */
+  private readonly uia3Windows = new Set<string>();
+
+  async uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw> {
+    if (this.uia3Windows.has(hwnd)) {
+      try {
+        return await this.uiCall<UiaSnapshotRaw>('uia3_snapshot', { hwnd, ...opts }, opts.budgetMs + 15000);
+      } catch (e) {
+        if (!(e instanceof CapabilityError) || e.code !== 'uia_unavailable') throw e;
+        this.uia3Windows.delete(hwnd);
+      }
+    }
+    const classic = await this.call<UiaSnapshotRaw>('uia_snapshot', { hwnd, ...opts }, opts.budgetMs + 15000);
+    if (meaningfulNodes(classic.nodes) >= 8) return classic;
+    try {
+      const modern = await this.uiCall<UiaSnapshotRaw>('uia3_snapshot', { hwnd, ...opts }, opts.budgetMs + 15000);
+      if (meaningfulNodes(modern.nodes) > meaningfulNodes(classic.nodes) + 3) {
+        this.uia3Windows.add(hwnd);
+        this.log.info('desktop.uia3_window', { classic: classic.nodes.length, modern: modern.nodes.length });
+        return modern;
+      }
+    } catch {
+      /* modern client unavailable: keep the classic result */
+    }
+    return classic;
+  }
+
+  /** Which reader a window uses (diagnostics). */
+  uiaEngine(hwnd: string): 'classic' | 'modern' {
+    return this.uia3Windows.has(hwnd) ? 'modern' : 'classic';
+  }
+
+  private ui(hwnd: string, cmd: string): string {
+    return this.uia3Windows.has(hwnd) ? `uia3_${cmd}` : `uia_${cmd}`;
   }
 
   uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null> {
-    return this.call('uia_describe', { hwnd, rid }, 15000);
+    return this.uiCall(this.ui(hwnd, 'describe'), { hwnd, rid }, 15000);
   }
 
   async uiaTexts(hwnd: string, rids: string[]): Promise<string[][]> {
     if (!rids.length) return [];
-    const r = await this.call<string[][] | null>('uia_texts', { hwnd, rids: rids.join('|'), budgetMs: 6000 }, 20000);
+    const r = await this.uiCall<string[][] | null>(this.ui(hwnd, 'texts'), { hwnd, rids: rids.join('|'), budgetMs: 6000 }, 20000);
     return Array.isArray(r) ? r.map((x) => (Array.isArray(x) ? x.map(String) : [])) : [];
   }
 
   uiaAct(hwnd: string, rid: string, action: UiaAction, text = ''): Promise<{ method: string }> {
-    return this.call('uia_act', { hwnd, rid, action, text }, 20000);
+    return this.uiCall(this.ui(hwnd, 'act'), { hwnd, rid, action, text }, 20000);
   }
 
   uiaCenter(hwnd: string, rid: string): Promise<{ x: number; y: number }> {
-    return this.call('uia_center', { hwnd, rid }, 15000);
+    return this.uiCall(this.ui(hwnd, 'center'), { hwnd, rid }, 15000);
   }
 
   browserContext(hwnd: string, maxChars: number): Promise<BrowserContextRaw> {
@@ -342,7 +399,7 @@ export class Win32Backend implements DesktopBackend {
 
   async readText(hwnd: string): Promise<string | null> {
     try {
-      const r = await this.call<{ available: boolean; text: string }>('readtext', { hwnd }, 15000);
+      const r = await this.uiCall<{ available: boolean; text: string }>(this.uia3Windows.has(hwnd) ? 'uia3_readtext' : 'readtext', { hwnd }, 15000);
       return r.available ? String(r.text ?? '') : null;
     } catch {
       return null;
@@ -365,6 +422,8 @@ export class Win32Backend implements DesktopBackend {
   }
 
   dispose(): void {
+    this.modernProc?.dispose();
+    this.modernProc = null;
     try {
       this.proc?.stdin.end();
       this.proc?.kill();
@@ -374,6 +433,11 @@ export class Win32Backend implements DesktopBackend {
     this.proc = null;
     this.ready = null;
   }
+}
+
+/** Elements beyond the window frame (title bar, system menu, caption buttons). */
+export function meaningfulNodes(nodes: UiaNodeRaw[]): number {
+  return nodes.filter((n) => !['window', 'titlebar', 'menubar', 'menuitem'].includes(n.role) && !(n.role === 'button' && /^(minimi[sz]e|maximi[sz]e|restore|close)$/i.test(n.name))).length;
 }
 
 function helperError(message: string): CapabilityError {

@@ -132,6 +132,15 @@ Execution (`TaskOrchestrator`):
 - **One owner of the physical desktop**: approved actions that control the keyboard/mouse/foreground and live chat replies take turns through one queue (`DesktopService.exclusive`); waiting can be cancelled and a failure releases the desktop. Reading and research never wait for it.
 - **Open questions**: when an action needs a choice (app, profile, window, contact), the question and the original request are kept for that conversation (two turns / ten minutes, not persisted). The answer completes the original request; it is never an approval.
 
+## 4j. Modern UI Automation, files, research agents, workflows
+
+- **Modern reader**: windows the classic .NET client reads as empty are read with the COM UI Automation client in a second helper process (`keo-uia-modern.ps1`, same fixed-script model, no network). It only reads elements and performs the same validated element actions; keyboard/mouse input stays in the main helper behind the same checks.
+- **WhatsApp files**: `whatsapp.send_file` sends only a regular file (no links, no programs/scripts, ≤ 64 MB) whose full path appears in the user's own message in this conversation; always-ask approval; the recipient is re-verified right before Send; the user's clipboard text is restored.
+- **Project workspaces**: only a folder chosen in the picker; every path is resolved inside it (no `..`, drive letters or links leading out); `.env`/key files are never written and read only when named by the user; writes are atomic with backups and refused when the file changed since it was read; only `package.json` scripts run (name matched against the file, `cmd /c npm run <name>`), with a time limit, always-ask approval and key-like strings redacted from output.
+- **Research sub-agents** get only `web.search` and `web.fetch_page` (enforced per call, through the normal registry admission), a turn limit and the parent's cancellation; they cannot act, message, remember or approve. Findings are kept only when their source page was fetched.
+- **Research cards** accept only products whose page Keo fetched in the session; price/merchant/image come from that page's own data (or a price present in its text); images are fetched with the same public-address checks (every redirect hop) and embedded as data URLs, so the renderer's CSP is unchanged. Source links open in the browser only for pages Keo fetched.
+- **Workflows** store capability ids and inputs without window handles, element ids, coordinates or hashes; running one means a new plan with fresh targets and approvals. Imports are schema-validated, unknown capabilities are skipped, and imported workflows are marked. Exports contain projects and workflows only.
+
 ## 4h. Language
 
 - Replies are in English by default (system policy). Another language is used only for what the user explicitly asks for (translations, "reply to her in French"); web pages, WhatsApp messages and screen text never change the reply language.

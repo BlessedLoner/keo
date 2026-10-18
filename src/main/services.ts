@@ -1,13 +1,19 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { AutoSpeechEngine, ModernSpeechEngine } from './voice/modernSpeech';
 import { VoiceMode } from './voice/voiceMode';
 import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type TestWindow } from './desktop/selfTest';
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
-import { AgentService } from './agent/agentService';
+import { AgentService, type PendingQuestion } from './agent/agentService';
 import { advancedCapabilities, whatsappCheck } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
 import { appCapabilities } from './capabilities/apps';
+import { researchCapabilities } from './capabilities/research';
+import { subAgentCapabilities } from './agent/subAgents';
+import { fileCapabilities } from './capabilities/files';
+import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
 import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
 import { installedBrowsers, openInProfile, type InstalledBrowser } from './desktop/browserProfiles';
 import { LiveChatService } from './livechat/liveChatService';
@@ -39,7 +45,7 @@ import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote, nameMentioned } from './agent/quotes';
-import type { AgentEvent, LiveChatSession } from '../shared/domain';
+import type { AgentEvent, LiveChatSession, Presence } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
 export interface ServiceDeps {
@@ -108,12 +114,13 @@ export class Services {
   /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
   readonly capDeps: CapabilityDeps;
   readonly apps: AppDiscovery;
+  readonly workflows: WorkflowStore;
   readonly snapshots = new SnapshotStore();
   readonly presence: PresenceService;
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
-  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void> } = { showCommandBar: () => undefined, notify: () => undefined };
+  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void>; mainFocused?(): boolean } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
   private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
@@ -182,6 +189,7 @@ export class Services {
     this.capDeps = capDeps;
     this.registry.inputLock = (owner, fn, signal) => this.desktop.exclusive(owner, fn, signal);
     this.apps = new AppDiscovery(d.startApps);
+    this.workflows = new WorkflowStore(path.join(d.profile.userData, 'workflows.json'));
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -205,6 +213,10 @@ export class Services {
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
       ...appCapabilities({ ...capDeps, apps: this.apps, launchApp: d.launchApp ?? launchByAppId, launchWaitMs: d.appLaunchWaitMs, browsers: d.browsers ?? (() => installedBrowsers()), openTab: d.openTab ?? openInProfile }),
+      ...researchCapabilities({ ...capDeps, web: this.web, images: d.imageTools }),
+      ...fileCapabilities(capDeps),
+      ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
+      ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
       ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
@@ -252,6 +264,16 @@ export class Services {
       },
     );
 
+    // Open questions survive a restart (same 10-minute expiry); a deleted conversation drops its entry.
+    const pendingFile = path.join(d.profile.userData, 'pending-questions.json');
+    this.agent.pendingStore = {
+      load: () => (fs.existsSync(pendingFile) ? (JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as Record<string, PendingQuestion>) : {}),
+      save: (all) => {
+        const live = Object.fromEntries(Object.entries(all).filter(([id]) => !!this.conversations.get(id)));
+        fs.writeFileSync(`${pendingFile}.tmp`, JSON.stringify(live));
+        fs.renameSync(`${pendingFile}.tmp`, pendingFile);
+      },
+    };
     this.agent.systemExtra = () =>
       this.live.agentContext() +
       this.activeWindowContext() +
@@ -336,13 +358,53 @@ export class Services {
     };
   }
 
+  /** Task events already notified (step/task id + event), so each shows at most once. */
+  private notified = new Set<string>();
+  private notifyTaskEvents(): void {
+    const prefs = this.settings.get().notifications;
+    if (this.ui.mainFocused?.()) return; // the user is looking at Keo already
+    for (const t of this.tasks.list(30)) {
+      const ageMs = Date.now() - Date.parse(t.updatedAt);
+      if (ageMs > 60_000) continue; // only fresh changes (no flood after a restart)
+      for (const s of t.steps) {
+        if (prefs.approvals && s.state === 'awaiting_authorization' && !this.notified.has(`a:${s.id}`)) {
+          this.notified.add(`a:${s.id}`);
+          this.ui.notify('Keo needs your approval', s.preview.summary);
+        }
+      }
+      if (prefs.finished && t.state === 'completed' && !this.notified.has(`d:${t.id}`) && Date.parse(t.updatedAt) - Date.parse(t.createdAt) > 15_000) {
+        this.notified.add(`d:${t.id}`);
+        this.ui.notify('Keo finished a task', t.title);
+      }
+      if (prefs.failed && (t.state === 'failed' || t.state === 'outcome_uncertain') && !this.notified.has(`f:${t.id}`)) {
+        this.notified.add(`f:${t.id}`);
+        this.ui.notify(t.state === 'failed' ? 'A Keo task failed' : 'Check a Keo task', t.title);
+      }
+    }
+    if (this.notified.size > 2000) this.notified.clear();
+  }
+
   private updateApprovals(): void {
+    this.notifyTaskEvents();
     const active = this.tasks.list(200).filter((t) => !TERMINAL_TASK.has(t.state));
     const waiting = active.flatMap((t) => t.steps.filter((s) => s.state === 'awaiting_authorization'));
     const proposed = active.filter((t) => t.state === 'proposed').length;
     const first = waiting[0];
     const app = (first?.input as { target?: { processName?: string } } | null)?.target?.processName ?? null;
     this.presence.setApprovals(waiting.length + proposed, first ? { capabilityId: first.capabilityId, app } : null);
+    // Floating task indicators: unfinished tasks with their real state (no fake progress).
+    this.presence.setTasks(
+      active
+        .filter((t) => t.state !== 'proposed')
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 4)
+        .map((t) => {
+          const cur = t.steps.find((s) => !['succeeded', 'failed', 'cancelled', 'denied', 'skipped'].includes(s.state));
+          const state: Presence['tasks'][number]['state'] =
+            t.state === 'outcome_uncertain' || t.steps.some((s) => s.state === 'outcome_uncertain') ? 'uncertain' : t.steps.some((s) => s.state === 'awaiting_authorization') ? 'needs_you' : t.state === 'running' ? 'running' : 'waiting';
+          return { id: t.id, title: t.title.slice(0, 80), state, step: cur ? cur.title.slice(0, 80) : null };
+        }),
+    );
   }
 
   /** Renderer windows report real audio activity (playback, recording). */
@@ -559,6 +621,10 @@ export class Services {
     const interruptedMessages = this.conversations.markInterrupted();
     const recovery = this.tasks.recover();
     this.tasks.pump();
+    // Warm Windows' app list in the background (it takes a few seconds), only if launching is on.
+    setTimeout(() => {
+      if (this.settings.get().permissions.launchEnabled) void this.apps.list().catch(() => undefined);
+    }, 20_000).unref?.();
     const purge = () => {
       try {
         this.vision.purgeExpired(this.settings.get().privacy.observationRetentionHours);

@@ -1,3 +1,4 @@
+import { extractProduct, type PageProduct } from './productData';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { CapabilityError } from '../capabilities/types';
@@ -18,6 +19,17 @@ export interface FetchedPage {
   truncated: boolean;
   contentType: string;
   fetchedAt: string;
+  /** Product facts the page declares about itself (structured data / meta tags), when present. */
+  product?: PageProduct;
+}
+
+/** A page Keo actually fetched in this session (provenance for research cards). */
+export interface VisitedPage {
+  finalUrl: string;
+  title: string;
+  fetchedAt: string;
+  text: string;
+  product: PageProduct;
 }
 
 type FetchImpl = typeof fetch;
@@ -120,7 +132,50 @@ export class WebService {
       truncated = true;
     }
     this.log.info('web.fetch', { host: current.host, chars: text.length, truncated });
-    return { url: rawUrl, finalUrl: current.toString(), title, text, truncated, contentType: contentType.split(';')[0] ?? '', fetchedAt: new Date().toISOString() };
+    const product = isHtml ? extractProduct(raw, current.toString()) : {};
+    const fetchedAt = new Date().toISOString();
+    this.remember({ finalUrl: current.toString(), title, fetchedAt, text: text.slice(0, 60_000), product }, rawUrl);
+    return { url: rawUrl, finalUrl: current.toString(), title, text, truncated, contentType: contentType.split(';')[0] ?? '', fetchedAt, ...(Object.keys(product).length ? { product } : {}) };
+  }
+
+  /** Pages fetched in this session, newest last (bounded; kept in memory only, for one hour). */
+  private readonly visited = new Map<string, VisitedPage>();
+
+  private remember(p: VisitedPage, requested: string): void {
+    for (const k of [p.finalUrl, requested]) {
+      this.visited.delete(k);
+      this.visited.set(k, p);
+    }
+    while (this.visited.size > 200) this.visited.delete(this.visited.keys().next().value!);
+  }
+
+  /** The fetched page for this address, if Keo really read it in the last hour. */
+  visitedPage(url: string): VisitedPage | null {
+    const p = this.visited.get(url) ?? this.visited.get(url.replace(/\/$/, '')) ?? this.visited.get(`${url}/`);
+    return p && Date.now() - Date.parse(p.fetchedAt) < 60 * 60_000 ? p : null;
+  }
+
+  /** Downloads a product image from a public address (size- and type-limited). */
+  async fetchImage(rawUrl: string, signal: AbortSignal): Promise<{ bytes: Buffer; contentType: string } | null> {
+    const u = await this.assertPublicUrl(rawUrl).catch(() => null);
+    if (!u) return null;
+    try {
+      // Redirects are followed by hand so every hop is checked to be public (no private-network access).
+      let cur = u;
+      let res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers: { 'User-Agent': USER_AGENT, Accept: 'image/png,image/jpeg,image/*;q=0.8' } });
+      for (let hop = 0; hop < 3 && res.status >= 300 && res.status < 400; hop++) {
+        const loc = res.headers.get('location');
+        if (!loc) return null;
+        cur = await this.assertPublicUrl(new URL(loc, cur).toString());
+        res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers: { 'User-Agent': USER_AGENT, Accept: 'image/png,image/jpeg,image/*;q=0.8' } });
+      }
+      const type = (res.headers.get('content-type') ?? '').toLowerCase().split(';')[0] ?? '';
+      if (!res.ok || !/^image\/(png|jpe?g)$/.test(type)) return null;
+      const { truncatedBytes, bytes } = await readCappedBytes(res, 3_000_000);
+      return truncatedBytes ? null : { bytes, contentType: type };
+    } catch {
+      return null;
+    }
   }
 
   /** Allows only http(s) to hosts that resolve exclusively to public addresses. */
@@ -171,6 +226,27 @@ export function isPrivateAddress(addr: string): boolean {
     return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(ip) || ip.startsWith('64:ff9b:') || ip.startsWith('2001:db8');
   }
   return true; // unknown format: refuse
+}
+
+async function readCappedBytes(res: Response, max: number): Promise<{ bytes: Buffer; truncatedBytes: boolean }> {
+  if (!res.body) {
+    const b = Buffer.from(await res.arrayBuffer());
+    return { bytes: b.subarray(0, max), truncatedBytes: b.length > max };
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      return { bytes: Buffer.alloc(0), truncatedBytes: true };
+    }
+    chunks.push(value);
+  }
+  return { bytes: Buffer.concat(chunks), truncatedBytes: false };
 }
 
 async function readCapped(res: Response, max: number): Promise<{ text: string; truncatedBytes: boolean }> {

@@ -54,6 +54,8 @@ export function cleanHeader(name: string): string {
       .replace(/[\s,.]*(click|tap) here for (contact|group) info\s*$/i, '')
       .replace(/[\s,.·-]*(official\s+)?business\s+account\s*$/i, '')
       .replace(/[\s,.]*(online|typing(…|\.\.\.)?|recording audio(…|\.\.\.)?|last seen\b.*)\s*$/i, '')
+      // WhatsApp app: your own chat reads "Name (You) Message yourself".
+      .replace(/[\s,.]*message yourself\s*$/i, '')
       .trim();
   }
   return t;
@@ -62,7 +64,13 @@ export function cleanHeader(name: string): string {
 /** Exact (normalised) match between the open chat's header and the intended contact. */
 export function headerMatches(header: string | null, contact: string): boolean {
   if (!header) return false;
-  return normName(cleanHeader(header)) === normName(contact);
+  return sameChat(cleanHeader(header), contact);
+}
+
+/** Same chat name, normalised; "Name (You)" — your own chat — also matches "Name". */
+export function sameChat(a: string, b: string): boolean {
+  const bare = (s: string) => normName(s.replace(/\s*\(you\)\s*$/i, ''));
+  return normName(a) === normName(b) || bare(a) === bare(b);
 }
 
 const GENERIC_HEADER = /^(search|menu|more options|new chat|profile details|contact info|end icon button|start icon button|read more|voice message|emojis, gifs, stickers|disappearing messages|encrypted|click here for contact info|video call|voice call|call|chats|status|channels|communities|settings|profile|get the app|attach|emoji|archived|filter|unread|all|groups|favourites|favorites|whatsapp|back|close|search\.\.\.|search messages?)$/i;

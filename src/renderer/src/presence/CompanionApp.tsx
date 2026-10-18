@@ -10,6 +10,9 @@ import { emblemFor, usePresence } from '../lib/presence';
  * passes through to the desktop. Activity text is content-free (capability +
  * application), never message or page contents.
  */
+/** What each task chip says (the real task state; no invented progress). */
+const TASK_STATE: Record<'running' | 'waiting' | 'needs_you' | 'uncertain', string> = { running: 'Working', waiting: 'Queued', needs_you: 'Needs you', uncertain: 'Check result' };
+
 export function CompanionApp() {
   const p = usePresence();
   const [hover, setHover] = useState(false);
@@ -54,6 +57,23 @@ export function CompanionApp() {
 
   return (
     <div className="companion-stage">
+      {!!p?.tasks.length && (
+        <ul className="task-chips" aria-label="Keo tasks" onMouseEnter={() => setInteractive(true)} onMouseLeave={() => !dragging.current && setInteractive(false)}>
+          {p.tasks.map((t) => (
+            <li key={t.id} className={`task-chip ${t.state}`}>
+              <span className="dot" aria-hidden="true" />
+              <button className="task-title" title={t.step ? `${t.title} — ${t.step}` : t.title} onClick={() => void invoke('presence:openMain', { view: 'tasks' })}>
+                <span className="sr-only">{TASK_STATE[t.state]}: </span>
+                {t.title}
+                <span className="task-state">{TASK_STATE[t.state]}</span>
+              </button>
+              <button className="cbtn" aria-label={`Cancel ${t.title}`} title="Cancel this task" onClick={() => void invoke('tasks:cancel', { id: t.id }).catch(() => undefined)}>
+                <Icon name="x" size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div
         className={`companion ${hover || vm?.active ? 'expanded' : ''} ${vm?.active ? 'voice' : ''} state-${state}`}
         onMouseEnter={() => {

@@ -6,6 +6,7 @@ export type WindowRole = 'main' | 'command' | 'companion';
 const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'presence:get',
   'presence:stopAll',
+  'tasks:cancel',
   'app:quit',
   'presence:openMain',
   'companion:setInteractive',

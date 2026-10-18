@@ -78,6 +78,25 @@ export interface Conversation {
 export type MessageRole = 'user' | 'assistant' | 'note';
 export type MessageStatus = 'complete' | 'streaming' | 'interrupted' | 'error' | 'cancelled';
 
+/** A product comparison card (research.show_products): every field traced to a fetched page. */
+export interface ProductCard {
+  name: string;
+  url: string;
+  pageTitle: string;
+  merchant: string | null;
+  price: string | null;
+  currency: string | null;
+  priceFrom: 'page data' | 'page text' | 'not found';
+  availability: string | null;
+  /** Shrunk copy downloaded by Keo (data: URL), never a remote address. */
+  image: string | null;
+  fit: string | null;
+  pros: string[];
+  cons: string[];
+  specs: string[];
+  fetchedAt: string;
+}
+
 export interface ToolActivity {
   callId: string;
   capabilityId: string;
@@ -93,6 +112,10 @@ export interface ToolActivity {
     | 'proposed';
   detail: string;
   taskId?: string;
+  /** Product cards to show with this step (research.show_products). */
+  cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }> };
+  /** Choices to offer as buttons when the action needs the user to pick (app, profile, window). */
+  choices?: string[];
 }
 
 export interface MessageMeta {
@@ -358,6 +381,8 @@ export interface Presence {
   /** Live chats: how many are running and how many wait for the user. */
   liveChats: { active: number; waiting: number; firstWaiting: string | null; ready: number; firstReady: { id: string; contact: string } | null };
   autonomy: AutonomyLevel;
+  /** Unfinished tasks (newest first, at most four): title and truthful state only. */
+  tasks: Array<{ id: string; title: string; state: 'running' | 'waiting' | 'needs_you' | 'uncertain'; step: string | null }>;
   /** Hands-free conversation after the wake word. */
   voiceMode: { active: boolean; state: 'off' | 'listening' | 'thinking' | 'speaking' | 'confirming'; heard: string | null; said: string | null };
   updatedAt: ISODate;

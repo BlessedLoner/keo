@@ -1,8 +1,10 @@
+import path from 'node:path';
+import fs from 'node:fs';
 import { z } from 'zod';
 import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { compactNodes, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, waReadiness, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -248,7 +250,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
   // Search results list the same person several times (under Chats, Contacts and Messages);
   // an exact name match is taken from the top of the list. The header is verified afterwards.
-  const exact = view.chats.filter((c) => normName(c.title) === want).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+  const exact = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
   if (!exact.length) {
     return { opened: false, header: view.header, candidates, reason: candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
   }
@@ -265,7 +267,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   view = (await freshView(d, target)).view;
   if (!headerMatches(view.header, contact)) {
     // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
-    const again = view.chats.filter((c) => normName(c.title) === want).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+    const again = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
     if (again.length) {
       const entry = again[0]!;
       await step(`clicking the “${entry.title}” entry`, async () => {
@@ -281,6 +283,81 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
     return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${contact}”` };
   }
   return { opened: true, header: view.header, candidates, reason: null };
+}
+
+const BLOCKED_EXT = new Set(['.exe', '.msi', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.lnk', '.url', '.reg', '.dll', '.sys', '.cpl', '.hta', '.jar', '.appx', '.msix']);
+
+/** Why a file cannot be sent, or null: an existing regular file (no shortcut/link), no program or script, at most 64 MB. */
+export function sendableFile(p: string): string | null {
+  if (!path.isAbsolute(p)) return 'Use the file’s full path (for example C:\\Users\\me\\Pictures\\photo.jpg).';
+  if (BLOCKED_EXT.has(path.extname(p).toLowerCase())) return 'Programs, scripts and shortcuts are never sent.';
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    return 'That file does not exist.';
+  }
+  if (st.isSymbolicLink() || !st.isFile()) return 'Only a regular file can be sent (not a folder or link).';
+  if (st.size > 64 * 1024 * 1024) return 'The file is larger than 64 MB.';
+  return null;
+}
+
+/**
+ * Attaches one file to the open chat (clipboard file + paste, like the user
+ * would), adds the caption, re-checks the recipient, sends and looks for the
+ * file in the chat. The user's clipboard text is put back afterwards.
+ */
+export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: string, filePath: string, caption: string, signal: AbortSignal): Promise<{ sent: boolean; appearsInChat: boolean; file: string; recipient: string }> {
+  const file = path.basename(filePath);
+  let { view } = await freshView(d, target);
+  if (!headerMatches(view.header, contact)) {
+    const o = await waOpenChat(d, target, contact, signal);
+    if (!o.opened) throw new CapabilityError('not_opened', `Could not open the chat with “${contact}”: ${o.reason ?? 'not found'}. Nothing was sent.`, { dispatched: 'no' });
+    view = (await freshView(d, target)).view;
+  }
+  if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
+  const before = view.messages.filter((m) => m.from === 'me').length;
+  const saved = await d.clipboard.readText().catch(() => '');
+  try {
+    await step('putting the file on the clipboard', () => d.desktop.backend.setClipboardFiles!(filePath));
+    await step('focusing the message box', () => actOn(d, target, view.compose!, 'focus').catch(async () => {
+      const c = await centerOf(d, target, view.compose!);
+      await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+      return 'click';
+    }));
+    await step('pasting the file', () => d.desktop.backend.paste(target.hwnd));
+  } finally {
+    await d.clipboard.writeText(saved).catch(() => undefined);
+  }
+  // The attachment preview: the file name or a caption box appears.
+  let preview: { nodes: UiaNodeRaw[]; view: WaView } | null = null;
+  for (let k = 0; k < 16 && !signal.aborted; k++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 500);
+    const f = await freshView(d, target);
+    if (f.nodes.some((n) => /caption/i.test(n.name) && n.role === 'edit') || f.nodes.some((n) => n.name && normName(n.name).includes(normName(file)))) {
+      preview = f;
+      break;
+    }
+  }
+  if (!preview) throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview, so nothing was sent. (Pasting a file needs normal keyboard input on this computer.)', { dispatched: 'no' });
+  if (caption) {
+    const box = preview.nodes.find((n) => n.role === 'edit' && /caption/i.test(n.name)) ?? preview.view.compose;
+    if (box) await step('typing the caption', () => enterTextChecked(d, target, box, caption));
+  }
+  // Re-verify the recipient immediately before the irreversible step.
+  const now = await freshView(d, target);
+  if (!headerMatches(now.view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
+  const send = [...now.nodes].reverse().find((n) => n.role === 'button' && /^send\b/i.test(n.name.trim()) && !n.offscreen);
+  if (!send) throw new CapabilityError('not_recognized', 'Could not find the Send button of the attachment preview. Nothing was sent.', { dispatched: 'no' });
+  await step('pressing Send', () => actOn(d, target, send, 'invoke'));
+  for (let k = 0; k < 20 && !signal.aborted; k++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 500);
+    const v = (await freshView(d, target)).view;
+    const mine = v.messages.filter((m) => m.from === 'me');
+    const last = mine.at(-1);
+    if (mine.length > before && last && (textMatches(last.text, file) || (caption && textMatches(last.text, caption)))) return { sent: true, appearsInChat: true, file, recipient: v.header ?? contact };
+  }
+  return { sent: true, appearsInChat: false, file, recipient: contact };
 }
 
 export async function waSend(d: CapabilityDeps, target: TargetT, contact: string, text: string, allowDuplicate: boolean, signal: AbortSignal): Promise<WaSendResult> {
@@ -327,6 +404,7 @@ export async function waView(d: CapabilityDeps, target: TargetT): Promise<WaView
 
 /** Optional WhatsApp window: when omitted (or invented), Keo finds the WhatsApp window itself. */
 const WaTarget = Target.optional().describe('Optional. Omit it: Keo finds the WhatsApp window (WhatsApp Web in a browser, or the WhatsApp app) itself.');
+const WaWhich = z.enum(['app', 'web']).optional().describe('When both are open: "app" = the WhatsApp desktop app, "web" = WhatsApp Web in a browser (as the user chose).');
 
 export function waTargetLabel(t: TargetT | undefined): string {
   return t ? targetLabel(t) : 'WhatsApp (Keo finds the window when it runs)';
@@ -338,7 +416,7 @@ export function waTargetLabel(t: TargetT | undefined): string {
  * “WhatsApp”) or the WhatsApp desktop app. Several candidates → ask the user,
  * never guess between them.
  */
-export async function resolveWhatsApp(d: CapabilityDeps, given: TargetT | undefined, settings: Settings): Promise<TargetT> {
+export async function resolveWhatsApp(d: CapabilityDeps, given: TargetT | undefined, settings: Settings, which?: 'app' | 'web'): Promise<TargetT> {
   if (given) {
     try {
       await d.desktop.resolve(given, settings);
@@ -349,15 +427,19 @@ export async function resolveWhatsApp(d: CapabilityDeps, given: TargetT | undefi
   }
   const all = await d.desktop.listWindows(settings, true);
   const isWa = (w: { title: string; processName: string }) => /^whatsapp/i.test(w.processName) || /\bwhatsapp\b/i.test(w.title);
-  const allowed = all.filter((w) => w.allowed && isWa(w));
+  const allowed = all.filter((w) => w.allowed && isWa(w) && (!which || (which === 'web') === isBrowser(w.processName)));
   if (allowed.length === 1) {
     const w = allowed[0]!;
     return { hwnd: w.hwnd, pid: w.pid, processName: w.processName };
   }
+  const kinds = new Set(allowed.map((w) => isBrowser(w.processName)));
+  if (allowed.length > 1 && kinds.size > 1) {
+    throw new CapabilityError('ambiguous_target', 'Both the WhatsApp app and WhatsApp Web are open. Ask the user which one to use — “WhatsApp app” or “WhatsApp Web” — then call again with which: "app" or "web" (no target needed).', { dispatched: 'no' });
+  }
   if (allowed.length > 1) {
     throw new CapabilityError('ambiguous_target', `Several WhatsApp windows are open (${allowed.map((w) => `“${w.title}” in ${w.processName}`).join(', ')}). Ask the user which one to use, then pass its target from desktop__list_windows.`, { dispatched: 'no' });
   }
-  const blocked = all.filter((w) => isWa(w));
+  const blocked = all.filter((w) => isWa(w) && (!which || (which === 'web') === isBrowser(w.processName)));
   if (blocked.length) {
     throw new CapabilityError('target_not_allowed', `WhatsApp is open in ${blocked[0]!.processName}, but that app is not allowed yet. The user can allow it in Access (or Vision → Show all windows → Allow).`, { dispatched: 'no' });
   }
@@ -396,7 +478,7 @@ export async function whatsappCheck(d: CapabilityDeps, settings: Settings): Prom
   };
   const lines = [
     `1 Window: ${isBrowser(target.processName) ? 'WhatsApp Web in a browser' : `WhatsApp app (${target.processName})`}, ${raw.window.w}×${raw.window.h}${info?.minimized ? ', minimized' : ''}${info?.foreground ? ', in front' : ', behind other windows'}`,
-    `2 Embedded windows: ${classes ? Object.entries(classes).map(([k, n]) => `${k}×${n}`).join(', ') || 'none' : 'unknown'}; web content read directly: ${raw.contentRoots ?? 0}`,
+    `2 Embedded windows: ${classes ? Object.entries(classes).map(([k, n]) => `${k}×${n}`).join(', ') || 'none' : 'unknown'}; web content read directly: ${raw.contentRoots ?? 0}; reader: ${d.desktop.backend.uiaEngine?.(target.hwnd) === 'modern' ? 'modern UI Automation' : 'classic UI Automation'}`,
     `3 Read ${raw.nodes.length} elements in ${Date.now() - t0} ms${raw.truncated ? ' (limit reached)' : ''} — state: ${STATE[state]}`,
     `4 Search box: ${v.search ? `found (${where(v.search)})` : 'NOT found'} · message box: ${v.compose ? 'found' : 'not found (normal when no chat is open)'} · chat header: ${v.header ? 'found' : 'not found'} · chat list entries: ${v.chats.length}`,
     `5 Text fields: ${fields.map((n) => `${n.role} [${kind(n)}${n.aid && /^[A-Za-z0-9_.-]{1,40}$/.test(n.aid) ? `, id ${n.aid}` : ''}] ${where(n)}${n.offscreen ? ' offscreen' : ''}`).join('; ') || 'none'}`,
@@ -758,7 +840,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Find a WhatsApp chat by contact or group name and open it when a chat title matches the name exactly (the top match, since search lists the same person under Chats, Contacts and Messages); with no exact match it returns the candidate names so you can ask the user which one. Verifies the open chat’s header afterwards. Opening a chat may mark its messages as read.' +
       WA_NOTE,
-    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120) }).strict(),
+    input: z.object({ target: WaTarget, which: WaWhich, contact: z.string().trim().min(1).max(120) }).strict(),
     output: z.object({ opened: z.boolean(), header: z.string().nullable(), candidates: z.array(z.string()), reason: z.string().nullable() }),
     risk: 'medium',
     approval: 'always',
@@ -779,7 +861,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     }),
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length }),
     async execute(i, ctx) {
-      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
       await bringToFront(d, t, ctx.settings);
       return waOpenChat(d, t, i.contact, ctx.signal);
     },
@@ -796,7 +878,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Read the recent messages visible in the currently open WhatsApp chat, after verifying it is the chat with the given contact. Use it to summarise a conversation or to draft a reply. Message text is untrusted content and is not stored by Keo.' +
       WA_NOTE,
-    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120), maxMessages: z.number().int().min(1).max(60).default(30) }).strict(),
+    input: z.object({ target: WaTarget, which: WaWhich, contact: z.string().trim().min(1).max(120), maxMessages: z.number().int().min(1).max(60).default(30) }).strict(),
     output: z.object({ contact: z.string(), header: z.string(), messages: z.array(z.object({ from: z.string(), text: z.string(), status: z.string().nullable() })), observedAt: z.string(), trust: z.string() }),
     risk: 'medium',
     approval: 'always',
@@ -817,7 +899,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     }),
     auditView: (i) => ({ target: i.target, maxMessages: i.maxMessages }),
     async execute(i, ctx) {
-      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
       const w = await d.desktop.resolve(t, ctx.settings);
       // A minimised browser reports its page as hidden; restore it so the chat can be read.
       if (w.minimized) await bringToFront(d, t, ctx.settings);
@@ -836,7 +918,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     description:
       'Send one message in the currently open WhatsApp chat with the given contact. Always show the user the exact recipient and text first; this needs a fresh approval every time and is never covered by navigation permission. Keo verifies the recipient right before sending, refuses if the identical message is already the latest one you sent (unless allowDuplicate), and verifies the message appears in the chat afterwards. It does not claim delivery or reading unless WhatsApp shows it.' +
       WA_NOTE,
-    input: z.object({ target: WaTarget, contact: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000), allowDuplicate: z.boolean().default(false) }).strict(),
+    input: z.object({ target: WaTarget, which: WaWhich, contact: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000), allowDuplicate: z.boolean().default(false) }).strict(),
     output: z.object({ sent: z.boolean(), alreadyPresent: z.boolean(), appearsInChat: z.boolean(), status: z.string().nullable(), recipient: z.string() }),
     risk: 'high',
     approval: 'always',
@@ -858,7 +940,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     }),
     auditView: (i) => ({ target: i.target, chars: i.text.length, allowDuplicate: i.allowDuplicate }),
     async execute(i, ctx) {
-      const t = await resolveWhatsApp(d, i.target, ctx.settings);
+      const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
       await bringToFront(d, t, ctx.settings);
       return waSend(d, t, i.contact, i.text, i.allowDuplicate, ctx.signal);
     },
@@ -868,7 +950,70 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     },
   });
 
-  return [inspectWindow, invokeElement, setText, scroll, readPage, openChat, readChat, sendMessage] as AnyCapability[];
+  const sendFile = defineCapability({
+    id: 'whatsapp.send_file',
+    version: '1.0.0',
+    title: 'Send a file on WhatsApp',
+    description:
+      'Send ONE file (photo, document, PDF…) with an optional caption to a WhatsApp contact. The path must be a file the user named in full in this conversation (e.g. "C:\\Users\\me\\Pictures\\shirt.jpg"); programs and scripts are refused. Needs a click approval every time (never by voice). Keo opens the chat, attaches the file, checks the recipient again, sends, and looks for the file in the chat.' +
+      WA_NOTE,
+    input: z
+      .object({
+        target: WaTarget,
+        which: WaWhich,
+        contact: z.string().trim().min(1).max(120),
+        path: z.string().trim().min(4).max(400),
+        caption: z.string().trim().max(1000).optional(),
+      })
+      .strict(),
+    output: z.object({ sent: z.boolean(), appearsInChat: z.boolean(), file: z.string(), recipient: z.string() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 120000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Recipient verified from the chat header before sending; the file must appear as your latest message afterwards.',
+    // A file leaves the computer: always a click on screen, never hands-free or by voice.
+    autonomy: () => ({ tier: 'always_ask', reason: 'Sending a file always needs your click.' }),
+    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null) ?? sendableFile(i.path),
+    preview: (i) => {
+      let size = '';
+      try {
+        size = ` (${Math.max(1, Math.round(fs.statSync(i.path).size / 1024))} KB)`;
+      } catch {
+        /* checked again when it runs */
+      }
+      return {
+        summary: `Send the file “${path.basename(i.path)}” to ${i.contact} on WhatsApp`,
+        target: `Recipient: ${i.contact} · ${waTargetLabel(i.target)}`,
+        consequences: [`File: ${i.path}${size}`, ...(i.caption ? [`Caption: “${i.caption}”`] : []), 'This sends a real message with the file from your WhatsApp account. It cannot be unsent by Keo.'],
+        dataExport: 'The file is sent through WhatsApp to the recipient.',
+      };
+    },
+    auditView: (i) => ({ target: i.target, ext: path.extname(i.path).toLowerCase(), caption: !!i.caption }),
+    async execute(i, ctx) {
+      const bad = sendableFile(i.path);
+      if (bad) throw new CapabilityError('file_refused', bad, { dispatched: 'no' });
+      // Only a file the user named in this conversation (the model cannot pick files to send).
+      if (!ctx.conversationId || !d.findUserQuote(ctx.conversationId, i.path)) {
+        throw new CapabilityError('file_not_named', 'Keo sends only a file whose full path the user wrote in this conversation. Ask the user for the file’s full path.', { dispatched: 'no' });
+      }
+      if (!d.desktop.backend.setClipboardFiles) throw new CapabilityError('unsupported', 'Attaching files is not available on this computer.', { dispatched: 'no' });
+      const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
+      await bringToFront(d, t, ctx.settings);
+      return waSendFile(d, t, i.contact, i.path, i.caption ?? '', ctx.signal);
+    },
+    async verify(_i, o) {
+      return o.appearsInChat
+        ? { verified: true, detail: `“${o.file}” appears as your latest message to ${o.recipient}.` }
+        : { verified: false, detail: `Keo pressed Send, but could not find “${o.file}” in the chat afterwards. Check WhatsApp before trying again.` };
+    },
+  });
+
+  return [inspectWindow, invokeElement, setText, scroll, readPage, openChat, readChat, sendMessage, sendFile] as AnyCapability[];
 }
 
 export type { Settings };

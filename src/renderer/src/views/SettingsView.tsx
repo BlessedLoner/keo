@@ -281,6 +281,15 @@ function ApprovalsAndLiveChat({ s, patch }: { s: Settings; patch: Patch }) {
   return (
     <>
       <section className="card">
+        <h2 style={{ marginTop: 0 }}>Notifications</h2>
+        <p className="muted small">Windows notifications for task events, shown only while Keo’s window is not in front, once per event. Clicking one opens Tasks.</p>
+        <Toggle checked={s.notifications.approvals} onChange={(v) => void patch({ notifications: { approvals: v } })} label="When an action waits for my approval" />
+        <div style={{ height: 6 }} />
+        <Toggle checked={s.notifications.finished} onChange={(v) => void patch({ notifications: { finished: v } })} label="When a longer task finishes" />
+        <div style={{ height: 6 }} />
+        <Toggle checked={s.notifications.failed} onChange={(v) => void patch({ notifications: { failed: v } })} label="When a task fails or its result is uncertain" />
+      </section>
+      <section className="card">
         <h2 style={{ marginTop: 0 }}>How much Keo may do without asking</h2>
         <div className="choice-list" role="radiogroup" aria-label="Approval level">
           {LEVELS.map((l) => (
@@ -944,11 +953,69 @@ function CheckComputer() {
   );
 }
 
+/** Saved workflows, and export/import of projects and workflows (never keys, settings or chats). */
+function WorkflowsAndExport() {
+  const ui = useUi();
+  const [list, setList] = useState<Array<{ id: string; name: string; description: string; steps: number; imported: boolean }>>([]);
+  const load = useCallback(() => void invoke('workflows:list', {}).then(setList).catch(() => undefined), []);
+  useEffect(load, [load]);
+  return (
+    <section className="card">
+      <h2>Workflows and export</h2>
+      <p className="muted small">Save a finished task as a workflow from Tasks (“Save as workflow”), then ask Keo to run it again: Keo looks at the current screen, re-plans the steps and asks for approval as usual — it never replays old clicks.</p>
+      {list.length === 0 ? (
+        <p className="muted small">No saved workflows yet.</p>
+      ) : (
+        <ul className="plain-list">
+          {list.map((w) => (
+            <li key={w.id} className="row">
+              <span className="grow">
+                <strong>{w.name}</strong> <span className="muted small">· {w.steps} step(s){w.imported ? ' · imported' : ''}</span>
+                {w.description && <div className="muted small">{w.description}</div>}
+              </span>
+              <button className="btn ghost sm" onClick={() => void invoke('workflows:delete', { id: w.id }).then(load).catch((e) => ui.error(errText(e)))}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button
+          className="btn sm"
+          onClick={() =>
+            void invoke('data:export', {})
+              .then((r) => r.path && ui.toast(`Exported ${r.projects} project(s) and ${r.workflows} workflow(s)`, 'success'))
+              .catch((e) => ui.error(errText(e)))
+          }
+        >
+          Export projects and workflows…
+        </button>
+        <button
+          className="btn ghost sm"
+          onClick={() =>
+            void invoke('data:import', {})
+              .then((r) => {
+                if (r) ui.toast(`Imported ${r.projects} project(s) and ${r.workflows} workflow(s)${r.skipped ? ` (${r.skipped} skipped: unknown actions)` : ''}`, 'success');
+                load();
+              })
+              .catch((e) => ui.error(errText(e)))
+          }
+        >
+          Import…
+        </button>
+      </div>
+      <p className="hint">The export holds project notes and workflow steps only — no API keys, settings, conversations or memory.</p>
+    </section>
+  );
+}
+
 function Data({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [info, setInfo] = useState<{ path: string } | null>(null);
   return (
     <>
+      <WorkflowsAndExport />
       <section className="card">
         <h2>Updates</h2>
         <Toggle checked={s.updates.check} onChange={(v) => void patch({ updates: { check: v } })} label="Keep Keo up to date: check once a day, download new versions in the background and install them when Keo closes (asks GitHub; nothing about you is sent)" />

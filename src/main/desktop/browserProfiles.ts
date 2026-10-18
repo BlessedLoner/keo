@@ -116,6 +116,9 @@ export function installedBrowsers(env: NodeJS.ProcessEnv = process.env, f: Brows
  */
 export function matchProfiles(profiles: BrowserProfile[], wanted: string): BrowserProfile[] {
   const w = wanted.trim().toLowerCase();
+  // "Blessed2 (Profile 1)": the folder in brackets decides.
+  const inBrackets = /\((default|profile \d{1,3})\)\s*$/i.exec(w)?.[1];
+  if (inBrackets) return profiles.filter((p) => p.dir.toLowerCase() === inBrackets);
   const byDir = profiles.filter((p) => p.dir.toLowerCase() === w);
   if (byDir.length) return byDir;
   const exact = profiles.filter((p) => p.name.toLowerCase() === w);

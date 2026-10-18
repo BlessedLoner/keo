@@ -5,7 +5,7 @@ import { matchProfiles, profileLabel, safeWebUrl, searchUrl, type InstalledBrows
 import type { CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
-const AppOut = z.object({ name: z.string(), appId: z.string(), kind: z.enum(['store', 'desktop']), openWindow: z.boolean() });
+const AppOut = z.object({ name: z.string(), appId: z.string(), kind: z.enum(['store', 'desktop']), publisher: z.string().nullable(), openWindow: z.boolean() });
 
 export interface AppsDeps extends CapabilityDeps {
   apps: AppDiscovery;
@@ -18,7 +18,7 @@ export interface AppsDeps extends CapabilityDeps {
   openTab: (exe: string, profileDir: string, url: string) => Promise<void>;
 }
 
-const kindLabel = (a: DiscoveredApp) => (a.kind === 'store' ? 'Microsoft Store app' : 'desktop app');
+const kindLabel = (a: DiscoveredApp) => `${a.kind === 'store' ? 'Microsoft Store app' : 'desktop app'}${a.publisher ? ` by ${a.publisher}` : ''}`;
 
 /**
  * Finding and opening Windows apps by name (Start menu and Microsoft Store
@@ -46,7 +46,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
     permissions: ['desktop.launch'],
     consequential: false,
     idempotent: true,
-    timeoutMs: 30000,
+    timeoutMs: 60000,
     maxAttempts: 1,
     modelVisible: true,
     verificationPolicy: 'Read-only listing from Windows.',
@@ -59,7 +59,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       });
       const matches = await d.apps.find(i.query);
       const out = [];
-      for (const m of matches) out.push({ name: m.app.name, appId: m.app.appId, kind: m.app.kind, openWindow: (await openWindows(m.app, ctx.settings)).length > 0 });
+      for (const m of matches) out.push({ name: m.app.name, appId: m.app.appId, kind: m.app.kind, publisher: m.app.publisher ?? null, openWindow: (await openWindows(m.app, ctx.settings)).length > 0 });
       return { matches: out, total: all.length };
     },
   });
@@ -216,7 +216,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
           const msg =
             code === 'profile_not_found'
               ? `${b.label} has no profile called “${i.profile}”. Its profiles: ${names}. Ask the user which one.`
-              : `${b.label} has ${found.length > 1 ? `more than one profile called “${i.profile}”` : 'several profiles'}: ${names}. Ask the user which one, then call again with profile set to the name (or the folder in brackets, e.g. “Profile 1”).`;
+              : `${b.label} has ${found.length > 1 ? `more than one profile called “${i.profile}”` : 'several profiles'}: ${names}. Ask the user which one, then call again with profile set to the name (or the folder in brackets, such as Profile 1).`;
           throw new CapabilityError(code, msg, { dispatched: 'no' });
         }
         dir = chosen.dir;
