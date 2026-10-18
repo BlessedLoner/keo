@@ -1,7 +1,7 @@
 {
   "name": "keo",
   "productName": "Keo",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Keo — a permission-controlled personal AI agent for Windows.",
   "private": true,
   "license": "UNLICENSED",
