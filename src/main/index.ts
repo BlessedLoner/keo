@@ -288,6 +288,7 @@ app.whenReady().then(() => {
       setCompanionInteractive: (b) => presenceWindows?.setCompanionInteractive(b),
       companionDrag: (phase) => presenceWindows?.companionDrag(phase),
       shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+      voiceShortcutStatus: () => presenceWindows?.voiceShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
       quit: () => app.quit(),
     });
     const svc = services;

@@ -95,7 +95,7 @@ export function CompanionApp() {
             {!!p?.pendingApprovals && <span className="badge">{p.pendingApprovals}</span>}
           </div>
           <div className="companion-activity" title={voiceLine ?? undefined}>
-            {voiceLine ?? p?.activity ?? wakeLabel ?? 'Ctrl+K to ask'}
+            {voiceLine ?? p?.activity ?? wakeLabel ?? 'Ctrl+K to talk · Ctrl+Shift+K to type'}
           </div>
           {vm?.active && !hover && (
             <div className="companion-actions">

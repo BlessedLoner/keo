@@ -115,6 +115,11 @@ Allow WhatsApp (or your browser for WhatsApp Web) in **Access**. Then:
 
 There is no background or ongoing auto-replying: every message is drafted, shown and approved by you. Keo has no official WhatsApp API (none exists for personal accounts); it works through the visible app like you do, so a WhatsApp redesign can make it report “couldn't find the search box” until the adapter is updated.
 
+## Apps and browser profiles
+
+- **Open apps by name**, including Microsoft Store apps (Calculator, WhatsApp, Settings…): Keo uses Windows' own list of startable apps (`Get-StartApps`: names and app ids) and starts them through `explorer.exe shell:AppsFolder\<app id>` — no executable paths to register. If a window of the app is already open, Keo switches to it. If several apps match ("WhatsApp" and "WhatsApp Web"), Keo asks which one. Opening needs your OK (by click or "yes"); typing or clicking inside an app still needs it in the allowed apps. Requires *Access → Launch applications*.
+- **Browser profiles** (Chrome, Edge, Brave): Keo reads only the profile names from the browser's profile list and opens a web address or search in a **new tab** of the profile you choose — your open tabs are not touched. With several profiles Keo asks which one (also when two profiles share a name) and continues the original request after your answer.
+
 ## Approval levels
 
 **Settings → Approvals & live chat** sets how much Keo may do without asking:
@@ -144,7 +149,7 @@ The contact's messages are untrusted: they can only ever lead to a reply in that
 
 - **Voice conversation**: after the wake phrase Keo stays in a spoken conversation — it answers out loud and listens again, like a voice assistant, until you say “stop”, “that's all”, “thanks Keo” or stay quiet twice (or press Stop). Say a command together with the wake phrase (“Hey Keo, what's on my screen?”) or after it. Approvals can be answered with “yes” / “no”, except actions that always need a click on screen (raw clicks, payments, deleting…). If the window you are talking about isn't allowed yet, Keo asks — by voice — to allow just that app, then reads it.
 - **Wake word** (off by default): uses the Windows speech recognizer on this PC (the modern Windows 10/11 recognizer when available, falling back to the classic one; choose under *Speech engine*). If it mishears your phrase, use *Teach Keo your voice*. Default phrase “hey keo”; add your own (2–4 words) and press *Test* to check Windows understands it. Audio stays local; speech that isn't a wake phrase is discarded. Listening pauses while Keo speaks; mute any time with the mic chip in the title bar or the companion. After the wake phrase, your command is understood by Windows speech (offline) or OpenAI transcription (if configured and consented).
-- **Command bar shortcut**: Ctrl+K by default opens a small command bar over any app (Enter to send, Esc to close). A global shortcut takes that key away from other apps while Keo runs (Ctrl+K is used by browsers, VS Code, Slack), so you can change it (Ctrl+Alt+K, Ctrl+Shift+Space, …) or turn it off; if another app already holds it, Settings says so.
+- **Shortcuts**: **Ctrl+K** starts (or ends) a voice conversation; **Ctrl+Shift+K** opens the mini-chat over any app (Enter to send, Esc to close). Both can be changed or turned off in Settings; if another app already holds a shortcut, Settings says so. Installs that still had the old Ctrl+K mini-chat default are moved to Ctrl+Shift+K once; custom shortcuts are kept.
 - **Floating companion**: a small emblem that always shows what Keo is really doing — idle, listening, understanding, planning, acting, verifying, waiting for your approval, speaking, cancelled, error — with the current step (e.g. “Pressing ‘Settings’ · WhatsApp”). It never takes keyboard focus. Hover for controls: open Keo, Stop everything, mute, command bar. Drag to move (position is remembered and kept on screen when monitors change). Respects *reduced motion*.
 
 Push-to-talk in the chat (OpenAI transcription with consent) and spoken replies (Windows voices offline, or OpenAI voices) work as before.

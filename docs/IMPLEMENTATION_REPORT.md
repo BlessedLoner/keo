@@ -107,6 +107,15 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### Next iteration (uncommitted): shortcuts, app discovery, browser profiles, desktop ownership, open questions
+
+- Ctrl+K = voice conversation, Ctrl+Shift+K = mini-chat; both registered by one manager that releases its previous registrations first; conflicts reported per shortcut; one-time move of the old Ctrl+K mini-chat default.
+- `apps.find` / `apps.open`: Windows app discovery (Start menu + Microsoft Store via `Get-StartApps`), launch by app id, switch to an open window, ambiguity → question. Live read-only check on this PC passed (Calculator found as a Store app).
+- `browser.list_profiles` / `browser.open_tab`: Chrome/Edge/Brave profile names, new tab in the chosen profile; duplicate profile names (seen on this PC: two “Blessed2”) are ambiguous.
+- Desktop input queue (one owner) for desktop actions and live chats.
+- Open questions per conversation so "Personal" completes "research … in Chrome".
+- Tests: `tests/apps.test.ts` (16), `tests/desktoplock.test.ts` (5) — fakes only, nothing launched.
+
 ### 1.1.3 investigation: WhatsApp Desktop and unexpected Spanish
 
 - **Not a packaging defect.** Every helper (desktop, speech) is an embedded script written to the profile's runtime folder at start; nothing depends on repository paths. The packaged build includes its runtime dependencies (checked in `app.asar`) and the packaged `Keo.exe` passes the smoke checks and the desktop self-test in a disposable profile. What differed: the earlier successes ran **WhatsApp Web in a browser**; the failing laptop runs the **WhatsApp app**, which hosts its page in an embedded WebView2 child window.

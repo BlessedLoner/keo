@@ -30,6 +30,9 @@ const UNTRUSTED_OUTPUT = new Set([
 ]);
 
 /** Read-only capabilities that gather context (shown as "gathering context"). */
+/** Error codes that mean: the user must choose (app, profile, window, contact) before the action can run. */
+const NEEDS_CHOICE = new Set(['ambiguous_app', 'ambiguous_profile', 'profile_not_found', 'ambiguous_target', 'ambiguous_contact']);
+
 const CONTEXT_CAPS = new Set(['web.search', 'web.fetch_page', 'browser.read_page', 'desktop.inspect_window', 'desktop.list_windows', 'whatsapp.read_chat', 'memory.search', 'project.list', 'project.get', 'vision.get_observation', 'system.datetime']);
 const MAX_TOOL_RESULT_CHARS = 20000;
 
@@ -41,7 +44,31 @@ interface ActiveTurn {
 
 export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
-  systemExtra: () => string = () => '';
+  systemExtra: (conversationId: string) => string = () => '';
+  /**
+   * Open questions per conversation: an action that could not run because a
+   * choice was missing (which app, which profile, which window). The next
+   * reply is read against it, so "Personal" completes the original request
+   * instead of starting a new one. Expires after two turns or ten minutes;
+   * cleared when that action succeeds. A choice is never an approval.
+   */
+  private readonly pending = new Map<string, { capabilityId: string; toolName: string; input: unknown; question: string; at: number; turnsLeft: number }>();
+
+  pendingQuestion(conversationId: string): { capabilityId: string; question: string } | null {
+    const p = this.pending.get(conversationId);
+    return p ? { capabilityId: p.capabilityId, question: p.question } : null;
+  }
+
+  private pendingContext(conversationId: string): string {
+    const p = this.pending.get(conversationId);
+    if (!p) return '';
+    if (p.turnsLeft < 0 || Date.now() - p.at > 10 * 60_000) {
+      this.pending.delete(conversationId);
+      return '';
+    }
+    return `\n\n# Open question in this conversation\nAn earlier ${p.toolName} call needed the user to choose: ${p.question.slice(0, 600)}\nOriginal input: ${JSON.stringify(p.input).slice(0, 400)}\nIf the user's latest message answers this (even with just a name, "the first one", "the one already open"), call ${p.toolName} again with the original input plus their choice. If they correct an earlier choice, use the correction. If their message is a different request, ignore this question. Their choice is not an approval; Keo still asks for approval where needed.`;
+  }
+
 
   /**
    * Handles a user message without the model when Keo itself knows what it is
@@ -129,7 +156,24 @@ export class AgentService {
     }
   }
 
+  private notePending(conversationId: string, call: ToolCall, r: { activity: ToolActivity; content: string }): void {
+    let parsed: { code?: unknown; error?: unknown } = {};
+    try {
+      parsed = JSON.parse(r.content) as typeof parsed;
+    } catch {
+      /* not JSON */
+    }
+    const code = typeof parsed.code === 'string' ? parsed.code : null;
+    if (code && NEEDS_CHOICE.has(code)) {
+      this.pending.set(conversationId, { capabilityId: r.activity.capabilityId, toolName: call.name, input: call.input, question: typeof parsed.error === 'string' ? parsed.error : r.activity.detail, at: Date.now(), turnsLeft: 2 });
+    } else if (r.activity.outcome === 'executed' && this.pending.get(conversationId)?.capabilityId === r.activity.capabilityId) {
+      this.pending.delete(conversationId);
+    }
+  }
+
   private async runTurn(conversationId: string, sourceMessageId: string): Promise<Message> {
+    const open = this.pending.get(conversationId);
+    if (open) open.turnsLeft--;
     const correlationId = newCorrelationId();
     const settings = this.getSettings();
     const controller = new AbortController();
@@ -189,7 +233,7 @@ export class AgentService {
         const sep = text && !text.endsWith('\n') ? '\n\n' : '';
         let first = true;
         const result = await provider.stream(
-          { model, system: SYSTEM_PROMPT + this.systemExtra(), messages, tools, maxOutputTokens: maxOut, correlationId },
+          { model, system: SYSTEM_PROMPT + this.systemExtra(conversationId) + this.pendingContext(conversationId), messages, tools, maxOutputTokens: maxOut, correlationId },
           {
             onText: (delta) => {
               if (first && sep) {
@@ -295,6 +339,7 @@ export class AgentService {
             },
           });
           upsert(r.activity);
+          this.notePending(conversationId, call, r);
           this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity: r.activity });
           results.push({ type: 'tool_result', callId: call.id, content: r.content, isError: r.isError });
           flush(true);

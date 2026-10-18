@@ -125,6 +125,13 @@ Execution (`TaskOrchestrator`):
 - The beta is not code-signed, so the updater cannot verify a publisher signature; integrity rests on HTTPS to GitHub and the hash in `latest.yml` from the same release. Code signing (see docs/RELEASING.md) would add publisher verification.
 - Update requests carry no user data. Development runs never update.
 
+## 4i. Apps, browser profiles, desktop ownership, open questions
+
+- **App discovery** lists candidates from Windows' own app registry (`Get-StartApps`); it is not an execution engine. `apps.open` launches only an app id from that list (validated shape, one argument to `explorer.exe`, no shell), always with approval, behind the *Launch applications* switch. Several matches are never guessed between. Discovered apps gain no rights: acting inside them still needs the allowed list and per-action approval.
+- **Browser profiles**: from each Chromium browser's *Local State* only the profile folder and display name are taken; e-mail addresses, the stored encryption key, cookies and passwords are never read out or sent. `browser.open_tab` opens only http(s) addresses (no file:, javascript:, browser pages or flags) via `--profile-directory`, adding a new tab; no remote-debugging port is used.
+- **One owner of the physical desktop**: approved actions that control the keyboard/mouse/foreground and live chat replies take turns through one queue (`DesktopService.exclusive`); waiting can be cancelled and a failure releases the desktop. Reading and research never wait for it.
+- **Open questions**: when an action needs a choice (app, profile, window, contact), the question and the original request are kept for that conversation (two turns / ten minutes, not persisted). The answer completes the original request; it is never an approval.
+
 ## 4h. Language
 
 - Replies are in English by default (system policy). Another language is used only for what the user explicitly asks for (translations, "reply to her in French"); web pages, WhatsApp messages and screen text never change the reply language.

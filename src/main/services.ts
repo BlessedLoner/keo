@@ -7,6 +7,9 @@ import { AgentService } from './agent/agentService';
 import { advancedCapabilities, whatsappCheck } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
+import { appCapabilities } from './capabilities/apps';
+import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
+import { installedBrowsers, openInProfile, type InstalledBrowser } from './desktop/browserProfiles';
 import { LiveChatService } from './livechat/liveChatService';
 import { builtinCapabilities, type CapabilityDeps, type PlanInput } from './capabilities/builtins';
 import { SnapshotStore } from './desktop/uia';
@@ -57,6 +60,12 @@ export interface ServiceDeps {
   speechEngine?: SpeechEngine;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
   voiceIo?: { listen(): Promise<{ text: string | null; reason: string }>; speak(text: string): Promise<void> };
+  /** Windows' app list and app launcher (tests inject fakes; the app uses Get-StartApps / explorer.exe). */
+  startApps?: () => Promise<StartApp[]>;
+  launchApp?: (appId: string) => Promise<void>;
+  appLaunchWaitMs?: number;
+  browsers?: () => InstalledBrowser[];
+  openTab?: (exe: string, profileDir: string, url: string) => Promise<void>;
   /** Throw-away window for "Check this computer" (tests use a fake). */
   launchTestWindow?: (title: string) => TestWindow;
   /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
@@ -98,6 +107,7 @@ export class Services {
   readonly live: LiveChatService;
   /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
   readonly capDeps: CapabilityDeps;
+  readonly apps: AppDiscovery;
   readonly snapshots = new SnapshotStore();
   readonly presence: PresenceService;
   readonly wake: WakeService;
@@ -130,6 +140,12 @@ export class Services {
     this.taskRepo = new TaskRepo(this.db);
     this.observations = new ObservationRepo(this.db);
     const getSettings = (): Settings => this.settings.get();
+    // One-time: Ctrl+K became the voice shortcut, so a mini-chat still on the old default moves to Ctrl+Shift+K.
+    const sc = getSettings().shortcuts;
+    if (!sc.layoutV2) {
+      this.settings.update({ shortcuts: { layoutV2: true, ...(sc.commandBar.toLowerCase() === 'control+k' ? { commandBar: 'Control+Shift+K' } : {}) } });
+      this.log.info('settings.shortcuts_migrated', { movedCommandBar: sc.commandBar.toLowerCase() === 'control+k' });
+    }
     if (d.testProvider && getSettings().activeProvider === null) this.settings.update({ activeProvider: 'test' });
     this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null });
     this.registry = new CapabilityRegistry(getSettings, this.audit, this.log);
@@ -164,6 +180,8 @@ export class Services {
       focusSettleMs: d.focusSettleMs,
     };
     this.capDeps = capDeps;
+    this.registry.inputLock = (owner, fn, signal) => this.desktop.exclusive(owner, fn, signal);
+    this.apps = new AppDiscovery(d.startApps);
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -186,6 +204,7 @@ export class Services {
     for (const cap of [
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
+      ...appCapabilities({ ...capDeps, apps: this.apps, launchApp: d.launchApp ?? launchByAppId, launchWaitMs: d.appLaunchWaitMs, browsers: d.browsers ?? (() => installedBrowsers()), openTab: d.openTab ?? openInProfile }),
       ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
@@ -441,6 +460,12 @@ export class Services {
   }
 
   /** Starts or stops voice mode from the UI (companion / title bar). */
+  /** Voice shortcut (Ctrl+K): start a voice conversation, or end the one running. */
+  toggleVoiceMode(): void {
+    if (this.voiceMode.isActive()) this.voiceMode.stop('shortcut');
+    else this.startVoiceMode();
+  }
+
   startVoiceMode(): void {
     void this.noteActiveWindow().finally(() => this.voiceMode.start());
   }

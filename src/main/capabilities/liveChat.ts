@@ -80,15 +80,25 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
       };
     },
     auditView: (i) => ({ target: i.target, contactLength: i.contact.length, instructions: i.instructions.length, opening: !!i.opening, replyToLatest: i.replyToLatest }),
+    // Opening the chat takes the desktop; the session itself (its opening message, replies) takes
+    // its own turns through the live chat service, so nothing waits on itself.
+    locksDesktopItself: true,
     async execute(i, ctx) {
-      const target = await resolveWhatsApp(d, i.target, ctx.settings);
-      await bringToFront(d, target, ctx.settings);
-      const o = await waOpenChat(d, target, i.contact, ctx.signal);
-      if (!o.opened) {
-        throw new CapabilityError('not_opened', `Could not open the chat with “${i.contact}”: ${o.reason ?? 'not found'}.${o.candidates.length ? ` Candidates: ${o.candidates.join(', ')}.` : ''} Ask the user which one they mean.`, {
-          dispatched: 'no',
-        });
-      }
+      const target = await d.desktop.exclusive(
+        `whatsapp.live_chat_start:${ctx.correlationId}`,
+        async () => {
+          const t = await resolveWhatsApp(d, i.target, ctx.settings);
+          await bringToFront(d, t, ctx.settings);
+          const o = await waOpenChat(d, t, i.contact, ctx.signal);
+          if (!o.opened) {
+            throw new CapabilityError('not_opened', `Could not open the chat with “${i.contact}”: ${o.reason ?? 'not found'}.${o.candidates.length ? ` Candidates: ${o.candidates.join(', ')}.` : ''} Ask the user which one they mean.`, {
+              dispatched: 'no',
+            });
+          }
+          return t;
+        },
+        ctx.signal,
+      );
       const s = await d.live.start({
         target,
         contact: i.contact,

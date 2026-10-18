@@ -1,4 +1,5 @@
 import type { LiveChatLine, LiveChatSession } from '../../shared/domain';
+import { CapabilityError } from '../capabilities/types';
 import type { Settings } from '../../shared/settings';
 import { bringToFront, type CapabilityDeps, type TargetT } from '../capabilities/builtins';
 import { waOpenChat, waSend, waView } from '../capabilities/advanced';
@@ -568,6 +569,14 @@ export class LiveChatService {
    * is retried automatically (a send that may have happened is never repeated).
    */
   private async withFocus<T>(r: Runtime, fn: () => Promise<T>): Promise<T | null> {
+    // The live chat takes its turn on the physical desktop like any other desktop action.
+    return this.d.cap.desktop.exclusive(`livechat:${r.s.id}`, () => this.withFocusNow(r, fn), r.abort.signal).catch((e) => {
+      if (e instanceof CapabilityError && e.code === 'cancelled') return null;
+      throw e;
+    });
+  }
+
+  private async withFocusNow<T>(r: Runtime, fn: () => Promise<T>): Promise<T | null> {
     const st = this.d.settings();
     const backend = this.d.cap.desktop.backend;
     if (r.ending) return null;

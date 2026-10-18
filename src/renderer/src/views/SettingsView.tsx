@@ -429,13 +429,51 @@ function TeachVoice({ phrase, learned, disabled }: { phrase: string; learned: st
   );
 }
 
+/** One global shortcut: state (active / not registered / off), conflicts, presets. */
+function ShortcutCard(p: {
+  title: string;
+  help: string;
+  status: { registered: boolean; enabled: boolean; error: string | null } | undefined;
+  enabled: boolean;
+  value: string;
+  presets: string[];
+  onEnabled(v: boolean): void;
+  onSave(a: string): void;
+}) {
+  const [accel, setAccel] = useState(p.value);
+  useEffect(() => setAccel(p.value), [p.value]);
+  return (
+    <section className="card">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>{p.title}</h2>
+        {p.status?.registered ? <span className="chip ok">Active</span> : p.status?.enabled ? <span className="chip danger">Not registered</span> : <span className="chip">Off</span>}
+      </div>
+      <p className="muted small">
+        {p.help} A global shortcut is taken away from every other app while Keo runs (Ctrl+K is also used by browsers, VS Code and Slack).
+      </p>
+      {p.status?.error && <div className="banner danger small" style={{ marginBottom: 10 }}>{p.status.error}</div>}
+      <Toggle checked={p.enabled} onChange={p.onEnabled} label="Enable this shortcut" />
+      <div className="row" style={{ marginTop: 10 }}>
+        <input className="input mono" style={{ maxWidth: 220 }} aria-label={`${p.title} keys`} value={accel} onChange={(e) => setAccel(e.target.value)} />
+        <button className="btn sm" disabled={accel === p.value} onClick={() => p.onSave(accel)}>
+          Save
+        </button>
+        {p.presets.map((a) => (
+          <button key={a} className="btn ghost sm" onClick={() => { setAccel(a); p.onSave(a); }}>
+            {a.replace('Control', 'Ctrl')}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [status, setStatus] = useState<WakeStatusInfo | null>(null);
   const [phrase, setPhrase] = useState('');
   const [testing, setTesting] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<string | null>(null);
-  const [accel, setAccel] = useState(s.shortcuts.commandBar);
   const refresh = useCallback(() => void invoke('wake:status').then(setStatus, (e) => ui.error(errText(e))), [ui]);
   useEffect(() => {
     refresh();
@@ -543,28 +581,26 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
         </div>
       </section>
 
-      <section className="card">
-        <div className="row">
-          <h2 style={{ margin: 0 }}>Command bar shortcut</h2>
-          {status?.shortcut.registered ? <span className="chip ok">Active</span> : status?.shortcut.enabled ? <span className="chip danger">Not registered</span> : <span className="chip">Off</span>}
-        </div>
-        <p className="muted small">
-          Opens Keo’s command bar from anywhere while Keo is running. Note: a global shortcut is taken away from every other app while Keo runs — Ctrl+K, for example, is also used by browsers, VS Code and Slack. Ctrl+Alt+K or Ctrl+Shift+Space avoid most conflicts.
-        </p>
-        {status?.shortcut.error && <div className="banner danger small" style={{ marginBottom: 10 }}>{status.shortcut.error}</div>}
-        <Toggle checked={s.shortcuts.commandBarEnabled} onChange={(v) => void patch({ shortcuts: { commandBarEnabled: v } })} label="Enable the global shortcut" />
-        <div className="row" style={{ marginTop: 10 }}>
-          <input className="input mono" style={{ maxWidth: 220 }} aria-label="Shortcut" value={accel} onChange={(e) => setAccel(e.target.value)} />
-          <button className="btn sm" disabled={accel === s.shortcuts.commandBar} onClick={() => void patch({ shortcuts: { commandBar: accel } })}>
-            Save
-          </button>
-          {['Control+K', 'Control+Alt+K', 'Control+Shift+Space'].map((a) => (
-            <button key={a} className="btn ghost sm" onClick={() => { setAccel(a); void patch({ shortcuts: { commandBar: a } }); }}>
-              {a.replace('Control', 'Ctrl')}
-            </button>
-          ))}
-        </div>
-      </section>
+      <ShortcutCard
+        title="Voice shortcut"
+        help="Starts a voice conversation with Keo from anywhere (press again to end it)."
+        status={status?.voiceShortcut}
+        enabled={s.shortcuts.voiceEnabled}
+        value={s.shortcuts.voice}
+        presets={['Control+K', 'Control+Alt+K', 'Control+Shift+Space']}
+        onEnabled={(v) => void patch({ shortcuts: { voiceEnabled: v } })}
+        onSave={(a) => void patch({ shortcuts: { voice: a } })}
+      />
+      <ShortcutCard
+        title="Mini-chat shortcut"
+        help="Opens Keo’s mini-chat (command bar) over any app."
+        status={status?.shortcut}
+        enabled={s.shortcuts.commandBarEnabled}
+        value={s.shortcuts.commandBar}
+        presets={['Control+Shift+K', 'Control+Alt+K', 'Control+Shift+Space']}
+        onEnabled={(v) => void patch({ shortcuts: { commandBarEnabled: v } })}
+        onSave={(a) => void patch({ shortcuts: { commandBar: a } })}
+      />
 
       <section className="card">
         <h2>Floating companion</h2>

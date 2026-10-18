@@ -208,8 +208,12 @@ export class CapabilityRegistry {
    * the output contract. Used directly only for non-consequential capabilities
    * that need no approval; everything else runs through the task orchestrator.
    */
+  /** Serialises capabilities that control the physical desktop (set by Services). */
+  inputLock: <T>(owner: string, fn: () => Promise<T>, signal: AbortSignal) => Promise<T> = (_o, fn) => fn();
+
   async execute(cap: AnyCapability, input: unknown, ctx: CapabilityContext): Promise<unknown> {
-    const out = await withTimeout(cap.execute(input, ctx), cap.timeoutMs, ctx.signal);
+    const run = () => withTimeout(cap.execute(input, ctx), cap.timeoutMs, ctx.signal);
+    const out = await (cap.permissions.includes('desktop.control') && !cap.locksDesktopItself ? this.inputLock(`${cap.id}:${ctx.correlationId}`, run, ctx.signal) : run());
     const checked = cap.output.safeParse(out);
     if (!checked.success) {
       throw new CapabilityError('invalid_output', `Capability returned output that violates its contract: ${formatZodError(checked.error)}`, {

@@ -588,7 +588,9 @@ describe('wake word and voice commands', () => {
   });
 
   it('validates shortcut accelerators', () => {
-    expect(SettingsSchema.parse({}).shortcuts.commandBar).toBe('Control+K');
+    expect(SettingsSchema.parse({}).shortcuts.commandBar).toBe('Control+Shift+K');
+    expect(SettingsSchema.parse({}).shortcuts.voice).toBe('Control+K');
+    expect(() => SettingsSchema.parse({ shortcuts: { voice: 'K' } })).toThrow();
     expect(() => SettingsSchema.parse({ shortcuts: { commandBar: 'K' } })).toThrow();
     expect(() => SettingsSchema.parse({ shortcuts: { commandBar: 'Control+Alt+Delete!' } })).toThrow();
     expect(SettingsSchema.parse({ shortcuts: { commandBar: 'Control+Shift+Space' } }).shortcuts.commandBar).toBe('Control+Shift+Space');

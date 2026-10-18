@@ -9,7 +9,7 @@ import { emblemFor, usePresence, useVoiceReporting } from '../lib/presence';
 import { voice } from '../lib/voice';
 
 /**
- * Ctrl+K / wake-word command bar. Commands go to the "Quick commands"
+ * Mini-chat (Ctrl+Shift+K) / wake-word command bar. Commands go to the "Quick commands"
  * conversation through the normal agent pipeline; approvals for its actions
  * appear inline. Nothing here bypasses the main process's checks.
  */

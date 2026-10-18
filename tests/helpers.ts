@@ -258,7 +258,7 @@ export interface Harness {
 }
 
 export function makeHarness(
-  opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming']; voiceIo?: ServiceDeps['voiceIo'] } = {},
+  opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming']; voiceIo?: ServiceDeps['voiceIo']; deps?: Partial<ServiceDeps> } = {},
 ): Harness {
   const dir = opts.dir ?? tempDir();
   const profile = resolveProfile(dir, { KEO_USER_DATA_DIR: dir }, false);
@@ -282,6 +282,12 @@ export function makeHarness(
     ...(opts.web ? { web: opts.web } : {}),
     ...(opts.liveChatTiming ? { liveChatTiming: opts.liveChatTiming } : {}),
     ...(opts.voiceIo ? { voiceIo: opts.voiceIo } : {}),
+    // Never the real Windows app list, launcher or browser in tests.
+    startApps: async () => [],
+    launchApp: async () => undefined,
+    browsers: () => [],
+    openTab: async () => undefined,
+    ...(opts.deps ?? {}),
   });
   return {
     dir,

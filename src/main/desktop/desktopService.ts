@@ -43,6 +43,48 @@ export class DesktopService {
     private readonly ownPid: number = process.pid,
   ) {}
 
+  /**
+   * Single owner of the physical keyboard, mouse and foreground window: work
+   * that controls the desktop (an approved desktop action, a live chat
+   * reply) runs one at a time, in order. Reading/research never waits here.
+   */
+  private inputTail: Promise<unknown> = Promise.resolve();
+  private owner: string | null = null;
+  private waiting = 0;
+
+  inputOwner(): { owner: string | null; waiting: number } {
+    return { owner: this.owner, waiting: this.waiting };
+  }
+
+  async exclusive<T>(owner: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const prev = this.inputTail;
+    let release!: () => void;
+    const mine = new Promise<void>((r) => (release = r));
+    this.inputTail = prev.then(() => mine);
+    this.waiting++;
+    try {
+      await Promise.race([
+        prev,
+        new Promise<never>((_, reject) => {
+          if (signal?.aborted) reject(new CapabilityError('cancelled', 'Cancelled while waiting for another desktop action to finish.', { dispatched: 'no' }));
+          signal?.addEventListener('abort', () => reject(new CapabilityError('cancelled', 'Cancelled while waiting for another desktop action to finish.', { dispatched: 'no' })), { once: true });
+        }),
+      ]);
+    } catch (e) {
+      this.waiting--;
+      release(); // keep the queue moving for those behind
+      throw e;
+    }
+    this.waiting--;
+    this.owner = owner;
+    try {
+      return await fn();
+    } finally {
+      this.owner = null;
+      release();
+    }
+  }
+
   support() {
     return this.backend.support();
   }

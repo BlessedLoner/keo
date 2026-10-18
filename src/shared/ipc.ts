@@ -308,6 +308,7 @@ export interface WakeStatusInfo {
   muted: boolean;
   recognizers: Array<{ culture: string; name: string }>;
   shortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  voiceShortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   /** Speech engine in use ("modern" Windows 10/11 or "classic"), and why modern isn't, if it isn't. */
   engine: { kind: string | null; fallbackReason: string | null };
 }

@@ -32,6 +32,7 @@ export interface HostHooks {
   setCompanionInteractive?(interactive: boolean): void;
   companionDrag?(phase: 'start' | 'end'): void;
   shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  voiceShortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   quit?(): void;
   /** Connected displays (size and scaling only). */
   displays?(): Array<{ width: number; height: number; scale: number; primary: boolean }>;
@@ -48,6 +49,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     ...s.wake.getState(),
     recognizers: await s.wake.recognizers(),
     engine: s.wake.engineInfo(),
+    voiceShortcut: host.voiceShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.voice, enabled: s.settings.get().shortcuts.voiceEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
   const webStatus = () => {

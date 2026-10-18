@@ -41,6 +41,13 @@ export const OpenAICompatSettings = z
   })
   .strict();
 
+const Accelerator = z
+  .string()
+  .trim()
+  .min(3)
+  .max(40)
+  .regex(/^((Control|Ctrl|Alt|Shift|Super|CommandOrControl)\+){1,3}([A-Z0-9]|F([1-9]|1[0-2])|Space)$/i, 'Invalid shortcut');
+
 export const AllowedApp = z
   .object({
     processName: z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9 ._-]+$/),
@@ -183,8 +190,13 @@ export const SettingsSchema = z
     shortcuts: z
       .object({
         commandBarEnabled: z.boolean().default(true),
-        /** Electron accelerator, e.g. "Control+K", "Control+Alt+K". */
-        commandBar: z.string().trim().min(3).max(40).regex(/^((Control|Ctrl|Alt|Shift|Super|CommandOrControl)\+){1,3}([A-Z0-9]|F([1-9]|1[0-2])|Space)$/i, 'Invalid shortcut').default('Control+K'),
+        /** Mini-chat (command bar). Electron accelerator, e.g. "Control+Shift+K". */
+        commandBar: Accelerator.default('Control+Shift+K'),
+        /** Talk to Keo (starts or stops a voice conversation). */
+        voiceEnabled: z.boolean().default(true),
+        voice: Accelerator.default('Control+K'),
+        /** One-time move of the mini-chat from the old default Ctrl+K to Ctrl+Shift+K (Ctrl+K is voice now). */
+        layoutV2: z.boolean().default(false),
       })
       .strict()
       .prefault({}),

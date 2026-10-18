@@ -39,6 +39,9 @@ export class PresenceWindows {
   private dragTimer: NodeJS.Timeout | null = null;
   private dragOffset = { x: 0, y: 0 };
   private shortcut: ShortcutStatus = { accelerator: '', enabled: false, registered: false, error: null };
+  private voiceShortcut: ShortcutStatus = { accelerator: '', enabled: false, registered: false, error: null };
+  /** Accelerators Keo registered (released before re-registering, so handlers never duplicate). */
+  private registered: string[] = [];
   private quitting = false;
 
   constructor(
@@ -207,21 +210,39 @@ export class PresenceWindows {
   }
 
   // ---------------------------------------------------------------- shortcut
-  /** (Re-)registers the global command-bar shortcut from settings and records the outcome. */
+  /**
+   * (Re-)registers both global shortcuts from settings — voice (Ctrl+K) and the
+   * mini-chat (Ctrl+Shift+K) — and records each outcome. Everything Keo
+   * registered before is released first, so handlers are never duplicated.
+   */
   syncShortcut(): ShortcutStatus {
     const s = this.services.settings.get().shortcuts;
-    if (this.shortcut.registered && this.shortcut.accelerator) globalShortcut.unregister(this.shortcut.accelerator);
-    this.shortcut = { accelerator: s.commandBar, enabled: s.commandBarEnabled, registered: false, error: null };
-    if (!s.commandBarEnabled) return this.shortcut;
-    try {
-      const ok = globalShortcut.register(s.commandBar, () => this.toggleCommandBar());
-      this.shortcut.registered = ok && globalShortcut.isRegistered(s.commandBar);
-      if (!this.shortcut.registered) this.shortcut.error = `${s.commandBar} is already used by another application. Choose a different shortcut in Settings → Voice & shortcuts.`;
-    } catch (e) {
-      this.shortcut.error = `Invalid shortcut: ${(e as Error).message}`;
-    }
-    this.log.info('shortcut.register', { accelerator: s.commandBar, registered: this.shortcut.registered });
+    for (const a of this.registered.splice(0)) globalShortcut.unregister(a);
+    const reg = (accelerator: string, enabled: boolean, fn: () => void, what: string, taken: string | null): ShortcutStatus => {
+      const st: ShortcutStatus = { accelerator, enabled, registered: false, error: null };
+      if (!enabled) return st;
+      if (taken && taken.toLowerCase() === accelerator.toLowerCase()) {
+        st.error = `${accelerator} is already Keo’s ${what === 'voice' ? 'mini-chat' : 'voice'} shortcut. Choose a different one.`;
+        return st;
+      }
+      try {
+        const ok = globalShortcut.register(accelerator, fn);
+        st.registered = ok && globalShortcut.isRegistered(accelerator);
+        if (st.registered) this.registered.push(accelerator);
+        else st.error = `${accelerator} is already used by another application. Choose a different shortcut in Settings → Voice & shortcuts.`;
+      } catch (e) {
+        st.error = `Invalid shortcut: ${(e as Error).message}`;
+      }
+      this.log.info('shortcut.register', { what, accelerator, registered: st.registered });
+      return st;
+    };
+    this.voiceShortcut = reg(s.voice, s.voiceEnabled, () => this.services.toggleVoiceMode(), 'voice', null);
+    this.shortcut = reg(s.commandBar, s.commandBarEnabled, () => this.toggleCommandBar(), 'command', s.voiceEnabled ? s.voice : null);
     return this.shortcut;
+  }
+
+  voiceShortcutStatus(): ShortcutStatus {
+    return { ...this.voiceShortcut };
   }
 
   shortcutStatus(): ShortcutStatus {

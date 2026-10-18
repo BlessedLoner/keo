@@ -53,6 +53,8 @@ export interface Capability<I = unknown, O = unknown> {
   idempotent: boolean;
   timeoutMs: number;
   maxAttempts: number;
+  /** Takes the desktop input lock itself around its desktop steps (it hands work to a service that locks on its own). */
+  locksDesktopItself?: boolean;
   /** Whether the model may propose this capability as a tool call. */
   modelVisible: boolean;
   /** Verification policy, surfaced in the UI. */
