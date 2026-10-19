@@ -22,11 +22,13 @@ function launch(run) {
   const env = { ...process.env, KEO_SMOKE: '1', KEO_ENABLE_TEST_PROVIDER: '1', KEO_USER_DATA_DIR: profile, KEO_SMOKE_OUT: out };
   // A parent Electron-based tool may set this; it would make Electron run as plain Node.
   delete env.ELECTRON_RUN_AS_NODE;
+  // A manual live send (KEO_LIVE_RESULTS_SEND) happens once, in the first run only.
+  if (run !== 1) delete env.KEO_LIVE_RESULTS_SEND;
   // KEO_SMOKE_APP=<path to Keo.exe> runs the same checks against a packaged build.
   const app = process.env.KEO_SMOKE_APP;
   const r = spawnSync(app ?? electron, app ? [] : [root], {
     env,
-    timeout: 90_000,
+    timeout: process.env.KEO_LIVE_RESULTS_SEND ? 400_000 : 90_000,
     encoding: 'utf8',
   });
   if (!fs.existsSync(out)) {
@@ -84,6 +86,9 @@ check('results window: may read results', p.resultsGet === 'ok', p.resultsGet);
 check('results window: cannot read memory', p.resultsMemoryList === 'forbidden', p.resultsMemoryList);
 check('results window: cannot change settings', p.resultsSettingsUpdate === 'forbidden', p.resultsSettingsUpdate);
 check('results window: cannot approve tasks', p.resultsTasksApprove === 'forbidden', p.resultsTasksApprove);
+check('results window: steps aside during desktop work', p.resultsStepsAside === true, p.resultsStepsAside);
+check('results window: stays closed once closed', p.resultsStaysClosed === true, p.resultsStaysClosed);
+if (p.liveSend) console.log('LIVE send from the results window:', JSON.stringify(p.liveSend), 'window back:', p.liveResultsBack);
 check('report renders as PDF', p.reportPdf === true, p.reportError ?? p.reportPdf);
 check('report renders as picture', p.reportPng === true, p.reportError ?? p.reportPng);
 check('report renders again', p.reportAgain === true, p.reportError ?? p.reportAgain);

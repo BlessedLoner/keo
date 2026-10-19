@@ -72,7 +72,7 @@ public static class KeoWin {
     for (int ix = 1; ix <= 3; ix++) for (int iy = 1; iy <= 3; iy++) {
       var p = new POINT(); p.X = r.Left + w * ix / 4; p.Y = r.Top + hh * iy / 4;
       total++;
-      if (GetAncestor(WindowFromPoint(p), 2) != h) covered++;
+      if (!PartOfTarget(WindowFromPoint(p), h)) covered++;
     }
     return (double)covered / total;
   }
@@ -115,6 +115,38 @@ public static class KeoWin {
   [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
   [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr h);
   [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr h);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] struct PBI { public IntPtr exitStatus; public IntPtr peb; public IntPtr affinity; public IntPtr priority; public IntPtr pid; public IntPtr parent; }
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref PBI pbi, int len, out int ret);
+
+  static uint ParentPid(uint pid) {
+    var ph = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION
+    if (ph == IntPtr.Zero) return 0;
+    try {
+      var b = new PBI(); int ret;
+      if (NtQueryInformationProcess(ph, 0, ref b, Marshal.SizeOf(typeof(PBI)), out ret) != 0) return 0;
+      return (uint)b.parent.ToInt64();
+    } finally { CloseHandle(ph); }
+  }
+
+  // The target app's own surface: the window itself, or a visible top-level window of the same app
+  // (same process, or a child process it started) laid over it. WhatsApp Desktop draws its chats in
+  // such a WebView2 window, which holds the keyboard focus. Any other window is not the target.
+  public static bool PartOfTarget(IntPtr w, IntPtr h) {
+    if (w == IntPtr.Zero) return false;
+    var top = GetAncestor(w, 2);
+    if (top == h) return true;
+    if (top == IntPtr.Zero || !IsWindowVisible(top) || IsIconic(h)) return false;
+    uint tp, wp; GetWindowThreadProcessId(h, out tp); GetWindowThreadProcessId(top, out wp);
+    if (wp == 0 || (wp != tp && ParentPid(wp) != tp)) return false;
+    RECT a, b;
+    if (!GetWindowRect(h, out a) || !GetWindowRect(top, out b)) return false;
+    const int tol = 24;
+    return b.Left >= a.Left - tol && b.Top >= a.Top - tol && b.Right <= a.Right + tol && b.Bottom <= a.Bottom + tol && (b.Right - b.Left) * 2 >= (a.Right - a.Left);
+  }
+
+  static bool IsFg(IntPtr h) { return PartOfTarget(GetForegroundWindow(), h); }
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -134,7 +166,7 @@ public static class KeoWin {
     d["className"] = Cls(h);
     d["minimized"] = IsIconic(h);
     d["x"] = r.Left; d["y"] = r.Top; d["width"] = r.Right - r.Left; d["height"] = r.Bottom - r.Top;
-    d["foreground"] = GetForegroundWindow() == h;
+    d["foreground"] = IsFg(h);
     return d;
   }
 
@@ -174,7 +206,7 @@ public static class KeoWin {
   public static void Wheel(IntPtr h, int sx, int sy, int notches) {
     RequireForeground(h);
     var p = new POINT(); p.X = sx; p.Y = sy;
-    if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
+    if (!PartOfTarget(WindowFromPoint(p), h)) throw new Exception("target_obscured");
     PointerTo(sx, sy);
     var inputs = new List<INPUT>();
     int n = Math.Abs(notches);
@@ -187,7 +219,7 @@ public static class KeoWin {
   public static void ClickScreen(IntPtr h, int sx, int sy) {
     RequireForeground(h);
     var p = new POINT(); p.X = sx; p.Y = sy;
-    if (GetAncestor(WindowFromPoint(p), 2) != h) throw new Exception("target_obscured");
+    if (!PartOfTarget(WindowFromPoint(p), h)) throw new Exception("target_obscured");
     PointerTo(sx, sy);
     var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = 0x0002;
     var b = new INPUT(); b.type = 0; b.U.mi.dwFlags = 0x0004;
@@ -212,7 +244,7 @@ public static class KeoWin {
     BringWindowToTop(h);
     SetForegroundWindow(h);
     Thread.Sleep(60);
-    if (GetForegroundWindow() != h) {
+    if (!IsFg(h)) {
       // An ALT tap lets this process take foreground rights (documented
       // SetForegroundWindow rule). A bare ALT release would open the menu of
       // whichever window receives it (and swallow the next keys typed), so an
@@ -227,7 +259,7 @@ public static class KeoWin {
       SetForegroundWindow(h);
       Thread.Sleep(100);
     }
-    if (GetForegroundWindow() != h) {
+    if (!IsFg(h)) {
       // Fallback: share input state with the current foreground thread, which
       // Windows permits to hand over the foreground.
       uint pidUnused;
@@ -243,7 +275,7 @@ public static class KeoWin {
       AttachThreadInput(me, fgThread, false);
       Thread.Sleep(150);
     }
-    if (GetForegroundWindow() != h) return false;
+    if (!IsFg(h)) return false;
     LeaveMenuMode(h);
     return true;
   }
@@ -268,11 +300,13 @@ public static class KeoWin {
   // same characters/keys/clicks are posted as window messages to the focused
   // control of the verified foreground target (never to a background window).
   static IntPtr FocusOf(IntPtr h) {
+    var fg = GetForegroundWindow();
+    var surface = fg != IntPtr.Zero && GetAncestor(fg, 2) != h && PartOfTarget(fg, h) ? GetAncestor(fg, 2) : h;
     uint pidUnused;
-    uint thread = GetWindowThreadProcessId(h, out pidUnused);
+    uint thread = GetWindowThreadProcessId(surface, out pidUnused);
     var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
-    if (GetGUIThreadInfo(thread, ref gi) && gi.hwndFocus != IntPtr.Zero && GetAncestor(gi.hwndFocus, 2) == h) return gi.hwndFocus;
-    return h;
+    if (GetGUIThreadInfo(thread, ref gi) && gi.hwndFocus != IntPtr.Zero && GetAncestor(gi.hwndFocus, 2) == surface) return gi.hwndFocus;
+    return surface;
   }
 
   static IntPtr KeyL(uint vk, bool up) {
@@ -288,7 +322,7 @@ public static class KeoWin {
     int n = 0;
     foreach (char c in text) {
       if (c == '\r') { n++; continue; }
-      if (n % 20 == 0 && GetForegroundWindow() != h) throw new Exception("foreground_lost:" + n);
+      if (n % 20 == 0 && !IsFg(h)) throw new Exception("foreground_lost:" + n);
       if (c == '\n') {
         PostMessageW(f, 0x0100, new IntPtr(0x0D), KeyL(0x0D, false));
         PostMessageW(f, 0x0102, new IntPtr(13), KeyL(0x0D, false));
@@ -330,7 +364,7 @@ public static class KeoWin {
     RequireForeground(h);
     var p = new POINT(); p.X = sx; p.Y = sy;
     var hit = WindowFromPoint(p);
-    if (GetAncestor(hit, 2) != h) throw new Exception("target_obscured");
+    if (!PartOfTarget(hit, h)) throw new Exception("target_obscured");
     ScreenToClient(hit, ref p);
     var l = new IntPtr((p.Y << 16) | (p.X & 0xFFFF));
     PostMessageW(hit, 0x0200, IntPtr.Zero, l);
@@ -341,7 +375,7 @@ public static class KeoWin {
 
   public static void RequireForeground(IntPtr h) {
     if (!IsWindow(h)) throw new Exception("target_gone");
-    if (GetForegroundWindow() != h) throw new Exception("not_foreground");
+    if (!IsFg(h)) throw new Exception("not_foreground");
   }
 
   public static Dictionary<string, object> Move(IntPtr h, int x, int y, int w, int hh) {
@@ -374,13 +408,13 @@ public static class KeoWin {
       else { batch.Add(Key(0, c, 4)); batch.Add(Key(0, c, 4 | 2)); }
       pending++;
       if (pending >= 20) {
-        if (GetForegroundWindow() != h) throw new Exception("foreground_lost:" + done);
+        if (!IsFg(h)) throw new Exception("foreground_lost:" + done);
         Send(batch); batch.Clear(); done += pending; pending = 0;
         Thread.Sleep(15);
       }
     }
     if (pending > 0) {
-      if (GetForegroundWindow() != h) throw new Exception("foreground_lost:" + done);
+      if (!IsFg(h)) throw new Exception("foreground_lost:" + done);
       Send(batch); done += pending;
     }
     return done;
@@ -410,7 +444,7 @@ public static class KeoWin {
     var p = new POINT(); p.X = cx; p.Y = cy;
     ClientToScreen(h, ref p);
     var hit = WindowFromPoint(p);
-    if (GetAncestor(hit, 2) != h) throw new Exception("target_obscured");
+    if (!PartOfTarget(hit, h)) throw new Exception("target_obscured");
     PointerTo(p.X, p.Y);
     uint down = button == "right" ? 0x0008u : 0x0002u;
     uint up = button == "right" ? 0x0010u : 0x0004u;
@@ -899,10 +933,25 @@ while ($true) {
         $p = [string]$req.args.path
         if (-not [System.IO.File]::Exists($p)) { throw 'file_missing' }
         Add-Type -AssemblyName System.Windows.Forms
-        $c = New-Object System.Collections.Specialized.StringCollection
-        [void]$c.Add($p)
-        [System.Windows.Forms.Clipboard]::SetFileDropList($c)
-        Reply $req.id $true @{ set = $true }
+        if ([bool]$req.args.image) {
+          # A picture goes on as the image itself (bitmap + PNG): web-based apps such as WhatsApp
+          # Desktop take a pasted image (with a caption box) but not a pasted file.
+          Add-Type -AssemblyName System.Drawing
+          $bytes = [System.IO.File]::ReadAllBytes($p)
+          $img = [System.Drawing.Image]::FromStream((New-Object System.IO.MemoryStream(,$bytes)))
+          $png = New-Object System.IO.MemoryStream
+          $img.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
+          $do = New-Object System.Windows.Forms.DataObject
+          $do.SetImage($img)
+          $do.SetData('PNG', $false, $png)
+          [System.Windows.Forms.Clipboard]::SetDataObject($do, $true)
+          Reply $req.id $true @{ set = $true; image = $true }
+        } else {
+          $c = New-Object System.Collections.Specialized.StringCollection
+          [void]$c.Add($p)
+          [System.Windows.Forms.Clipboard]::SetFileDropList($c)
+          Reply $req.id $true @{ set = $true }
+        }
       }
       'ping'  { Reply $req.id $true @{ pong = $true; dpi = $script:dpiMode } }
       'idle'  { Reply $req.id $true @{ idleMs = [KeoWin]::IdleMs(); foreground = [KeoWin]::ForegroundHwnd() } }

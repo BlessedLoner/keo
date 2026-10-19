@@ -104,6 +104,11 @@ export interface CapabilityDeps {
   findUserQuote: (conversationId: string, quote: string) => { messageId: string } | null;
   /** Starts an app by its Windows app id (tests inject a fake). */
   launchAppId?: (appId: string) => Promise<void>;
+  /**
+   * When a text message would only repeat a recent research result's links, says which result
+   * to send instead (as a picture with the prices and links), so the pictures are not lost.
+   */
+  researchCopy?: (text: string) => string | null;
   /** Pause after focusing before sending input (tests use 0). */
   focusSettleMs?: number;
   /** Creates a proposed (non-executing) task from a model plan. Returns task id. */

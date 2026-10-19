@@ -306,7 +306,36 @@ export class PresenceWindows {
   }
 
   hideResults(): void {
+    this.resultsAside = 0;
     if (this.results && !this.results.isDestroyed()) this.results.hide();
+  }
+
+  private resultsAside = 0;
+
+  /**
+   * While Keo controls the desktop the results window steps aside (it floats on top and would
+   * cover the app or take the click); it comes back, without taking focus, when the work is done —
+   * unless the user closed it meanwhile.
+   */
+  stepAsideResults(): (() => void) | undefined {
+    const win = this.results;
+    if (!win || win.isDestroyed() || (!win.isVisible() && this.resultsAside === 0)) return undefined;
+    this.resultsAside++;
+    if (win.isVisible()) win.hide();
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      if (this.resultsAside === 0) return; // closed by the user meanwhile
+      this.resultsAside--;
+      if (this.resultsAside > 0) return;
+      setTimeout(() => {
+        if (this.resultsAside === 0 && !win.isDestroyed() && !win.isVisible() && this.results === win) {
+          win.showInactive();
+          win.webContents.invalidate();
+        }
+      }, 400);
+    };
   }
 
   broadcast(channel: string, payload: unknown): void {

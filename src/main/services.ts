@@ -177,6 +177,7 @@ export class Services {
     this.clipboard = d.clipboard ?? memoryClipboard();
     this.launchTestWindow = d.launchTestWindow ?? launchPowerShellTestWindow;
     const capDeps: CapabilityDeps = {
+      researchCopy: (text) => this.researchCopy(text),
       memory: this.memory,
       projects: this.projects,
       observations: this.observations,
@@ -301,6 +302,7 @@ export class Services {
     };
     this.agent.systemExtra = () =>
       this.live.agentContext() +
+      this.researchContext() +
       this.activeWindowContext() +
       (this.voiceMode?.isActive()
         ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Answer in one to three short, natural sentences (no lists, Markdown, tables or code unless asked — those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
@@ -560,6 +562,27 @@ export class Services {
     this.lastWhatsAppCheck = { at: new Date().toISOString(), ...r };
     this.audit.record({ kind: 'diagnostics.whatsapp_check', decision: r.ok ? 'passed' : 'failed' });
     return r;
+  }
+
+  /** A research result from the last two hours, as the results window shows it. */
+  private recentResult() {
+    const r = this.results.get(undefined);
+    return r && Date.now() - Date.parse(r.createdAt) < 2 * 3600_000 ? r : null;
+  }
+
+  private researchContext(): string {
+    const r = this.recentResult();
+    if (!r) return '';
+    return `\n\n# Research result on screen\nThe results window shows “${r.title.replace(/[\r\n]+/g, ' ').slice(0, 160)}” (resultId ${r.id}, ${r.cards.length} product(s) with pictures and prices). When the user says to send or share it, use research__send_whatsapp with this resultId — it sends the picture with the prices and links; never retype it as a text message. To save it, use research__save_result.`;
+  }
+
+  /** Refuses a text message that only repeats a research result's links (the picture would be lost). */
+  private researchCopy(text: string): string | null {
+    const r = this.recentResult();
+    if (!r || !r.cards.length) return null;
+    const linked = r.cards.filter((c) => text.includes(c.url)).length;
+    if (linked < Math.min(2, r.cards.length)) return null;
+    return `This message repeats the research result “${r.title}”. Send it with research__send_whatsapp (resultId ${r.id}) instead, which includes the comparison picture with the prices and links.`;
   }
 
   researchSaveRoot(): string {

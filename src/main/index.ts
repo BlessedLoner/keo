@@ -384,6 +384,7 @@ app.whenReady().then(() => {
     });
     const svc = services;
     presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
+    svc.desktop.stepAside = () => presenceWindows?.stepAsideResults();
     svc.ui = {
       showCommandBar: () => presenceWindows?.showCommandBar(),
       showMain: (view) => showMain(view),
@@ -611,7 +612,37 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     await new Promise((resolve) => setTimeout(resolve, 1200));
     fs.writeFileSync(path.join(shots, 'results.png'), (await res.webContents.capturePage()).toPNG());
   }
+  // It steps aside while Keo controls the desktop, then comes back without taking focus.
+  svc.desktop.stepAside = () => pw.stepAsideResults();
+  const visibleBefore = res.isVisible();
+  let hiddenDuring = false;
+  await svc.desktop.exclusive('smoke', async () => {
+    hiddenDuring = !res.isVisible();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  r.resultsStepsAside = visibleBefore && hiddenDuring && res.isVisible();
   pw.hideResults();
+  await svc.desktop.exclusive('smoke', async () => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  r.resultsStaysClosed = !res.isVisible();
+  // Manual live check (development only, KEO_LIVE_RESULTS_SEND=<contact>): the real Send of the results
+  // window — focused as after the user's click — into the real WhatsApp app. Sends one real message.
+  const liveContact = process.env.KEO_LIVE_RESULTS_SEND;
+  if (liveContact && !app.isPackaged) {
+    fs.writeFileSync(path.join(app.getPath('temp'), 'keo-live-results-send.json'), JSON.stringify({ started: new Date().toISOString() }));
+    svc.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'WhatsApp', label: 'WhatsApp' }, { processName: 'WhatsApp.Root', label: 'WhatsApp' }] } });
+    pw.showResults();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    res.focus();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const t0 = Date.now();
+    const sent = await svc.runUserAction('research.send_whatsapp', { contact: liveContact, which: 'app', note: 'Keo test: research results window' });
+    r.liveSend = { ok: sent.ok, error: sent.error, detail: sent.detail, ms: Date.now() - t0 };
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    r.liveResultsBack = res.isVisible();
+    fs.writeFileSync(path.join(app.getPath('temp'), 'keo-live-results-send.json'), JSON.stringify({ liveSend: r.liveSend, back: r.liveResultsBack }, null, 1));
+    pw.hideResults();
+  }
   // The real report renderer, under Keo's real session hardening (Save / Send use it).
   try {
     const sample = reportHtml(svc.results.get(undefined)!, { forImage: true });

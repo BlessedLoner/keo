@@ -331,55 +331,102 @@ export function sendableFile(p: string): string | null {
  * would), adds the caption, re-checks the recipient, sends and looks for the
  * file in the chat. The user's clipboard text is put back afterwards.
  */
+/** WhatsApp's attachment preview (app and Web): caption box, "Send 1 selected", "Remove attachment", the media item. */
+function isPreviewControl(n: UiaNodeRaw, file: string): boolean {
+  if (n.offscreen) return false;
+  if (n.role === 'edit' && /caption/i.test(n.name)) return true;
+  if (n.role === 'button' && (/^send \d+ selected\b/i.test(n.name.trim()) || /^remove attachment$/i.test(n.name.trim()) || /^open (photo|video|image|document|file)\b/i.test(n.name.trim()))) return true;
+  return !!n.name && normName(n.name).includes(normName(file));
+}
+
+/** Closes an unsent attachment preview with its own button, so nothing half-made is left in the chat. */
+async function discardPreview(d: CapabilityDeps, target: TargetT): Promise<void> {
+  const f = await freshView(d, target).catch(() => null);
+  const remove = f?.nodes.find((n) => n.role === 'button' && /^remove attachment$/i.test(n.name.trim()) && !n.offscreen);
+  if (remove) await actOn(d, target, remove, 'invoke').catch(() => undefined);
+}
+
 export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: string, filePath: string, caption: string, signal: AbortSignal): Promise<{ sent: boolean; appearsInChat: boolean; file: string; recipient: string }> {
   const file = path.basename(filePath);
-  let { view } = await freshView(d, target);
-  if (!headerMatches(view.header, contact)) {
+  let fresh = await freshView(d, target);
+  if (!headerMatches(fresh.view.header, contact)) {
     const o = await waOpenChat(d, target, contact, signal);
     if (!o.opened) throw new CapabilityError('not_opened', `Could not open the chat with “${contact}”: ${o.reason ?? 'not found'}. Nothing was sent.`, { dispatched: 'no' });
-    view = (await freshView(d, target)).view;
+    fresh = await freshView(d, target);
   }
+  const { view } = fresh;
+  // Checked again right before pasting: the preview opens over this chat.
+  if (!headerMatches(view.header, contact)) throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
   if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
+  const shownBefore = new Set(fresh.nodes.filter((n) => !n.offscreen).map((n) => `${n.role}:${n.name}`));
+  const elementsBefore = new Set(fresh.nodes.map((n) => n.rid));
   const before = view.messages.filter((m) => m.from === 'me').length;
   const saved = await d.clipboard.readText().catch(() => '');
+  let preview: { nodes: UiaNodeRaw[]; view: WaView } | null = null;
   try {
-    await step('putting the file on the clipboard', () => d.desktop.backend.setClipboardFiles!(filePath));
-    await step('focusing the message box', () => actOn(d, target, view.compose!, 'focus').catch(async () => {
-      const c = await centerOf(d, target, view.compose!);
-      await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
-      return 'click';
-    }));
+    // A picture goes on the clipboard as the image itself (the WhatsApp app takes a pasted image, not a pasted file).
+    const picture = /\.(png|jpe?g|gif|bmp)$/i.test(filePath);
+    await step('putting the file on the clipboard', () => d.desktop.backend.setClipboardFiles!(filePath, picture));
+    // A real click puts the keyboard in the message box (accessibility focus alone does not in the WhatsApp app).
+    await step('focusing the message box', async () => {
+      try {
+        const c = await centerOf(d, target, view.compose!);
+        await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+      } catch (e) {
+        if (!(e instanceof CapabilityError) || e.dispatched !== 'no') throw e;
+        await actOn(d, target, view.compose!, 'focus');
+      }
+    });
+    await sleep(d.focusSettleMs === 0 ? 0 : 200);
     await step('pasting the file', () => d.desktop.backend.paste(target.hwnd));
+    // The app reads the clipboard after Ctrl+V returns: keep the file there until the preview shows.
+    for (let k = 0; k < 12 && !signal.aborted && !preview; k++) {
+      await sleep(d.focusSettleMs === 0 ? 0 : 400);
+      const f = await freshView(d, target);
+      if (f.nodes.some((n) => isPreviewControl(n, file))) preview = f;
+    }
   } finally {
     await d.clipboard.writeText(saved).catch(() => undefined);
   }
-  // The attachment preview: the file name or a caption box appears.
-  let preview: { nodes: UiaNodeRaw[]; view: WaView } | null = null;
-  for (let k = 0; k < 16 && !signal.aborted; k++) {
-    await sleep(d.focusSettleMs === 0 ? 0 : 500);
-    const f = await freshView(d, target);
-    if (f.nodes.some((n) => /caption/i.test(n.name) && n.role === 'edit') || f.nodes.some((n) => n.name && normName(n.name).includes(normName(file)))) {
-      preview = f;
-      break;
-    }
-  }
   if (!preview) throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview, so nothing was sent. (Pasting a file needs normal keyboard input on this computer.)', { dispatched: 'no' });
-  if (caption) {
-    const box = preview.nodes.find((n) => n.role === 'edit' && /caption/i.test(n.name)) ?? preview.view.compose;
-    if (box) await step('typing the caption', () => enterTextChecked(d, target, box, caption));
+  let send: UiaNodeRaw | undefined;
+  try {
+    if (caption) {
+      // The preview's own caption box: named "…caption…" (Web), or the text box the preview added (app).
+      const box =
+        preview.nodes.find((n) => n.role === 'edit' && /caption/i.test(n.name) && !n.offscreen) ??
+        preview.nodes.find((n) => n.role === 'edit' && !n.offscreen && !shownBefore.has(`${n.role}:${n.name}`)) ??
+        preview.view.compose;
+      if (box) await step('typing the caption', () => enterTextChecked(d, target, box, caption));
+    }
+    if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
+    // Re-verify the recipient immediately before the irreversible step. The app's preview may hide the
+    // chat header; then the check made just before pasting (same chat, nothing navigated) stands.
+    const now = await freshView(d, target);
+    if (now.view.header && !headerMatches(now.view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
+    send = [...now.nodes].reverse().find((n) => n.role === 'button' && /^send\b/i.test(n.name.trim()) && !n.offscreen);
+    if (!send) throw new CapabilityError('not_recognized', 'Could not find the Send button of the attachment preview. Nothing was sent.', { dispatched: 'no' });
+  } catch (e) {
+    await discardPreview(d, target);
+    throw e;
   }
-  // Re-verify the recipient immediately before the irreversible step.
-  const now = await freshView(d, target);
-  if (!headerMatches(now.view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
-  const send = [...now.nodes].reverse().find((n) => n.role === 'button' && /^send\b/i.test(n.name.trim()) && !n.offscreen);
-  if (!send) throw new CapabilityError('not_recognized', 'Could not find the Send button of the attachment preview. Nothing was sent.', { dispatched: 'no' });
-  await step('pressing Send', () => actOn(d, target, send, 'invoke'));
+  await step('pressing Send', () => actOn(d, target, send!, 'invoke'));
+  // The app shows a picture message as an image named with its caption, and a multi-line caption as
+  // separate rows; either the new picture or the caption's first line among the new rows proves it.
+  const head = caption.split(/\n+/).map((l) => l.trim()).find(Boolean) ?? '';
   for (let k = 0; k < 20 && !signal.aborted; k++) {
     await sleep(d.focusSettleMs === 0 ? 0 : 500);
-    const v = (await freshView(d, target)).view;
+    const f = await freshView(d, target);
+    const v = f.view;
     const mine = v.messages.filter((m) => m.from === 'me');
     const last = mine.at(-1);
-    if (mine.length > before && last && (textMatches(last.text, file) || (caption && textMatches(last.text, caption)))) return { sent: true, appearsInChat: true, file, recipient: v.header ?? contact };
+    // A new element (not one seen before pasting), so an identical earlier message does not count.
+    const lastPicture = [...f.nodes].reverse().find((n) => n.role === 'image' && !!n.name && !!head && textMatches(n.name, head));
+    const newPicture = !!lastPicture && !elementsBefore.has(lastPicture.rid);
+    const newRows = mine.slice(before).map((m) => m.text).join(' ');
+    if (newPicture || (mine.length > before && last && (textMatches(last.text, file) || (caption && textMatches(last.text, caption)) || (head && textMatches(newRows, head))))) {
+      return { sent: true, appearsInChat: true, file, recipient: v.header ?? contact };
+    }
   }
   return { sent: true, appearsInChat: false, file, recipient: contact };
 }
@@ -940,7 +987,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Send a WhatsApp message',
     description:
-      'Send one message in the currently open WhatsApp chat with the given contact. Always show the user the exact recipient and text first; this needs a fresh approval every time and is never covered by navigation permission. Keo verifies the recipient right before sending, refuses if the identical message is already the latest one you sent (unless allowDuplicate), and verifies the message appears in the chat afterwards. It does not claim delivery or reading unless WhatsApp shows it.' +
+      'Send one text message in the currently open WhatsApp chat with the given contact. To send a research result (comparison, prices, products), use research__send_whatsapp instead: it sends the picture with the prices and links. Always show the user the exact recipient and text first; this needs a fresh approval every time and is never covered by navigation permission. Keo verifies the recipient right before sending, refuses if the identical message is already the latest one you sent (unless allowDuplicate), and verifies the message appears in the chat afterwards. It does not claim delivery or reading unless WhatsApp shows it.' +
       WA_NOTE,
     input: z.object({ target: WaTarget, which: WaWhich, contact: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000), allowDuplicate: z.boolean().default(false) }).strict(),
     output: z.object({ sent: z.boolean(), alreadyPresent: z.boolean(), appearsInChat: z.boolean(), status: z.string().nullable(), recipient: z.string() }),
@@ -955,7 +1002,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     verificationPolicy: 'Recipient verified from the chat header before sending; the sent text must appear as your latest message afterwards. Delivery/read status is reported only if WhatsApp shows it.',
     // Hands-free may send only to someone the user named themselves in this conversation.
     autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
-    precheck: (i, s) => (i.target ? allowCheck(i.target, s) : null),
+    precheck: (i, s) => d.researchCopy?.(i.text) ?? (i.target ? allowCheck(i.target, s) : null),
     preview: (i) => ({
       summary: `Send a WhatsApp message to ${i.contact}`,
       target: `Recipient: ${i.contact} · ${waTargetLabel(i.target)}`,

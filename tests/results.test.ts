@@ -9,7 +9,9 @@ import { folderName, priceOf, reportHtml, ResearchResults, shareText } from '../
 import { parseDuckDuckGo, WebService } from '../src/main/web/webService';
 import type { ProductCard } from '../src/shared/domain';
 import { FakeWhatsApp } from './fakeApps';
-import { makeHarness, type Harness } from './helpers';
+import type { ChatRequest, ChatResult } from '../src/main/providers/types';
+import { DesktopService } from '../src/main/desktop/desktopService';
+import { FakeDesktop, makeHarness, waitFor, type Harness } from './helpers';
 
 let h: Harness;
 afterEach(async () => {
@@ -169,6 +171,74 @@ describe('research results', () => {
     for (const c of ['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl'] as const) expect(channelAllowed('results', c)).toBe(true);
     for (const c of ['settings:update', 'tasks:approveStep', 'chat:send', 'web:setKey', 'files:read'] as const) expect(channelAllowed('results', c as never)).toBe(false);
     expect(channelAllowed('companion', 'results:send')).toBe(false);
+  });
+});
+
+describe('sending a research result by voice or chat', () => {
+  const WIN: RawWindow = { hwnd: '4001', pid: 888, processName: 'chrome', title: 'WhatsApp - Google Chrome', className: 'X', minimized: false, x: 0, y: 0, width: 1200, height: 800, foreground: false };
+  let seq = 0;
+  const call = (name: string, input: unknown): ChatResult => ({ text: '', toolCalls: [{ id: `v${++seq}`, name, input }], stopReason: 'tool_use', usage: null, model: 'keo-test-1', native: undefined });
+  const reply = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage: null, model: 'keo-test-1', native: undefined });
+
+  it('the model is told about the result on screen, a text-only copy is refused, and the picture is sent', async () => {
+    rendered = [];
+    const systems: string[] = [];
+    let refusal = '';
+    h = makeHarness({
+      web: web(),
+      deps: { renderReport: fakeRender },
+      script: (req: ChatRequest) => {
+        systems.push(req.system);
+        const last = JSON.stringify(req.messages.at(-1)?.content ?? '');
+        if (last.includes('send it to Mum')) {
+          // What the model did before: retype the prices and links as a plain message.
+          const r = h.services.results.get(undefined)!;
+          return call('whatsapp__send_message', { contact: 'Mum', which: 'web', text: shareText(r) });
+        }
+        if (last.includes('research__send_whatsapp') && !refusal) {
+          refusal = last;
+          return call('research__send_whatsapp', { contact: 'Mum', which: 'web' });
+        }
+        return reply('Sent.');
+      },
+    });
+    h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] }, agent: { approvalWaitSeconds: 10 } });
+    const wa = new FakeWhatsApp();
+    h.desktop.addApp(WIN, wa);
+    const r = addResult();
+    const conv = h.services.conversations.create('v');
+    const turn = h.services.agent.send(conv.id, 'send it to Mum');
+    await waitFor(() => h.services.tasks.list(5).some((t) => t.steps.some((s) => s.state === 'awaiting_authorization')), 8000);
+    for (const t of h.services.tasks.list(5)) for (const st of t.steps) if (st.state === 'awaiting_authorization') h.services.tasks.approveStep(st.id, st.inputHash);
+    await turn.done;
+    expect(systems[0]).toContain(`resultId ${r.id}`);
+    expect(refusal).toMatch(/repeats the research result/);
+    expect(wa.sentFiles).toHaveLength(1);
+    expect(wa.sentFiles[0]!.file).toMatch(/\.png$/);
+    expect(wa.sentFiles[0]!.caption).toContain('https://shop.example.com/air');
+    // No plain text message was sent.
+    expect(h.services.tasks.list(5).flatMap((t) => t.steps).filter((st) => st.capabilityId === 'whatsapp.send_message' && st.state === 'succeeded')).toEqual([]);
+  });
+
+  it('an ordinary message that mentions one link is not affected', async () => {
+    harness();
+    addResult();
+    const a = h.services.registry.admit({ capabilityId: 'whatsapp.send_message', input: { contact: 'Mum', which: 'web', text: 'Look at https://shop.example.com/air' }, origin: 'model', correlationId: 'c' });
+    expect(a.ok || !/research result/.test(a.reason)).toBe(true);
+  });
+});
+
+describe("Keo's floating windows step aside during desktop work", () => {
+  it('hides before the work and comes back after, also when the work fails', async () => {
+    const d = new DesktopService(new FakeDesktop());
+    const log: string[] = [];
+    d.stepAside = (owner) => {
+      log.push(`aside ${owner}`);
+      return () => log.push(`back ${owner}`);
+    };
+    await d.exclusive('a', async () => void log.push('work a'));
+    await expect(d.exclusive('b', async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    expect(log).toEqual(['aside a', 'work a', 'back a', 'aside b', 'back b']);
   });
 });
 

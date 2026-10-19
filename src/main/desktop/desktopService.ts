@@ -52,6 +52,13 @@ export class DesktopService {
   private owner: string | null = null;
   private waiting = 0;
 
+  /**
+   * Called when work takes over the desktop: Keo's own floating windows (the research results
+   * window) get out of the way so they cannot cover or take focus from the target app. Returns
+   * what to call when the work is done.
+   */
+  stepAside: ((owner: string) => (() => void) | void) | null = null;
+
   inputOwner(): { owner: string | null; waiting: number } {
     return { owner: this.owner, waiting: this.waiting };
   }
@@ -77,10 +84,21 @@ export class DesktopService {
     }
     this.waiting--;
     this.owner = owner;
+    let restore: (() => void) | void;
+    try {
+      restore = this.stepAside?.(owner);
+    } catch {
+      restore = undefined;
+    }
     try {
       return await fn();
     } finally {
       this.owner = null;
+      try {
+        restore?.();
+      } catch {
+        /* a window that is gone needs no restoring */
+      }
       release();
     }
   }

@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.5.2 fixes: sending research pictures on WhatsApp Desktop (live-verified)
+
+- Reported: Send from the results window failed with "not in the foreground" while the results window stayed above WhatsApp; by voice only text and links were sent.
+- Found on this PC (live): WhatsApp Desktop's chat content is a separate WebView2 top-level window of its child process that takes the foreground when the message box is used, so the helper's exact-window check refused the paste. The app also does not take a pasted file, only a pasted image; accessibility focus does not move the keyboard into its message box (a click does); and Keo restored the clipboard before WhatsApp had read it.
+- Fixes: overlay windows of the target app count as the target (same or child process, within its bounds); pictures go on the clipboard as image data; the message box is clicked; the clipboard is restored after the preview shows; WhatsApp Desktop's media preview (“Send 1 selected”, “Remove attachment”, caption box) is recognised; an unsent preview is removed on failure; success is checked by a new picture element. The results window steps aside during desktop work. The model is told about the result on screen, and a text-only copy of it is refused in favour of `research.send_whatsapp`.
+- Live (user-approved, own chat only): two test pictures with captions were delivered to “Emmanuel (You)” from the results window; the first runs failed safely without sending (foreground, then preview not shown). The final success report after the id-based check was confirmed read-only (ids stable across reads), not by a third send.
+
 ### Next iteration (uncommitted): research results window, save/send, search without a key
 
 - Reported: a request like “compare the best prices of the MacBook Pro/Air M4 32 GB and show me the result” opened a browser on Google results and sent only links and text prices on WhatsApp, with no picture.

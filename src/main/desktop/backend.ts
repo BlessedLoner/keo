@@ -83,7 +83,8 @@ export interface DesktopBackend {
   /** Sends Ctrl+V to the foreground target. */
   paste(hwnd: string): Promise<void>;
   /** Puts one file on the clipboard as a file (like Copy in Explorer), for attaching it by pasting. */
-  setClipboardFiles?(path: string): Promise<void>;
+  /** Puts one file on the clipboard for pasting; a picture (`asImage`) goes on as the image itself. */
+  setClipboardFiles?(path: string, asImage?: boolean): Promise<void>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
   readText(hwnd: string): Promise<string | null>;
   /** Bounded UI Automation tree of one window. */
@@ -311,8 +312,8 @@ export class Win32Backend implements DesktopBackend {
     );
   }
 
-  async setClipboardFiles(path: string): Promise<void> {
-    await this.call('clipboard_files', { path }, 15000);
+  async setClipboardFiles(path: string, asImage = false): Promise<void> {
+    await this.call('clipboard_files', { path, image: asImage }, 15000);
   }
 
   childClasses(hwnd: string): Promise<Record<string, number>> {

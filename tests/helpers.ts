@@ -94,8 +94,8 @@ export class FakeDesktop implements DesktopBackend {
   }
   /** A file put on the clipboard (pasted as an attachment). */
   clipboardFile: string | null = null;
-  async setClipboardFiles(path: string) {
-    this.calls.push({ op: 'clipboard_files', args: [path] });
+  async setClipboardFiles(path: string, asImage = false) {
+    this.calls.push({ op: 'clipboard_files', args: [path, asImage] });
     this.clipboardFile = path;
   }
   async paste(hwnd: string) {
