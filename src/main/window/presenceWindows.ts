@@ -259,12 +259,57 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | null {
+    if (this.keoMode && !this.keoMode.isDestroyed() && this.keoMode.webContents.id === id) return 'keomode';
     if (this.pencil && !this.pencil.isDestroyed() && this.pencil.webContents.id === id) return 'pencil';
     if (this.companion && !this.companion.isDestroyed() && this.companion.webContents.id === id) return 'companion';
     if (this.command && !this.command.isDestroyed() && this.command.webContents.id === id) return 'command';
     if (this.results && !this.results.isDestroyed() && this.results.webContents.id === id) return 'results';
     return null;
+  }
+
+  // ---------------------------------------------------------------- Keo mode
+  keoMode: BrowserWindow | null = null;
+
+  /** The full-screen, animated Keo on the display under the mouse (Esc or the close button leaves). */
+  showKeoMode(): void {
+    if (this.keoMode && !this.keoMode.isDestroyed()) {
+      this.keoMode.show();
+      this.keoMode.focus();
+      return;
+    }
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const win = new BrowserWindow({
+      ...d.bounds,
+      frame: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: false,
+      show: false,
+      title: 'Keo mode',
+      backgroundColor: '#000000',
+      webPreferences: webPreferences(this.preload),
+    });
+    win.setBounds(d.bounds);
+    win.on('closed', () => {
+      if (this.keoMode === win) this.keoMode = null;
+    });
+    void win.loadURL(this.url('#keomode'));
+    win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return;
+      win.show();
+      win.focus();
+    });
+    this.keoMode = win;
+  }
+
+  hideKeoMode(): void {
+    const w = this.keoMode;
+    this.keoMode = null;
+    if (w && !w.isDestroyed()) w.destroy();
   }
 
   // ---------------------------------------------------------------- Keo's pencil
@@ -391,7 +436,7 @@ export class PresenceWindows {
   }
 
   broadcast(channel: string, payload: unknown): void {
-    for (const w of [this.companion, this.command, this.results, this.pencil]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+    for (const w of [this.companion, this.command, this.results, this.pencil, this.keoMode]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
   }
 
   openMain(view?: string): void {
@@ -407,6 +452,8 @@ export class PresenceWindows {
     this.results?.destroy();
     this.pencil?.destroy();
     this.pencil = null;
+    this.keoMode?.destroy();
+    this.keoMode = null;
     this.companion = null;
     this.command = null;
     this.results = null;

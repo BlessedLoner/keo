@@ -1,7 +1,7 @@
 import type { InvokeChannel } from '../../shared/ipc';
 
 /** Each Keo window gets only the IPC channels its job needs. */
-export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil';
+export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil' | 'keomode';
 
 const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'presence:get',
@@ -14,6 +14,7 @@ const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'companion:hide',
   'commandBar:show',
   'pencil:start',
+  'keomode:open',
   'wake:status',
   'wake:setMuted',
   'grants:list',
@@ -60,9 +61,13 @@ const RESULTS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['results:get
 /** Keo's pencil overlay: its own screenshot, sending the marked area, listening. Nothing else. */
 const PENCIL: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['pencil:context', 'pencil:submit', 'pencil:cancel', 'pencil:allowExport', 'pencil:listen', 'settings:get']);
 
+/** Keo mode (the full-screen Keo): presence, starting/ending the voice conversation, closing. */
+const KEOMODE: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['presence:get', 'voice:modeStart', 'voice:modeStop', 'keomode:close', 'settings:get', 'wake:status']);
+
 export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolean {
   if (role === 'main') return true;
   if (role === 'results') return RESULTS.has(channel);
   if (role === 'pencil') return PENCIL.has(channel);
+  if (role === 'keomode') return KEOMODE.has(channel);
   return (role === 'command' ? COMMAND : COMPANION).has(channel);
 }

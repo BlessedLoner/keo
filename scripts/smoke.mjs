@@ -94,6 +94,10 @@ check('pencil: may read its screen picture', p.pencilContext === 'ok', p.pencilC
 check('pencil: cannot send chat', p.pencilChatSend === 'forbidden', p.pencilChatSend);
 check('pencil: draw, type and send reaches Keo', p.pencilSent === true, p.pencilSent);
 check('pencil: closes', p.pencilClosed === true, p.pencilClosed);
+check('keo mode: shows Keo', p.keoModeRendered === true, p.keoModeError ?? p.keoModeRendered);
+check('keo mode: may read presence', p.keoModePresence === 'ok', p.keoModePresence);
+check('keo mode: cannot send chat', p.keoModeChatSend === 'forbidden', p.keoModeChatSend);
+check('keo mode: closes', p.keoModeClosed === true, p.keoModeClosed);
 check('copy from Keo’s window reaches the clipboard', p.copyText === true, p.copyText);
 if (p.voiceSpeak) check('voice reply is spoken by the app voice', p.voiceSpeak.how === 'spoken', JSON.stringify(p.voiceSpeak));
 check('report renders as PDF', p.reportPdf === true, p.reportError ?? p.reportPdf);

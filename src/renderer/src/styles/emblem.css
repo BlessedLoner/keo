@@ -20,7 +20,7 @@
 .keo-emblem .ke-eyes,
 .keo-emblem .ke-core,
 .keo-emblem .ke-circuit { transform-box: view-box; transform-origin: 100px 98px; }
-.keo-emblem .ke-core { transform-origin: 100px 166px; }
+.keo-emblem .ke-core { transform-origin: 100px 176px; }
 .keo-emblem .ke-eyes { transform-origin: 100px 90px; }
 .keo-emblem .ke-pulse { opacity: 0; }
 .keo-emblem .ke-scan { opacity: 0; }
@@ -126,3 +126,12 @@
 }
 html.motion-reduce .keo-emblem *,
 html.motion-reduce .keo-emblem { animation: none !important; transition: none !important; }
+
+/* Noir (default): ice white and silver instead of cyan and violet when idle. */
+html:not([data-theme='classic']) .keo-emblem.state-idle,
+html:not([data-theme='classic']) .keo-emblem.state-cancelled { --keo-a1: #eaf3ff; --keo-a2: #a9c2e6; --keo-eye: #ffffff; }
+.keo-emblem .ke-portrait { transition: filter 400ms ease; }
+.keo-emblem.state-error .ke-portrait { filter: grayscale(1) brightness(0.8); }
+.keo-emblem.state-cancelled .ke-portrait { filter: grayscale(0.6) brightness(0.85); }
+.keo-emblem.state-speaking .ke-rim,
+.keo-emblem.state-listening .ke-rim { stroke-opacity: calc(0.45 + var(--lvl) * 0.55); stroke-width: calc(1.4px + var(--lvl) * 2.2px); }

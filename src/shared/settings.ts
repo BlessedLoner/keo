@@ -302,6 +302,10 @@ export const SettingsSchema = z
     ui: z
       .object({
         reducedMotion: z.enum(['system', 'reduce', 'full']).default('system'),
+        /** Look: Noir (black and white, Keo's own) or Classic (the earlier dark blue). */
+        theme: z.enum(['noir', 'classic']).default('noir'),
+        /** Saying the wake word also opens Keo mode (the full-screen Keo). */
+        keoModeOnWake: z.boolean().default(false),
         /** The first-run welcome has been completed or skipped. */
         onboarded: z.boolean().default(false),
       })

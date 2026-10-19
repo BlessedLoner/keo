@@ -107,6 +107,16 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.7.0: Noir look, Keo's character, Keo mode; WhatsApp focus fix
+
+- **WhatsApp text after the picture** (user's laptop): the picture arrived but the text did not. Likely cause: after the Windows file dialog closes, focus does not return to WhatsApp there, so typing/pasting was refused. Keo now puts WhatsApp back in front after the dialog, before the caption and before the follow-up text, and types straight into the message box as a last way in. Not reproducible on this PC (focus returns there); covered by the existing fake-WhatsApp tests.
+- **Noir** (new default look, Settings → Appearance; *Classic* keeps the earlier dark blue): black and white with Keo's ice-blue glow; white primary buttons; neutral greys.
+- **Keo's character** (user-supplied art, `src/renderer/src/assets/keo.webp`) in the animated emblem (title bar, chat, welcome, companion), keeping the state-driven halo, rim and chest-light animations.
+- **Floating Keo**: a levitating orb with Keo's portrait and a turning state ring; a frosted capsule with round actions on hover (now with Pencil and Keo mode).
+- **Pencil** toolbar reorganised: header with steps (Mark → Ask → Send), a tools row (pen/highlighter, colours, undo/clear, hint) and an ask row (mic, what Keo heard or a text box, Send).
+- **Keo mode** (“open Keo mode” typed or spoken, the companion button, or optionally the wake word): full-screen Keo floating in depth (tilts toward the mouse), turning holographic rings, drifting glass cards, snow, a chest light and rings that follow Keo's real state, and live captions; a voice conversation starts with it; Esc / “close Keo mode” leaves. The window may only use presence, voice start/stop, close, settings and wake status.
+- Tests: `tests/keomode.test.ts`; smoke: Keo mode opens with the art, channel limits, closes.
+
 ### 1.6.2 fixes: the text always arrives with the picture
 
 - Reported (user's laptop, 1.6.1): “WhatsApp did not take the text for the picture, so nothing was sent” — the new safety check stopped a picture without its text, but the caption still did not go in there.

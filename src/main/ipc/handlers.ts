@@ -481,6 +481,14 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { ok: true as const };
     },
     'pencil:start': () => s.startPencil(),
+    'keomode:open': () => {
+      s.openKeoMode();
+      return { ok: true as const };
+    },
+    'keomode:close': () => {
+      s.closeKeoMode();
+      return { ok: true as const };
+    },
     'pencil:context': () => s.pencilContext(),
     'pencil:submit': (i) => s.pencilSubmit(i),
     'pencil:cancel': () => {

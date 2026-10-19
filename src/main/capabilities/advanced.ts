@@ -343,6 +343,17 @@ function isPreviewControl(n: UiaNodeRaw, file: string): boolean {
   return !!n.name && normName(n.name).includes(normName(file));
 }
 
+/**
+ * Puts the WhatsApp window back in front when something else took it (a closing file dialog can hand
+ * the focus to another window on some PCs); typing and pasting need it in front.
+ */
+async function refront(d: CapabilityDeps, target: TargetT): Promise<void> {
+  const w = await d.desktop.backend.info(target.hwnd).catch(() => null);
+  if (!w || w.foreground) return;
+  await d.desktop.backend.focus(target.hwnd).catch(() => undefined);
+  await sleep(d.focusSettleMs === 0 ? 0 : 250);
+}
+
 /** WhatsApp's Attach menu entries (common interface languages). */
 const ATTACH_PHOTOS = /photos?|videos?|fotos?|imag|bild|médias?|galer/i;
 const ATTACH_DOCUMENT = /document|documento|dokument|fichier|datei/i;
@@ -401,7 +412,10 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
         throw e;
       }
       const shown = await waitPreview();
-      if (shown) return shown;
+      if (shown) {
+        await refront(d, target);
+        return shown;
+      }
       // Never leave the dialog open on top of WhatsApp.
       const still = await d.desktop.backend.fileDialogs().catch(() => []);
       if (still.some((x) => x.hwnd === dialog)) await d.desktop.backend.fileDialogCancel?.(dialog).catch(() => undefined);
@@ -432,7 +446,10 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
     throw e;
   }
   const shown = await waitPreview();
-  if (shown) return shown;
+  if (shown) {
+    await refront(d, target);
+    return shown;
+  }
   throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview after choosing the file, so nothing was sent.', { dispatched: 'no' });
 }
 
@@ -464,6 +481,7 @@ async function enterCaption(d: CapabilityDeps, target: TargetT, box: UiaNodeRaw,
     }
     await sleep(d.focusSettleMs === 0 ? 0 : 200);
   };
+  await refront(d, target);
   // 1) Click + paste.
   await focusBox();
   await pasteViaClipboard(d, target.hwnd, caption).catch(notDispatched);
@@ -584,6 +602,8 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
     if (pictureThere && !captionInPreview) {
       // The text the preview did not take, as the next message (verified like any message).
       try {
+        await sleep(d.focusSettleMs === 0 ? 0 : 600);
+        await refront(d, target);
         const t = await step('sending the text after the picture', () => waSend(d, target, contact, caption, true, signal));
         return { sent: true, appearsInChat: t.appearsInChat, file, recipient: t.recipient, textSeparately: true };
       } catch (e) {
@@ -610,7 +630,18 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   const compose = view.compose;
   // The newest message of mine before sending: the sent one must be a newer row.
   const lastBefore = lastOutgoing(view)?.row?.rid ?? null;
-  await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text));
+  await refront(d, target);
+  const took = await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text));
+  if (!took) {
+    // Last way in: clear the box and type straight into it (posted to it when simulated input is refused).
+    await d.desktop.backend.uiaAct(target.hwnd, compose.rid, 'set_value', '').catch(() => undefined);
+    await refront(d, target);
+    const c = await centerOf(d, target, compose).catch(() => null);
+    if (c) await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y).catch(() => undefined);
+    await sleep(d.focusSettleMs === 0 ? 0 : 200);
+    await d.desktop.backend.typeText(target.hwnd, text.replace(/\r?\n/g, ' ')).catch(() => undefined);
+    await sleep(d.focusSettleMs === 0 ? 0 : 300);
+  }
   await sleep(d.focusSettleMs === 0 ? 0 : 300);
   // Re-verify recipient and draft immediately before the irreversible step.
   view = (await freshView(d, target)).view;

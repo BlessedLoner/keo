@@ -445,6 +445,9 @@ app.whenReady().then(() => {
       showResults: () => presenceWindows?.showResults(),
       showPencil: (bounds) => presenceWindows?.showPencil(bounds),
       hidePencil: () => presenceWindows?.hidePencil(),
+      showKeoMode: () => presenceWindows?.showKeoMode(),
+      hideKeoMode: () => presenceWindows?.hideKeoMode(),
+      keoModeOpen: () => !!presenceWindows?.keoMode,
       mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
       notify: (title, body) => {
         if (!Notification.isSupported()) return;
@@ -732,6 +735,28 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     r.pencilClosed = pw.pencil === null;
   } catch (e) {
     r.pencilError = errorMessage(e);
+  }
+  // Keo mode: the full-screen Keo, its own channels only, closed again (no voice conversation in the smoke run).
+  try {
+    pw.showKeoMode();
+    for (let i = 0; i < 60 && !(pw.keoMode && !pw.keoMode.webContents.isLoading()); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const km = pw.keoMode;
+    if (km) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      r.keoModeRendered = await km.webContents.executeJavaScript(`!!document.querySelector('.km-figure img.km-img') && document.querySelector('.km-img').complete && document.querySelector('.km-img').naturalWidth > 0`);
+      r.keoModePresence = await tryCall(km, 'presence:get');
+      r.keoModeChatSend = await tryCall(km, 'chat:send', { conversationId: 'x', text: 'x' });
+      if (shots && !app.isPackaged) {
+        km.webContents.setBackgroundThrottling(false);
+        km.webContents.invalidate();
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        fs.writeFileSync(path.join(shots, 'keomode.png'), (await km.webContents.capturePage()).toPNG());
+      }
+    }
+    pw.hideKeoMode();
+    r.keoModeClosed = pw.keoMode === null;
+  } catch (e) {
+    r.keoModeError = errorMessage(e);
   }
   // Copy from Keo's window goes through the main process (the page's own clipboard access is not granted).
   if (mainWindow && !mainWindow.isDestroyed()) {

@@ -107,7 +107,10 @@ export function CompanionApp() {
             if (!moved.current) void invoke('presence:openMain', {});
           }}
         >
-          <KeoEmblem state={state} size={64} />
+          <div className="orb">
+            <div className="orb-ring" aria-hidden="true" />
+            <KeoEmblem state={state} size={60} />
+          </div>
         </div>
         <div className="companion-body">
           <div className="companion-state">
@@ -148,6 +151,9 @@ export function CompanionApp() {
                   <Icon name="mic" size={14} />
                 </button>
               )}
+              <button className="cbtn keomode" aria-label="Keo mode" title="Keo mode — full-screen Keo" onClick={() => void invoke('keomode:open')}>
+                <Icon name="sparkle" size={14} />
+              </button>
               <button className="cbtn pencil" aria-label="Pencil: mark the screen and ask" title="Pencil: circle what you mean and tell Keo (Ctrl+Alt+P)" onClick={() => void invoke('pencil:start')}>
                 <Icon name="edit" size={14} />
               </button>

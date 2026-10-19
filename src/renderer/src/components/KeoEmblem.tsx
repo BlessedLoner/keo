@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from 'react';
 import { levelBus } from '../lib/levelBus';
+import keoArt from '../assets/keo.webp';
 
 export type EmblemState =
   | 'idle'
@@ -26,8 +27,7 @@ interface Props {
 }
 
 /**
- * Keo's animated identity: an original vector emblem of a sleek robotic head
- * inside a segmented halo. Visual state is driven by real application events
+ * Keo's animated identity: Keo's character portrait inside a segmented halo. Visual state is driven by real application events
  * (passed in as `state`); audio-reactive motion reads the shared level bus,
  * which is only fed by a real microphone analyser or real playback analyser.
  */
@@ -96,6 +96,10 @@ export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
         <filter id={id('soft')} x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="5" />
         </filter>
+        <radialGradient id={id('vignette')} cx="50%" cy="45%" r="55%">
+          <stop offset="70%" stopColor="#000" stopOpacity="0" />
+          <stop offset="100%" stopColor="#000" stopOpacity="0.55" />
+        </radialGradient>
         <clipPath id={id('disc')}>
           <circle cx="100" cy="98" r="72" />
         </clipPath>
@@ -117,58 +121,24 @@ export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
         <circle className="ke-pulse" cx="100" cy="98" r="86" fill="none" stroke="var(--keo-a1)" strokeWidth="1.5" />
       </g>
 
-      {/* Inner disc with circuit traces */}
-      <circle cx="100" cy="98" r="72" fill={`url(#${id('bg')})`} stroke="#1d2433" strokeWidth="1" />
-      {!compact && (
-        <g clipPath={`url(#${id('disc')})`} className="ke-circuit-bg" fill="none" stroke="var(--keo-a2)" strokeWidth="0.7" strokeOpacity="0.35">
-          <path d="M34 70 H54 L62 78 V112 M40 124 H58 L66 132 M166 70 H146 L138 78 V112 M160 124 H142 L134 132 M46 92 H58 M154 92 H142" />
-          <circle cx="34" cy="70" r="1.6" fill="var(--keo-a2)" />
-          <circle cx="166" cy="70" r="1.6" fill="var(--keo-a1)" />
-          <circle cx="40" cy="124" r="1.4" fill="var(--keo-a1)" />
-          <circle cx="160" cy="124" r="1.4" fill="var(--keo-a2)" />
-        </g>
-      )}
+      {/* Keo's portrait in the inner disc (the character art), with a soft rim for depth */}
+      <circle cx="100" cy="98" r="72" fill="#0a0a0c" />
+      <image className="ke-portrait" href={keoArt} x="-58" y="-25" width="322" height="423" preserveAspectRatio="none" clipPath={`url(#${id('disc')})`} />
+      <circle cx="100" cy="98" r="72" fill={`url(#${id('vignette')})`} />
+      <circle className="ke-rim" cx="100" cy="98" r="72" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.55" strokeWidth="1.4" />
       <g className="ke-scan" clipPath={`url(#${id('disc')})`}>
         <rect x="28" y="20" width="144" height="10" fill="var(--keo-a1)" opacity="0.18" />
       </g>
 
-      {/* Shoulders / collar */}
-      <path d="M58 172 C64 150 82 146 100 147 C118 146 136 150 142 172 Z" fill={`url(#${id('collar')})`} stroke="#4a5263" strokeWidth="0.8" />
-      <path d="M86 150 L100 166 L114 150" fill="none" stroke="var(--keo-a1)" strokeWidth="1.2" strokeOpacity="0.8" filter={`url(#${id('glow')})`} />
+      {/* Chest core: glows with the real voice level while listening/speaking */}
       <g className="ke-core">
-        <circle cx="100" cy="166" r="6.5" fill="#0b0e14" stroke="var(--keo-a1)" strokeWidth="1.6" filter={`url(#${id('glow')})`} />
-        <circle cx="100" cy="166" r="2.6" fill="var(--keo-a1)" />
+        <circle cx="100" cy="176" r="5.5" fill="#0b0b0e" stroke="var(--keo-a1)" strokeWidth="1.5" filter={`url(#${id('glow')})`} />
+        <circle cx="100" cy="176" r="2.3" fill="var(--keo-a1)" />
       </g>
-
-      {/* Head */}
-      <g className="ke-head">
-        <path
-          d="M100 34 C129 34 137 58 136 82 C135 103 129 121 117 136 C111 144 106 148 100 148 C94 148 89 144 83 136 C71 121 65 103 64 82 C63 58 71 34 100 34 Z"
-          fill={`url(#${id('skin')})`}
-          stroke="#56607a"
-          strokeWidth="0.8"
-        />
-        {/* Specular highlight */}
-        <path d="M80 44 C88 37 104 36 112 40 C100 41 88 46 80 58 Z" fill="#ffffff" opacity="0.14" />
-        {/* Facial plates */}
-        <path d="M70 96 C76 112 86 128 100 134 C114 128 124 112 130 96" fill="none" stroke="#000" strokeOpacity="0.35" strokeWidth="1" />
-        {/* Forehead circuit */}
-        <g className="ke-circuit" fill="none" stroke="var(--keo-a1)" strokeWidth="1.3" strokeLinecap="round" filter={`url(#${id('glow')})`}>
-          <path d="M100 38 V58 L90 68 M100 58 L110 68" />
-          {!compact && <path d="M78 52 L84 62 L84 72 M122 52 L116 62 L116 72" strokeOpacity="0.7" />}
-        </g>
-        {/* Eyes */}
-        <g className="ke-eyes" filter={`url(#${id('glow')})`}>
-          <path className="ke-eye" d="M77 91 Q86 84 95 90 Q86 96 77 91 Z" fill="var(--keo-eye)" />
-          <path className="ke-eye" d="M105 90 Q114 84 123 91 Q114 96 105 90 Z" fill="var(--keo-eye)" />
-        </g>
-        {/* Mouth: a calm line, replaced by level-driven bars while speaking */}
-        <path className="ke-mouth" d="M92 122 Q100 124.5 108 122" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.55" strokeWidth="1.2" strokeLinecap="round" />
-        <g className="ke-voice" fill="var(--keo-a1)">
-          {[-8, -4, 0, 4, 8].map((dx, i) => (
-            <rect key={dx} className={`ke-bar b${i}`} x={99 + dx} y="117" width="2" height="10" rx="1" />
-          ))}
-        </g>
+      <g className="ke-voice" fill="var(--keo-a1)">
+        {[-22, -16, 16, 22].map((dx, i) => (
+          <rect key={dx} className={`ke-bar b${i}`} x={99 + dx} y="171" width="2" height="10" rx="1" />
+        ))}
       </g>
 
       {/* Base ring */}

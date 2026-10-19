@@ -175,6 +175,8 @@ export const invokeSchemas = {
   'companion:hide': empty,
   'commandBar:show': empty,
   'pencil:start': empty,
+  'keomode:open': empty,
+  'keomode:close': empty,
   'pencil:context': empty,
   'pencil:submit': z
     .object({
@@ -313,6 +315,8 @@ export interface InvokeOutputs {
   'companion:hide': { ok: true };
   'commandBar:show': { ok: true };
   'pencil:start': { ok: boolean; error: string | null };
+  'keomode:open': { ok: true };
+  'keomode:close': { ok: true };
   'pencil:context': { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null } | null;
   'pencil:submit': { ok: boolean; error: string | null };
   'pencil:cancel': { ok: true };

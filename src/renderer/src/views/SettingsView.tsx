@@ -933,6 +933,15 @@ function Appearance({ s, patch }: { s: Settings; patch: Patch }) {
       <section className="card">
         <h2>Motion</h2>
         <div className="field">
+          <label htmlFor="theme">Look</label>
+          <select id="theme" className="select" style={{ maxWidth: 320 }} value={s.ui.theme} onChange={(e) => void patch({ ui: { theme: e.target.value } })}>
+            <option value="noir">Noir — black and white (Keo)</option>
+            <option value="classic">Classic — dark blue</option>
+          </select>
+        </div>
+        <Toggle checked={s.ui.keoModeOnWake} onChange={(v) => void patch({ ui: { keoModeOnWake: v } })} label="Open Keo mode when I say the wake word" />
+        <div style={{ height: 10 }} />
+        <div className="field">
           <label htmlFor="motion">Animations</label>
           <select id="motion" className="select" style={{ maxWidth: 320 }} value={s.ui.reducedMotion} onChange={(e) => void patch({ ui: { reducedMotion: e.target.value } })}>
             <option value="system">Follow Windows setting</option>

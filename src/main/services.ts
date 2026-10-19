@@ -103,6 +103,10 @@ export function memoryClipboard(initial = ''): { readText(): Promise<string>; wr
 }
 
 /** Composition root shared by the Electron app and the integration tests. */
+/** "Open Keo mode", "start keo mode please", … and the matching close. */
+const KEO_MODE_OPEN = /^\s*(?:(?:hey|ok|okay)\s+keo[,.!\s]*)?(?:please\s+)?(?:open|start|show|enter|launch|activate|turn\s+on|go\s+(?:in)?to)\s+(?:the\s+)?keo\s*mode\b/i;
+const KEO_MODE_CLOSE = /^\s*(?:please\s+)?(?:close|exit|leave|stop|hide|end|turn\s+off|quit)\s+(?:the\s+)?keo\s*mode\b/i;
+
 export class Services {
   readonly log: Logger;
   readonly db: Database;
@@ -143,6 +147,9 @@ export class Services {
     showResults?(): void;
     showPencil?(bounds: { x: number; y: number; width: number; height: number }): void;
     hidePencil?(): void;
+    showKeoMode?(): void;
+    hideKeoMode?(): void;
+    keoModeOpen?(): boolean;
   } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
   readonly porcupine: PorcupineWakeEngine;
@@ -338,6 +345,15 @@ export class Services {
     // Answers to a waiting live chat (and "stop" / "send it") go straight to it — never lost to a model
     // that only *says* it passed them on. The command bar (voice) may answer any running chat.
     this.agent.interceptor = (conversationId, text) => {
+      // "Open Keo mode" / "close Keo mode" (typed or spoken) are handled by Keo itself.
+      if (KEO_MODE_OPEN.test(text)) {
+        this.openKeoMode();
+        return this.ui.showKeoMode ? 'Keo mode is on. Talk to me any time — say “close Keo mode” to leave.' : 'Keo mode is not available in this build.';
+      }
+      if (KEO_MODE_CLOSE.test(text)) {
+        this.closeKeoMode();
+        return 'Keo mode is off.';
+      }
       const reply = this.live.routeUserMessage(conversationId, text, { anyConversation: conversationId === getSettings().commandBar.conversationId });
       if (reply !== null) setTimeout(() => this.push('conversations:changed', { conversationId }), 0);
       return reply;
@@ -547,6 +563,7 @@ export class Services {
 
   private async handleWake(rest = ''): Promise<void> {
     await this.noteActiveWindow();
+    if (this.settings.get().ui.keoModeOnWake && !KEO_MODE_OPEN.test(rest)) this.ui.showKeoMode?.();
     // Hands-free: talk with Keo by voice (no command bar); "stop" ends it.
     this.voiceMode.start(rest);
   }
@@ -622,6 +639,20 @@ export class Services {
     const linked = r.cards.filter((c) => text.includes(c.url)).length;
     if (linked < Math.min(2, r.cards.length)) return null;
     return `This message repeats the research result “${r.title}”. Send it with research__send_whatsapp (resultId ${r.id}) instead, which includes the comparison picture with the prices and links.`;
+  }
+
+  // ------------------------------------------------------------------ Keo mode
+
+  /** The full-screen Keo; a voice conversation starts with it so the user can just talk. */
+  openKeoMode(): void {
+    if (!this.ui.showKeoMode) return;
+    this.ui.showKeoMode();
+    this.audit.record({ kind: 'keomode', decision: 'opened' });
+    if (!this.voiceMode.isActive()) void this.noteActiveWindow().finally(() => this.voiceMode.start());
+  }
+
+  closeKeoMode(): void {
+    this.ui.hideKeoMode?.();
   }
 
   // ------------------------------------------------------------------ Keo's pencil

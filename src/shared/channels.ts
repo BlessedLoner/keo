@@ -95,6 +95,8 @@ export const INVOKE_CHANNELS = [
   'companion:hide',
   'commandBar:show',
   'pencil:start',
+  'keomode:open',
+  'keomode:close',
   'pencil:context',
   'pencil:submit',
   'pencil:cancel',
