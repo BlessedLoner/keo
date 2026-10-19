@@ -5,6 +5,7 @@ import { realPorcupine } from './voice/porcupineEngine';
 import { autoUpdater } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { pushChannels } from '../shared/ipc';
 import { Win32Backend } from './desktop/backend';
 import { APP_ID, resolveProfile } from './env/profile';
@@ -18,6 +19,7 @@ import { errorMessage } from './util/errors';
 import { electronImageTools, ElectronWindowCapture } from './vision/electronCapture';
 import { buildCsp } from './window/csp';
 import { PresenceWindows } from './window/presenceWindows';
+import { reportHtml } from './research/results';
 
 // ---------------------------------------------------------------------------
 // Identity & isolated profile (must happen before "ready")
@@ -207,15 +209,51 @@ function ensureVoiceWindow(): Promise<void> {
   });
 }
 
+/** Report files being rendered right now: the only file:// addresses the report session may load. */
+const renderingReports = new Set<string>();
+let reportSessionReady = false;
+
+/**
+ * A separate in-memory session for rendering reports. Keo's own session refuses everything but
+ * app://keo (renderer hardening); this one refuses everything but the report file being rendered
+ * and the data: pictures inside it — no network, no permissions, nothing kept.
+ */
+function reportSession(): Electron.Session {
+  const ses = session.fromPartition('keo-report-render');
+  if (!reportSessionReady) {
+    reportSessionReady = true;
+    ses.setPermissionRequestHandler((_wc, _p, cb) => cb(false));
+    ses.setPermissionCheckHandler(() => false);
+    ses.setDevicePermissionHandler(() => false);
+    ses.webRequest.onBeforeRequest((details, cb) => {
+      const u = details.url;
+      const allowed = u.startsWith('data:') || renderingReports.has(normalizeFileUrl(u));
+      if (!allowed) log.warn('report.blocked_request', { scheme: u.split(':')[0] });
+      cb({ cancel: !allowed });
+    });
+  }
+  return ses;
+}
+
+const normalizeFileUrl = (u: string) => {
+  try {
+    return decodeURIComponent(new URL(u).href).toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
 /**
  * Turns a research report (self-contained HTML: inline styles, data: images, no scripts) into a
- * PDF or a PNG in a hidden, sandboxed window with JavaScript off; the file is loaded from Keo's
- * own temp folder and the window is destroyed afterwards.
+ * PDF or a PNG in a hidden, sandboxed window with JavaScript off, in its own locked-down session;
+ * the file is loaded from Keo's temp folder and the window is destroyed afterwards.
  */
 async function renderReport(html: string, kind: 'pdf' | 'png'): Promise<Buffer> {
   const file = path.join(app.getPath('temp'), `keo-report-${process.pid}-${Date.now()}.html`);
   fs.writeFileSync(file, html, 'utf8');
-  const win = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const key = normalizeFileUrl(pathToFileURL(file).href);
+  renderingReports.add(key);
+  const win = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { session: reportSession(), javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
   try {
     await win.loadFile(file);
     if (kind === 'pdf') return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
@@ -234,6 +272,7 @@ async function renderReport(html: string, kind: 'pdf' | 'png'): Promise<Buffer> 
     }
     return img.crop({ x: 0, y: 0, width, height: Math.min(height, last + 32) }).toPNG();
   } finally {
+    renderingReports.delete(key);
     win.destroy();
     fs.rm(file, { force: true }, () => undefined);
   }
@@ -573,6 +612,17 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     fs.writeFileSync(path.join(shots, 'results.png'), (await res.webContents.capturePage()).toPNG());
   }
   pw.hideResults();
+  // The real report renderer, under Keo's real session hardening (Save / Send use it).
+  try {
+    const sample = reportHtml(svc.results.get(undefined)!, { forImage: true });
+    const pdf = await renderReport(sample, 'pdf');
+    const png = await renderReport(sample, 'png');
+    r.reportPdf = pdf.subarray(0, 5).toString('latin1') === '%PDF-' && pdf.length > 1000;
+    r.reportPng = png.subarray(1, 4).toString('latin1') === 'PNG' && png.length > 1000;
+    r.reportAgain = (await renderReport(sample, 'pdf')).length > 1000;
+  } catch (e) {
+    r.reportError = errorMessage(e);
+  }
   svc.settings.update({ shortcuts: { commandBarEnabled: true, commandBar: 'Control+Alt+Shift+F11' } });
   const st = pw.syncShortcut();
   r.shortcutRegistered = st.registered && globalShortcut.isRegistered('Control+Alt+Shift+F11');

@@ -114,6 +114,25 @@ describe('research results', () => {
     expect(h.services.tasks.list(5).every((t) => t.state === 'completed')).toBe(true);
   });
 
+  it('a failed render saves and sends nothing, and says so', async () => {
+    rendered = [];
+    h = makeHarness({ web: web(), deps: { renderReport: async () => Promise.reject(new Error('ERR_BLOCKED_BY_CLIENT (-20)')) } });
+    const r = addResult();
+    const handlers = createHandlers(h.services, { appInfo: () => ({}) as never, openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const out = await handlers['results:save']({ id: r.id, format: 'pdf' });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/could not make the PDF.*Nothing was saved/);
+    expect(fs.existsSync(h.services.researchSaveRoot()) ? fs.readdirSync(h.services.researchSaveRoot()) : []).toEqual([]);
+    h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] } });
+    const wa = new FakeWhatsApp();
+    h.desktop.addApp({ hwnd: '4001', pid: 888, processName: 'chrome', title: 'WhatsApp - Google Chrome', className: 'X', minimized: false, x: 0, y: 0, width: 1200, height: 800, foreground: false }, wa);
+    const sent = await handlers['results:send']({ id: r.id, contact: 'Mum', which: 'web' });
+    expect(sent.ok).toBe(false);
+    expect(sent.error).toMatch(/Nothing was sent/);
+    expect(wa.sentFiles).toEqual([]);
+    expect(h.services.tasks.list(5).some((t) => t.state === 'outcome_uncertain')).toBe(false);
+  });
+
   it('opens only folders Keo saved research into', async () => {
     harness();
     const opened: string[] = [];

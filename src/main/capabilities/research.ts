@@ -151,6 +151,15 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
       return { resultId: saved.id, title: saved.title, summary: i.summary, criteria: i.criteria, cards, dropped };
     },
   });
+  /** Rendering happens before anything is saved or sent, so a failure here changed nothing. */
+  const render = async (html: string, kind: 'pdf' | 'png', what: string): Promise<Buffer> => {
+    try {
+      return await d.render(html, kind);
+    } catch (e) {
+      throw new CapabilityError('render_failed', `Keo could not make the ${kind === 'pdf' ? 'PDF' : 'picture'} (${(e as Error).message}). Nothing was ${what}.`, { dispatched: 'no' });
+    }
+  };
+
   const saveResult = defineCapability({
     id: 'research.save_result',
     version: '1.0.0',
@@ -177,6 +186,8 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
     async execute(i, ctx) {
       const r = d.results.get(i.resultId);
       if (!r) throw new CapabilityError('no_result', 'There is no research result to save yet.', { dispatched: 'no' });
+      // Render first: if that fails, no half-written folder is left behind.
+      const rendered = i.format === 'page' ? null : await render(reportHtml(r, { forImage: i.format === 'png' }), i.format, 'saved');
       const base = path.join(d.saveRoot(), folderName(r));
       let folder = base;
       for (let n = 2; fs.existsSync(folder); n++) folder = `${base} (${n})`;
@@ -187,7 +198,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
       files.push(page);
       if (i.format !== 'page') {
         const out = path.join(folder, i.format === 'pdf' ? 'report.pdf' : 'report.png');
-        fs.writeFileSync(out, await d.render(reportHtml(r, { forImage: i.format === 'png' }), i.format));
+        fs.writeFileSync(out, rendered!);
         files.push(out);
       }
       // Product pictures: full size from the page's own image when possible, else Keo's preview.
@@ -262,7 +273,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
       const dir = path.join(d.workRoot(), r.id);
       fs.mkdirSync(dir, { recursive: true });
       const picture = path.join(dir, `${folderName(r).slice(11) || 'research'}.png`);
-      fs.writeFileSync(picture, await d.render(reportHtml(r, { forImage: true }), 'png'));
+      fs.writeFileSync(picture, await render(reportHtml(r, { forImage: true }), 'png', 'sent'));
       const caption = `${i.note ? `${i.note}\n\n` : ''}${shareText(r)}`;
       const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
       return d.desktop.exclusive(`research.send_whatsapp:${ctx.correlationId}`, async () => {

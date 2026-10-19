@@ -84,6 +84,9 @@ check('results window: may read results', p.resultsGet === 'ok', p.resultsGet);
 check('results window: cannot read memory', p.resultsMemoryList === 'forbidden', p.resultsMemoryList);
 check('results window: cannot change settings', p.resultsSettingsUpdate === 'forbidden', p.resultsSettingsUpdate);
 check('results window: cannot approve tasks', p.resultsTasksApprove === 'forbidden', p.resultsTasksApprove);
+check('report renders as PDF', p.reportPdf === true, p.reportError ?? p.reportPdf);
+check('report renders as picture', p.reportPng === true, p.reportError ?? p.reportPng);
+check('report renders again', p.reportAgain === true, p.reportError ?? p.reportAgain);
 check('companion: closed when disabled', p.companionClosedWhenDisabled === true, p.companionClosedWhenDisabled);
 check('presence: no orphan windows after shutdown', p.noPresenceWindowsAfterShutdown === true, p.noPresenceWindowsAfterShutdown);
 
