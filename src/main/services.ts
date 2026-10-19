@@ -47,7 +47,7 @@ import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote, nameMentioned } from './agent/quotes';
-import type { AgentEvent, LiveChatSession, Presence } from '../shared/domain';
+import type { AgentEvent, LiveChatSession, Message, Presence } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
 export interface ServiceDeps {
@@ -74,6 +74,8 @@ export interface ServiceDeps {
   porcupineFactory?: () => PorcupineFactory;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
   voiceIo?: { listen(): Promise<{ text: string | null; reason: string }>; speak(text: string): Promise<void> };
+  /** A picture of the display under the mouse (Keo's pencil), with its position on the desktop. */
+  captureScreen?: () => Promise<{ png: Buffer; width: number; height: number; bounds: { x: number; y: number; width: number; height: number }; toScreen(x: number, y: number): { x: number; y: number } }>;
   /** Windows' own voice (System.Speech), used when the app's voice does not start. */
   windowsSpeak?: (text: string) => Promise<void>;
   /** Windows' app list and app launcher (tests inject fakes; the app uses Get-StartApps / explorer.exe). */
@@ -132,12 +134,27 @@ export class Services {
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
-  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void>; mainFocused?(): boolean; showResults?(): void } = { showCommandBar: () => undefined, notify: () => undefined };
+  ui: {
+    showCommandBar(): void;
+    notify(title: string, body: string): void;
+    showMain?(view: 'chat' | 'tasks' | 'settings'): void;
+    ensureVoiceWindow?(): Promise<void>;
+    mainFocused?(): boolean;
+    showResults?(): void;
+    showPencil?(bounds: { x: number; y: number; width: number; height: number }): void;
+    hidePencil?(): void;
+  } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
   readonly porcupine: PorcupineWakeEngine;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
   private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
+  /** Listeners for reply text as the model writes it (voice mode speaks sentence by sentence). */
+  private readonly textListeners = new Set<(conversationId: string, delta: string) => void>();
   private readonly windowsSpeak: ((text: string) => Promise<void>) | null;
+  private readonly captureScreen: ServiceDeps['captureScreen'] | null;
+  private readonly voiceIoDeps: ServiceDeps['voiceIo'] | null;
+  /** The open pencil overlay: the screen picture it was drawn on and what the user said. */
+  private pencil: { png: Buffer; width: number; height: number; bounds: { x: number; y: number; width: number; height: number }; toScreen(x: number, y: number): { x: number; y: number }; heard: string | null; listening: boolean; listenSeq: number } | null = null;
   /** How the last voice-mode reply was spoken ('spoken', 'no_start', 'timeout'…), for diagnostics. */
   lastVoiceSpeak: string | null = null;
   readonly agent: AgentService;
@@ -210,6 +227,8 @@ export class Services {
     this.workflows = new WorkflowStore(path.join(d.profile.userData, 'workflows.json'));
     this.documentsDir = d.documentsDir ?? null;
     this.windowsSpeak = d.windowsSpeak ?? null;
+    this.captureScreen = d.captureScreen ?? null;
+    this.voiceIoDeps = d.voiceIo ?? null;
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -289,7 +308,10 @@ export class Services {
       this.audit,
       this.log,
       getSettings,
-      (e: AgentEvent) => this.push('agent:event', e),
+      (e: AgentEvent) => {
+        this.push('agent:event', e);
+        if (e.type === 'text_delta') for (const fn of this.textListeners) fn(e.conversationId, e.delta);
+      },
       (capId) => {
         if (capId.startsWith('memory.')) this.push('memory:changed', { memoryId: null });
         if (capId.startsWith('project.')) this.push('projects:changed', { projectId: null });
@@ -369,6 +391,13 @@ export class Services {
         }
       },
       conversationId: () => this.commandConversation(),
+      onReplyText: (fn) => {
+        const l = (conversationId: string, delta: string) => {
+          if (conversationId === this.commandConversation()) fn(delta);
+        };
+        this.textListeners.add(l);
+        return () => this.textListeners.delete(l);
+      },
       tasks: this.tasks,
       audit: this.audit,
       log: this.log,
@@ -593,6 +622,131 @@ export class Services {
     const linked = r.cards.filter((c) => text.includes(c.url)).length;
     if (linked < Math.min(2, r.cards.length)) return null;
     return `This message repeats the research result “${r.title}”. Send it with research__send_whatsapp (resultId ${r.id}) instead, which includes the comparison picture with the prices and links.`;
+  }
+
+  // ------------------------------------------------------------------ Keo's pencil
+
+  /** Opens the pencil: a picture of the screen is taken first, then the drawing layer opens and Keo listens. */
+  async startPencil(): Promise<{ ok: boolean; error: string | null }> {
+    if (this.pencil) return { ok: true, error: null };
+    if (!this.captureScreen || !this.ui.showPencil) return { ok: false, error: 'The pencil is not available in this build.' };
+    try {
+      const shot = await this.captureScreen();
+      this.pencil = { ...shot, heard: null, listening: false, listenSeq: 0 };
+    } catch (e) {
+      return { ok: false, error: `Keo could not take a picture of the screen: ${(e as Error).message}` };
+    }
+    this.audit.record({ kind: 'pencil', decision: 'opened' });
+    // The pencil takes the microphone: a running voice conversation pauses for it.
+    if (this.voiceMode.isActive()) this.voiceMode.stop('pencil');
+    this.ui.showPencil(this.pencil.bounds);
+    this.pencilListen();
+    return { ok: true, error: null };
+  }
+
+  /** Listens once for what the user wants (while they draw). */
+  pencilListen(): boolean {
+    const p = this.pencil;
+    if (!p || p.listening) return false;
+    p.listening = true;
+    const seq = ++p.listenSeq;
+    this.push('presence:command', { type: 'pencil_heard', text: p.heard, reason: 'listening', listening: true });
+    void (this.voiceIoListen() as Promise<{ text: string | null; reason: string }>).then(
+      (r) => {
+        if (this.pencil !== p || p.listenSeq !== seq) return;
+        p.listening = false;
+        if (r.text?.trim()) p.heard = r.text.trim();
+        this.push('presence:command', { type: 'pencil_heard', text: p.heard, reason: r.reason, listening: false });
+      },
+      () => {
+        if (this.pencil !== p || p.listenSeq !== seq) return;
+        p.listening = false;
+        this.push('presence:command', { type: 'pencil_heard', text: p.heard, reason: 'error', listening: false });
+      },
+    );
+    return true;
+  }
+
+  private voiceIoListen(): Promise<{ text: string | null; reason: string }> {
+    return this.voiceIoDeps ? this.voiceIoDeps.listen() : this.voiceListen();
+  }
+
+  pencilContext(): { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null } | null {
+    const p = this.pencil;
+    if (!p) return null;
+    const provider = this.providers.active();
+    const info = provider.models().find((m) => m.id === provider.selectedModel());
+    const st = this.settings.get();
+    const consentNeeded = provider.id !== 'test' && !st.permissions.visionExport[provider.id as keyof typeof st.permissions.visionExport];
+    return { image: `data:image/png;base64,${p.png.toString('base64')}`, width: p.width, height: p.height, provider: provider.label ?? provider.id, consentNeeded, visionModel: !!info?.capabilities.vision, listening: p.listening, heard: p.heard };
+  }
+
+  /** The user agreed, in the pencil, that marked screen areas may be sent to the active provider. */
+  pencilAllowExport(): boolean {
+    const provider = this.providers.active();
+    if (provider.id === 'test') return true;
+    this.settings.update({ permissions: { visionExport: { [provider.id]: true } } });
+    this.audit.record({ kind: 'permission.decision', decision: 'vision_export_allowed_in_pencil', detail: { providerId: provider.id } });
+    return true;
+  }
+
+  pencilCancel(): void {
+    const p = this.pencil;
+    if (!p) return;
+    p.listenSeq++;
+    this.pencil = null;
+    if (p.listening) {
+      for (const [, w] of this.voiceWaiters) w({ text: null, reason: 'cancelled' });
+      this.voiceWaiters.clear();
+      this.wake.cancelCapture();
+    }
+    this.ui.hidePencil?.();
+    this.audit.record({ kind: 'pencil', decision: 'cancelled' });
+  }
+
+  /**
+   * Sends what the user marked: a close-up of the marks and the whole screen with them, plus what
+   * they said or typed, to the quick-commands conversation. If they spoke, Keo answers aloud and
+   * keeps listening for follow-ups.
+   */
+  async pencilSubmit(i: { text: string; crop: string; full: string; box: { x: number; y: number; w: number; h: number } }): Promise<{ ok: boolean; error: string | null }> {
+    const p = this.pencil;
+    if (!p) return { ok: false, error: 'The pencil is not open.' };
+    if (this.pencilContext()?.consentNeeded) return { ok: false, error: 'Allow sending the marked area first.' };
+    const spoken = !i.text.trim() && p.heard ? p.heard : null;
+    const ask = i.text.trim() || p.heard || 'What is this? Explain what I marked.';
+    // The window under the middle of the marks (so Keo can act there if asked).
+    let where = '';
+    try {
+      const c = p.toScreen(p.bounds.x + i.box.x + i.box.w / 2, p.bounds.y + i.box.y + i.box.h / 2);
+      const wins = await this.desktop.listWindows(this.settings.get(), true);
+      const hit = wins.find((w) => !w.minimized && c.x >= w.bounds.x && c.y >= w.bounds.y && c.x < w.bounds.x + w.bounds.width && c.y < w.bounds.y + w.bounds.height);
+      if (hit) where = ` The marked area is in the window “${hit.title.slice(0, 120)}” (${hit.processName}, hwnd ${hit.hwnd}, pid ${hit.pid}).`;
+    } catch {
+      /* the window is optional context */
+    }
+    const listening = p.listening;
+    p.listenSeq++;
+    this.pencil = null;
+    if (listening) {
+      for (const [, w] of this.voiceWaiters) w({ text: null, reason: 'cancelled' });
+      this.voiceWaiters.clear();
+      this.wake.cancelCapture();
+    }
+    this.ui.hidePencil?.();
+    const message = `${ask}\n\n(Marked with Keo’s pencil: the pictures show my screen with my marks in red — first a close-up of the marked area, then the whole screen.${where})`;
+    const conv = this.commandConversation();
+    let sent: { done: Promise<Message> };
+    try {
+      sent = this.agent.send(conv, message, { images: [{ mediaType: 'image/png', dataBase64: i.crop }, { mediaType: 'image/png', dataBase64: i.full }] });
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+    this.push('conversations:changed', { conversationId: conv });
+    this.audit.record({ kind: 'pencil', decision: 'sent', detail: { spoke: !!spoken, typed: !!i.text.trim(), window: !!where } });
+    if (spoken) this.voiceMode.startWithTurn(spoken, sent);
+    else this.ui.showCommandBar();
+    return { ok: true, error: null };
   }
 
   researchSaveRoot(): string {

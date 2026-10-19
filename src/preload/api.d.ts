@@ -23,6 +23,7 @@ export type PresenceCommand =
   | { type: 'record_command' }
   | { type: 'focus_input' }
   | { type: 'results_open' }
+  | { type: 'pencil_heard'; text: string | null; reason: string; listening: boolean }
   | { type: 'navigate'; view: string }
   | { type: 'transcript'; text: string; conversationId: string | null }
   | { type: 'listen_result'; reason: string }

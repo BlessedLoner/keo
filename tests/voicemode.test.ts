@@ -207,3 +207,24 @@ describe('cloud voice parts', () => {
     expect(speechParts('Okay')).toEqual(['Okay']);
   });
 });
+
+describe('speaking while the reply is written', () => {
+  it('says finished sentences early and the rest at the end, nothing twice', async () => {
+    const { io } = setup(() => reply('Sure thing. The weather today is sunny and warm across the city. Have fun outside!'));
+    io.heard = ['what is the weather'];
+    h.services.voiceMode.start();
+    await waitFor(() => !h.services.voiceMode.isActive(), 5000);
+    const said = io.spoken.filter((t) => !/^okay\.?$/i.test(t));
+    expect(said.join(' ')).toContain('Sure thing. The weather today is sunny and warm across the city. Have fun outside!');
+    expect(said.join(' ').match(/Have fun outside/g)).toHaveLength(1);
+    expect(said.join(' ').match(/Sure thing/g)).toHaveLength(1);
+  });
+
+  it('finds sentence ends, not decimals, abbreviations or code', async () => {
+    const { lastSentenceEnd } = await import('../src/main/voice/voiceMode');
+    const t = 'The price is 1,299.99 dollars today. Ask Dr. Lee about it. ';
+    expect(t.slice(0, lastSentenceEnd(t))).toBe('The price is 1,299.99 dollars today. Ask Dr. Lee about it.');
+    expect(lastSentenceEnd('Short. ')).toBe(0);
+    expect(lastSentenceEnd('Here is code: ```js\nconst a = 1. ')).toBe(0);
+  });
+});

@@ -23,6 +23,8 @@ export interface VoiceModeDeps {
   /** Sends a user message to the conversation; resolves with Keo's reply. */
   send(text: string): { done: Promise<Message> } | null;
   conversationId(): string;
+  /** Reply text as the model writes it (for speaking finished sentences early); returns unsubscribe. */
+  onReplyText?(fn: (delta: string) => void): () => void;
   tasks: TaskOrchestrator;
   audit: AuditRepo;
   log: Logger;
@@ -109,6 +111,24 @@ export class VoiceMode {
     });
   }
 
+  /**
+   * Continues as a voice conversation after a request that was already sent (Keo's pencil): the
+   * reply is spoken, then Keo keeps listening for follow-ups as usual.
+   */
+  startWithTurn(heard: string, sent: { done: Promise<Message> }): void {
+    if (this.view.active) this.stop('replaced');
+    const session = ++this.session;
+    this.set({ active: true, state: 'thinking', heard, said: null });
+    this.d.pauseWake(true);
+    this.d.audit.record({ kind: 'voice.mode', decision: 'started', detail: { withCommand: true, from: 'pencil' } });
+    void this.handle(session, heard, sent)
+      .then(() => this.loop(session, null))
+      .catch((e) => {
+        this.d.log.warn('voice.mode_failed', { error: (e as Error).message });
+        this.stop('error');
+      });
+  }
+
   stop(reason = 'stopped'): void {
     if (!this.view.active) return;
     this.session++;
@@ -165,15 +185,34 @@ export class VoiceMode {
     }
   }
 
-  private async handle(session: number, text: string): Promise<void> {
+  private async handle(session: number, text: string, presend?: { done: Promise<Message> }): Promise<void> {
     this.set({ heard: text, state: 'thinking' });
-    const sent = this.d.send(text);
+    // Speak finished sentences while the model is still writing (the answer starts sooner).
+    let raw = '';
+    let spokenUpTo = 0;
+    let early = Promise.resolve();
+    const off = this.d.onReplyText?.((delta) => {
+      raw += delta;
+      const end = lastSentenceEnd(raw);
+      if (end <= spokenUpTo || !this.alive(session)) return;
+      const chunk = spokenVersion(raw.slice(spokenUpTo, end), 400);
+      spokenUpTo = end;
+      if (chunk) early = early.then(() => this.say(session, chunk));
+    });
+    const sent = presend ?? this.d.send(text);
     if (!sent) {
+      off?.();
       await this.say(session, 'I am still working on the last request.');
       return;
     }
     const asked = new Set<string>();
-    const reply = await this.awaitTurn(session, sent.done, asked);
+    let reply: Message | null;
+    try {
+      reply = await this.awaitTurn(session, sent.done, asked);
+    } finally {
+      off?.();
+    }
+    await early;
     if (!this.alive(session)) return;
     // Actions still waiting for approval after the reply: ask now (instead of reading out "waiting for approval").
     let decided = false;
@@ -184,7 +223,13 @@ export class VoiceMode {
       if (approved) await this.reportOutcome(session, pa.task.id, pa.step.id);
     }
     if (decided || !this.alive(session)) return;
-    const spoken = reply && reply.status !== 'error' ? spokenVersion(reply.content) : 'Sorry, something went wrong. The details are on screen.';
+    if (!reply || reply.status === 'error') {
+      await this.say(session, 'Sorry, something went wrong. The details are on screen.');
+      return;
+    }
+    // Say what was not spoken early: the rest of the same text, or the whole (corrected) reply.
+    const rest = spokenUpTo > 0 && reply.content.startsWith(raw.slice(0, spokenUpTo)) ? reply.content.slice(spokenUpTo) : spokenUpTo > 0 ? '' : reply.content;
+    const spoken = spokenVersion(rest);
     if (spoken) await this.say(session, spoken);
   }
 
@@ -277,6 +322,20 @@ export class VoiceMode {
       this.d.log.warn('voice.speak_failed', { error: (e as Error).message });
     }
   }
+}
+
+/** End (exclusive) of the last finished sentence in streamed text, outside code blocks; 0 if none. */
+export function lastSentenceEnd(text: string): number {
+  if ((text.match(/```/g)?.length ?? 0) % 2 === 1) return 0; // inside a code block
+  let end = 0;
+  const re = /[.!?…](?=\s)|\n\s*\n/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const at = m.index + m[0].length;
+    // A decimal point or a short abbreviation is not the end of a sentence.
+    if (m[0] === '.' && /\b(e\.g|i\.e|etc|vs|mr|mrs|ms|dr|no)\.$/i.test(text.slice(Math.max(0, at - 5), at))) continue;
+    if (at >= 25) end = at;
+  }
+  return end;
 }
 
 const lowerFirst = (s: string) => (s ? s[0]!.toLowerCase() + s.slice(1) : s);

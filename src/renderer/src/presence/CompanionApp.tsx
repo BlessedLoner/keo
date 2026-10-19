@@ -148,6 +148,9 @@ export function CompanionApp() {
                   <Icon name="mic" size={14} />
                 </button>
               )}
+              <button className="cbtn pencil" aria-label="Pencil: mark the screen and ask" title="Pencil: circle what you mean and tell Keo (Ctrl+Alt+P)" onClick={() => void invoke('pencil:start')}>
+                <Icon name="edit" size={14} />
+              </button>
               <button className="cbtn" aria-label="Command bar" title="Command bar" onClick={() => void invoke('commandBar:show')}>
                 <Icon name="chat" size={14} />
               </button>

@@ -224,7 +224,7 @@ export class PresenceWindows {
       const st: ShortcutStatus = { accelerator, enabled, registered: false, error: null };
       if (!enabled) return st;
       if (taken && taken.toLowerCase() === accelerator.toLowerCase()) {
-        st.error = `${accelerator} is already Keo’s ${what === 'voice' ? 'mini-chat' : 'voice'} shortcut. Choose a different one.`;
+        st.error = `${accelerator} is already used by another Keo shortcut. Choose a different one.`;
         return st;
       }
       try {
@@ -240,7 +240,15 @@ export class PresenceWindows {
     };
     this.voiceShortcut = reg(s.voice, s.voiceEnabled, () => this.services.toggleVoiceMode(), 'voice', null);
     this.shortcut = reg(s.commandBar, s.commandBarEnabled, () => this.toggleCommandBar(), 'command', s.voiceEnabled ? s.voice : null);
+    const taken = [s.voiceEnabled ? s.voice : null, s.commandBarEnabled ? s.commandBar : null].find((a) => a && a.toLowerCase() === s.pencil.toLowerCase()) ?? null;
+    this.pencilShortcut = reg(s.pencil, s.pencilEnabled, () => void (this.pencil ? this.services.pencilCancel() : this.services.startPencil()), 'pencil', taken);
     return this.shortcut;
+  }
+
+  private pencilShortcut: ShortcutStatus = { accelerator: '', enabled: false, registered: false, error: null };
+
+  pencilShortcutStatus(): ShortcutStatus {
+    return { ...this.pencilShortcut };
   }
 
   voiceShortcutStatus(): ShortcutStatus {
@@ -251,11 +259,55 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | 'results' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | null {
+    if (this.pencil && !this.pencil.isDestroyed() && this.pencil.webContents.id === id) return 'pencil';
     if (this.companion && !this.companion.isDestroyed() && this.companion.webContents.id === id) return 'companion';
     if (this.command && !this.command.isDestroyed() && this.command.webContents.id === id) return 'command';
     if (this.results && !this.results.isDestroyed() && this.results.webContents.id === id) return 'results';
     return null;
+  }
+
+  // ---------------------------------------------------------------- Keo's pencil
+  pencil: BrowserWindow | null = null;
+
+  /** The drawing layer over one display (it takes focus, so Esc and typing work). */
+  showPencil(bounds: { x: number; y: number; width: number; height: number }): void {
+    this.hidePencil();
+    const win = new BrowserWindow({
+      ...bounds,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      show: false,
+      alwaysOnTop: true,
+      title: 'Keo pencil',
+      backgroundColor: '#00000000',
+      webPreferences: webPreferences(this.preload),
+    });
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setBounds(bounds);
+    win.on('closed', () => {
+      if (this.pencil === win) this.pencil = null;
+    });
+    void win.loadURL(this.url('#pencil'));
+    win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return;
+      win.show();
+      win.focus();
+    });
+    this.pencil = win;
+  }
+
+  hidePencil(): void {
+    const w = this.pencil;
+    this.pencil = null;
+    if (w && !w.isDestroyed()) w.destroy();
   }
 
   // ---------------------------------------------------------------- research results
@@ -339,7 +391,7 @@ export class PresenceWindows {
   }
 
   broadcast(channel: string, payload: unknown): void {
-    for (const w of [this.companion, this.command, this.results]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+    for (const w of [this.companion, this.command, this.results, this.pencil]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
   }
 
   openMain(view?: string): void {
@@ -353,6 +405,8 @@ export class PresenceWindows {
     this.companion?.destroy();
     this.command?.destroy();
     this.results?.destroy();
+    this.pencil?.destroy();
+    this.pencil = null;
     this.companion = null;
     this.command = null;
     this.results = null;

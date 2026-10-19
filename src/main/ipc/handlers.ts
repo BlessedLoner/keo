@@ -45,6 +45,7 @@ export interface HostHooks {
   companionDrag?(phase: 'start' | 'end'): void;
   shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   voiceShortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  pencilShortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   quit?(): void;
   /** Connected displays (size and scaling only). */
   displays?(): Array<{ width: number; height: number; scale: number; primary: boolean }>;
@@ -63,6 +64,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     engine: s.wake.engineInfo(),
     picovoiceKey: s.secrets.has('picovoice'),
     voiceShortcut: host.voiceShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.voice, enabled: s.settings.get().shortcuts.voiceEnabled, registered: false, error: 'Not available in this build.' },
+    pencilShortcut: host.pencilShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.pencil, enabled: s.settings.get().shortcuts.pencilEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
   const webStatus = () => {
@@ -478,6 +480,15 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       host.showCommandBar?.();
       return { ok: true as const };
     },
+    'pencil:start': () => s.startPencil(),
+    'pencil:context': () => s.pencilContext(),
+    'pencil:submit': (i) => s.pencilSubmit(i),
+    'pencil:cancel': () => {
+      s.pencilCancel();
+      return { ok: true as const };
+    },
+    'pencil:allowExport': () => ({ allowed: s.pencilAllowExport() }),
+    'pencil:listen': () => ({ started: s.pencilListen() }),
     'commandBar:hide': () => {
       host.hideCommandBar?.();
       return { ok: true as const };

@@ -4,6 +4,7 @@ import { App } from './App';
 import { CommandBarApp } from './presence/CommandBarApp';
 import { CompanionApp } from './presence/CompanionApp';
 import { ResultsApp } from './presence/ResultsApp';
+import { PencilApp } from './presence/PencilApp';
 import { UiProvider } from './components/ui';
 import { AppStateProvider } from './state/AppState';
 import './styles/app.css';
@@ -21,6 +22,8 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <CommandBarApp />
       ) : route === '#results' ? (
         <ResultsApp />
+      ) : route === '#pencil' ? (
+        <PencilApp />
       ) : (
         <AppStateProvider>
           <App />

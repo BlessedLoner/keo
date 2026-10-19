@@ -51,27 +51,37 @@ it.runIf(process.env.KEO_LIVE_WA_ATTACH === '1')('explores the Attach menu and f
       await b.uiaAct(w.hwnd, attach.rid, 'invoke').catch(() => undefined); // close the menu
       return;
     }
-    const winsBefore = new Set((await b.list()).map((x) => x.hwnd));
-    await b.uiaAct(w.hwnd, photos.rid, 'invoke').catch((e) => (out.photosInvokeError = String(e)));
-    let dlg = null;
-    for (let k = 0; k < 20 && !dlg; k++) {
-      await sleep(400);
-      const all = await b.list();
-      dlg = all.find((x) => !winsBefore.has(x.hwnd) && x.pid === w.pid) ?? all.find((x) => !winsBefore.has(x.hwnd) && x.className === '#32770') ?? null;
+    const dlgBefore = new Set((await b.fileDialogs()).map((x) => x.hwnd));
+    await b.uiaAct(w.hwnd, photos.rid, 'invoke');
+    let dlg: { hwnd: string; pid: number; owner: string; title: string } | undefined;
+    for (let k = 0; k < 25 && !dlg; k++) {
+      await sleep(300);
+      dlg = (await b.fileDialogs()).find((x) => !dlgBefore.has(x.hwnd));
     }
-    out.dialog = dlg ? { processName: dlg.processName, className: dlg.className, title: dlg.title.slice(0, 40), samePid: dlg.pid === w.pid } : null;
-    // The common file dialog may also be a child of WhatsApp's window; look inside it too.
-    const inner = await snap(w.hwnd);
-    out.innerDialog = inner.nodes.filter((n) => n.role === 'window' && n.depth > 0).map((n) => `${n.lct}:${n.name.slice(0, 30)}`).slice(0, 5);
-    const dwin = dlg ?? null;
-    if (dwin) {
-      const ds = await snap(dwin.hwnd);
-      out.dialogControls = ds.nodes.filter((n) => ['edit', 'combobox', 'button', 'splitbutton'].includes(n.role) && !n.offscreen).map((n) => `${n.role}:${n.name.slice(0, 30)}:${n.aid ?? ''}:${(n.patterns ?? []).join('/')}`).slice(0, 30);
-      const cancel = ds.nodes.find((n) => n.role === 'button' && /^cancel$/i.test(n.name));
-      if (cancel) await b.uiaAct(dwin.hwnd, cancel.rid, 'invoke');
+    out.dialog = dlg ? { ownerIsWhatsApp: dlg.owner === w.hwnd, samePid: dlg.pid === w.pid, title: dlg.title } : null;
+    if (!dlg) return;
+    // KEO_LIVE_WA_ATTACH_FILE: fill the dialog and open the file (preview only, removed again); otherwise cancel.
+    const file = process.env.KEO_LIVE_WA_ATTACH_FILE;
+    if (!file) {
+      await b.fileDialogCancel(dlg.hwnd);
       await sleep(600);
-      out.dialogClosed = !(await b.list()).some((x) => x.hwnd === dwin.hwnd);
+      out.cancelled = !(await b.fileDialogs()).some((x) => x.hwnd === dlg!.hwnd);
+      return;
     }
+    const t0 = Date.now();
+    await b.fileDialogOpen(dlg.hwnd, file);
+    let preview = false;
+    for (let k = 0; k < 15 && !preview; k++) {
+      await sleep(400);
+      preview = (await snap(w.hwnd)).nodes.some((n) => n.role === 'button' && /^send \d+ selected/i.test(n.name));
+    }
+    out.previewShown = preview;
+    out.ms = Date.now() - t0;
+    out.dialogClosed = !(await b.fileDialogs()).some((x) => x.hwnd === dlg!.hwnd);
+    const remove = (await snap(w.hwnd)).nodes.find((n) => n.role === 'button' && /^remove attachment$/i.test(n.name));
+    if (remove) await b.uiaAct(w.hwnd, remove.rid, 'invoke');
+    await sleep(800);
+    out.previewRemoved = !(await snap(w.hwnd)).nodes.some((n) => n.role === 'button' && /^send \d+ selected/i.test(n.name));
   } catch (e) {
     out.error = String(e).slice(0, 400);
   } finally {

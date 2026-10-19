@@ -212,6 +212,9 @@ export const SettingsSchema = z
         /** Talk to Keo (starts or stops a voice conversation). */
         voiceEnabled: z.boolean().default(true),
         voice: Accelerator.default('Control+K'),
+        /** Keo's pencil: mark part of the screen and ask about it. */
+        pencilEnabled: z.boolean().default(true),
+        pencil: Accelerator.default('Control+Alt+P'),
         /** One-time move of the mini-chat from the old default Ctrl+K to Ctrl+Shift+K (Ctrl+K is voice now). */
         layoutV2: z.boolean().default(false),
       })

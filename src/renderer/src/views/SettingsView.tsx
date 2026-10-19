@@ -663,6 +663,16 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
         onSave={(a) => void patch({ shortcuts: { voice: a } })}
       />
       <ShortcutCard
+        title="Pencil shortcut"
+        help="Opens Keo’s pencil: circle or mark anything on screen and say or type what you want."
+        status={status?.pencilShortcut}
+        enabled={s.shortcuts.pencilEnabled}
+        value={s.shortcuts.pencil}
+        presets={['Control+Alt+P', 'Control+Shift+P', 'Alt+Shift+P']}
+        onEnabled={(v) => void patch({ shortcuts: { pencilEnabled: v } })}
+        onSave={(a) => void patch({ shortcuts: { pencil: a } })}
+      />
+      <ShortcutCard
         title="Mini-chat shortcut"
         help="Opens Keo’s mini-chat (command bar) over any app."
         status={status?.shortcut}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
 import { realPorcupine } from './voice/porcupineEngine';
@@ -310,6 +310,22 @@ function windowsSpeak(text: string): Promise<void> {
   });
 }
 
+/**
+ * A picture of the display under the mouse, for Keo's pencil (taken before the drawing layer opens,
+ * so it shows exactly what the user sees). Positions are in screen DIPs; `toScreen` turns one into
+ * physical desktop pixels (what window positions use).
+ */
+async function captureScreen(): Promise<{ png: Buffer; width: number; height: number; bounds: { x: number; y: number; width: number; height: number }; toScreen(x: number, y: number): { x: number; y: number } }> {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const size = { width: Math.round(display.size.width * display.scaleFactor), height: Math.round(display.size.height * display.scaleFactor) };
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size, fetchWindowIcons: false });
+  const src = sources.find((x) => x.display_id === String(display.id)) ?? (sources.length === 1 ? sources[0] : undefined);
+  if (!src || src.thumbnail.isEmpty()) throw new Error('the screen could not be captured');
+  const img = src.thumbnail;
+  const { width, height } = img.getSize();
+  return { png: img.toPNG(), width, height, bounds: display.bounds, toScreen: (x, y) => screen.dipToScreenPoint({ x, y }) };
+}
+
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -341,6 +357,7 @@ app.whenReady().then(() => {
       documentsDir: app.getPath('documents'),
       renderReport: (html, kind) => renderReport(html, kind),
       windowsSpeak: (text) => windowsSpeak(text),
+      captureScreen: () => captureScreen(),
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
     });
@@ -414,6 +431,7 @@ app.whenReady().then(() => {
       companionDrag: (phase) => presenceWindows?.companionDrag(phase),
       shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
       voiceShortcutStatus: () => presenceWindows?.voiceShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+      pencilShortcutStatus: () => presenceWindows?.pencilShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
       quit: () => app.quit(),
     });
     const svc = services;
@@ -425,6 +443,8 @@ app.whenReady().then(() => {
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
       ensureVoiceWindow: () => ensureVoiceWindow(),
       showResults: () => presenceWindows?.showResults(),
+      showPencil: (bounds) => presenceWindows?.showPencil(bounds),
+      hidePencil: () => presenceWindows?.hidePencil(),
       mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
       notify: (title, body) => {
         if (!Notification.isSupported()) return;
@@ -676,6 +696,42 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     r.liveResultsBack = res.isVisible();
     fs.writeFileSync(path.join(app.getPath('temp'), 'keo-live-results-send.json'), JSON.stringify({ liveSend: r.liveSend, back: r.liveResultsBack }, null, 1));
     pw.hideResults();
+  }
+  // Keo's pencil: the drawing layer over the screen, its own channels only, closed again.
+  try {
+    const started = await svc.startPencil();
+    r.pencilStarted = started.ok ? true : started.error;
+    for (let i = 0; i < 60 && !(pw.pencil && !pw.pencil.webContents.isLoading()); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const pen = pw.pencil;
+    if (pen) {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      r.pencilRendered = await pen.webContents.executeJavaScript(`!!document.querySelector('.pencil-bar')`);
+      r.pencilContext = await tryCall(pen, 'pencil:context', {});
+      r.pencilChatSend = await tryCall(pen, 'chat:send', { conversationId: 'x', text: 'x' });
+      if (shots && !app.isPackaged) fs.writeFileSync(path.join(shots, 'pencil.png'), (await pen.webContents.capturePage()).toPNG());
+      // Draw a mark, type the request and press Send, as a user would.
+      await pen.webContents.executeJavaScript(`(() => {
+        const st = document.querySelector('.pencil-stage');
+        const ev = (t, x, y) => st.dispatchEvent(new PointerEvent(t, { bubbles: true, clientX: x, clientY: y, pointerId: 7, pressure: 0.5 }));
+        ev('pointerdown', 400, 300);
+        for (let i = 1; i <= 24; i++) ev('pointermove', 400 + Math.cos(i / 24 * 6.283) * 80, 300 + Math.sin(i / 24 * 6.283) * 50);
+        ev('pointerup', 480, 300);
+        const input = document.querySelector('.pencil-input');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'what is in this circle');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await pen.webContents.executeJavaScript(`document.querySelector('.pencil-send').click()`);
+      for (let i = 0; i < 50 && pw.pencil; i++) await new Promise((resolve) => setTimeout(resolve, 100));
+      const conv = svc.settings.get().commandBar.conversationId;
+      const msgs = conv ? svc.conversations.messages(conv) : [];
+      r.pencilSent = msgs.some((m) => m.role === 'user' && m.content.startsWith('what is in this circle') && m.content.includes('Keo’s pencil'));
+    }
+    svc.pencilCancel();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    r.pencilClosed = pw.pencil === null;
+  } catch (e) {
+    r.pencilError = errorMessage(e);
   }
   // Copy from Keo's window goes through the main process (the page's own clipboard access is not granted).
   if (mainWindow && !mainWindow.isDestroyed()) {

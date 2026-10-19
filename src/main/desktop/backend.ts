@@ -85,6 +85,11 @@ export interface DesktopBackend {
   /** Puts one file on the clipboard as a file (like Copy in Explorer), for attaching it by pasting. */
   /** Puts one file on the clipboard for pasting; a picture (`asImage`) goes on as the image itself. */
   setClipboardFiles?(path: string, asImage?: boolean): Promise<void>;
+  /** Visible standard file dialogs (with their owner window and process). */
+  fileDialogs?(): Promise<Array<{ hwnd: string; pid: number; owner: string; title: string }>>;
+  /** Puts a path in a file dialog's "File name" box and presses Open (no keyboard input). */
+  fileDialogOpen?(dialog: string, path: string): Promise<void>;
+  fileDialogCancel?(dialog: string): Promise<void>;
   /** Left-button strokes in screen coordinates, inside the target window only. */
   draw?(hwnd: string, strokes: Array<Array<[number, number]>>): Promise<{ points: number; method: 'mouse' | 'direct' }>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
@@ -401,6 +406,19 @@ export class Win32Backend implements DesktopBackend {
       async () => ({ points: Number((await this.call<{ points: number }>('draw', { hwnd, points }, t)).points), method: 'mouse' as const }),
       async () => ({ points: Number((await this.call<{ points: number }>('post_draw', { hwnd, points }, t)).points), method: 'direct' as const }),
     );
+  }
+
+  async fileDialogs(): Promise<Array<{ hwnd: string; pid: number; owner: string; title: string }>> {
+    const r = await this.call<Array<{ hwnd: string; pid: number; owner: string; title: string }> | null>('file_dialogs', {}, 15000);
+    return (r ?? []).map((x) => ({ hwnd: String(x.hwnd), pid: Number(x.pid), owner: String(x.owner), title: String(x.title ?? '') }));
+  }
+
+  async fileDialogOpen(dialog: string, path: string): Promise<void> {
+    await this.call('file_dialog_open', { hwnd: dialog, path }, 15000);
+  }
+
+  async fileDialogCancel(dialog: string): Promise<void> {
+    await this.call('file_dialog_cancel', { hwnd: dialog }, 15000);
   }
 
   async clickScreen(hwnd: string, x: number, y: number): Promise<void> {

@@ -370,20 +370,60 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
     return null;
   }
   const chosen = item;
+  const dialogsBefore = new Set(((await d.desktop.backend.fileDialogs?.().catch(() => [])) ?? []).map((x) => x.hwnd));
   await step(`choosing “${chosen.name}”`, () => actOn(d, target, chosen, 'invoke'));
-  // The Windows file dialog opens inside WhatsApp's window: its "File name" box and Open button
-  // have the same ids in every Windows language (1148 and 1).
+  const waitPreview = async () => {
+    for (let k = 0; k < 15 && !signal.aborted; k++) {
+      await sleep(d.focusSettleMs === 0 ? 0 : 400);
+      const f = await freshView(d, target);
+      if (f.nodes.some((n) => isPreviewControl(n, file))) return f;
+    }
+    return null;
+  };
+
+  // 1) The file dialog as a Windows dialog: the one WhatsApp just opened (owned by its window or
+  //    process, or the only new one). Filling it this way does not depend on how many files the
+  //    folder shows, on accessibility, or on keyboard input.
+  if (d.desktop.backend.fileDialogs && d.desktop.backend.fileDialogOpen) {
+    let dlg: { hwnd: string; pid: number; owner: string } | undefined;
+    for (let k = 0; k < 25 && !dlg && !signal.aborted; k++) {
+      await sleep(d.focusSettleMs === 0 ? 0 : 300);
+      const all = await d.desktop.backend.fileDialogs().catch(() => []);
+      const fresh = all.filter((x) => !dialogsBefore.has(x.hwnd));
+      dlg = fresh.find((x) => x.owner === target.hwnd || x.pid === target.pid) ?? (fresh.length === 1 ? fresh[0] : undefined);
+    }
+    if (dlg) {
+      const dialog = dlg.hwnd;
+      try {
+        await step('choosing the file in the file dialog', () => d.desktop.backend.fileDialogOpen!(dialog, filePath));
+      } catch (e) {
+        await d.desktop.backend.fileDialogCancel?.(dialog).catch(() => undefined);
+        throw e;
+      }
+      const shown = await waitPreview();
+      if (shown) return shown;
+      // Never leave the dialog open on top of WhatsApp.
+      const still = await d.desktop.backend.fileDialogs().catch(() => []);
+      if (still.some((x) => x.hwnd === dialog)) await d.desktop.backend.fileDialogCancel?.(dialog).catch(() => undefined);
+      throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview after choosing the file, so nothing was sent.', { dispatched: 'no' });
+    }
+  }
+
+  // 2) The dialog inside WhatsApp's accessibility tree (same control ids in every language).
   let nameBox: UiaNodeRaw | undefined;
   let open: UiaNodeRaw | undefined;
   let cancel: UiaNodeRaw | undefined;
-  for (let k = 0; k < 20 && !nameBox && !signal.aborted; k++) {
+  for (let k = 0; k < 10 && !nameBox && !signal.aborted; k++) {
     await sleep(d.focusSettleMs === 0 ? 0 : 400);
     const nodes = (await stableSnapshot(d, target)).nodes;
     nameBox = nodes.find((n) => n.role === 'edit' && n.aid === '1148' && !n.offscreen) ?? nodes.find((n) => n.role === 'combobox' && n.aid === '1148' && !n.offscreen);
     open = nodes.find((n) => n.role === 'button' && n.aid === '1' && !n.offscreen);
     cancel = nodes.find((n) => n.role === 'button' && n.aid === '2' && !n.offscreen);
   }
-  if (!nameBox || !open) return null;
+  if (!nameBox || !open) {
+    if (cancel) await actOn(d, target, cancel, 'invoke').catch(() => undefined);
+    return null;
+  }
   try {
     await step('entering the file in the file dialog', () => actOn(d, target, nameBox!, 'set_value', filePath));
     await step('pressing Open in the file dialog', () => actOn(d, target, open!, 'invoke'));
@@ -391,11 +431,8 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
     if (cancel) await actOn(d, target, cancel, 'invoke').catch(() => undefined);
     throw e;
   }
-  for (let k = 0; k < 15 && !signal.aborted; k++) {
-    await sleep(d.focusSettleMs === 0 ? 0 : 400);
-    const f = await freshView(d, target);
-    if (f.nodes.some((n) => isPreviewControl(n, file))) return f;
-  }
+  const shown = await waitPreview();
+  if (shown) return shown;
   throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview after choosing the file, so nothing was sent.', { dispatched: 'no' });
 }
 

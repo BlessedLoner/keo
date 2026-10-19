@@ -136,11 +136,15 @@ export class AgentService {
     return false;
   }
 
+  /** Pictures that go with one user message (Keo's pencil): shown to the model in that turn only. */
+  private readonly pictures = new Map<string, Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>>();
+
   /** Persists the user message and starts a turn in the background. */
-  send(conversationId: string, text: string): { userMessageId: string; done: Promise<Message> } {
+  send(conversationId: string, text: string, opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }> } = {}): { userMessageId: string; done: Promise<Message> } {
     if (this.active.has(conversationId)) throw new KeoError('busy', 'Keo is still responding in this conversation. Stop it or wait.');
     const conv = this.conversations.require(conversationId);
     const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
+    if (opts.images?.length) this.pictures.set(user.id, opts.images);
     if (conv.messageCount === 0 && (conv.title === 'New conversation' || !conv.title.trim())) {
       this.conversations.rename(conversationId, deriveTitle(text));
     }
@@ -256,6 +260,14 @@ export class AgentService {
       // The in-flight assistant message is excluded by the builder (status "streaming").
       const messages: NeutralMessage[] = built.messages;
       meta.memoryIds = built.memoryIds;
+      // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only.
+      const pics = this.pictures.get(sourceMessageId);
+      this.pictures.delete(sourceMessageId);
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+      if (pics?.length && lastUser) {
+        if (info?.capabilities.vision) lastUser.content.push(...pics.map((p) => ({ type: 'image' as const, mediaType: p.mediaType, dataBase64: p.dataBase64 })));
+        else lastUser.content.push({ type: 'text', text: '(The user marked part of their screen, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)' });
+      }
       const tools = settings.agent.toolsEnabled && info?.capabilities.tools ? this.registry.toolSpecs() : [];
       const maxOut = Math.min(
         info?.capabilities.maxOutputTokens ?? 4096,

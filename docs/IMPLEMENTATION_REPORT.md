@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.6.0: Keo's pencil, file dialog, faster spoken answers
+
+- **WhatsApp on other PCs:** the Attach → Photos & videos file dialog stayed open untouched while a pasted picture appeared. Likely cause: the dialog's file list (a folder with many pictures) used up the accessibility reading budget before the “File name” box, so Keo fell back to pasting. Keo now operates the dialog as a Windows dialog: the visible `#32770` dialog owned by WhatsApp's window or process (or the only new one) gets the path in its “File name” box (id 1148, `WM_SETTEXT`, read back) and its OK command; a dialog Keo opened is cancelled if anything fails, never left open. Live here: dialog found (owned by WhatsApp), file chosen, preview in 5 s, then removed — nothing sent.
+- **Spoken answers start sooner:** in voice mode Keo speaks finished sentences while the model is still writing (sentence ends ignore decimals, abbreviations and code), then the rest — nothing twice.
+- **Keo's pencil** (floating icon button, `Ctrl+Alt+P`): Keo takes a picture of the display, opens a drawing layer over it (pen, highlighter, colours, undo, clear) and listens; the user circles what they mean and says or types what they want. It sends by itself once there is a mark and a request (or on Send/Enter). The model receives a close-up of the marked area and the whole screen with the marks (≤ 1600 px each, for that turn only, not stored) plus the window under the marks, so it can act there. Spoken requests are answered aloud and the voice conversation continues; typed ones open the mini-chat. The first use with a real provider asks for consent (sets `visionExport` for that provider). The overlay window may only use its own channels.
+- Tests: `tests/pencil.test.ts`, early speech tests, dialog route via the fake; smoke: pencil opens, draw + type + Send reaches Keo, channel limits. Live: `tests/live-whatsapp-attach.test.ts` (no send).
+
 ### 1.5.4 fixes: WhatsApp sending on other PCs, cloud voice
 
 - Reported on two laptops: sending a research result failed (“attachment preview not shown”, “header shows nothing recognisable / Delivered”, “WhatsApp.Root not allowed”), and the OpenAI voice answered late and over the Windows voice.

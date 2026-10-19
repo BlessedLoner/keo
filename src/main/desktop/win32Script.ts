@@ -512,6 +512,62 @@ public static class KeoWin {
     PostMessageW(w, msg, new IntPtr(keys), new IntPtr(((c.Y & 0xFFFF) << 16) | (c.X & 0xFFFF)));
   }
 
+  // ---- Standard Windows file dialogs (#32770 with a "File name" box, control id 1148).
+  // Keo fills in only a dialog that the app it is operating opened for an approved file.
+  [DllImport("user32.dll", EntryPoint = "EnumChildWindows")] static extern bool EnumKids(IntPtr parent, EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] static extern IntPtr SendTextTimeout(IntPtr h, uint msg, IntPtr w, string l, uint flags, uint ms, out IntPtr res);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] static extern IntPtr SendBufTimeout(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint ms, out IntPtr res);
+
+  static IntPtr ChildById(IntPtr parent, int id) {
+    IntPtr found = IntPtr.Zero;
+    EnumKids(parent, (c, l) => { if (GetDlgCtrlID(c) == id && IsWindowVisible(c)) { found = c; return false; } return true; }, IntPtr.Zero);
+    return found;
+  }
+
+  static IntPtr FileNameEdit(IntPtr dlg) {
+    var box = ChildById(dlg, 1148);
+    if (box == IntPtr.Zero) return IntPtr.Zero;
+    if (Cls(box) == "Edit") return box;
+    IntPtr edit = IntPtr.Zero;
+    EnumKids(box, (c, l) => { if (Cls(c) == "Edit") { edit = c; return false; } return true; }, IntPtr.Zero);
+    return edit;
+  }
+
+  public static List<Dictionary<string, object>> FileDialogs() {
+    var list = new List<Dictionary<string, object>>();
+    EnumWindows((h, l) => {
+      if (!IsWindowVisible(h) || Cls(h) != "#32770" || FileNameEdit(h) == IntPtr.Zero) return true;
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      var d = new Dictionary<string, object>();
+      d["hwnd"] = h.ToInt64().ToString();
+      d["pid"] = (long)pid;
+      d["owner"] = GetWindow(h, 4).ToInt64().ToString();
+      d["title"] = Text(h);
+      list.Add(d);
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
+
+  public static Dictionary<string, object> FileDialogOpen(IntPtr dlg, string path) {
+    if (!IsWindow(dlg) || Cls(dlg) != "#32770") throw new Exception("dialog_gone");
+    var edit = FileNameEdit(dlg);
+    if (edit == IntPtr.Zero) throw new Exception("no_file_name_box");
+    IntPtr r;
+    SendTextTimeout(edit, 0x000C, IntPtr.Zero, path, 0x0002, 3000, out r); // WM_SETTEXT
+    var sb = new StringBuilder(4096);
+    SendBufTimeout(edit, 0x000D, new IntPtr(4096), sb, 0x0002, 3000, out r); // WM_GETTEXT
+    if (sb.ToString() != path) throw new Exception("name_not_set");
+    // Open = the dialog's OK command (button id 1); posted, so a busy dialog cannot block the helper.
+    PostMessageW(dlg, 0x0111, new IntPtr(1), ChildById(dlg, 1));
+    var d = new Dictionary<string, object>(); d["set"] = true; return d;
+  }
+
+  public static void FileDialogCancel(IntPtr dlg) {
+    if (IsWindow(dlg) && Cls(dlg) == "#32770") PostMessageW(dlg, 0x0111, new IntPtr(2), IntPtr.Zero);
+  }
+
   public static void RequireForeground(IntPtr h) {
     if (!IsWindow(h)) throw new Exception("target_gone");
     if (!IsFg(h)) throw new Exception("not_foreground");
@@ -1063,6 +1119,9 @@ while ($true) {
       'uia_texts'    { RequireUia; ReplyRaw $req.id ([KeoUia]::Texts($h, [string]$req.args.rids, [int]$req.args.budgetMs)) }
       'browser_context' { RequireUia; ReplyRaw $req.id ([KeoUia]::BrowserContext($h, [int]$req.args.maxChars)) }
       'proc_windows' { Reply $req.id $true @([KeoWin]::ProcessWindows([uint32]$req.args.pid)) }
+      'file_dialogs' { Reply $req.id $true @([KeoWin]::FileDialogs()) }
+      'file_dialog_open' { Reply $req.id $true ([KeoWin]::FileDialogOpen($h, [string]$req.args.path)) }
+      'file_dialog_cancel' { [KeoWin]::FileDialogCancel($h); Reply $req.id $true @{ cancelled = $true } }
       'click_screen' { [KeoWin]::ClickScreen($h, [int]$req.args.x, [int]$req.args.y); Reply $req.id $true @{ clicked = $true } }
       'draw'      { Reply $req.id $true @{ points = [KeoWin]::Draw($h, [int[]]@($req.args.points)) } }
       'post_draw' {

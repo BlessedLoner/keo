@@ -174,6 +174,19 @@ export const invokeSchemas = {
   'companion:drag': z.object({ phase: z.enum(['start', 'end']) }).strict(),
   'companion:hide': empty,
   'commandBar:show': empty,
+  'pencil:start': empty,
+  'pencil:context': empty,
+  'pencil:submit': z
+    .object({
+      text: z.string().max(2000),
+      crop: z.string().regex(/^[A-Za-z0-9+/=]+$/).max(16_000_000),
+      full: z.string().regex(/^[A-Za-z0-9+/=]+$/).max(16_000_000),
+      box: z.object({ x: z.number().int(), y: z.number().int(), w: z.number().int().min(1), h: z.number().int().min(1) }).strict(),
+    })
+    .strict(),
+  'pencil:cancel': empty,
+  'pencil:allowExport': empty,
+  'pencil:listen': empty,
   'commandBar:hide': empty,
   'commandBar:conversation': z.object({ fresh: z.boolean().default(false) }).strict(),
   'wake:status': empty,
@@ -299,6 +312,12 @@ export interface InvokeOutputs {
   'companion:drag': { ok: true };
   'companion:hide': { ok: true };
   'commandBar:show': { ok: true };
+  'pencil:start': { ok: boolean; error: string | null };
+  'pencil:context': { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null } | null;
+  'pencil:submit': { ok: boolean; error: string | null };
+  'pencil:cancel': { ok: true };
+  'pencil:allowExport': { allowed: boolean };
+  'pencil:listen': { started: boolean };
   'commandBar:hide': { ok: true };
   'commandBar:conversation': { conversationId: string };
   'wake:status': WakeStatusInfo;
@@ -345,6 +364,7 @@ export interface WakeStatusInfo {
   recognizers: Array<{ culture: string; name: string }>;
   shortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   voiceShortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  pencilShortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   /** A Picovoice access key is stored (never the key itself). */
   picovoiceKey: boolean;
   /** Speech engine in use ("modern" Windows 10/11 or "classic"), and why modern isn't, if it isn't. */
