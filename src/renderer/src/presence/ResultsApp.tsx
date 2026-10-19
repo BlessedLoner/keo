@@ -123,7 +123,7 @@ export function ResultsApp() {
                     <div className="results-info">
                       <h2>{c.name}</h2>
                       <div className="results-price">
-                        <strong>{c.price ? `${c.currency && /^[\d.,\s]+$/.test(c.price) ? `${c.currency} ` : ''}${c.price}` : 'Price not found'}</strong>
+                        <strong className={c.price ? undefined : 'none'}>{c.price ? `${c.currency && /^[\d.,\s]+$/.test(c.price) ? `${c.currency} ` : ''}${c.price}` : 'Price not found'}</strong>
                         {c.merchant && <span> · {c.merchant}</span>}
                       </div>
                       {c.availability && <div className="results-avail">{c.availability}</div>}

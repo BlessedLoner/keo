@@ -107,6 +107,15 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.5.4 fixes: WhatsApp sending on other PCs, cloud voice
+
+- Reported on two laptops: sending a research result failed (“attachment preview not shown”, “header shows nothing recognisable / Delivered”, “WhatsApp.Root not allowed”), and the OpenAI voice answered late and over the Windows voice.
+- Reproduced here: with a wide or maximised WhatsApp window the chat list is narrower than 30 % of the width, so the header name was treated as part of the list. The conversation pane now starts where the list actually ends; a lone delivery status is never a header; header-area buttons and the selected chat can confirm (never choose) the chat the user named. Searching for “Name(You)” searches “Name”.
+- `WhatsApp.Root` (the app's window process) counts as the allowed “WhatsApp” app.
+- Pictures and files are attached through WhatsApp's own Attach menu and the Windows file dialog (file name box id 1148, Open id 1), entirely through accessibility — this works where Windows blocks simulated keyboard input; pasting remains the fallback and the WhatsApp Web route.
+- Cloud voice: a reply still downloading when it is stopped (listening started, the Windows fallback took over) is dropped instead of played late; replies are fetched and played sentence by sentence (short first part), so speech starts sooner.
+- Live (user-approved, own chat): a picture with caption sent from the results window with only “WhatsApp” allowed and the contact typed as “Emmanuel(You)”; verified by Keo. The OpenAI voice path is covered by tests only (no live cloud calls).
+
 ### 1.5.3 fixes: spoken replies, copy, drawing
 
 - Voice replies were silent, then spoken late: a Windows voice can take several seconds to start the first time (5.2 s measured here, longer on slower PCs) and Keo waited only 2.5 s, then listened again while the reply was still queued; the chat view also spoke replies itself when *Speak responses* was on. Now Keo waits up to 15 s for the voice to start, warms it up when the wake word or spoken replies are on, cancels anything still queued before listening (so nothing plays during or after a session), and if the app voice still does not start says the reply with Windows' own voice (System.Speech). The chat view does not speak replies during voice mode. Two microphone hiccups are retried before a session ends.

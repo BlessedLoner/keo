@@ -22,7 +22,15 @@ it.runIf(process.env.KEO_LIVE_WA_LAST === '1')('reads the latest message in my o
     await new Promise((r) => setTimeout(r, 600));
     const s = await b.uiaSnapshot(w.hwnd, { maxNodes: 1500, maxDepth: 60, budgetMs: 9000 });
     const v = analyzeWhatsApp(s.nodes, s.window);
+    // Names other than WhatsApp's own interface words are masked (another chat may be open).
+    const ui = /^(search|menu|profile details|video call|voice call|attach|emojis, gifs, stickers|voice message|delivered|read|sent|online|typing|message yourself|click here for contact info|.*\d{1,2}:\d{2}.*)$/i;
+    const mask = (t: string) => (ui.test(t.trim()) ? t.slice(0, 40) : `<${t.trim().split(/\s+/).length} words>`);
+    out.analyzerHeader = v.header ? mask(v.header) : null;
+    out.win = s.window;
     if (!v.header || !/\(you\)/i.test(v.header)) {
+      const doc = s.nodes.filter((n) => n.role === 'document' && n.w).sort((a, b) => (b.w ?? 0) * (b.h ?? 0) - (a.w ?? 0) * (a.h ?? 0))[0];
+      out.doc = doc ? { y: doc.y, h: doc.h, w: doc.w } : null;
+      out.topBand = s.nodes.filter((n) => n.name && !n.offscreen && doc && (n.y ?? 0) - (doc.y ?? 0) < (doc.h ?? 0) * 0.3 && (n.x ?? 0) - (doc.x ?? 0) > (doc.w ?? 0) * 0.3).map((n) => `${n.role}:${mask(n.name)}@${(n.y ?? 0) - (doc!.y ?? 0)},${n.h},${n.w}`).slice(0, 30);
       out.stopped = 'own chat is not open';
       return;
     }
@@ -35,6 +43,10 @@ it.runIf(process.env.KEO_LIVE_WA_LAST === '1')('reads the latest message in my o
     const ids = (nodes: typeof s.nodes) => nodes.filter((n) => n.role === 'image' && /^keo test:/i.test(n.name)).map((n) => n.rid).join(',');
     const s2 = await b.uiaSnapshot(w.hwnd, { maxNodes: 1500, maxDepth: 60, budgetMs: 9000 });
     out.idsStable = ids(s.nodes) !== '' && ids(s.nodes) === ids(s2.nodes);
+    // The top band of the conversation pane (header candidates), in document coordinates.
+    const doc = s.nodes.filter((n) => n.role === 'document' && n.w).sort((a, b) => (b.w ?? 0) * (b.h ?? 0) - (a.w ?? 0) * (a.h ?? 0))[0];
+    out.doc = doc ? { y: doc.y, h: doc.h, w: doc.w } : null;
+    out.topBand = s.nodes.filter((n) => n.name && !n.offscreen && doc && (n.y ?? 0) - (doc.y ?? 0) < (doc.h ?? 0) * 0.3 && (n.x ?? 0) - (doc.x ?? 0) > (doc.w ?? 0) * 0.3).map((n) => `${n.role}:${n.name.slice(0, 40)}@${(n.y ?? 0) - (doc!.y ?? 0)},${n.h},${n.w}`).slice(0, 30);
     out.previewOpen = s.nodes.some((n) => n.role === 'button' && /^send \d+ selected/i.test(n.name));
   } catch (e) {
     out.error = String(e).slice(0, 300);

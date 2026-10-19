@@ -193,3 +193,17 @@ describe('spoken replies', () => {
     expect(types.indexOf('stop_speaking')).toBeGreaterThan(types.indexOf('voice_say'));
   });
 });
+
+describe('cloud voice parts', () => {
+  it('starts with a short sentence and keeps sentences whole', async () => {
+    const { speechParts } = await import('../src/shared/speech');
+    const text = 'Here is what I found. The MacBook Air costs 1,099 dollars at Apple and 999 at Best Buy this week. The Pro starts at 1,599. ' + 'It has a brighter screen and more ports. '.repeat(12);
+    const parts = speechParts(text);
+    expect(parts[0]!.startsWith('Here is what I found.')).toBe(true);
+    expect(parts[0]!.length).toBeLessThanOrEqual(140);
+    expect(parts[0]!.endsWith('.')).toBe(true);
+    expect(parts.every((p) => p.length <= 360)).toBe(true);
+    expect(parts.join(' ').replace(/\s+/g, ' ')).toBe(text.trim().replace(/\s+/g, ' '));
+    expect(speechParts('Okay')).toEqual(['Okay']);
+  });
+});

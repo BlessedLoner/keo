@@ -29,6 +29,11 @@ export interface WaView {
   compose: UiaNodeRaw | null;
   send: UiaNodeRaw | null;
   header: string | null;
+  /**
+   * Other places that name the open chat: header-area buttons and the selected chat in the list.
+   * Used only to confirm a chat the user named (never to pick a recipient).
+   */
+  headerAlternatives?: string[];
   chats: WaChat[];
   messages: WaMessage[];
 }
@@ -61,6 +66,16 @@ export function cleanHeader(name: string): string {
   return t;
 }
 
+/**
+ * Whether the open chat is the one the user named: the header, or — when the app lays the header
+ * out differently (smaller window, banners, other versions) — a header-area button or the chat
+ * selected in the list carries exactly that name.
+ */
+export function openChatIs(view: Pick<WaView, 'header' | 'headerAlternatives'>, contact: string): boolean {
+  if (headerMatches(view.header, contact)) return true;
+  return (view.headerAlternatives ?? []).some((a) => headerMatches(a, contact));
+}
+
 /** Exact (normalised) match between the open chat's header and the intended contact. */
 export function headerMatches(header: string | null, contact: string): boolean {
   if (!header) return false;
@@ -79,6 +94,8 @@ const SEARCH = /search|pesquis|buscar|busca|rechercher|recherche|suchen|suche|ce
 const COMPOSE = /type a message|message|compose|write|mensagem|mensaje|nachricht|messaggio|bericht|сообщение/i;
 const TIME = /^\s*(\d{1,2}:\d{2}(\s?[ap]\.?m\.?)?|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/i;
 const STATUS = /\b(pending|sent|delivered|read)\b/i;
+/** A delivery status on its own ("Delivered") is never a chat name. */
+const STATUS_ONLY = /^(pending|sent|delivered|read|seen|failed)$/i;
 
 const TRAILING_TIME = /\s*(\d{1,2}:\d{2}(\s?[ap]\.?m\.?)?|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/i;
 
@@ -184,9 +201,10 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
   const nested = new Set(chats.filter((c) => chats.some((o) => o !== c && descendants(c.index, kids, 400).includes(o.index))).map((c) => c.index));
   const innermost = chats.filter((c) => !nested.has(c.index));
 
-  // The conversation pane starts where the chat list ends (layouts differ; 30% of the width as a fallback).
+  // The conversation pane starts where the chat list ends. The list is narrower than 30% of a wide
+  // (maximised) window, so 30% is only the fallback when no list is visible.
   const leftEdges = [search, ...chats.map((c) => c.node)].filter((n): n is UiaNodeRaw => !!n && hasBox(n)).map((n) => (n.x ?? 0) + (n.w ?? 0));
-  const paneLeft = Math.max(W * 0.3, ...leftEdges);
+  const paneLeft = leftEdges.length ? Math.max(...leftEdges) : W * 0.3;
 
   // Header: the contact/group name in the top band of the conversation pane. Several controls live
   // there (profile, call, search, menu); the name is the widest one that is not a known action.
@@ -202,11 +220,21 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
           cy(n) < H * 0.12 &&
           (n.y ?? 0) >= 0 &&
           !GENERIC_HEADER.test(n.name.trim()) &&
+          !STATUS_ONLY.test(n.name.trim()) &&
           !TIME.test(n.name) &&
           n.name.trim().length <= 80,
       )
       .sort((a, b) => (b.w ?? 0) - (a.w ?? 0))[0] ?? null;
   const header = headerNode ? cleanHeader(headerNode.name.split(/\s{2,}|\n/)[0]!) || null : null;
+  // Confirmations of the open chat: buttons in a slightly taller header band (a banner or a small
+  // window moves the header down) and the selected chat in the list. Message text never counts.
+  const band = Math.max(H * 0.18, 130);
+  const headerAlternatives = [
+    ...nodes
+      .filter((n) => !!n.name && hasBox(n) && !n.offscreen && ['button', 'header', 'headeritem'].includes(n.role) && (n.x ?? 0) >= paneLeft - 2 && cy(n) < band && (n.y ?? 0) >= 0 && !GENERIC_HEADER.test(n.name.trim()) && !STATUS_ONLY.test(n.name.trim()) && n.name.trim().length <= 80)
+      .map((n) => cleanHeader(n.name.split(/\s{2,}|\n/)[0]!)),
+    ...innermost.filter((c) => c.node.selected).map((c) => c.title),
+  ].filter(Boolean);
 
   // Messages: rows between the header and the compose box in the right pane.
   const top = headerNode ? (headerNode.y ?? 0) + (headerNode.h ?? 0) : H * 0.1;
@@ -237,7 +265,7 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
   });
 
   // Rows without readable text are kept so the caller can read them through the raw view (see completeMessages).
-  return { search, compose, send, header, chats: innermost, messages };
+  return { search, compose, send, header, headerAlternatives, chats: innermost, messages };
 }
 
 /** The most recent message sent by the user, if visible. */

@@ -5,7 +5,7 @@ import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { meaningfulNodes } from '../desktop/backend';
 import { compactNodes, isCriticalControl, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -238,7 +238,9 @@ export interface WaSendResult {
 
 export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: string, signal: AbortSignal): Promise<WaOpenResult> {
   let { view } = await freshView(d, target);
-  if (headerMatches(view.header, contact)) return { opened: true, header: view.header, candidates: [view.header as string], reason: 'already_open' };
+  // The name as confirmed: the header's, or the user's when another part of the window confirmed it.
+  const confirmed = (v: WaView) => (headerMatches(v.header, contact) ? v.header : contact);
+  if (openChatIs(view, contact)) return { opened: true, header: confirmed(view), candidates: [confirmed(view) as string], reason: 'already_open' };
   if (!view.search) {
     // A window just brought to the front can expose its page a moment late.
     await sleep(d.focusSettleMs === 0 ? 0 : 800);
@@ -267,11 +269,13 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
     throw new CapabilityError(code, msg, { dispatched: 'no' });
   }
   const searchNode = view.search;
-  await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, contact));
+  // Your own chat is listed as "Name (You)", but WhatsApp's search finds it by the name alone.
+  const query = contact.replace(/\s*\(you\)\s*$/i, '').trim() || contact;
+  await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, query));
   if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
   // Wait only until the results show the contact (not a fixed pause).
   view = await viewUntil(d, target, (v) => v.chats.some((c) => sameChat(c.title, contact)), 2500, signal);
-  const want = normName(contact);
+  const want = normName(query);
   const titles = [...new Set(view.chats.map((c) => c.title))];
   const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
   // Search results list the same person several times (under Chats, Contacts and Messages);
@@ -289,8 +293,8 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
       await actOn(d, target, chat.node, 'select');
     }
   });
-  view = await viewUntil(d, target, (v) => headerMatches(v.header, contact), 2500, signal);
-  if (!headerMatches(view.header, contact)) {
+  view = await viewUntil(d, target, (v) => openChatIs(v, contact), 2500, signal);
+  if (!openChatIs(view, contact)) {
     // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
     const again = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
     if (again.length) {
@@ -299,14 +303,14 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
         const c = await centerOf(d, target, entry.titleNode ?? entry.node);
         await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
       });
-      view = await viewUntil(d, target, (v) => headerMatches(v.header, contact), 2500, signal);
+      view = await viewUntil(d, target, (v) => openChatIs(v, contact), 2500, signal);
     }
   }
-  if (!headerMatches(view.header, contact)) {
+  if (!openChatIs(view, contact)) {
     // Opening a chat is repeatable and harmless, so this is a plain “not confirmed”, not an uncertain outcome.
     return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${contact}”` };
   }
-  return { opened: true, header: view.header, candidates, reason: null };
+  return { opened: true, header: confirmed(view), candidates, reason: null };
 }
 
 const BLOCKED_EXT = new Set(['.exe', '.msi', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.lnk', '.url', '.reg', '.dll', '.sys', '.cpl', '.hta', '.jar', '.appx', '.msix']);
@@ -339,6 +343,62 @@ function isPreviewControl(n: UiaNodeRaw, file: string): boolean {
   return !!n.name && normName(n.name).includes(normName(file));
 }
 
+/** WhatsApp's Attach menu entries (common interface languages). */
+const ATTACH_PHOTOS = /photos?|videos?|fotos?|imag|bild|médias?|galer/i;
+const ATTACH_DOCUMENT = /document|documento|dokument|fichier|datei/i;
+
+/**
+ * Attaches a file through WhatsApp's own Attach menu and the Windows file dialog, entirely through
+ * accessibility (no keyboard or mouse simulation): Attach → Photos & videos / Document → the file's
+ * path in “File name” → Open. Returns the preview, or null when this route is not available here
+ * (then the caller pastes instead). The dialog is cancelled if anything goes wrong in it.
+ */
+async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: string, picture: boolean, file: string, signal: AbortSignal): Promise<{ nodes: UiaNodeRaw[]; view: WaView } | null> {
+  const f0 = await freshView(d, target);
+  const attach = f0.nodes.find((n) => n.role === 'button' && /^(attach|anexar|adjuntar|joindre|anhängen|allega)\b/i.test(n.name.trim()) && !n.offscreen);
+  if (!attach) return null;
+  await step('opening the Attach menu', () => actOn(d, target, attach, 'invoke'));
+  let item: UiaNodeRaw | undefined;
+  for (let k = 0; k < 8 && !item && !signal.aborted; k++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 300);
+    const f = await freshView(d, target);
+    const items = f.nodes.filter((n) => n.role === 'menuitem' && !n.offscreen && !!n.name);
+    item = items.find((n) => (picture ? ATTACH_PHOTOS : ATTACH_DOCUMENT).test(n.name)) ?? (picture ? undefined : items.find((n) => ATTACH_DOCUMENT.test(n.name)));
+  }
+  if (!item) {
+    await actOn(d, target, attach, 'invoke').catch(() => undefined); // close the menu again
+    return null;
+  }
+  const chosen = item;
+  await step(`choosing “${chosen.name}”`, () => actOn(d, target, chosen, 'invoke'));
+  // The Windows file dialog opens inside WhatsApp's window: its "File name" box and Open button
+  // have the same ids in every Windows language (1148 and 1).
+  let nameBox: UiaNodeRaw | undefined;
+  let open: UiaNodeRaw | undefined;
+  let cancel: UiaNodeRaw | undefined;
+  for (let k = 0; k < 20 && !nameBox && !signal.aborted; k++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 400);
+    const nodes = (await stableSnapshot(d, target)).nodes;
+    nameBox = nodes.find((n) => n.role === 'edit' && n.aid === '1148' && !n.offscreen) ?? nodes.find((n) => n.role === 'combobox' && n.aid === '1148' && !n.offscreen);
+    open = nodes.find((n) => n.role === 'button' && n.aid === '1' && !n.offscreen);
+    cancel = nodes.find((n) => n.role === 'button' && n.aid === '2' && !n.offscreen);
+  }
+  if (!nameBox || !open) return null;
+  try {
+    await step('entering the file in the file dialog', () => actOn(d, target, nameBox!, 'set_value', filePath));
+    await step('pressing Open in the file dialog', () => actOn(d, target, open!, 'invoke'));
+  } catch (e) {
+    if (cancel) await actOn(d, target, cancel, 'invoke').catch(() => undefined);
+    throw e;
+  }
+  for (let k = 0; k < 15 && !signal.aborted; k++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 400);
+    const f = await freshView(d, target);
+    if (f.nodes.some((n) => isPreviewControl(n, file))) return f;
+  }
+  throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview after choosing the file, so nothing was sent.', { dispatched: 'no' });
+}
+
 /** Closes an unsent attachment preview with its own button, so nothing half-made is left in the chat. */
 async function discardPreview(d: CapabilityDeps, target: TargetT): Promise<void> {
   const f = await freshView(d, target).catch(() => null);
@@ -349,23 +409,26 @@ async function discardPreview(d: CapabilityDeps, target: TargetT): Promise<void>
 export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: string, filePath: string, caption: string, signal: AbortSignal): Promise<{ sent: boolean; appearsInChat: boolean; file: string; recipient: string }> {
   const file = path.basename(filePath);
   let fresh = await freshView(d, target);
-  if (!headerMatches(fresh.view.header, contact)) {
+  if (!openChatIs(fresh.view, contact)) {
     const o = await waOpenChat(d, target, contact, signal);
     if (!o.opened) throw new CapabilityError('not_opened', `Could not open the chat with “${contact}”: ${o.reason ?? 'not found'}. Nothing was sent.`, { dispatched: 'no' });
     fresh = await freshView(d, target);
   }
   const { view } = fresh;
   // Checked again right before pasting: the preview opens over this chat.
-  if (!headerMatches(view.header, contact)) throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
+  if (!openChatIs(view, contact)) throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
   if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
   const shownBefore = new Set(fresh.nodes.filter((n) => !n.offscreen).map((n) => `${n.role}:${n.name}`));
   const elementsBefore = new Set(fresh.nodes.map((n) => n.rid));
   const before = view.messages.filter((m) => m.from === 'me').length;
-  const saved = await d.clipboard.readText().catch(() => '');
+  const picture = /\.(png|jpe?g|gif|bmp)$/i.test(filePath);
   let preview: { nodes: UiaNodeRaw[]; view: WaView } | null = null;
-  try {
+  // The WhatsApp app: attach through its own menu and the file dialog (works where Windows blocks
+  // simulated keyboard input); paste only when that route is not available.
+  if (!isBrowser(target.processName)) preview = await attachViaMenu(d, target, filePath, picture, file, signal);
+  const saved = preview ? '' : await d.clipboard.readText().catch(() => '');
+  if (!preview) try {
     // A picture goes on the clipboard as the image itself (the WhatsApp app takes a pasted image, not a pasted file).
-    const picture = /\.(png|jpe?g|gif|bmp)$/i.test(filePath);
     await step('putting the file on the clipboard', () => d.desktop.backend.setClipboardFiles!(filePath, picture));
     // A real click puts the keyboard in the message box (accessibility focus alone does not in the WhatsApp app).
     await step('focusing the message box', async () => {
@@ -403,7 +466,7 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
     // Re-verify the recipient immediately before the irreversible step. The app's preview may hide the
     // chat header; then the check made just before pasting (same chat, nothing navigated) stands.
     const now = await freshView(d, target);
-    if (now.view.header && !headerMatches(now.view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
+    if (now.view.header && !openChatIs(now.view, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
     send = [...now.nodes].reverse().find((n) => n.role === 'button' && /^send\b/i.test(n.name.trim()) && !n.offscreen);
     if (!send) throw new CapabilityError('not_recognized', 'Could not find the Send button of the attachment preview. Nothing was sent.', { dispatched: 'no' });
   } catch (e) {
@@ -433,7 +496,7 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
 
 export async function waSend(d: CapabilityDeps, target: TargetT, contact: string, text: string, allowDuplicate: boolean, signal: AbortSignal): Promise<WaSendResult> {
   let { view } = await freshView(d, target);
-  if (!headerMatches(view.header, contact)) {
+  if (!openChatIs(view, contact)) {
     throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
   }
   const last = lastOutgoing(view);
@@ -446,7 +509,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   await sleep(d.focusSettleMs === 0 ? 0 : 300);
   // Re-verify recipient and draft immediately before the irreversible step.
   view = (await freshView(d, target)).view;
-  if (!headerMatches(view.header, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
+  if (!openChatIs(view, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
   const draft = view.compose ? await d.desktop.backend.uiaDescribe(target.hwnd, view.compose.rid).catch(() => null) : null;
   const draftText = draft?.value ?? draft?.name ?? '';
   if (draft?.value !== undefined && !textMatches(draftText, text)) {
@@ -938,7 +1001,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     },
     async verify(i, o) {
       if (!o.opened) return { verified: null, detail: `Not opened: ${o.reason}. Candidates: ${o.candidates.join(', ') || 'none'}.` };
-      return headerMatches(o.header, i.contact) ? { verified: true, detail: `The open chat is “${o.header}”.` } : { verified: false, detail: 'The open chat does not match.' };
+      return openChatIs(o, i.contact) ? { verified: true, detail: `The open chat is “${o.header}”.` } : { verified: false, detail: 'The open chat does not match.' };
     },
   });
 
@@ -975,7 +1038,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
       // A minimised browser reports its page as hidden; restore it so the chat can be read.
       if (w.minimized) await bringToFront(d, t, ctx.settings);
       const { view } = await freshView(d, t);
-      if (!headerMatches(view.header, i.contact)) {
+      if (!openChatIs(view, i.contact)) {
         throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${i.contact}”. Open it first with whatsapp__open_chat.`);
       }
       return { contact: i.contact, header: view.header as string, messages: view.messages.slice(-i.maxMessages).map(({ from, text, status }) => ({ from, text, status })), observedAt: new Date().toISOString(), trust: UNTRUSTED };

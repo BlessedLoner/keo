@@ -674,7 +674,7 @@ export class Services {
       const t = setTimeout(() => {
         this.voiceWaiters.delete(id);
         resolve('timeout');
-      }, 20_000 + text.length * 90);
+      }, 30_000 + text.length * 100);
       this.voiceWaiters.set(id, (v) => {
         clearTimeout(t);
         resolve(v.reason);

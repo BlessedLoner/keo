@@ -1,4 +1,5 @@
 import { invoke } from './api';
+import { speechParts } from '@shared/speech';
 import { levelBus } from './levelBus';
 
 export interface VoiceState {
@@ -30,6 +31,10 @@ class VoiceController {
   private raf = 0;
   private stopTimer = 0;
   private audio: HTMLAudioElement | null = null;
+  /** Bumped by every new utterance and by stopSpeaking: speech fetched for an older one is dropped. */
+  private speechSeq = 0;
+  /** Ends the clip that is playing now (stopSpeaking), so a waiting speak() returns at once. */
+  private endClip: (() => void) | null = null;
   private audioUrl: string | null = null;
   private resolveRecording: ((text: string | null) => void) | null = null;
 
@@ -232,34 +237,75 @@ class VoiceController {
       speechSynthesis.speak(u);
       return;
     }
+    // Cloud voice: the reply is fetched and played sentence by sentence (the next part downloads
+    // while one plays), so speech starts after the first short sentence, not the whole text.
+    const seq = this.speechSeq;
+    const parts = speechParts(clean.slice(0, 4000));
+    this.set({ speaking: true, speakingSync: null });
+    let played = false;
     try {
-      this.set({ speaking: true, speakingSync: null });
-      const r = await invoke('voice:speak', { text: clean.slice(0, 4000) });
-      const blob = new Blob([r.audio as BlobPart], { type: r.mimeType });
-      this.audioUrl = URL.createObjectURL(blob);
-      const el = new Audio(this.audioUrl);
+      let next: Promise<{ audio: Uint8Array; mimeType: string }> | null = invoke('voice:speak', { text: parts[0]! });
+      for (let i = 0; i < parts.length && next; i++) {
+        const clip = await next;
+        if (seq !== this.speechSeq) return; // stopped or replaced meanwhile: never play late
+        next = i + 1 < parts.length ? invoke('voice:speak', { text: parts[i + 1]! }) : null;
+        next?.catch(() => undefined);
+        await this.playClip(clip, seq);
+        played = true;
+        if (seq !== this.speechSeq) return;
+      }
+    } catch (e) {
+      if (seq === this.speechSeq) this.set({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      if (seq === this.speechSeq) {
+        this.lastPlayed = played;
+        this.stopSpeaking();
+      }
+    }
+  }
+
+  /** Whether the last cloud utterance played at least one part (read by speakAndWait). */
+  private lastPlayed = false;
+
+  /** Plays one fetched clip; resolves when it ends, fails or is stopped. */
+  private playClip(clip: { audio: Uint8Array; mimeType: string }, seq: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (seq !== this.speechSeq) return resolve();
+      const url = URL.createObjectURL(new Blob([clip.audio as BlobPart], { type: clip.mimeType }));
+      const el = new Audio(url);
       this.audio = el;
-      const ctx = this.audioCtx();
-      const src = ctx.createMediaElementSource(el);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      src.connect(analyser);
-      analyser.connect(ctx.destination);
-      el.onplay = () => {
-        this.set({ speaking: true, speakingSync: 'amplitude' });
-        this.meter(analyser, 'playback');
+      this.audioUrl = url;
+      const done = () => {
+        if (this.endClip === done) this.endClip = null;
+        this.stopMeter();
+        if (this.audio === el) this.audio = null;
+        URL.revokeObjectURL(url);
+        if (this.audioUrl === url) this.audioUrl = null;
+        resolve();
       };
-      el.onended = () => this.stopSpeaking();
+      this.endClip = done;
+      try {
+        const ctx = this.audioCtx();
+        const src = ctx.createMediaElementSource(el);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        src.connect(analyser);
+        analyser.connect(ctx.destination);
+        el.onplay = () => {
+          this.set({ speaking: true, speakingSync: 'amplitude' });
+          this.meter(analyser, 'playback');
+        };
+        void ctx.resume().catch(() => undefined);
+      } catch {
+        /* no level meter: plain playback */
+      }
+      el.onended = done;
       el.onerror = () => {
         this.set({ error: 'Audio playback failed.' });
-        this.stopSpeaking();
+        done();
       };
-      await ctx.resume();
-      await el.play();
-    } catch (e) {
-      this.set({ error: e instanceof Error ? e.message : String(e) });
-      this.stopSpeaking();
-    }
+      el.play().catch(() => done());
+    });
   }
 
   /**
@@ -268,6 +314,12 @@ class VoiceController {
    * A Windows voice can take several seconds to start the first time.
    */
   async speakAndWait(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
+    if (engine === 'openai') {
+      // The cloud voice resolves when it has finished (or was stopped).
+      this.lastPlayed = false;
+      await this.speak(text, 'openai', systemVoice);
+      return this.lastPlayed ? 'spoken' : 'no_start';
+    }
     await this.speak(text, engine === 'none' ? 'system' : engine, systemVoice);
     const started = performance.now();
     while (!this.state.speaking && performance.now() - started < 15_000) await new Promise((r) => setTimeout(r, 50));
@@ -288,6 +340,10 @@ class VoiceController {
   }
 
   stopSpeaking(): void {
+    this.speechSeq++;
+    const end = this.endClip;
+    this.endClip = null;
+    end?.();
     if ('speechSynthesis' in window) speechSynthesis.cancel();
     if (this.audio) {
       this.audio.pause();

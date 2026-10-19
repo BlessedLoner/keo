@@ -14,9 +14,19 @@ export function normalizeProcess(name: string): string {
   return name.trim().toLowerCase().replace(/\.exe$/, '');
 }
 
+/**
+ * One app, several process names: WhatsApp Desktop's window belongs to "WhatsApp.Root" although the
+ * installed app (and Keo's app list) calls it "WhatsApp". Allowing one allows the other.
+ */
+const SAME_APP: Record<string, string> = { 'whatsapp.root': 'whatsapp', whatsappdesktop: 'whatsapp' };
+const appKey = (name: string) => {
+  const n = normalizeProcess(name);
+  return SAME_APP[n] ?? n;
+};
+
 export function isAllowedProcess(processName: string, s: Settings): boolean {
-  const n = normalizeProcess(processName);
-  return s.permissions.allowedApps.some((a) => normalizeProcess(a.processName) === n);
+  const n = appKey(processName);
+  return s.permissions.allowedApps.some((a) => appKey(a.processName) === n);
 }
 
 export function toTarget(w: RawWindow, s: Settings): WindowTarget {

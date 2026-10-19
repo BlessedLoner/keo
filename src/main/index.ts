@@ -664,7 +664,7 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
   const liveContact = process.env.KEO_LIVE_RESULTS_SEND;
   if (liveContact && !app.isPackaged) {
     fs.writeFileSync(path.join(app.getPath('temp'), 'keo-live-results-send.json'), JSON.stringify({ started: new Date().toISOString() }));
-    svc.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'WhatsApp', label: 'WhatsApp' }, { processName: 'WhatsApp.Root', label: 'WhatsApp' }] } });
+    svc.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'WhatsApp', label: 'WhatsApp' }] } });
     pw.showResults();
     await new Promise((resolve) => setTimeout(resolve, 900));
     res.focus();
