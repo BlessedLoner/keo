@@ -264,7 +264,7 @@ const LEVELS: Array<{ id: Settings['autonomy']['level']; title: string; text: st
   {
     id: 'hands_free',
     title: 'Hands-free',
-    text: 'For voice use. Keo does what you asked without stopping for each step, including sending messages to people you named yourself.',
+    text: 'Keo works without stopping to ask: opening and operating the apps you told it to use, clicking and typing in them, sending messages to people you named, and replying in live chats on its own. Still always asks: paying, buying, deleting, signing in, and running project code.'
   },
 ];
 
@@ -477,6 +477,64 @@ function ShortcutCard(p: {
   );
 }
 
+/** Trained wake word (Picovoice Porcupine): access key, model file or built-in keyword, sensitivity. */
+function TrainedWakeWord({ s, patch, hasKey }: { s: Settings; patch: Patch; hasKey: boolean }) {
+  const ui = useUi();
+  const p = s.wake.porcupine;
+  const [key, setKey] = useState('');
+  const [keySaved, setKeySaved] = useState(hasKey);
+  return (
+    <section className="card">
+      <h2>Trained wake word</h2>
+      <p className="muted small">
+        Picovoice Porcupine listens on this PC for one trained phrase only — much more reliable than general speech recognition, and no audio leaves your computer. Create a free account at console.picovoice.ai, copy your
+        AccessKey, and either train “Hey Keo” there (download the Windows .ppn file) or use a built-in word such as “Jarvis”. Then choose “Trained wake word” as the speech engine above.
+      </p>
+      <div className="field">
+        <label htmlFor="pv-key">Picovoice AccessKey {keySaved && <span className="chip ok">Saved</span>}</label>
+        <div className="row">
+          <input id="pv-key" className="input mono" type="password" autoComplete="off" placeholder={keySaved ? '•••••••• (saved, encrypted)' : 'Paste your AccessKey'} value={key} onChange={(e) => setKey(e.target.value)} />
+          <button className="btn sm" disabled={!key.trim()} onClick={() => void invoke('wake:setPicovoiceKey', { key: key.trim() }).then((r) => { setKeySaved(r.hasKey); setKey(''); ui.toast('AccessKey saved (encrypted)', 'success'); }).catch((e) => ui.error(errText(e)))}>
+            Save
+          </button>
+          {keySaved && (
+            <button className="btn ghost sm" onClick={() => void invoke('wake:setPicovoiceKey', { key: '' }).then((r) => setKeySaved(r.hasKey)).catch((e) => ui.error(errText(e)))}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid-2">
+        <div className="field">
+          <label>Wake word</label>
+          <div className="row">
+            <button className="btn sm" onClick={() => void invoke('wake:pickKeywordFile', {}).catch((e) => ui.error(errText(e)))}>
+              Choose trained .ppn file…
+            </button>
+          </div>
+          <span className="hint">{p.keywordPath ? `Using ${p.keywordPath.split(/[\\/]/).pop()}` : p.builtin ? `Using the built-in word “${p.builtin}”` : 'Not chosen yet.'}</span>
+        </div>
+        <div className="field">
+          <label htmlFor="pv-builtin">…or a built-in word</label>
+          <select id="pv-builtin" className="select" value={p.builtin ?? ''} onChange={(e) => void patch({ wake: { porcupine: { builtin: e.target.value || null, keywordPath: e.target.value ? null : p.keywordPath } } })}>
+            <option value="">(none)</option>
+            {['jarvis', 'computer', 'hey siri', 'alexa', 'hey google', 'ok google', 'picovoice', 'porcupine', 'bumblebee', 'terminator'].map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="pv-sens">Sensitivity: {p.sensitivity.toFixed(2)}</label>
+          <input id="pv-sens" type="range" min={0.1} max={0.95} step={0.05} defaultValue={p.sensitivity} onMouseUp={(e) => void patch({ wake: { porcupine: { sensitivity: Number((e.target as HTMLInputElement).value) } } })} onKeyUp={(e) => void patch({ wake: { porcupine: { sensitivity: Number((e.target as HTMLInputElement).value) } } })} />
+          <span className="hint">Higher catches more of your calls but may wake on similar sounds.</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [status, setStatus] = useState<WakeStatusInfo | null>(null);
@@ -559,9 +617,12 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
               <option value="auto">Automatic (modern Windows engine when available)</option>
               <option value="modern">Modern Windows 10/11 engine</option>
               <option value="classic">Classic Windows engine</option>
+              <option value="porcupine">Trained wake word (Picovoice Porcupine)</option>
             </select>
             <span className="hint">
-              {status?.engine.kind === 'modern'
+              {status?.engine.kind === 'porcupine'
+                ? 'Using the trained wake word (Porcupine, on this PC). Commands are still understood by Windows speech or OpenAI.'
+                : status?.engine.kind === 'modern'
                 ? 'Using the modern engine (the one behind Windows voice typing) — best with accents.'
                 : status?.engine.kind === 'classic'
                   ? `Using the classic engine${status.engine.fallbackReason ? ` (modern unavailable: ${status.engine.fallbackReason.slice(0, 120)})` : ''}.`
@@ -590,6 +651,7 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
         </div>
       </section>
 
+      {status && <TrainedWakeWord s={s} patch={patch} hasKey={status.picovoiceKey} />}
       <ShortcutCard
         title="Voice shortcut"
         help="Starts a voice conversation with Keo from anywhere (press again to end it)."

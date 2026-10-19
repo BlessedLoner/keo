@@ -107,6 +107,14 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.4 iteration: hands-free, faster WhatsApp, installed apps, trained wake word
+
+- Live chat asked the user even for “hey how are you”: the prompt told the model to ask for anything not covered by instructions, and unparseable answers defaulted to asking. Now small talk is answered, malformed answers are retried, and in Hands-free the chat never pauses (careful replies + a notification).
+- Hands-free approves all but the critical tier (pay/buy/delete/reset/sign-in controls, running project code); plan steps included; forgiving name matching.
+- WhatsApp app reading: 9 s → ~2 s (live: 234 elements, search/compose/6 chats found) by reading pattern details only for interactive elements and skipping the second copy of the page; fixed pauses replaced by polling; live chat polls every 1.5 s, debounce 2.5 s, gap 2.5 s.
+- Installed-apps picker with icons (live: 117 apps, 103 with process names, 102 icons; WhatsApp → WhatsApp.Root) for allowed and launchable apps; Store apps launch by app id.
+- Porcupine trained wake word (optional engine; built-in “Jarvis” or a trained “Hey Keo” .ppn). Not live-tested: needs the user's Picovoice AccessKey.
+
 ### 1.3 iteration: WhatsApp app, research cards, sub-agents, workspaces, workflows
 
 - **WhatsApp app (verified live on this PC, WhatsApp 2.2640.100.0):** the window is WinUI 3 hosting WebView2 windowlessly. Root causes: (1) Keo only treated `Chrome_RenderWidgetHostHWND` as embedded content; the app uses `Chrome_WidgetWin_0` inside `Microsoft.UI.Content.DesktopChildSiteBridge`; (2) once the classic .NET UI Automation client has been used in a process, the COM client in that process also sees an empty frame. Fix: content roots include those classes, and a modern (COM) reader runs in its own helper process, chosen automatically per window. Live: classic 15 elements / modern 782–1094, search box and 8 chats found; your own chat (“Emmanuel (You)”) searched, opened and header-verified (header form “Name (You) Message yourself” now understood). Nothing was sent.

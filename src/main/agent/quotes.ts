@@ -34,5 +34,22 @@ export function findQuote(messages: Array<{ id: string; text: string }>, quote: 
 export function nameMentioned(messages: Array<{ text: string }>, name: string): boolean {
   const n = normalizeQuote(name);
   if (n.length < 2) return false;
-  return messages.some((m) => ` ${normalizeQuote(m.text)} `.includes(` ${n} `));
+  const squash = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, '');
+  const sq = squash(n);
+  return messages.some((m) => {
+    const t = normalizeQuote(m.text);
+    if (` ${t} `.includes(` ${n} `)) return true;
+    // Same name written with or without spaces/punctuation ("Kid bro" / "Kidbro"), whole words only.
+    if (sq.length < 4) return false;
+    const words = t.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    for (let a = 0; a < words.length; a++) {
+      let acc = '';
+      for (let b = a; b < Math.min(words.length, a + 4); b++) {
+        acc += words[b];
+        if (acc === sq) return true;
+        if (acc.length >= sq.length) break;
+      }
+    }
+    return false;
+  });
 }

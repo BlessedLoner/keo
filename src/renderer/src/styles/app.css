@@ -403,3 +403,9 @@ kbd { padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px
 /* voice mode in the companion: captions wrap to two lines */
 .companion.voice .companion-activity { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .plain-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.app-picker { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.app-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.app-list li { padding: 4px 4px; border-radius: 6px; }
+.app-list li:hover { background: rgba(255, 255, 255, 0.04); }
+.app-list img, .app-icon-placeholder { width: 24px; height: 24px; flex: none; display: inline-flex; align-items: center; justify-content: center; }

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
+import { realPorcupine } from './voice/porcupineEngine';
 import { autoUpdater } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -279,6 +280,10 @@ app.whenReady().then(() => {
       },
       pickOpenFile: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import projects and workflows', properties: ['openFile'], filters: [{ name: 'Keo export', extensions: ['json'] }] });
+        return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
+      pickWakeModel: async () => {
+        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
       pickFolder: async (title) => {
@@ -574,6 +579,13 @@ function runSmoke(win: BrowserWindow): void {
         result.presence = await presenceSmoke(process.env.KEO_SMOKE_SHOTS);
       } catch (e) {
         result.presence = { error: errorMessage(e) };
+      }
+      // The trained wake word's native modules load in this build (packaged: from app.asar.unpacked).
+      try {
+        realPorcupine();
+        result.porcupineLoads = true;
+      } catch (e) {
+        result.porcupineLoads = errorMessage(e).slice(0, 200);
       }
       log.info('smoke.result', { keys: Object.keys(result).length });
       if (out) fs.writeFileSync(out, JSON.stringify(result, null, 2));

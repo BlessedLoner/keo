@@ -37,7 +37,9 @@ it.runIf(process.env.KEO_LIVE_WA_OPEN === '1')('opens my own chat in the WhatsAp
     out.chatsVisible = v.chats.length;
     // The user's own number on this WhatsApp is saved as "Emmanuel" (the user named it for this test).
     const want = process.env.KEO_LIVE_WA_CONTACT ?? 'Emmanuel';
+    const tOpen = Date.now();
     let r = await waOpenChat(d, target, want, new AbortController().signal);
+    out.openMs = Date.now() - tOpen;
     out.firstTry = { opened: r.opened, candidates: r.candidates.length, selfCandidate: r.candidates.some((c) => /\(you\)/i.test(c)) };
     const self = r.candidates.find((c) => /\(you\)/i.test(c));
     if (!r.opened && self) r = await waOpenChat(d, target, self, new AbortController().signal);

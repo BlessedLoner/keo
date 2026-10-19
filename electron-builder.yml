@@ -17,6 +17,9 @@ files:
   - package.json
   - '!**/*.map'
 asar: true
+# Porcupine (trained wake word) loads its native .node files and model files from disk.
+asarUnpack:
+  - node_modules/@picovoice/**
 compression: normal
 npmRebuild: false # Keo ships no native modules (SQLite is Node's built-in node:sqlite).
 afterPack: scripts/after-pack.cjs

@@ -951,6 +951,27 @@ public interface IKeoUia {
   [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaWalker GetControlViewWalker();
   void GetContentViewWalker();
   [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaWalker GetRawViewWalker();
+  void GetRawViewCondition();
+  [return: MarshalAs(UnmanagedType.IUnknown)] object GetControlViewCondition();
+  void GetContentViewCondition();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaCacheRequest CreateCacheRequest();
+}
+
+[ComImport, Guid("b32a92b5-bc25-4078-9c08-d7ee95c48e03"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoUiaCacheRequest {
+  void AddProperty(int propertyId);
+  void AddPattern(int patternId);
+  void Clone();
+  void GetTreeScope();
+  void SetTreeScope(int scope);
+  void GetTreeFilter();
+  void SetTreeFilter([MarshalAs(UnmanagedType.IUnknown)] object filter);
+}
+
+[ComImport, Guid("14314595-b4bc-4055-95f2-58f2e42c9855"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IKeoUiaElementArray {
+  int GetLength();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement GetElement(int index);
 }
 
 [ComImport, Guid("4042c624-389c-4afc-a630-9df854a541fc"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -965,10 +986,15 @@ public interface IKeoUiaWalker {
 public interface IKeoUiaElement {
   void SetFocus();
   [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_I4)] int[] GetRuntimeId();
-  void FindFirst(); void FindAll(); void FindFirstBuildCache(); void FindAllBuildCache(); void BuildUpdatedCache();
+  void FindFirst(); void FindAll(); void FindFirstBuildCache(); void FindAllBuildCache();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElement BuildUpdatedCache([MarshalAs(UnmanagedType.Interface)] IKeoUiaCacheRequest request);
   [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int propertyId);
-  void GetCurrentPropertyValueEx(); void GetCachedPropertyValue(); void GetCachedPropertyValueEx(); void GetCurrentPatternAs(); void GetCachedPatternAs();
+  void GetCurrentPropertyValueEx();
+  [return: MarshalAs(UnmanagedType.Struct)] object GetCachedPropertyValue(int propertyId);
+  void GetCachedPropertyValueEx(); void GetCurrentPatternAs(); void GetCachedPatternAs();
   [return: MarshalAs(UnmanagedType.IUnknown)] object GetCurrentPattern(int patternId);
+  void GetCachedPattern(); void GetCachedParent();
+  [return: MarshalAs(UnmanagedType.Interface)] IKeoUiaElementArray GetCachedChildren();
 }
 
 [ComImport, Guid("fb377fbe-8ea6-46d5-9c73-6499642d3059"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -1019,6 +1045,9 @@ public static class KeoUia3 {
     P_SELECTED = 30079, P_TOGGLESTATE = 30086;
   const int PAT_INVOKE = 10000, PAT_SCROLL = 10004, PAT_EXPAND = 10005, PAT_VALUE = 10002, PAT_SELITEM = 10010, PAT_TOGGLE = 10015;
 
+  /** Roles whose patterns/values matter for actions; others get name, type and position only. */
+  static readonly HashSet<string> Interactive = new HashSet<string> { "button", "edit", "combobox", "checkbox", "radiobutton", "listitem", "dataitem", "treeitem", "tabitem", "menuitem", "hyperlink", "document", "splitbutton", "slider", "spinner", "list", "tree", "tab", "datagrid", "table", "scrollbar" };
+
   static readonly Dictionary<int, string> Types = new Dictionary<int, string> {
     {50000,"button"},{50001,"calendar"},{50002,"checkbox"},{50003,"combobox"},{50004,"edit"},{50005,"hyperlink"},{50006,"image"},
     {50007,"listitem"},{50008,"list"},{50009,"menu"},{50010,"menubar"},{50011,"menuitem"},{50012,"progressbar"},{50013,"radiobutton"},
@@ -1027,9 +1056,80 @@ public static class KeoUia3 {
     {50028,"datagrid"},{50029,"dataitem"},{50030,"document"},{50031,"splitbutton"},{50032,"window"},{50033,"pane"},{50034,"header"},
     {50035,"headeritem"},{50036,"table"},{50037,"titlebar"},{50038,"separator"},{50039,"semanticzoom"},{50040,"appbar"} };
 
-  static object Prop(IKeoUiaElement e, int id) { try { return e.GetCurrentPropertyValue(id); } catch { return null; } }
+  // Reads come from the element's cache when it was filled in one batch (see Snapshot), else live.
+  [ThreadStatic] static bool useCache;
+  static object Prop(IKeoUiaElement e, int id) { try { return useCache ? e.GetCachedPropertyValue(id) : e.GetCurrentPropertyValue(id); } catch { return null; } }
   static bool B(IKeoUiaElement e, int id) { var v = Prop(e, id); return v is bool && (bool)v; }
   static string S(IKeoUiaElement e, int id) { var v = Prop(e, id) as string; return v ?? ""; }
+  static string CachedRid(IKeoUiaElement e) {
+    var r = Prop(e, 30000) as int[];
+    if (r == null) return Rid(e);
+    var parts = new string[r.Length];
+    for (int i = 0; i < r.Length; i++) parts[i] = r[i].ToString();
+    return string.Join(".", parts);
+  }
+
+  static readonly int[] CachedProps = { 30000, 30001, 30003, 30004, 30005, 30008, 30010, 30011, 30019, 30022, 30028, 30031, 30034, 30036, 30040, 30041, 30043, 30045, 30046, 30070, 30079, 30086 };
+
+  /**
+   * One cross-process call per element that returns the element AND its
+   * children with every property Keo needs (instead of ~20 calls per
+   * element). Caching a whole subtree at once fails on large web pages.
+   */
+  static bool Duplicate(Dictionary<string, object> n, HashSet<string> containers) {
+    if (!IsContainer(n)) return false;
+    object x, y, w, h;
+    n.TryGetValue("x", out x); n.TryGetValue("y", out y); n.TryGetValue("w", out w); n.TryGetValue("h", out h);
+    var key = n["role"] + "|" + n["name"] + "|" + x + "|" + y + "|" + w + "|" + h;
+    if (((string)n["name"]).Length == 0) return false; // unnamed wrappers are too common to compare
+    return !containers.Add(key);
+  }
+
+  static bool IsContainer(Dictionary<string, object> n) {
+    var role = (string)n["role"];
+    if (role != "pane" && role != "document" && role != "group" && role != "window" && role != "custom") return false;
+    object w, h;
+    return n.TryGetValue("w", out w) && n.TryGetValue("h", out h) && (int)w >= 40 && (int)h >= 40;
+  }
+
+  static IKeoUiaCacheRequest levelReq;
+  static IKeoUiaCacheRequest LevelRequest() {
+    if (levelReq != null) return levelReq;
+    var req = U().CreateCacheRequest();
+    foreach (var id in CachedProps) req.AddProperty(id);
+    req.SetTreeScope(1); // the element itself
+    return levelReq = req;
+  }
+
+  /**
+   * Adds a subtree to the list (depth-first, bounded), skipping elements already seen.
+   * Structure comes from the live walker (it reaches embedded web content); each
+   * element's properties arrive in ONE batched call instead of ~20.
+   */
+  static bool AddCached(IKeoUiaElement root, double wx, double wy, int depth, int parent, List<Dictionary<string, object>> list, HashSet<string> seen, int maxNodes, int maxDepth, Stopwatch sw, int budgetMs) {
+    var req = LevelRequest();
+    var walker = U().GetControlViewWalker();
+    var stack = new Stack<Tuple<IKeoUiaElement, int, int>>();
+    stack.Push(Tuple.Create(root, depth, parent));
+    bool truncated = false;
+    while (stack.Count > 0) {
+      if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+      var t = stack.Pop();
+      IKeoUiaElement filled;
+      try { filled = t.Item1.BuildUpdatedCache(req); } catch { continue; }
+      Dictionary<string, object> n;
+      try { n = Node(filled, wx, wy, t.Item2, t.Item3); } catch { continue; }
+      var r = (string)n["rid"];
+      int idx;
+      if (seen.Contains(r)) idx = -1; else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); last[r] = t.Item1; }
+      if (t.Item2 >= maxDepth) continue;
+      int parentIdx = idx >= 0 ? idx : t.Item3;
+      var kids = new List<IKeoUiaElement>();
+      try { var ch = walker.GetFirstChildElement(t.Item1); while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSiblingElement(ch); } } catch { }
+      for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, parentIdx));
+    }
+    return truncated;
+  }
 
   static string Rid(IKeoUiaElement e) {
     var r = e.GetRuntimeId();
@@ -1049,17 +1149,20 @@ public static class KeoUia3 {
 
   static Dictionary<string, object> Node(IKeoUiaElement e, double wx, double wy, int depth, int parent) {
     var d = new Dictionary<string, object>();
-    d["rid"] = Rid(e);
+    d["rid"] = useCache ? CachedRid(e) : Rid(e);
     var t = Prop(e, P_TYPE);
     string role; d["role"] = (t is int && Types.TryGetValue((int)t, out role)) ? role : "custom";
-    var lct = S(e, P_LCT); if (lct.Length > 0) d["lct"] = Clip(lct, 40);
+    var roleName = (string)d["role"];
+    bool interactive = Interactive.Contains(roleName);
+    if (interactive) { var lct = S(e, P_LCT); if (lct.Length > 0) d["lct"] = Clip(lct, 40); }
     d["name"] = Clip(S(e, P_NAME), 200);
     var aid = S(e, P_AID); if (aid.Length > 0) d["aid"] = Clip(aid, 80);
     var r = Rect(e);
     if (r != null && r.Length == 4 && !double.IsInfinity(r[0]) && !double.IsNaN(r[0]) && r[2] > 0) { d["x"] = (int)(r[0] - wx); d["y"] = (int)(r[1] - wy); d["w"] = (int)r[2]; d["h"] = (int)r[3]; }
     d["depth"] = depth; d["parent"] = parent;
-    if (!B(e, P_ENABLED)) d["disabled"] = true;
     if (B(e, P_OFFSCREEN)) d["offscreen"] = true;
+    if (!interactive) return d; // text, panes and groups: name, type and position are enough
+    if (!B(e, P_ENABLED)) d["disabled"] = true;
     if (B(e, P_FOCUS)) d["focused"] = true;
     bool pw = B(e, P_PASSWORD); if (pw) d["password"] = true;
     var pats = new List<string>();
@@ -1079,7 +1182,45 @@ public static class KeoUia3 {
   }
 
   public static string Snapshot(IntPtr h, int maxNodes, int maxDepth, int budgetMs) {
+    // Batched (cached) reads hang on some WebView2 elements, so the live walk is used,
+    // reading pattern details only for elements that can be interacted with (see Node).
+    return SnapshotWalk(h, maxNodes, maxDepth, budgetMs);
+  }
+
+  static string SnapshotCached(IntPtr h, int maxNodes, int maxDepth, int budgetMs) {
     var sw = Stopwatch.StartNew();
+    var root = U().ElementFromHandle(h);
+    var wr = Rect(root) ?? new double[] { 0, 0, 0, 0 };
+    IKeoUiaElement croot = root;
+    try { LevelRequest(); } catch { return null; }
+    var list = new List<Dictionary<string, object>>();
+    var seen = new HashSet<string>();
+    last.Clear(); lastWindow = h;
+    bool truncated;
+    int extraRoots = 0;
+    useCache = true;
+    try {
+      truncated = AddCached(croot, wr[0], wr[1], 0, -1, list, seen, maxNodes, maxDepth, sw, budgetMs);
+      foreach (var child in ContentChildren(h)) {
+        if (truncated) break;
+        IKeoUiaElement c;
+        try { c = U().ElementFromHandle(child); } catch { c = null; }
+        if (c == null) continue;
+        int before = list.Count;
+        truncated = AddCached(c, wr[0], wr[1], 1, 0, list, seen, maxNodes, maxDepth, sw, budgetMs);
+        if (list.Count > before) extraRoots++;
+      }
+    } finally { useCache = false; }
+    var res = new Dictionary<string, object>();
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["engine"] = "uia3-batched"; res["contentRoots"] = extraRoots;
+    var wd = new Dictionary<string, object>(); wd["w"] = (int)wr[2]; wd["h"] = (int)wr[3]; wd["x"] = (int)wr[0]; wd["y"] = (int)wr[1];
+    res["window"] = wd;
+    return Json.Serialize(res);
+  }
+
+  static string SnapshotWalk(IntPtr h, int maxNodes, int maxDepth, int budgetMs) {
+    var sw = Stopwatch.StartNew();
+    var containers = new HashSet<string>();
     var root = U().ElementFromHandle(h);
     var wr = Rect(root) ?? new double[] { 0, 0, 0, 0 };
     var walker = U().GetControlViewWalker();
@@ -1096,6 +1237,11 @@ public static class KeoUia3 {
       int idx = list.Count; n["i"] = idx; list.Add(n);
       last[(string)n["rid"]] = t.Item1;
       if (t.Item2 >= maxDepth) continue;
+      // Scrolled-out parts (old messages, far chats) cannot be acted on: their insides are skipped.
+      if (n.ContainsKey("offscreen") && t.Item2 > 1) continue;
+      // The same web page can be reachable twice (the host's copy and the browser's own):
+      // a large container identical in type, name and place to one already read is not read again.
+      if (Duplicate(n, containers)) continue;
       var kids = new List<IKeoUiaElement>();
       try {
         var ch = walker.GetFirstChildElement(t.Item1);
@@ -1124,6 +1270,8 @@ public static class KeoUia3 {
         int idx;
         if (seen.Contains(r)) { idx = -1; } else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); last[r] = t.Item1; added = true; }
         if (t.Item2 >= maxDepth) continue;
+        if (n.ContainsKey("offscreen") && t.Item2 > 1) continue;
+        if (Duplicate(n, containers)) continue;
         var kids = new List<IKeoUiaElement>();
         try { var ch = walker.GetFirstChildElement(t.Item1); while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSiblingElement(ch); } } catch { }
         int parentIdx = idx >= 0 ? idx : t.Item3;

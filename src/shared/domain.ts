@@ -312,7 +312,8 @@ export interface ApprovalPreview {
   mustBeNamed?: string | null;
 }
 
-export type AutonomyTier = 'routine' | 'important' | 'always_ask';
+/** routine / important / always_ask: run without asking in Hands-free; critical: always a click on screen (pay, buy, delete, sign in, running code). */
+export type AutonomyTier = 'routine' | 'important' | 'always_ask' | 'critical';
 export type AutonomyLevel = 'always_ask' | 'important_only' | 'hands_free';
 
 /** A live WhatsApp chat Keo keeps going for the user until stopped. */

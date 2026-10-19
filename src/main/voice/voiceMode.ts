@@ -237,7 +237,7 @@ export class VoiceMode {
   /** Asks for one approval by voice; true when approved. */
   private async confirm(session: number, task: Task, step: Task['steps'][number]): Promise<boolean> {
     const what = step.preview.summary;
-    if (step.preview.autoTier === 'always_ask') {
+    if (step.preview.autoTier === 'critical') {
       this.d.showApprovals();
       await this.say(session, `${what}. This one needs your approval on screen.`);
       return false;

@@ -1,3 +1,4 @@
+import { launchByAppId } from '../desktop/appDiscovery';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -101,6 +102,8 @@ export interface CapabilityDeps {
    * verbatim (whitespace/case-insensitive). Used to ground auto-saved memories.
    */
   findUserQuote: (conversationId: string, quote: string) => { messageId: string } | null;
+  /** Starts an app by its Windows app id (tests inject a fake). */
+  launchAppId?: (appId: string) => Promise<void>;
   /** Pause after focusing before sending input (tests use 0). */
   focusSettleMs?: number;
   /** Creates a proposed (non-executing) task from a model plan. Returns task id. */
@@ -708,23 +711,34 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     },
     preview: (i, s) => {
       const a = s.permissions.launchableApps.find((x) => x.id === i.appId);
-      return { summary: `Launch ${a?.label ?? i.appId}`, target: a?.path ?? null, consequences: ['Starts a new process on this computer.'], dataExport: null };
+      return { summary: `Launch ${a?.label ?? i.appId}`, target: a?.path ?? a?.appId ?? null, consequences: ['Starts a new process on this computer.'], dataExport: null };
     },
     auditView: (i) => ({ appId: i.appId }),
     async execute(i, ctx) {
       const app = ctx.settings.permissions.launchableApps.find((a) => a.id === i.appId);
       if (!app) throw new CapabilityError('not_found', 'Application is no longer registered.');
-      if (!path.isAbsolute(app.path) || !fs.existsSync(app.path)) throw new CapabilityError('not_found', 'The registered executable no longer exists.');
+      if (app.appId && !app.path) {
+        // Store/registered app: started by Windows from its app id (no path, no shell).
+        try {
+          await (d.launchAppId ?? launchByAppId)(app.appId);
+        } catch (e) {
+          throw new CapabilityError('launch_failed', `Could not start the application: ${(e as Error).message}`, { dispatched: 'no' });
+        }
+        return { pid: 0, path: app.appId, next: 'Wait a moment, then call desktop__list_windows to find the new window.' };
+      }
+      const exe = app.path!;
+      if (!path.isAbsolute(exe) || !fs.existsSync(exe)) throw new CapabilityError('not_found', 'The registered executable no longer exists.');
       return await new Promise<{ pid: number; path: string; next: string }>((resolve, reject) => {
-        const child = spawn(app.path, [], { detached: true, stdio: 'ignore', shell: false, windowsHide: false });
+        const child = spawn(exe, [], { detached: true, stdio: 'ignore', shell: false, windowsHide: false });
         child.once('error', (e) => reject(new CapabilityError('launch_failed', `Could not start the application: ${e.message}`, { dispatched: 'no' })));
         child.once('spawn', () => {
           child.unref();
-          resolve({ pid: child.pid ?? 0, path: app.path, next: 'Wait a moment, then call desktop__list_windows to find the new window (it may belong to a differently named process).' });
+          resolve({ pid: child.pid ?? 0, path: exe, next: 'Wait a moment, then call desktop__list_windows to find the new window (it may belong to a differently named process).' });
         });
       });
     },
     async verify(_i, o) {
+      if (o.pid === 0 && !o.path.toLowerCase().endsWith('.exe')) return { verified: true, detail: 'Windows started the app.' };
       return o.pid > 0 ? { verified: true, detail: `Process started (pid ${o.pid}).` } : { verified: false, detail: 'No process id returned.' };
     },
   });

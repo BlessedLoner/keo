@@ -46,7 +46,10 @@ export const invokeSchemas = {
   'app:installUpdate': empty,
   'diag:checkComputer': empty,
   'projects:pickWorkspace': z.object({ projectId: z.string().min(1).max(80) }).strict(),
+  'wake:setPicovoiceKey': z.object({ key: z.string().trim().max(400) }).strict(),
+  'wake:pickKeywordFile': empty,
   'workflows:list': empty,
+  'apps:installed': z.object({ refresh: z.boolean().default(false) }).strict(),
   'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
   'workflows:delete': z.object({ id: z.string().regex(/^wf_[a-z0-9]{6,20}$/) }).strict(),
   'data:export': empty,
@@ -207,6 +210,9 @@ export interface InvokeOutputs {
   'app:installUpdate': { started: boolean };
   'diag:checkComputer': SelfTestResult;
   'projects:pickWorkspace': { path: string | null; scripts: string[] };
+  'apps:installed': Array<{ name: string; appId: string; kind: 'store' | 'desktop'; publisher: string | null; processName: string | null; exePath: string | null; icon: string | null }>;
+  'wake:setPicovoiceKey': { hasKey: boolean };
+  'wake:pickKeywordFile': { path: string | null };
   'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
   'workflows:saveFromTask': { id: string; name: string };
   'workflows:delete': { deleted: boolean };
@@ -326,6 +332,8 @@ export interface WakeStatusInfo {
   recognizers: Array<{ culture: string; name: string }>;
   shortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
   voiceShortcut: { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
+  /** A Picovoice access key is stored (never the key itself). */
+  picovoiceKey: boolean;
   /** Speech engine in use ("modern" Windows 10/11 or "classic"), and why modern isn't, if it isn't. */
   engine: { kind: string | null; fallbackReason: string | null };
 }

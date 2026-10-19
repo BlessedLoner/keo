@@ -467,7 +467,7 @@ describe('approval levels', () => {
     expect(send.awaiting).toBe(true);
   });
 
-  it('“Hands-free” sends to a contact the user named, but asks for anyone else and for raw clicks', async () => {
+  it('“Hands-free” sends to a contact the user named and operates the app without asking, but asks for anyone else', async () => {
     const { wa, conv } = setup('hands_free');
     userSays(conv.id, 'tell Mum on WhatsApp that I am on my way');
     await run('whatsapp.open_chat', { target: WA, contact: 'Mum' }, conv.id, false);
@@ -476,11 +476,54 @@ describe('approval levels', () => {
     expect(wa.sent).toEqual([{ to: 'Mum', text: 'I am on my way' }]);
     const other = await run('whatsapp.send_message', { target: WA, contact: 'Daniel Smith', text: 'hi' }, conv.id, false);
     expect(other.awaiting).toBe(true); // not named by the user
+    // Operating the app: raw clicks and Enter run without asking in Hands-free.
     const click = await run('desktop.click', { target: WA, x: 10, y: 10 }, conv.id, false);
-    expect(click.awaiting && click.step!.preview.alwaysAskReason).toMatch(/raw click/);
+    expect(click.awaiting).toBeFalsy();
+    expect(click.step!.approval?.policy).toBe('hands_free');
     const enter = await run('desktop.press_keys', { target: WA, combo: 'enter' }, conv.id, false);
-    expect(enter.awaiting).toBe(true);
+    expect(enter.awaiting).toBeFalsy();
+    // The same name written differently still counts as named.
+    userSays(conv.id, 'and message Daniel Okafor too');
+    const spaced = await run('whatsapp.send_message', { target: WA, contact: 'DanielOkafor', text: 'hi' }, conv.id, false);
+    expect(spaced.awaiting).toBeFalsy();
     const audit = h.services.audit.recent(200).filter((e) => e.decision === 'approved_by_policy');
     expect(audit.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('live chat in hands-free and small talk', () => {
+  it('answers small talk without asking the user, even when not hands-free', async () => {
+    const { wa } = await startWithMum();
+    brain.push((req) => {
+      expect(req.system).toMatch(/Greetings and small talk/);
+      return decision({ action: 'reply', message: "I'm good, thanks! How about you?" });
+    });
+    incoming(wa, 'Mum', 'hey how are you');
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(session().status).toBe('active');
+  });
+
+  it('hands-free never stops the chat: a price question gets a careful reply and an FYI to the user', async () => {
+    const { wa } = await startWithMum('Sell my blenders');
+    h.services.settings.update({ autonomy: { level: 'hands_free' } });
+    brain.push((req) => {
+      expect(req.system).toMatch(/hands-free: never stop to ask/);
+      return decision({ action: 'ask_user', question_for_user: 'What price?' });
+    });
+    brain.push(decision({ action: 'reply', message: 'Let me check the price and get back to you shortly!' }));
+    incoming(wa, 'Mum', 'How much is the blender?');
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(wa.sent[0]!.text).toMatch(/get back to you/);
+    expect(session().status).toBe('active');
+    await waitFor(() => /money or prices[\s\S]*I replied/.test(notified.join('\n')), 5000);
+  });
+
+  it('an unreadable model answer is retried instead of asking the user', async () => {
+    const { wa } = await startWithMum();
+    brain.push('Sure! I would say hello back.'); // not JSON
+    brain.push(decision({ action: 'reply', message: 'Hello! 😊' }));
+    incoming(wa, 'Mum', 'Hello dear');
+    await waitFor(() => wa.sent.length === 1, 5000);
+    expect(session().status).toBe('active');
   });
 });

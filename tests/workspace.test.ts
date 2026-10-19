@@ -114,7 +114,7 @@ describe('file capabilities', () => {
     const env = h.services.registry.admit({ capabilityId: 'files.write', input: { projectId: p.id, path: '.env', content: 'x' }, origin: 'model', correlationId: 'c' });
     expect(env.ok).toBe(false);
     const run = h.services.registry.admit({ capabilityId: 'files.run_script', input: { projectId: p.id, script: 'test' }, origin: 'model', correlationId: 'c' });
-    expect(run.ok && run.requiresApproval && run.preview.autoTier === 'always_ask').toBe(true);
+    expect(run.ok && run.requiresApproval && run.preview.autoTier === 'critical').toBe(true);
     const nope = h.services.registry.admit({ capabilityId: 'files.run_script', input: { projectId: p.id, script: 'deploy' }, origin: 'model', correlationId: 'c' });
     expect(nope.ok).toBe(false);
     // Approve the write through the normal task path and check the file.

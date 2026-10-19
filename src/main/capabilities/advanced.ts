@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
-import { compactNodes, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
+import { meaningfulNodes } from '../desktop/backend';
+import { compactNodes, isCriticalControl, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
 import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
@@ -66,6 +67,16 @@ async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
     await sleep(d.focusSettleMs === 0 ? 0 : 400);
     raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
   }
+  // Only the frame so far (title bar, window buttons): an app that just opened, or a web page
+  // that switches its accessibility on when first asked. Look again a few times.
+  for (let i = 0; i < 3 && meaningfulNodes(raw.nodes) < 3; i++) {
+    await sleep(d.focusSettleMs === 0 ? 0 : 400);
+    raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
+  }
+  if (meaningfulNodes(raw.nodes) < 3 && (await d.desktop.backend.coveredShare(target.hwnd).catch(() => 0)) >= 0.9) {
+    // Browser-based apps (Chrome, Electron, WebView2) stop showing their page while fully covered.
+    throw new CapabilityError('window_covered', 'That window is hidden behind other windows, and its app does not show its contents while covered. Bring it to the front (desktop__focus_window) and look again.', { dispatched: 'no' });
+  }
   return raw;
 }
 
@@ -80,6 +91,21 @@ async function freshView(d: CapabilityDeps, target: TargetT): Promise<{ nodes: U
     hidden.forEach((m, k) => names.set(m, texts[k] ?? []));
   }
   return { nodes: raw.nodes, view: { ...view, messages: completeMessages(view.messages, names, view.header) } };
+}
+
+/**
+ * Re-reads the window until `ready` holds or the time is up (returns the last view either way):
+ * WhatsApp is read again as soon as it has updated instead of after a fixed pause.
+ */
+async function viewUntil(d: CapabilityDeps, target: TargetT, ready: (v: WaView) => boolean, maxMs: number, signal: AbortSignal): Promise<WaView> {
+  const until = Date.now() + (d.focusSettleMs === 0 ? 0 : maxMs);
+  await sleep(d.focusSettleMs === 0 ? 0 : 150);
+  let v = (await freshView(d, target)).view;
+  while (!ready(v) && Date.now() < until && !signal.aborted) {
+    await sleep(200);
+    v = (await freshView(d, target)).view;
+  }
+  return v;
 }
 
 /** Runs one phase of a workflow; its errors say which phase failed (dispatch status unchanged). */
@@ -242,9 +268,9 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   }
   const searchNode = view.search;
   await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, contact));
-  await sleep(d.focusSettleMs === 0 ? 0 : 900);
   if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
-  view = (await freshView(d, target)).view;
+  // Wait only until the results show the contact (not a fixed pause).
+  view = await viewUntil(d, target, (v) => v.chats.some((c) => sameChat(c.title, contact)), 2500, signal);
   const want = normName(contact);
   const titles = [...new Set(view.chats.map((c) => c.title))];
   const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
@@ -263,8 +289,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
       await actOn(d, target, chat.node, 'select');
     }
   });
-  await sleep(d.focusSettleMs === 0 ? 0 : 900);
-  view = (await freshView(d, target)).view;
+  view = await viewUntil(d, target, (v) => headerMatches(v.header, contact), 2500, signal);
   if (!headerMatches(view.header, contact)) {
     // Some web apps ignore accessibility activation of a list entry; open it with one real click instead.
     const again = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
@@ -274,8 +299,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
         const c = await centerOf(d, target, entry.titleNode ?? entry.node);
         await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
       });
-      await sleep(d.focusSettleMs === 0 ? 0 : 900);
-      view = (await freshView(d, target)).view;
+      view = await viewUntil(d, target, (v) => headerMatches(v.header, contact), 2500, signal);
     }
   }
   if (!headerMatches(view.header, contact)) {
@@ -387,8 +411,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   } else {
     await d.desktop.backend.keys(target.hwnd, [], 0x0d); // Enter sends in WhatsApp
   }
-  await sleep(d.focusSettleMs === 0 ? 0 : 1500);
-  view = (await freshView(d, target)).view;
+  view = await viewUntil(d, target, (v) => { const o = lastOutgoing(v); return !!o && textMatches(o.text, text); }, 4000, signal);
   const now = lastOutgoing(view);
   const appears = !!now && textMatches(now.text, text);
   if (!appears) {
@@ -608,6 +631,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
     autonomy: (i) => {
       const n = nodeFor(i.snapshotId, i.elementId, i.target);
       if (!n) return { tier: 'always_ask', reason: 'Keo could not identify the control.' };
+      if (isCriticalControl(n)) return { tier: 'critical', reason: `“${n.name}” looks like a pay, buy, delete, reset or sign-in control.` };
       if (isSensitiveControl(n)) return { tier: 'always_ask', reason: `“${n.name}” looks like a send, delete, buy, pay or confirm control.` };
       // Moving between sections, tabs and menus is routine; other buttons are important.
       return ['tabitem', 'menuitem', 'treeitem', 'listitem', 'hyperlink', 'tab', 'dataitem'].includes(n.role) || i.action === 'focus' || i.action === 'expand' || i.action === 'collapse'

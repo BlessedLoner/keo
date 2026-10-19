@@ -38,7 +38,8 @@ export function accessCapabilities(d: CapabilityDeps & { updateSettings: (patch:
     modelVisible: true,
     verificationPolicy: 'Settings are read back after the change.',
     // Can be approved by voice ("yes"), but policyMatcher never runs it without asking.
-    autonomy: () => ({ tier: 'important' }),
+    // Hands-free may allow an app the user named themselves (e.g. "open WhatsApp and …").
+    autonomy: (i) => ({ tier: 'important', mustBeNamed: i.target.processName.replace(/\.(exe|root)$/i, '').replace(/[^A-Za-z0-9]+/g, ' ').trim() }),
     preview: (i, s) => {
       const pid = d.activeProviderId();
       const already = s.permissions.allowedApps.some((a) => a.processName.toLowerCase() === i.target.processName.toLowerCase());

@@ -87,6 +87,22 @@ export async function runDesktopE2E(s: Services, opts: { electronPath: string; f
       return { state: done.state, verification: st.verification, detail: st.verificationDetail, error: st.error, result: st.result };
     };
 
+    // The page must have loaded (the app reports its state) before the first observation, and the
+    // disposable test app is brought to the front: Chromium apps hide their page while fully covered.
+    await wait(() => !!state(), 20000).catch(() => undefined);
+    await s.desktop.backend.focus(target.hwnd).catch(() => undefined);
+    // …and it needs a moment to show its page again after coming to the front.
+    for (let i = 0; i < 20; i++) {
+      const probe = await s.desktop.backend.uiaSnapshot(target.hwnd, { maxNodes: 200, maxDepth: 30, budgetMs: 3000 });
+      if (probe.nodes.some((n) => n.role === 'document' || n.role === 'tabitem')) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    {
+      const raw = await s.desktop.backend.uiaSnapshot(target.hwnd, { maxNodes: 400, maxDepth: 40, budgetMs: 5000 });
+      const roles: Record<string, number> = {};
+      for (const n of raw.nodes) roles[n.role] = (roles[n.role] ?? 0) + 1;
+      results.firstRaw = { covered: await s.desktop.backend.coveredShare(target.hwnd).catch(() => null), foreground: (await s.desktop.backend.userActivity().catch(() => null))?.foreground === target.hwnd, nodes: raw.nodes.length, contentRoots: raw.contentRoots ?? null, roles, classes: await s.desktop.backend.childClasses?.(target.hwnd).catch(() => null), engine: s.desktop.backend.uiaEngine?.(target.hwnd) };
+    }
     // 1. Fresh observation and section navigation.
     const snap1 = (await run('desktop.inspect_window', {})) as { result: { snapshotId: string; elements: Array<{ id: string; role: string; name: string }> } };
     const settingsTab = snap1.result.elements.find((e) => e.name === 'Settings' && e.role === 'tabitem');

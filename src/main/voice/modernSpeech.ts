@@ -364,7 +364,7 @@ export class AutoSpeechEngine implements SpeechEngine {
   constructor(
     private readonly modern: SpeechEngine,
     private readonly classic: SpeechEngine,
-    private readonly prefer: () => 'auto' | 'modern' | 'classic',
+    private readonly prefer: () => 'auto' | 'modern' | 'classic' | 'porcupine',
   ) {}
 
   async start(onEvent: (e: SpeechEvent) => void, onExit: (code: number | null) => void): Promise<void> {

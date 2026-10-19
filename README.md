@@ -131,6 +131,14 @@ There is no background or ongoing auto-replying: every message is drafted, shown
 - **Workflows**: save a finished task (*Tasks → Save as workflow*) and ask Keo to run it again later; Keo re-plans against the current screen and asks for approval as usual. *Settings → Privacy & data → Export/Import* moves projects and workflows between PCs (no keys, settings or chats).
 - **Task chips** above the companion show unfinished tasks with their real state (working, queued, needs you, check result) and a cancel button. Choose which task events notify you in *Settings → Approvals & live chat*.
 
+## Trained wake word (optional)
+
+*Settings → Voice & shortcuts → Trained wake word*: Picovoice Porcupine listens on this PC for one trained phrase (no audio leaves the computer). Create a free account at console.picovoice.ai, paste your AccessKey, and either choose a trained “Hey Keo” model (`.ppn` for Windows, made in the Picovoice console) or a built-in word such as “Jarvis”; then pick *Trained wake word* as the speech engine. Commands after the wake word are still understood by Windows speech or OpenAI. If Porcupine cannot start (no key, missing file), Keo says why and uses Windows speech.
+
+## Installed apps
+
+*Access → Allowed applications → Add from installed apps…* and *Launchable applications → Choose from installed apps…* list every app on the PC (Start menu and Microsoft Store, with icons and publishers), including Store apps that have no .exe you could browse to, such as WhatsApp. Store apps launch through Windows by their app id.
+
 ## Approval levels
 
 **Settings → Approvals & live chat** sets how much Keo may do without asking:

@@ -27,6 +27,8 @@ export interface HostHooks {
   pickExecutable(): Promise<string | null>;
   /** Folder picker (project workspace). */
   pickFolder?(title: string): Promise<string | null>;
+  /** File picker for a trained wake word model (.ppn). */
+  pickWakeModel?(): Promise<string | null>;
   /** Save/open dialogs for export/import (JSON). */
   pickSaveFile?(defaultName: string): Promise<string | null>;
   pickOpenFile?(): Promise<string | null>;
@@ -56,6 +58,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     ...s.wake.getState(),
     recognizers: await s.wake.recognizers(),
     engine: s.wake.engineInfo(),
+    picovoiceKey: s.secrets.has('picovoice'),
     voiceShortcut: host.voiceShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.voice, enabled: s.settings.get().shortcuts.voiceEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
@@ -80,6 +83,21 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'app:installUpdate': () => ({ started: host.installUpdate?.() ?? false }),
     'diag:checkComputer': () => s.checkComputer(),
+    // Installed apps with icons for the Access pickers (read-only; names, ids, process names, icons).
+    'apps:installed': async () => s.apps.installed(),
+    // Picovoice access key for the trained wake word: stored encrypted like the other keys; empty removes it.
+    'wake:setPicovoiceKey': ({ key }) => {
+      if (key) s.secrets.set('picovoice', key);
+      else s.secrets.delete('picovoice');
+      s.porcupine.reset();
+      void s.wake.apply();
+      return { hasKey: s.secrets.has('picovoice') };
+    },
+    'wake:pickKeywordFile': async () => {
+      const file = (await host.pickWakeModel?.()) ?? null;
+      if (file) s.settings.update({ wake: { porcupine: { keywordPath: file, builtin: null } } });
+      return { path: file };
+    },
     'workflows:list': () => s.workflows.list().map((w) => ({ id: w.id, name: w.name, description: w.description, steps: w.steps.length, imported: w.imported, createdAt: w.createdAt })),
     'workflows:saveFromTask': ({ taskId, name }) => {
       const task = s.tasks.get(taskId);

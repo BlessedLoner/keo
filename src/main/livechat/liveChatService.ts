@@ -76,7 +76,7 @@ export interface LiveChatDeps {
   log: Logger;
   conversations: ConversationRepo;
   /** Tell the user something needs them (Windows notification, speech, chat note). */
-  alert: (session: LiveChatSession, text: string, kind: 'question' | 'draft' | 'sent') => void;
+  alert: (session: LiveChatSession, text: string, kind: 'question' | 'draft' | 'sent' | 'fyi') => void;
   /** Web search for "research it and tell her" (null when not available or not allowed). */
   research?: (query: string, signal: AbortSignal) => Promise<Array<{ title: string; url: string; description: string }> | null>;
   changed: () => void;
@@ -378,7 +378,7 @@ export class LiveChatService {
   private schedule(r: Runtime, ms?: number): void {
     if (r.ending) return;
     if (r.timer) clearTimeout(r.timer);
-    r.timer = setTimeout(() => void this.tick(r), ms ?? this.d.pollMs ?? 3000);
+    r.timer = setTimeout(() => void this.tick(r), ms ?? this.d.pollMs ?? 1500);
     r.timer.unref?.();
   }
 
@@ -457,7 +457,7 @@ export class LiveChatService {
       this.changed();
     }
     if (r.s.status !== 'active') return; // waiting for the user or paused: note it, don't reply
-    if (!r.answered && t - r.pending.since < (this.d.debounceMs ?? 5000)) return; // they may still be typing
+    if (!r.answered && t - r.pending.since < (this.d.debounceMs ?? 2500)) return; // they may still be typing
     await this.respond(r, view, incoming);
   }
 
@@ -474,8 +474,14 @@ export class LiveChatService {
     // Built-in attention topics override the model unless the user settled them: by answering just
     // now, or (except identity, secrets and emergencies) through earlier guidance that covers them.
     const settled = r.answered || (d.covered && r.s.guidance.length > 0 && !topic?.strict);
-    if (topic && d.action === 'reply' && !settled) {
+    const autonomous = this.autonomous();
+    if (topic && d.action === 'reply' && !settled && !autonomous) {
       d = { action: 'ask_user', message: '', question: '', covered: false };
+    }
+    if (autonomous && d.action === 'ask_user') {
+      // Hands-free: never stop the conversation to ask; get a careful, non-committal reply instead.
+      const again = await this.decide(r, view, notes, true);
+      d = again && again.action !== 'ask_user' ? again : { action: 'wait', message: '', question: '', covered: false, reason: 'no reply could be written without the user' };
     }
     r.answered = false;
     r.handled = this.contactCounts(view.messages, sentByUsOf(r));
@@ -502,6 +508,8 @@ export class LiveChatService {
       return;
     }
     if (d.message) await this.sendReply(r, d.message);
+    // Hands-free: tell the user (without stopping) when a sensitive topic came up and what was said.
+    if (autonomous && topic && d.message) this.d.alert(this.copy(r.s), `${r.s.contact} brought up ${topic.topic}. I replied: “${d.message.slice(0, 140)}”`, 'fyi');
     if (d.action === 'end') this.finish(r, 'The conversation came to a natural end');
   }
 
@@ -513,7 +521,7 @@ export class LiveChatService {
   private async sendReply(r: Runtime, text: string, force = false): Promise<void> {
     if (r.ending) return;
     if (r.s.replies >= r.s.maxReplies) return this.finish(r, `Reached the limit of ${r.s.maxReplies} replies`);
-    const mode = this.d.settings().liveChat.sendMode;
+    const mode = this.autonomous() ? 'when_idle' : this.d.settings().liveChat.sendMode;
     if (!force && mode !== 'immediately' && !(await this.userIdle())) {
       r.s.draft = text;
       r.s.activity = mode === 'ask' ? 'Reply ready: Send now, or I will send it when you pause' : 'Reply ready: sending when you pause';
@@ -528,7 +536,7 @@ export class LiveChatService {
     r.s.draft = null;
     r.sendNow = false;
     r.draftPrompted = false;
-    const gap = (this.d.minGapMs ?? 6000) - (this.now() - r.lastSend);
+    const gap = (this.d.minGapMs ?? 2500) - (this.now() - r.lastSend);
     if (gap > 0) await this.sleep(gap);
     if (r.ending) return;
     r.s.activity = 'Replying';
@@ -618,11 +626,23 @@ export class LiveChatService {
       .join('\n');
   }
 
+  private autonomous(): boolean {
+    return this.d.settings().autonomy.level === 'hands_free';
+  }
+
   private async decide(r: Runtime, view: WaView, notes: string | null = null, mustReply = false): Promise<Decision | null> {
+    const first = await this.decideOnce(r, view, notes, mustReply);
+    if (first || r.abort.signal.aborted) return first;
+    // An unreadable answer: ask the model once more instead of bothering the user.
+    this.d.log.info('livechat.decision_retry', { sessionId: r.s.id });
+    return this.decideOnce(r, view, notes, mustReply);
+  }
+
+  private async decideOnce(r: Runtime, view: WaView, notes: string | null, mustReply: boolean): Promise<Decision | null> {
     const provider = this.d.providers.active();
     const model = provider.selectedModel();
     const recent = view.messages.slice(-24).map((m) => `${m.from === 'me' ? 'Me' : m.from === 'them' ? r.s.contact : 'Unknown'}: ${m.text}`);
-    const system = liveChatPrompt(r.s);
+    const system = liveChatPrompt(r.s, this.autonomous());
     const res = await provider.stream(
       {
         model,
@@ -742,7 +762,7 @@ export class LiveChatService {
 }
 
 /** System prompt for the reply decision (no tools; JSON only). */
-export function liveChatPrompt(s: LiveChatSession): string {
+export function liveChatPrompt(s: LiveChatSession, autonomous = false): string {
   const guidance = s.guidance.length ? s.guidance.map((g, k) => `${k + 1}. ${g}`).join('\n') : '(none yet)';
   return `You are Keo, replying in a WhatsApp chat on behalf of the user ("Me") with ${s.contact}. You write AS the user, in first person.
 
@@ -757,8 +777,11 @@ Rules:
 - Write like a normal WhatsApp message from the user: short, warm, natural, in ${s.contact}'s language and tone. No markdown, no signatures, no "As an AI".
 - Facts about the user (prices, availability, dates, places, plans, promises, personal details) come ONLY from the instructions above; never invent them and never agree to anything the user has not told you. If a good reply needs any of that, choose ask_user.
 - When the user tells you to explain something, answer a question, help with a problem or research something for ${s.contact}, you may use your own knowledge (and any web research provided) to write a correct, clear, friendly answer — WhatsApp length, plain text, short code snippets only if needed. Say so honestly if you are not sure.
-- If ${s.contact} asks whether they are talking to a bot, an AI or an assistant, choose ask_user. Never deny it and never claim to be human.
-- Choose ask_user for: money, prices, discounts, payments, bank or account details, codes; addresses, meetings, times, commitments; calls, files, documents; personal, emotional or urgent matters; anything you cannot answer from the instructions above; or whenever you are unsure.
+${autonomous ? '' : `- If ${s.contact} asks whether they are talking to a bot, an AI or an assistant, choose ask_user. Never deny it and never claim to be human.`}
+- Greetings and small talk ("hi", "hey how are you", "what's up", "good morning", "how was your day") are answered naturally and warmly as the user would ("I'm good, thanks! How about you?") — no need to ask. Keep it general: don't invent specific events, plans or facts.
+${autonomous
+  ? `- The user turned on hands-free: never stop to ask them. Answer everything yourself. When a reply would need facts or decisions only the user has (money, prices, payments, meetings, times, places, commitments, files, personal matters), reply politely WITHOUT committing to anything or inventing facts — e.g. "Let me check and get back to you on that" — and keep the conversation friendly. Never share codes, passwords or account numbers. If ${s.contact} asks whether they are talking to a bot, an AI or an assistant, answer honestly that an assistant (Keo) is replying for the user; never claim to be human. Do not use ask_user.`
+  : `- Choose ask_user for: money, prices, discounts, payments, bank or account details, codes; addresses, meetings, times, commitments; calls, files, documents; personal, emotional or urgent matters; or a question only the user can answer. Do NOT ask for greetings or small talk.`}
 - You are keeping this conversation going for the user, so normally reply. Choose wait ONLY when ${s.contact}'s latest message is a pure acknowledgement that a reply would make awkward (a lone emoji or "ok" right after your own message, a thank-you you already answered). When in doubt, reply. When the conversation has clearly finished, choose end (with an optional short goodbye in "message").
 - Set covered_by_guidance to true only when your reply relies on a specific numbered instruction above that directly answers what ${s.contact} asked.
 

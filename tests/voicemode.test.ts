@@ -88,18 +88,26 @@ describe('voice mode', () => {
     });
   }
 
-  it('never approves an always-ask action by voice', async () => {
+  it('approves an always-ask action by voice, but never a critical one (it needs the screen)', async () => {
     const { io } = setup((req) => {
       const last = req.messages.at(-1);
-      const asked = last?.role === 'user' && JSON.stringify(last.content).includes('click the button') && !JSON.stringify(last.content).includes('tool_result');
-      return asked && req.tools.length ? call('desktop__click', { target: { hwnd: '1001', pid: 4242, processName: 'notepad' }, x: 5, y: 5 }) : reply('Done.');
+      const said = last?.role === 'user' && !JSON.stringify(last.content).includes('tool_result');
+      const text = JSON.stringify(last?.content ?? '');
+      if (said && req.tools.length && text.includes('click the button')) return call('desktop__click', { target: { hwnd: '1001', pid: 4242, processName: 'notepad' }, x: 5, y: 5 });
+      if (said && req.tools.length && text.includes('run the tests')) return call('files__run_script', { projectId: projectId!, script: 'test' });
+      return reply('Done.');
     });
-    h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] }, agent: { approvalWaitSeconds: 10 } });
-    io.heard = ['click the button', 'yes'];
+    let projectId: string | null = null;
+    const root = (await import('./helpers')).tempDir();
+    (await import('node:fs')).writeFileSync((await import('node:path')).join(root, 'package.json'), JSON.stringify({ scripts: { test: 'vitest' } }));
+    projectId = h.services.projects.create('P').id;
+    h.services.settings.update({ projectWorkspaces: { [projectId]: root }, permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'notepad', label: 'Notepad' }] }, agent: { approvalWaitSeconds: 10 } });
+    io.heard = ['click the button', 'yes', 'run the tests', 'yes'];
     h.services.voiceMode.start();
     await waitFor(() => io.spoken.some((s) => /needs your approval on screen/.test(s)), 8000);
-    const pending = h.services.tasks.list(10).flatMap((t) => t.steps).find((s) => s.capabilityId === 'desktop.click');
-    expect(pending?.state).toBe('awaiting_authorization');
+    const steps = h.services.tasks.list(10).flatMap((t) => t.steps);
+    expect(steps.find((s) => s.capabilityId === 'desktop.click')?.approval?.decision).toBe('approved');
+    expect(steps.find((s) => s.capabilityId === 'files.run_script')?.state).toBe('awaiting_authorization');
     h.services.voiceMode.stop();
   });
 

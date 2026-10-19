@@ -141,6 +141,12 @@ Execution (`TaskOrchestrator`):
 - **Research cards** accept only products whose page Keo fetched in the session; price/merchant/image come from that page's own data (or a price present in its text); images are fetched with the same public-address checks (every redirect hop) and embedded as data URLs, so the renderer's CSP is unchanged. Source links open in the browser only for pages Keo fetched.
 - **Workflows** store capability ids and inputs without window handles, element ids, coordinates or hashes; running one means a new plan with fresh targets and approvals. Imports are schema-validated, unknown capabilities are skipped, and imported workflows are marked. Exports contain projects and workflows only.
 
+## 4k. Hands-free, trained wake word, installed apps
+
+- **Hands-free** now runs every action without asking except the *critical* tier, which always needs a click on screen: controls that pay, buy, order, transfer, delete, reset, uninstall or sign in, and running project scripts. Messages still go only to people the user named in the conversation (names compared ignoring spaces/case). In live chats Hands-free never pauses to ask: on sensitive topics Keo replies without committing to anything or inventing facts, never shares codes or passwords, answers “are you a bot?” honestly, and notifies the user what it said.
+- **Porcupine** runs locally (native module unpacked from the asar); the AccessKey is stored with the other encrypted keys and is never logged or shown; only the chosen `.ppn` file or a built-in keyword is used; failures fall back to Windows speech with a reason that never contains the key.
+- **Installed apps** are read with a fixed, read-only PowerShell script (Get-StartApps, package manifests, Start-menu shortcuts, icons); nothing is started. Adding an app to the allowed or launch lists is the user's click in Access.
+
 ## 4h. Language
 
 - Replies are in English by default (system policy). Another language is used only for what the user explicitly asks for (translations, "reply to her in French"); web pages, WhatsApp messages and screen text never change the reply language.

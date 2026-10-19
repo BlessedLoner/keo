@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { CapabilityInfo } from '@shared/domain';
 import type { Settings } from '@shared/settings';
 import { Icon } from '../components/Icon';
@@ -86,10 +87,26 @@ function PermLabel({ title, text }: { title: string; text: string }) {
 
 function AllowedApps({ s, patch }: { s: Settings; patch: (p: Record<string, unknown>) => Promise<unknown> }) {
   const app = useApp();
+  const [picking, setPicking] = useState(false);
   return (
     <>
       <div className="section-title">Allowed applications</div>
       <div className="card">
+        <div className="row" style={{ marginBottom: 6 }}>
+          <span className="muted small">Keo may look at and (with your approval level) work in these apps.</span>
+          <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => setPicking((v) => !v)} aria-expanded={picking}>
+            <Icon name="plus" size={14} /> Add from installed apps…
+          </button>
+        </div>
+        {picking && (
+          <InstalledAppPicker
+            action="Allow"
+            isDone={(a) => !!a.processName && s.permissions.allowedApps.some((x) => x.processName.toLowerCase() === a.processName!.toLowerCase())}
+            canPick={(a) => (a.processName ? null : 'Windows does not say which process this app runs as. Open it once, then allow it from Vision → Show all windows.')}
+            onPick={(a) => void patch({ permissions: { observationEnabled: true, allowedApps: [...s.permissions.allowedApps, { processName: a.processName!, label: a.name.slice(0, 120) }] } })}
+            onClose={() => setPicking(false)}
+          />
+        )}
         {s.permissions.allowedApps.length === 0 ? (
           <p className="muted small" style={{ margin: 0 }}>
             None. Add apps from the Vision view (“Show all windows” → “Allow this app”).{' '}
@@ -119,6 +136,19 @@ function AllowedApps({ s, patch }: { s: Settings; patch: (p: Record<string, unkn
 
 function LaunchableApps({ s, patch }: { s: Settings; patch: (p: Record<string, unknown>) => Promise<unknown> }) {
   const ui = useUi();
+  const [picking, setPicking] = useState(false);
+  const pickInstalled = async (a: InstalledAppT) => {
+    let id = a.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 36) || 'app';
+    while (s.permissions.launchableApps.some((x) => x.id === id)) id = `${id}-2`;
+    const alreadyAllowed = !a.processName || s.permissions.allowedApps.some((x) => x.processName.toLowerCase() === a.processName!.toLowerCase());
+    await patch({
+      permissions: {
+        launchEnabled: true,
+        launchableApps: [...s.permissions.launchableApps, a.kind === 'desktop' && a.exePath ? { id, label: a.name.slice(0, 120), path: a.exePath } : { id, label: a.name.slice(0, 120), appId: a.appId }],
+        ...(alreadyAllowed ? {} : { allowedApps: [...s.permissions.allowedApps, { processName: a.processName!, label: a.name.slice(0, 120) }] }),
+      },
+    });
+  };
   const common = useInvoke('desktop:commonApps', {});
   const quickAdd = async (a: { id: string; label: string; path: string; processName: string }) => {
     const alreadyAllowed = s.permissions.allowedApps.some((x) => x.processName.toLowerCase() === a.processName.toLowerCase());
@@ -166,27 +196,94 @@ function LaunchableApps({ s, patch }: { s: Settings; patch: (p: Record<string, u
             <Icon name="rocket" size={15} />
             <span>{a.label}</span>
             <span className="mono muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {a.id} · {a.path}
+              {a.id} · {a.path ?? a.appId}
             </span>
             <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => void patch({ permissions: { launchableApps: s.permissions.launchableApps.filter((x) => x.id !== a.id) } })}>
               Remove
             </button>
           </div>
         ))}
+        {picking && (
+          <InstalledAppPicker
+            action="Add"
+            isDone={(a) => s.permissions.launchableApps.some((x) => x.appId === a.appId || (!!a.exePath && (x.path ?? '').toLowerCase() === a.exePath.toLowerCase()))}
+            canPick={() => null}
+            onPick={(a) => void pickInstalled(a)}
+            onClose={() => setPicking(false)}
+          />
+        )}
         <div className="row wrap" style={{ marginTop: 6 }}>
           {(common.data ?? [])
-            .filter((a) => a.available && !s.permissions.launchableApps.some((x) => x.path.toLowerCase() === a.path.toLowerCase()))
+            .filter((a) => a.available && !s.permissions.launchableApps.some((x) => (x.path ?? '').toLowerCase() === a.path.toLowerCase()))
             .map((a) => (
               <button key={a.id} className="btn sm" onClick={() => void quickAdd(a)}>
                 <Icon name="plus" size={14} /> {a.label}
               </button>
             ))}
-          <button className="btn sm" onClick={() => void add()}>
-            <Icon name="plus" size={14} /> Other application…
+          <button className="btn sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>
+            <Icon name="plus" size={14} /> Choose from installed apps…
+          </button>
+          <button className="btn ghost sm" onClick={() => void add()} title="Pick an .exe file">
+            Browse for an .exe…
           </button>
         </div>
       </div>
     </>
+  );
+}
+
+type InstalledAppT = { name: string; appId: string; kind: 'store' | 'desktop'; publisher: string | null; processName: string | null; exePath: string | null; icon: string | null };
+
+/** Searchable list of the apps installed on this PC (Start menu and Microsoft Store), with icons. */
+function InstalledAppPicker(p: { action: string; isDone(a: InstalledAppT): boolean; canPick(a: InstalledAppT): string | null; onPick(a: InstalledAppT): void; onClose(): void }) {
+  const list = useInvoke('apps:installed', { refresh: false });
+  const [q, setQ] = useState('');
+  const apps = (list.data ?? []).filter((a) => !q || `${a.name} ${a.publisher ?? ''}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="app-picker" role="dialog" aria-label="Installed apps">
+      <div className="row">
+        <input className="input" autoFocus placeholder="Search apps (WhatsApp, Calculator, File Explorer…)" aria-label="Search installed apps" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn ghost sm" onClick={p.onClose}>
+          Close
+        </button>
+      </div>
+      {list.loading && !list.data ? (
+        <div className="row muted small" style={{ padding: 8 }}>
+          <span className="spinner" /> Reading the apps installed on this PC…
+        </div>
+      ) : list.error ? (
+        <div className="banner danger small">{list.error}</div>
+      ) : (
+        <ul className="app-list">
+          {apps.map((a) => {
+            const done = p.isDone(a);
+            const why = p.canPick(a);
+            return (
+              <li key={a.appId} className="row">
+                {a.icon ? <img src={a.icon} alt="" width={24} height={24} /> : <span className="app-icon-placeholder" aria-hidden="true"><Icon name="window" size={16} /></span>}
+                <span className="grow">
+                  {a.name}
+                  <span className="muted small">
+                    {' '}
+                    · {a.kind === 'store' ? 'Microsoft Store' : 'Desktop'}
+                    {a.publisher ? ` · ${a.publisher}` : ''}
+                    {a.processName ? ` · ${a.processName}` : ''}
+                  </span>
+                </span>
+                {done ? (
+                  <span className="chip ok">Added</span>
+                ) : (
+                  <button className="btn sm" disabled={!!why} title={why ?? undefined} onClick={() => p.onPick(a)}>
+                    {p.action}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+          {apps.length === 0 && <li className="muted small">No app matches “{q}”.</li>}
+        </ul>
+      )}
+    </div>
   );
 }
 

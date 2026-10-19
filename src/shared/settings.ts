@@ -59,9 +59,13 @@ export const LaunchableApp = z
   .object({
     id: z.string().regex(/^[a-z0-9-]{1,40}$/),
     label: z.string().trim().min(1).max(120),
-    path: z.string().trim().min(3).max(400).regex(/\.exe$/i, 'Must be an .exe'),
+    /** Desktop apps: the .exe chosen in the file picker or from the installed-apps list. */
+    path: z.string().trim().min(3).max(400).regex(/\.exe$/i, 'Must be an .exe').optional(),
+    /** Microsoft Store and other registered apps: their Windows app id (started through Windows). */
+    appId: z.string().trim().min(1).max(300).regex(/^[\w.{}\\:~ !-]+$/).optional(),
   })
-  .strict();
+  .strict()
+  .refine((a) => !!a.path || !!a.appId, 'Give a path or an app id.');
 
 export const SettingsSchema = z
   .object({
@@ -181,7 +185,16 @@ export const SettingsSchema = z
          */
         learned: z.array(z.string().trim().min(4).max(40)).max(20).default([]),
         /** Speech engine: the modern Windows 10/11 recognizer (better with accents), or the classic one. */
-        engine: z.enum(['auto', 'modern', 'classic']).default('auto'),
+        engine: z.enum(['auto', 'modern', 'classic', 'porcupine']).default('auto'),
+        /** Trained wake word (Picovoice Porcupine, on this PC): a .ppn model file or a built-in keyword. The access key is kept with the other keys. */
+        porcupine: z
+          .object({
+            keywordPath: z.string().trim().max(400).nullable().default(null),
+            builtin: z.enum(['jarvis', 'computer', 'hey siri', 'alexa', 'hey google', 'ok google', 'picovoice', 'porcupine', 'bumblebee', 'terminator']).nullable().default(null),
+            sensitivity: z.number().min(0).max(1).default(0.6),
+          })
+          .strict()
+          .prefault({}),
         /** How a spoken command is turned into text after the wake phrase. */
         commandRecognizer: z.enum(['local', 'openai']).default('local'),
       })

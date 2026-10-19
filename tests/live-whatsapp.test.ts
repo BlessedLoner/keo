@@ -49,6 +49,7 @@ it.runIf(process.env.KEO_LIVE_WA === '1')('reads the WhatsApp app', async () => 
     out.modern = summary(modern);
     out.routedEngine = b.uiaEngine(w.hwnd);
     out.routed = summary(routed);
+    out.timing = { classicMs: classic.ms, modernMs: modern.ms, routedMs: routed.ms };
   } catch (e) {
     out.error = String(e);
   } finally {

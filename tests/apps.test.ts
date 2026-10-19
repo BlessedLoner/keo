@@ -276,3 +276,28 @@ describe('choice buttons', () => {
     expect(matchProfiles(profilesFromLocalState(LOCAL_STATE), 'Blessed2 (Profile 2)').map((p) => p.dir)).toEqual(['Profile 2']);
   });
 });
+
+describe('installed apps picker', () => {
+  it('lists installed apps with process names and icons; Store apps become launchable by app id', async () => {
+    const d = new AppDiscovery(async () => START_APPS);
+    const rows = [
+      { name: 'WhatsApp', appId: '5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App', exe: 'C:/Program Files/WindowsApps/5319275A.WhatsAppDesktop/WhatsApp.Root.exe', icon: 'iVBORw0KGgo=' },
+      { name: 'Google Chrome', appId: 'Chrome', exe: 'C:/Program Files/Google/Chrome/Application/chrome.exe', icon: null },
+    ];
+    const apps = await d.installed(async () => rows);
+    expect(apps.find((a) => a.name === 'WhatsApp')).toMatchObject({ kind: 'store', processName: 'WhatsApp.Root', exePath: null, icon: 'data:image/png;base64,iVBORw0KGgo=' });
+    expect(apps.find((a) => a.name === 'Google Chrome')).toMatchObject({ kind: 'desktop', processName: 'chrome', exePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+    expect(apps.find((a) => a.name === 'Notepad')).toMatchObject({ processName: null, icon: null });
+  });
+
+  it('a Store app in the launch list starts by its app id (through Windows, no path)', async () => {
+    const launched: string[] = [];
+    h = makeHarness({ script: () => reply('ok'), deps: { launchApp: async (id) => void launched.push(id) } });
+    h.services.settings.update({ permissions: { launchEnabled: true, launchableApps: [{ id: 'whatsapp', label: 'WhatsApp', appId: '5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App' }] }, agent: { approvalWaitSeconds: 10 } });
+    const r = await run('desktop.launch_app', { appId: 'whatsapp' });
+    expect(r.step?.state).toBe('succeeded');
+    expect(launched).toEqual(['5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App']);
+    const { SettingsSchema } = await import('../src/shared/settings');
+    expect(() => SettingsSchema.parse({ permissions: { launchableApps: [{ id: 'x', label: 'X' }] } })).toThrow();
+  });
+});

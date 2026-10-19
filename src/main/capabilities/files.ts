@@ -148,7 +148,7 @@ export function fileCapabilities(d: CapabilityDeps): AnyCapability[] {
     modelVisible: true,
     verificationPolicy: 'Exit code 0 means the script succeeded.',
     // A project's scripts run code on this computer: always a click.
-    autonomy: () => ({ tier: 'always_ask', reason: 'Project scripts run code on your computer.' }),
+    autonomy: () => ({ tier: 'critical', reason: 'Project scripts run code on your computer.' }),
     precheck: (i, s) => {
       const root = s.projectWorkspaces[i.projectId];
       if (!root) return 'This project has no folder yet.';

@@ -137,6 +137,12 @@ export function compactNodes(nodes: UiaNodeRaw[], limit = 260): { elements: Elem
  */
 const SENSITIVE = /\b(send|delete|remove|erase|discard|submit|pay|buy|purchase|order|checkout|check out|confirm|post|publish|share|transfer|withdraw|sign in|signin|log ?in|log ?out|sign out|install|uninstall|format|reset|accept|allow|agree|grant|unsubscribe|block|report|leave|exit|quit|close account|deactivate|archive|forward|reply all|call|video call|apply|save|upload|download)\b/i;
 
+/** Controls that move money, delete or reset things, or sign in: always a click on screen, even hands-free. */
+const CRITICAL = /\b(pay|buy|purchase|order now|place order|checkout|check out|transfer|withdraw|send money|delete|erase|uninstall|format|factory reset|reset|close account|deactivate|sign in|signin|log ?in)\b/i;
+export function isCriticalControl(n: Pick<UiaNodeRaw, 'name' | 'aid'>): boolean {
+  return CRITICAL.test(n.name ?? '') || CRITICAL.test(n.aid ?? '');
+}
+
 export function isSensitiveControl(n: Pick<UiaNodeRaw, 'name' | 'aid'>): boolean {
   return SENSITIVE.test(n.name ?? '') || SENSITIVE.test(n.aid ?? '');
 }

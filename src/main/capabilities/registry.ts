@@ -247,7 +247,7 @@ export class CapabilityRegistry {
 /** The approval-level tier of one admitted action (see Capability.autonomy). */
 export function autonomyOf(cap: AnyCapability, input: unknown): { autoTier: AutonomyTier; alwaysAskReason: string | null; mustBeNamed: string | null } {
   const a = cap.autonomy?.(input) ?? { tier: cap.risk === 'high' ? ('important' as const) : ('routine' as const) };
-  return { autoTier: a.tier, alwaysAskReason: a.tier === 'always_ask' ? (a.reason ?? 'Always needs your approval.') : null, mustBeNamed: a.mustBeNamed ?? null };
+  return { autoTier: a.tier, alwaysAskReason: a.tier === 'always_ask' || a.tier === 'critical' ? (a.reason ?? 'Always needs your approval.') : null, mustBeNamed: a.mustBeNamed ?? null };
 }
 
 export function formatZodError(e: z.ZodError): string {

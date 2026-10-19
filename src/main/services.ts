@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AutoSpeechEngine, ModernSpeechEngine } from './voice/modernSpeech';
 import { VoiceMode } from './voice/voiceMode';
+import { PorcupineWakeEngine, type PorcupineFactory } from './voice/porcupineEngine';
 import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type TestWindow } from './desktop/selfTest';
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
@@ -64,6 +65,8 @@ export interface ServiceDeps {
   logger?: Logger;
   /** Local speech engine (Windows SAPI helper in the app; a fake in tests). */
   speechEngine?: SpeechEngine;
+  /** Porcupine and its recorder (tests inject a fake). */
+  porcupineFactory?: () => PorcupineFactory;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
   voiceIo?: { listen(): Promise<{ text: string | null; reason: string }>; speak(text: string): Promise<void> };
   /** Windows' app list and app launcher (tests inject fakes; the app uses Get-StartApps / explorer.exe). */
@@ -122,6 +125,7 @@ export class Services {
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
   ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void>; mainFocused?(): boolean } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
+  readonly porcupine: PorcupineWakeEngine;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
   private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
   readonly agent: AgentService;
@@ -179,6 +183,7 @@ export class Services {
       proposePlan: (plan, ctx) => this.proposePlan(plan, ctx),
       web: this.web,
       clipboard: this.clipboard,
+      launchAppId: d.launchApp,
       findUserQuote: (conversationId, quote) => {
         const msgs = this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user');
         const hit = findQuote(msgs.map((m) => ({ id: m.id, text: m.content })), quote);
@@ -233,12 +238,12 @@ export class Services {
     this.tasks.policyMatcher = (step, task) => {
       const level = getSettings().autonomy.level;
       const tier = step.preview.autoTier ?? 'important';
-      if (level === 'always_ask' || tier === 'always_ask') return null;
-      // Granting access always needs an explicit yes (on screen or by voice).
-      if (step.capabilityId.startsWith('access.')) return null;
-      if (level === 'important_only' && tier !== 'routine') return null;
-      // Only actions from a conversation with the user (where "named" can be checked) run without asking.
-      if (task.origin === 'plan' || !task.conversationId) return null;
+      // Hands-free approves everything except critical actions (pay, buy, delete, sign in, run code).
+      if (level === 'always_ask' || tier === 'critical') return null;
+      if (level === 'important_only' && (tier !== 'routine' || step.capabilityId.startsWith('access.'))) return null;
+      // Only actions from a conversation with the user (where "named" can be checked) run without asking;
+      // a reviewed plan's steps may too in Hands-free.
+      if (!task.conversationId || (task.origin === 'plan' && level !== 'hands_free')) return null;
       const named = step.preview.mustBeNamed;
       if (named) {
         const said = this.conversations.recentMessages(task.conversationId, 40).filter((m) => m.role === 'user');
@@ -305,7 +310,17 @@ export class Services {
       this.presence.setGrants(list.length);
       this.push('grants:changed', { grants: list });
     });
-    this.wake = new WakeService(d.speechEngine ?? new AutoSpeechEngine(new ModernSpeechEngine(d.profile.runtimeDir), new PowerShellSpeechEngine(d.profile.runtimeDir), () => getSettings().wake.engine), getSettings, this.log, {
+    // Windows speech (modern, falling back to classic), with an optional trained wake word (Porcupine) on top.
+    const windowsSpeech = d.speechEngine ?? new AutoSpeechEngine(new ModernSpeechEngine(d.profile.runtimeDir), new PowerShellSpeechEngine(d.profile.runtimeDir), () => getSettings().wake.engine);
+    this.porcupine = new PorcupineWakeEngine(
+      windowsSpeech,
+      () => {
+        const w = getSettings().wake;
+        return { enabled: w.engine === 'porcupine', accessKey: this.secrets.get('picovoice'), keywordPath: w.porcupine.keywordPath, builtin: w.porcupine.builtin, sensitivity: w.porcupine.sensitivity };
+      },
+      d.porcupineFactory,
+    );
+    this.wake = new WakeService(this.porcupine, getSettings, this.log, {
       onWake: (_phrase, rest) => void this.handleWake(rest),
       onState: (st) => this.presence.setWake({ status: st.status, message: st.message, muted: st.muted, listening: st.status === 'listening', enabled: getSettings().wake.enabled, phrase: getSettings().wake.phrases[0] ?? null }),
     });
@@ -346,6 +361,7 @@ export class Services {
       const w = JSON.stringify(st.wake);
       if (w !== lastWake) {
         lastWake = w;
+        this.porcupine.reset(); // a new key/file/keyword/sensitivity takes effect on the next listen
         void this.wake.apply();
       }
     });
@@ -415,15 +431,20 @@ export class Services {
 
   /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
   /** A live chat needs the user: note in its conversation, Windows notification, spoken line. */
-  private liveChatAlert(session: LiveChatSession, text: string, kind: 'question' | 'draft' | 'sent'): void {
+  private liveChatAlert(session: LiveChatSession, text: string, kind: 'question' | 'draft' | 'sent' | 'fyi'): void {
     const st = this.settings.get().liveChat;
     // Questions and confirmed sends go into the conversation (so answers can follow, and nothing is claimed
     // before it happened); ready drafts only notify.
     if (kind !== 'draft' && session.conversationId && this.conversations.get(session.conversationId)) {
-      this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `${kind === 'sent' ? '✅' : '💬'} **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
+      this.conversations.addMessage({ conversationId: session.conversationId, role: 'assistant', content: `${kind === 'sent' ? '✅' : kind === 'fyi' ? 'ℹ️' : '💬'} **Live chat with ${session.contact}:** ${text}`, status: 'complete' });
       this.push('conversations:changed', { conversationId: session.conversationId });
     }
     if (kind === 'sent') return;
+    // Hands-free FYI: the chat went on; the user is only told (no voice announcement).
+    if (kind === 'fyi') {
+      if (st.notify) this.ui.notify(`Live chat with ${session.contact}`, text);
+      return;
+    }
     if (st.notify) this.ui.notify(kind === 'draft' ? `Reply to ${session.contact} ready` : `${session.contact} needs you`, text);
     if (st.speak) this.push('presence:command', { type: 'announce', text });
   }
