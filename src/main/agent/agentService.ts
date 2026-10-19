@@ -561,7 +561,7 @@ function wrap(capId: string, v: Record<string, unknown>): string {
 function brief(out: unknown): string {
   if (out && typeof out === 'object') {
     const o = out as Record<string, unknown>;
-    if (Array.isArray(o.results)) return `${o.results.length} result(s)${o.source === 'Brave Search' ? ' from Brave Search' : ''}`;
+    if (Array.isArray(o.results)) return `${o.results.length} result(s)${typeof o.source === 'string' ? ` from ${o.source}` : ''}`;
     if (typeof o.finalUrl === 'string' && typeof o.text === 'string') return `Read ${o.text.length.toLocaleString('en-US')} characters from ${hostOf(o.finalUrl)}${o.truncated ? ' (truncated)' : ''}`;
     if (o.status === 'saved') return 'Remembered from your words — edit or delete it in Memory.';
     if (o.status === 'already_known') return 'Already in memory.';

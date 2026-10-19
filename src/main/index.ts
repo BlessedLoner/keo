@@ -207,6 +207,38 @@ function ensureVoiceWindow(): Promise<void> {
   });
 }
 
+/**
+ * Turns a research report (self-contained HTML: inline styles, data: images, no scripts) into a
+ * PDF or a PNG in a hidden, sandboxed window with JavaScript off; the file is loaded from Keo's
+ * own temp folder and the window is destroyed afterwards.
+ */
+async function renderReport(html: string, kind: 'pdf' | 'png'): Promise<Buffer> {
+  const file = path.join(app.getPath('temp'), `keo-report-${process.pid}-${Date.now()}.html`);
+  fs.writeFileSync(file, html, 'utf8');
+  const win = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await win.loadFile(file);
+    if (kind === 'pdf') return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+    // JavaScript is off, so the page height comes from the picture: capture tall, then cut the empty background off the bottom.
+    win.setContentSize(1280, 4000);
+    await new Promise((r) => setTimeout(r, 400));
+    const img = await win.webContents.capturePage();
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    if (bmp.length < width * height * 4) return img.toPNG();
+    const bg = bmp.readUInt32LE((height - 1) * width * 4);
+    let last = height - 1;
+    rows: for (; last > 0; last--) {
+      const row = last * width * 4;
+      for (let x = 0; x < width; x += 2) if (bmp.readUInt32LE(row + x * 4) !== bg) break rows;
+    }
+    return img.crop({ x: 0, y: 0, width, height: Math.min(height, last + 32) }).toPNG();
+  } finally {
+    win.destroy();
+    fs.rm(file, { force: true }, () => undefined);
+  }
+}
+
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -235,6 +267,8 @@ app.whenReady().then(() => {
       captureSource: new ElectronWindowCapture(),
       imageTools: electronImageTools,
       clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
+      documentsDir: app.getPath('documents'),
+      renderReport: (html, kind) => renderReport(html, kind),
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
     });
@@ -282,6 +316,7 @@ app.whenReady().then(() => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import projects and workflows', properties: ['openFile'], filters: [{ name: 'Keo export', extensions: ['json'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
+      hideResults: () => presenceWindows?.hideResults(),
       pickWakeModel: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
@@ -315,6 +350,7 @@ app.whenReady().then(() => {
       showMain: (view) => showMain(view),
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
       ensureVoiceWindow: () => ensureVoiceWindow(),
+      showResults: () => presenceWindows?.showResults(),
       mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
       notify: (title, body) => {
         if (!Notification.isSupported()) return;
@@ -516,6 +552,27 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     fs.writeFileSync(path.join(shots, 'command-bar.png'), (await cmd.webContents.capturePage()).toPNG());
   }
   pw.hideCommandBar();
+  // Research results window: a synthetic result (no network), its own channels only.
+  const px = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const card = (name: string, price: string) => ({ name, url: `https://shop.example.com/${name.length}`, pageTitle: name, merchant: 'Example Shop', price, currency: 'USD', priceFrom: 'page data' as const, availability: 'InStock', image: px, imageUrl: null, fit: null, pros: ['Fast'], cons: ['Heavier'], specs: ['32 GB RAM', '512 GB SSD'], fetchedAt: new Date().toISOString() });
+  svc.results.add({ title: 'MacBook Pro M4 vs MacBook Air M4 (32 GB, 512 GB)', summary: 'Synthetic smoke result.', criteria: ['price', '32 GB RAM'], cards: [card('MacBook Air 13 M4', '1799'), card('MacBook Pro 14 M4', '2199')], dropped: [], conversationId: null });
+  pw.showResults();
+  const res = pw.results!;
+  await loaded(res);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  r.resultsRendered = await res.webContents.executeJavaScript(`document.querySelectorAll('.results-card').length`);
+  r.resultsGet = await tryCall(res, 'results:get', {});
+  r.resultsMemoryList = await tryCall(res, 'memory:list', {});
+  r.resultsSettingsUpdate = await tryCall(res, 'settings:update', { patch: {} });
+  r.resultsTasksApprove = await tryCall(res, 'tasks:approveStep', { stepId: 'x', inputHash: 'x' });
+  r.resultsTitle = await res.webContents.executeJavaScript(`document.querySelector('.results-heading h1')?.textContent ?? ''`);
+  if (shots && !app.isPackaged) {
+    res.webContents.setBackgroundThrottling(false);
+    res.webContents.invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    fs.writeFileSync(path.join(shots, 'results.png'), (await res.webContents.capturePage()).toPNG());
+  }
+  pw.hideResults();
   svc.settings.update({ shortcuts: { commandBarEnabled: true, commandBar: 'Control+Alt+Shift+F11' } });
   const st = pw.syncShortcut();
   r.shortcutRegistered = st.registered && globalShortcut.isRegistered('Control+Alt+Shift+F11');

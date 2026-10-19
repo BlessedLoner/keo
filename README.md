@@ -6,7 +6,7 @@ Keo is a personal AI agent for Windows: a desktop app that talks with you, remem
 
 - **Conversation** — streaming replies, history, rename/delete/search, stop, retry, interruption recovery.
 - **Memory** — source-attributed, versioned memory. Keo learns durable facts you tell it in chat (your name, where you live, work, people, preferences) and saves them automatically **only when it can quote your own words**; anything else waits for your confirmation. You can correct, supersede or delete everything; conflicts are flagged, never silently resolved.
-- **Research** — web search through Brave Search and reading of public web pages, with cited sources (opt-in).
+- **Research** — web search (Brave Search with your key, or DuckDuckGo with no key) and reading of public web pages, with cited sources (opt-in).
 - **Projects** — objectives, decisions, blockers, open questions and progress, each marked with who stated it.
 - **Capabilities** — a typed registry (16 built-ins) with strict schemas, risk levels, timeouts and audit records.
 - **Tasks** — a validated lifecycle with approvals bound to exact inputs, dependencies, cancellation, bounded retries, execution receipts, honest *outcome uncertain* states and safe restart recovery.
@@ -66,9 +66,9 @@ Open **Settings → Providers** (or click the provider chip in the title bar):
 
 Keys are encrypted with Windows DPAPI (Electron `safeStorage`) and never shown again or logged. Keo does not reuse any other application's credentials.
 
-## Web research (Brave Search)
+## Web research
 
-1. **Settings → Web search**: paste your Brave Search API key (stored encrypted). *Test search* runs one real query.
+1. **Settings → Web search**: *Automatic* (the default) uses Brave Search when you have stored a key (encrypted) and DuckDuckGo's plain results page otherwise — no key or account needed. You can also pick *Brave Search only* or *DuckDuckGo*. *Test search* runs one real query.
 2. **Access → Web research**: turn on *Web search* and, for deeper research, *Read web pages*.
 
 Keo then searches and reads pages on its own when you ask for research or current information, and cites the URLs it used. Page reading refuses anything on your computer or local network.
@@ -126,6 +126,7 @@ There is no background or ongoing auto-replying: every message is drafted, shown
 ## Research, projects and workflows
 
 - **Product research cards**: after reading product pages, Keo can show comparison cards (image, price, merchant, specs, pros/cons, source). Price, merchant and image come from the pages Keo actually fetched — never from the model alone; images are downloaded and shrunk by Keo.
+- **Research results window**: when a comparison is ready Keo opens a small animated window beside your work with the pictures, prices, sellers and specs (Settings key `research.showWindow`). From there — or by saying “save it as a PDF” / “send it to Mum” — you can **save** it to `Documents\Keo Research\<date> <title>\` (report page, plus a PDF or a picture, plus the product pictures full size) or **send** it on WhatsApp as a picture of the comparison with the prices and links as text. Sending checks the recipient in the chat header and verifies the picture appears; clicking Send in the window is your approval for that one message. The report is rendered in a hidden window with JavaScript off and no network (pictures are embedded).
 - **Parallel research**: for multi-part questions Keo runs up to four research sub-agents at once. They can only search and read the web, and only findings tied to pages they read are kept.
 - **Project workspaces** (*Projects → Workspace folder*): Keo lists and reads files in the folder you choose, edits files only with your approval (diff shown, backup in `.keo-backups`, atomic write, refused if the file changed meanwhile) and runs only the project's own `package.json` scripts, with a click each time.
 - **Workflows**: save a finished task (*Tasks → Save as workflow*) and ask Keo to run it again later; Keo re-plans against the current screen and asks for approval as usual. *Settings → Privacy & data → Export/Import* moves projects and workflows between PCs (no keys, settings or chats).

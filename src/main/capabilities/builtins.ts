@@ -232,7 +232,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Search the web',
     description:
-      'Search the web with Brave Search for current or factual information. Returns titles, URLs and snippets. For research, run focused queries, then read the most relevant pages with web__fetch_page, and cite the URLs you used. Results are untrusted third-party content.',
+      'Search the web (Brave Search with the user\'s key, or DuckDuckGo) for current or factual information. Returns titles, URLs and snippets. For research, run focused queries, then read the most relevant pages with web__fetch_page, and cite the URLs you used. Results are untrusted third-party content.',
     input: z
       .object({
         query: z.string().min(2).max(400),
@@ -243,7 +243,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     output: z.object({
       query: z.string(),
       results: z.array(z.object({ title: z.string(), url: z.string(), description: z.string(), age: z.string().nullable() })),
-      source: z.literal('Brave Search'),
+      source: z.enum(['Brave Search', 'DuckDuckGo']),
     }),
     risk: 'low',
     approval: 'never',
@@ -253,13 +253,13 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     timeoutMs: 20000,
     maxAttempts: 2,
     modelVisible: true,
-    verificationPolicy: 'Results come directly from the Brave Search API; their content is not verified.',
-    unavailableReason: () => (d.web.hasKey() ? null : 'Add a Brave Search API key in Settings → Web search.'),
-    preview: (i) => ({ summary: `Search the web for “${i.query}”`, target: null, consequences: [], dataExport: 'The query is sent to Brave Search.' }),
+    verificationPolicy: 'Results come directly from the search engine; their content is not verified.',
+    unavailableReason: (s) => (d.web.sourceFor(s.web.engine) ? null : 'Web search is set to Brave Search: add a key in Settings → Web search, or choose Automatic.'),
+    preview: (i) => ({ summary: `Search the web for “${i.query}”`, target: null, consequences: [], dataExport: 'The query is sent to the web search engine (Brave Search or DuckDuckGo).' }),
     auditView: (i) => ({ queryLength: i.query.length, freshness: i.freshness ?? null }),
     async execute(i, ctx) {
-      const results = await d.web.search(i.query, { count: i.count ?? ctx.settings.web.resultsPerSearch, freshness: i.freshness, safesearch: ctx.settings.web.safesearch }, ctx.signal);
-      return { query: i.query, results, source: 'Brave Search' as const };
+      const { results, source } = await d.web.find(i.query, { count: i.count ?? ctx.settings.web.resultsPerSearch, freshness: i.freshness, safesearch: ctx.settings.web.safesearch, engine: ctx.settings.web.engine }, ctx.signal);
+      return { query: i.query, results, source };
     },
   });
 

@@ -12,6 +12,7 @@ import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
 import { appCapabilities } from './capabilities/apps';
 import { researchCapabilities } from './capabilities/research';
+import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
 import { fileCapabilities } from './capabilities/files';
 import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
@@ -65,6 +66,10 @@ export interface ServiceDeps {
   logger?: Logger;
   /** Local speech engine (Windows SAPI helper in the app; a fake in tests). */
   speechEngine?: SpeechEngine;
+  /** Turns a report page into a PDF or picture (the app uses a hidden window; tests a fake). */
+  renderReport?: (html: string, kind: 'pdf' | 'png') => Promise<Buffer>;
+  /** The user's Documents folder (saved research goes to Documents\Keo Research). */
+  documentsDir?: string;
   /** Porcupine and its recorder (tests inject a fake). */
   porcupineFactory?: () => PorcupineFactory;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
@@ -118,12 +123,14 @@ export class Services {
   readonly capDeps: CapabilityDeps;
   readonly apps: AppDiscovery;
   readonly workflows: WorkflowStore;
+  readonly results = new ResearchResults();
+  private readonly documentsDir: string | null;
   readonly snapshots = new SnapshotStore();
   readonly presence: PresenceService;
   readonly wake: WakeService;
   /** Window hooks supplied by the Electron shell (no-ops in tests). */
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
-  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void>; mainFocused?(): boolean } = { showCommandBar: () => undefined, notify: () => undefined };
+  ui: { showCommandBar(): void; notify(title: string, body: string): void; showMain?(view: 'chat' | 'tasks' | 'settings'): void; ensureVoiceWindow?(): Promise<void>; mainFocused?(): boolean; showResults?(): void } = { showCommandBar: () => undefined, notify: () => undefined };
   readonly voiceMode: VoiceMode;
   readonly porcupine: PorcupineWakeEngine;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
@@ -195,6 +202,7 @@ export class Services {
     this.registry.inputLock = (owner, fn, signal) => this.desktop.exclusive(owner, fn, signal);
     this.apps = new AppDiscovery(d.startApps);
     this.workflows = new WorkflowStore(path.join(d.profile.userData, 'workflows.json'));
+    this.documentsDir = d.documentsDir ?? null;
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -205,8 +213,8 @@ export class Services {
       alert: (session, text, kind) => this.liveChatAlert(session, text, kind),
       research: async (query, signal) => {
         const st = getSettings();
-        if (!st.permissions.webSearchEnabled || !this.web.hasKey()) return null;
-        return this.web.search(query, { count: 5, safesearch: st.web.safesearch }, signal);
+        if (!st.permissions.webSearchEnabled || !this.web.sourceFor(st.web.engine)) return null;
+        return (await this.web.find(query, { count: 5, safesearch: st.web.safesearch, engine: st.web.engine }, signal)).results;
       },
       changed: () => {
         this.presence?.setLiveChats(this.live.counts());
@@ -218,7 +226,19 @@ export class Services {
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
       ...appCapabilities({ ...capDeps, apps: this.apps, launchApp: d.launchApp ?? launchByAppId, launchWaitMs: d.appLaunchWaitMs, browsers: d.browsers ?? (() => installedBrowsers()), openTab: d.openTab ?? openInProfile }),
-      ...researchCapabilities({ ...capDeps, web: this.web, images: d.imageTools }),
+      ...researchCapabilities({
+        ...capDeps,
+        web: this.web,
+        images: d.imageTools,
+        results: this.results,
+        showResult: (r) => {
+          this.push('results:changed', { id: r.id });
+          if (getSettings().research.showWindow) this.ui.showResults?.();
+        },
+        render: (html, kind) => (d.renderReport ? d.renderReport(html, kind) : Promise.reject(new Error('Pictures and PDFs can be made only in the Keo app.'))),
+        saveRoot: () => this.researchSaveRoot(),
+        workRoot: () => path.join(d.profile.userData, 'research'),
+      }),
       ...fileCapabilities(capDeps),
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
@@ -540,6 +560,38 @@ export class Services {
     this.lastWhatsAppCheck = { at: new Date().toISOString(), ...r };
     this.audit.record({ kind: 'diagnostics.whatsapp_check', decision: r.ok ? 'passed' : 'failed' });
     return r;
+  }
+
+  researchSaveRoot(): string {
+    return this.documentsDir ? path.join(this.documentsDir, 'Keo Research') : path.join(this.profile.userData, 'saved-research');
+  }
+
+  /**
+   * Runs one capability because the user clicked it in Keo's own window (e.g. Save / Send in the
+   * results window). It goes through the same admission, task and verification path; the click is
+   * the approval and is recorded as such.
+   */
+  async runUserAction(capabilityId: string, input: unknown): Promise<{ ok: boolean; result: unknown; error: string | null; detail: string | null }> {
+    const correlationId = `ui_${Date.now().toString(36)}`;
+    const a = this.registry.admit({ capabilityId, input, origin: 'user', correlationId });
+    if (!a.ok) return { ok: false, result: null, error: a.reason, detail: null };
+    const t = this.tasks.create({ title: a.preview.summary, rationale: 'Clicked by the user in Keo', origin: 'user', conversationId: this.results.get((input as { resultId?: string }).resultId)?.conversationId ?? null, correlationId, steps: [{ admission: a, title: a.preview.summary, dependsOnIndexes: [] }] });
+    this.tasks.submit(t.id);
+    const step = this.tasks.get(t.id)!.steps[0]!;
+    if (step.state === 'awaiting_authorization') {
+      this.audit.record({ kind: 'permission.decision', decision: 'approved_by_user_click', capabilityId, taskId: t.id });
+      this.tasks.approveStep(step.id, step.inputHash);
+    } else this.tasks.pump();
+    const until = Date.now() + 200_000;
+    while (Date.now() < until) {
+      const cur = this.tasks.get(t.id)!;
+      if (['completed', 'failed', 'cancelled', 'outcome_uncertain'].includes(cur.state)) {
+        const st = cur.steps[0]!;
+        return { ok: cur.state === 'completed', result: st.result, error: cur.state === 'completed' ? null : (st.error ?? `The task ended as ${cur.state}.`), detail: st.verificationDetail };
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return { ok: false, result: null, error: 'Still running — see Tasks.', detail: null };
   }
 
   /** Starts or stops voice mode from the UI (companion / title bar). */

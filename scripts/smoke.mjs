@@ -78,6 +78,12 @@ check('command bar: cannot change settings', p.commandSettingsUpdate === 'forbid
 check('command bar: cannot list desktop windows', p.commandDesktopList === 'forbidden', p.commandDesktopList);
 check('shortcut: registers', p.shortcutRegistered === true, p.shortcutRegistered);
 check('shortcut: released when disabled', p.shortcutReleasedWhenDisabled === true, p.shortcutReleasedWhenDisabled);
+check('results window: shows the cards', p.resultsRendered === 2, p.resultsRendered);
+check('results window: shows the title', typeof p.resultsTitle === 'string' && p.resultsTitle.startsWith('MacBook Pro M4'), p.resultsTitle);
+check('results window: may read results', p.resultsGet === 'ok', p.resultsGet);
+check('results window: cannot read memory', p.resultsMemoryList === 'forbidden', p.resultsMemoryList);
+check('results window: cannot change settings', p.resultsSettingsUpdate === 'forbidden', p.resultsSettingsUpdate);
+check('results window: cannot approve tasks', p.resultsTasksApprove === 'forbidden', p.resultsTasksApprove);
 check('companion: closed when disabled', p.companionClosedWhenDisabled === true, p.companionClosedWhenDisabled);
 check('presence: no orphan windows after shutdown', p.noPresenceWindowsAfterShutdown === true, p.noPresenceWindowsAfterShutdown);
 

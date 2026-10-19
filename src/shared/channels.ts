@@ -14,6 +14,11 @@ export const INVOKE_CHANNELS = [
   'projects:pickWorkspace',
   'wake:setPicovoiceKey',
   'wake:pickKeywordFile',
+  'results:get',
+  'results:save',
+  'results:send',
+  'results:openFolder',
+  'results:close',
   'workflows:list',
   'apps:installed',
   'workflows:saveFromTask',
@@ -131,6 +136,7 @@ export const pushChannels = [
   'grants:changed',
   'livechat:changed',
   'update:changed',
+  'results:changed',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

@@ -151,6 +151,8 @@ export const SettingsSchema = z
       .prefault({}),
     web: z
       .object({
+        /** auto: Brave Search when a key is stored, otherwise DuckDuckGo (no key needed). */
+        engine: z.enum(['auto', 'brave', 'duckduckgo']).default('auto'),
         safesearch: z.enum(['off', 'moderate', 'strict']).default('moderate'),
         resultsPerSearch: z.number().int().min(1).max(20).default(8),
       })
@@ -227,6 +229,13 @@ export const SettingsSchema = z
       .strict()
       .prefault({}),
     /** Defaults and limits for live WhatsApp chat sessions. */
+    research: z
+      .object({
+        /** Open the results window when Keo finishes a comparison. */
+        showWindow: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
     /** Which task events show a Windows notification (only while Keo's window is not in front). */
     notifications: z
       .object({

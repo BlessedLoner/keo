@@ -143,14 +143,16 @@ describe('web research', () => {
     expect(htmlToText('a&nbsp;&nbsp;b &#x41; &#66;')).toBe('a b A B');
   });
 
-  it('search is hidden from the model until a key and the permission are both present', () => {
+  it('search is hidden from the model until the permission is on (and a key, when Brave only is chosen)', () => {
     const { web } = fakeWeb({}, {}, null);
     h = makeHarness({ web });
     const names = () => h.services.registry.toolSpecs().map((t) => t.name);
     expect(names()).not.toContain('web__search');
     h.services.settings.update({ permissions: { webSearchEnabled: true } });
-    expect(names()).not.toContain('web__search'); // still no key
-    expect(h.services.registry.list().find((c) => c.id === 'web.search')?.unavailableReason).toMatch(/Brave Search API key/);
+    expect(names()).toContain('web__search'); // automatic: DuckDuckGo without a key
+    h.services.settings.update({ web: { engine: 'brave' } });
+    expect(names()).not.toContain('web__search'); // Brave only, and no key
+    expect(h.services.registry.list().find((c) => c.id === 'web.search')?.unavailableReason).toMatch(/Brave Search: add a key/);
   });
 
   it('research results reach the model marked as untrusted', async () => {

@@ -4,7 +4,9 @@ import type { Logger } from '../logging/logger';
 import type { Services } from '../services';
 
 const COMPANION_W = 300;
-const COMPANION_H = 270; // room for up to four task chips above the companion (the window is click-through)
+const COMPANION_H = 270;
+const RESULTS_W = 560;
+const RESULTS_H = 700; // room for up to four task chips above the companion (the window is click-through)
 const COMMAND_W = 680;
 const COMMAND_H = 500;
 
@@ -249,14 +251,66 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | null {
     if (this.companion && !this.companion.isDestroyed() && this.companion.webContents.id === id) return 'companion';
     if (this.command && !this.command.isDestroyed() && this.command.webContents.id === id) return 'command';
+    if (this.results && !this.results.isDestroyed() && this.results.webContents.id === id) return 'results';
     return null;
   }
 
+  // ---------------------------------------------------------------- research results
+  results: BrowserWindow | null = null;
+
+  /** The animated results window (latest research result), at the right of the screen, without stealing focus. */
+  showResults(): void {
+    let win = this.results && !this.results.isDestroyed() ? this.results : null;
+    if (!win) {
+      win = new BrowserWindow({
+        width: RESULTS_W,
+        height: RESULTS_H,
+        frame: false,
+        transparent: true,
+        resizable: true,
+        minWidth: 420,
+        minHeight: 420,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: false,
+        show: false,
+        alwaysOnTop: true,
+        title: 'Keo research results',
+        backgroundColor: '#00000000',
+        webPreferences: webPreferences(this.preload),
+      });
+      win.setAlwaysOnTop(true, 'floating');
+      win.on('closed', () => {
+        if (this.results === win) this.results = null;
+      });
+      void win.loadURL(this.url('#results'));
+      this.results = win;
+    }
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    const w = Math.min(RESULTS_W, d.width - 40);
+    const h = Math.min(RESULTS_H, d.height - 40);
+    win.setBounds({ x: Math.round(d.x + d.width - w - 24), y: Math.round(d.y + (d.height - h) / 2), width: w, height: h });
+    const show = () => {
+      win!.showInactive();
+      win!.webContents.send('presence:command', { type: 'results_open' });
+      // A window shown without focus may keep its first frame until something repaints it.
+      setTimeout(() => {
+        if (!win!.isDestroyed()) win!.webContents.invalidate();
+      }, 700);
+    };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', show);
+    else show();
+  }
+
+  hideResults(): void {
+    if (this.results && !this.results.isDestroyed()) this.results.hide();
+  }
+
   broadcast(channel: string, payload: unknown): void {
-    for (const w of [this.companion, this.command]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+    for (const w of [this.companion, this.command, this.results]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
   }
 
   openMain(view?: string): void {
@@ -269,8 +323,10 @@ export class PresenceWindows {
     globalShortcut.unregisterAll();
     this.companion?.destroy();
     this.command?.destroy();
+    this.results?.destroy();
     this.companion = null;
     this.command = null;
+    this.results = null;
   }
 }
 

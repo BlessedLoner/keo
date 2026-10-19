@@ -107,6 +107,14 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### Next iteration (uncommitted): research results window, save/send, search without a key
+
+- Reported: a request like “compare the best prices of the MacBook Pro/Air M4 32 GB and show me the result” opened a browser on Google results and sent only links and text prices on WhatsApp, with no picture.
+- Research now goes through web search + the sellers' product pages + `research.show_products`; the result is kept (last ten, in memory) and opens an animated **results window** (pictures, prices, sellers, specs, pros/cons, sources).
+- **Save** (`research.save_result`): `Documents\Keo Research\<date> <title>\` with `report.html`, `report.pdf` or `report.png` and the product pictures (full size from the page when possible). **Send** (`research.send_whatsapp`): a picture of the comparison plus prices and links as the caption, via the existing verified WhatsApp file path (app or Web). Both work from the window's buttons or by voice/chat (“save it as a PDF”, “send it to …”).
+- Web search works without a Brave key: engine setting *Automatic / Brave only / DuckDuckGo*.
+- Tests: `tests/results.test.ts` (store, report escaping/CSP, prices, save with a fake renderer writing real files, send through the fake WhatsApp, folder opening limits, window channel limits, DuckDuckGo parsing, engine choice, human-check stop). Not live-tested: the real PDF/PNG rendering and a real DuckDuckGo query and WhatsApp send.
+
 ### 1.4 iteration: hands-free, faster WhatsApp, installed apps, trained wake word
 
 - Live chat asked the user even for “hey how are you”: the prompt told the model to ask for anything not covered by instructions, and unparseable answers defaulted to asking. Now small talk is answered, malformed answers are retried, and in Hands-free the chat never pauses (careful replies + a notification).

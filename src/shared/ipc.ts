@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type {
   UpdateInfo,
   SelfTestResult,
+  ResearchResultView,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -48,6 +49,11 @@ export const invokeSchemas = {
   'projects:pickWorkspace': z.object({ projectId: z.string().min(1).max(80) }).strict(),
   'wake:setPicovoiceKey': z.object({ key: z.string().trim().max(400) }).strict(),
   'wake:pickKeywordFile': empty,
+  'results:get': z.object({ id: z.string().regex(/^rr_[a-z0-9]{6,20}$/).optional() }).strict(),
+  'results:save': z.object({ id: z.string().regex(/^rr_[a-z0-9]{6,20}$/), format: z.enum(['pdf', 'png', 'page']) }).strict(),
+  'results:send': z.object({ id: z.string().regex(/^rr_[a-z0-9]{6,20}$/), contact: z.string().trim().min(1).max(120), which: z.enum(['app', 'web']).optional(), note: z.string().trim().max(300).optional() }).strict(),
+  'results:openFolder': z.object({ folder: z.string().min(3).max(500) }).strict(),
+  'results:close': empty,
   'workflows:list': empty,
   'apps:installed': z.object({ refresh: z.boolean().default(false) }).strict(),
   'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
@@ -213,6 +219,11 @@ export interface InvokeOutputs {
   'apps:installed': Array<{ name: string; appId: string; kind: 'store' | 'desktop'; publisher: string | null; processName: string | null; exePath: string | null; icon: string | null }>;
   'wake:setPicovoiceKey': { hasKey: boolean };
   'wake:pickKeywordFile': { path: string | null };
+  'results:get': ResearchResultView | null;
+  'results:save': { ok: boolean; folder: string | null; error: string | null };
+  'results:send': { ok: boolean; error: string | null; detail: string | null };
+  'results:openFolder': { opened: boolean };
+  'results:close': { closed: boolean };
   'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
   'workflows:saveFromTask': { id: string; name: string };
   'workflows:delete': { deleted: boolean };

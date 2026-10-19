@@ -816,6 +816,15 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
             </button>
           </div>
         )}
+        <div className="field">
+          <label htmlFor="engine">Search engine</label>
+          <select id="engine" className="select" value={s.web.engine} onChange={(e) => void patch({ web: { engine: e.target.value } })}>
+            <option value="auto">Automatic — Brave Search with a key, otherwise DuckDuckGo</option>
+            <option value="brave">Brave Search only (needs the key)</option>
+            <option value="duckduckgo">DuckDuckGo (no key)</option>
+          </select>
+          <span className="muted small">DuckDuckGo needs no key: Keo reads its plain results page. It may slow down if you search a lot.</span>
+        </div>
         <div className="grid-2">
           <div className="field">
             <label htmlFor="safe">Safe search</label>
@@ -833,7 +842,7 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
         <div className="row">
           <button
             className="btn"
-            disabled={!status?.hasKey || testing}
+            disabled={(s.web.engine === 'brave' && !status?.hasKey) || testing}
             onClick={async () => {
               setTesting(true);
               try {
@@ -847,7 +856,7 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
           >
             {testing ? <span className="spinner" /> : <Icon name="search" size={14} />} Test search
           </button>
-          <span className="muted small">Runs one real query (counts toward your Brave quota).</span>
+          <span className="muted small">Runs one real query{status?.hasKey && s.web.engine !== 'duckduckgo' ? ' (counts toward your Brave quota)' : ' on DuckDuckGo'}.</span>
         </div>
         {test && (
           <div className={`banner ${test.ok ? 'info' : 'danger'} small`} style={{ marginTop: 10 }}>

@@ -38,6 +38,7 @@ export interface HostHooks {
   showCommandBar?(): void;
   hideCommandBar?(): void;
   hideCompanion?(): void;
+  hideResults?(): void;
   setCompanionInteractive?(interactive: boolean): void;
   companionDrag?(phase: 'start' | 'end'): void;
   shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
@@ -97,6 +98,30 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const file = (await host.pickWakeModel?.()) ?? null;
       if (file) s.settings.update({ wake: { porcupine: { keywordPath: file, builtin: null } } });
       return { path: file };
+    },
+    'results:get': ({ id }) => {
+      const r = s.results.get(id);
+      return r ? { id: r.id, title: r.title, summary: r.summary, criteria: r.criteria, cards: r.cards, createdAt: r.createdAt } : null;
+    },
+    // The buttons in Keo's results window are the user's own instruction (recipient/format shown there).
+    'results:save': async ({ id, format }) => {
+      const r = await s.runUserAction('research.save_result', { resultId: id, format });
+      return { ok: r.ok, folder: r.ok ? ((r.result as { folder: string }).folder ?? null) : null, error: r.error };
+    },
+    'results:send': async ({ id, contact, which, note }) => {
+      const r = await s.runUserAction('research.send_whatsapp', { resultId: id, contact, ...(which ? { which } : {}), ...(note ? { note } : {}) });
+      return { ok: r.ok, error: r.error, detail: r.detail };
+    },
+    'results:openFolder': async ({ folder }) => {
+      // Only folders Keo saved research into.
+      const root = s.researchSaveRoot();
+      const full = path.resolve(folder);
+      if (!full.startsWith(path.resolve(root) + path.sep) || !fs.existsSync(full)) return { opened: false };
+      return { opened: await host.openPath(full) };
+    },
+    'results:close': () => {
+      host.hideResults?.();
+      return { closed: true };
     },
     'workflows:list': () => s.workflows.list().map((w) => ({ id: w.id, name: w.name, description: w.description, steps: w.steps.length, imported: w.imported, createdAt: w.createdAt })),
     'workflows:saveFromTask': ({ taskId, name }) => {
@@ -376,8 +401,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'web:test': async () => {
       try {
-        const r = await s.web.search('Keo desktop assistant test', { count: 3, safesearch: 'moderate' }, abortAfter(20000));
-        return { ok: true, message: `Brave Search answered with ${r.length} result(s). This used one query from your plan.`, sample: r.slice(0, 3).map((x) => ({ title: x.title, url: x.url })) };
+        const { results: r, source } = await s.web.find('Keo desktop assistant test', { count: 3, safesearch: 'moderate', engine: s.settings.get().web.engine }, abortAfter(20000));
+        return { ok: true, message: `${source} answered with ${r.length} result(s).${source === 'Brave Search' ? ' This used one query from your plan.' : ''}`, sample: r.slice(0, 3).map((x) => ({ title: x.title, url: x.url })) };
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : String(e), sample: [] };
       }

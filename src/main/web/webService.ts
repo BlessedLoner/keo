@@ -36,15 +36,22 @@ type FetchImpl = typeof fetch;
 type Lookup = (host: string) => Promise<Array<{ address: string; family: number }>>;
 
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
+const DDG_ENDPOINT = 'https://html.duckduckgo.com/html/';
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+
+export type SearchEngine = 'auto' | 'brave' | 'duckduckgo';
+export type SearchSource = 'Brave Search' | 'DuckDuckGo';
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const MAX_TEXT_CHARS = 20000;
 const MAX_REDIRECTS = 4;
 const USER_AGENT = 'Keo/0.1 (personal desktop assistant)';
 
 /**
- * Outbound web access for research. Search goes only to Brave's API with the
- * user's own key; page fetching refuses private-network destinations (SSRF
- * protection) and returns plain text only — never executes page content.
+ * Outbound web access for research. Search goes to Brave's API with the user's
+ * own key, or — without a key, or when the user picks it — to DuckDuckGo's
+ * plain-HTML results page (no key, no account). Page fetching refuses
+ * private-network destinations (SSRF protection) and returns plain text only —
+ * never executes page content.
  */
 export class WebService {
   constructor(
@@ -56,6 +63,42 @@ export class WebService {
 
   hasKey(): boolean {
     return !!this.getKey();
+  }
+
+  /** Which search the engine setting resolves to right now (null: Brave chosen but no key). */
+  sourceFor(engine: SearchEngine): SearchSource | null {
+    if (engine === 'duckduckgo') return 'DuckDuckGo';
+    if (this.hasKey()) return 'Brave Search';
+    return engine === 'auto' ? 'DuckDuckGo' : null;
+  }
+
+  /** Search with the engine the user chose ('auto': Brave when a key is stored, else DuckDuckGo). */
+  async find(query: string, opts: { count: number; freshness?: string; safesearch: 'off' | 'moderate' | 'strict'; engine: SearchEngine }, signal: AbortSignal): Promise<{ results: SearchResult[]; source: SearchSource }> {
+    const source = this.sourceFor(opts.engine);
+    if (!source) throw new CapabilityError('unconfigured', 'Web search is set to Brave Search but no key is stored (Settings → Web search).');
+    const results = source === 'Brave Search' ? await this.search(query, opts, signal) : await this.searchDuckDuckGo(query, opts, signal);
+    return { results, source };
+  }
+
+  /** DuckDuckGo's HTML results page (a fixed public host), parsed to titles, links and snippets; ads are skipped. */
+  async searchDuckDuckGo(query: string, opts: { count: number; freshness?: string; safesearch: 'off' | 'moderate' | 'strict' }, signal: AbortSignal): Promise<SearchResult[]> {
+    const form = new URLSearchParams({ q: query, kl: 'wt-wt', kp: opts.safesearch === 'strict' ? '1' : opts.safesearch === 'off' ? '-2' : '-1' });
+    const df = { pd: 'd', pw: 'w', pm: 'm', py: 'y' }[opts.freshness ?? ''];
+    if (df) form.set('df', df);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(DDG_ENDPOINT, { method: 'POST', body: form.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, Accept: 'text/html' }, signal });
+    } catch (e) {
+      if (signal.aborted) throw new CapabilityError('cancelled', 'Search cancelled.');
+      throw new CapabilityError('network', `Could not reach DuckDuckGo: ${(e as Error).message}`, { retryable: true });
+    }
+    if (res.status === 429 || res.status === 202) throw new CapabilityError('rate_limit', 'DuckDuckGo is limiting searches right now. Wait a minute, or add a Brave Search key in Settings → Web search.', { retryable: true });
+    if (!res.ok) throw new CapabilityError('search_failed', `DuckDuckGo returned HTTP ${res.status}.`, { retryable: res.status >= 500 });
+    const { text: html } = await readCapped(res, MAX_PAGE_BYTES);
+    const results = parseDuckDuckGo(html).slice(0, Math.min(20, Math.max(1, opts.count)));
+    if (!results.length && /anomaly|captcha|challenge/i.test(html)) throw new CapabilityError('rate_limit', 'DuckDuckGo asked for a human check, so Keo stopped. Try again later, or add a Brave Search key in Settings → Web search.', { retryable: false });
+    this.log.info('web.search', { engine: 'duckduckgo', results: results.length, queryLength: query.length });
+    return results;
   }
 
   async search(query: string, opts: { count: number; freshness?: string; safesearch: 'off' | 'moderate' | 'strict' }, signal: AbortSignal): Promise<SearchResult[]> {
@@ -302,4 +345,37 @@ export function htmlToText(html: string): string {
     .replace(/ *\n */g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** Results from DuckDuckGo's HTML page: links come wrapped as /l/?uddg=<target>; ads point to y.js and are dropped. */
+export function parseDuckDuckGo(html: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split(/<div[^>]+class="[^"]*\bresult\b[^"]*"/i).slice(1);
+  for (const b of blocks) {
+    if (/result--ad\b/.test(b.slice(0, 200))) continue;
+    const a = /<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(b);
+    if (!a) continue;
+    let href = decodeEntities(a[1]!);
+    if (href.startsWith('//')) href = `https:${href}`;
+    try {
+      const u = new URL(href, 'https://duckduckgo.com');
+      if (u.hostname.endsWith('duckduckgo.com')) {
+        if (u.pathname.startsWith('/y.js')) continue;
+        const target = u.searchParams.get('uddg');
+        if (!target) continue;
+        href = target;
+      }
+      const t = new URL(href);
+      if (t.protocol !== 'https:' && t.protocol !== 'http:') continue;
+      href = t.toString();
+    } catch {
+      continue;
+    }
+    if (seen.has(href)) continue;
+    seen.add(href);
+    const snip = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div|td)>/i.exec(b);
+    out.push({ title: decodeEntities(stripTags(a[2]!)).trim().slice(0, 300), url: href.slice(0, 2000), description: snip ? decodeEntities(stripTags(snip[1]!)).trim().slice(0, 600) : '', age: null });
+  }
+  return out.filter((r) => r.title);
 }

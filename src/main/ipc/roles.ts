@@ -1,7 +1,7 @@
 import type { InvokeChannel } from '../../shared/ipc';
 
 /** Each Keo window gets only the IPC channels its job needs. */
-export type WindowRole = 'main' | 'command' | 'companion';
+export type WindowRole = 'main' | 'command' | 'companion' | 'results';
 
 const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'presence:get',
@@ -53,7 +53,11 @@ const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'app:info',
 ]);
 
+/** The research results window: show results, save or send them, open sources. Nothing else. */
+const RESULTS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl', 'presence:openMain', 'settings:get']);
+
 export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolean {
   if (role === 'main') return true;
+  if (role === 'results') return RESULTS.has(channel);
   return (role === 'command' ? COMMAND : COMPANION).has(channel);
 }

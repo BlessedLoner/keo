@@ -3,12 +3,13 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { CommandBarApp } from './presence/CommandBarApp';
 import { CompanionApp } from './presence/CompanionApp';
+import { ResultsApp } from './presence/ResultsApp';
 import { UiProvider } from './components/ui';
 import { AppStateProvider } from './state/AppState';
 import './styles/app.css';
 import './styles/emblem.css';
 
-// One renderer bundle, three windows: the main app, the floating companion and the command bar.
+// One renderer bundle, four windows: the main app, the floating companion, the command bar and research results.
 const route = window.location.hash;
 
 createRoot(document.getElementById('root') as HTMLElement).render(
@@ -18,6 +19,8 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <CompanionApp />
       ) : route === '#command' ? (
         <CommandBarApp />
+      ) : route === '#results' ? (
+        <ResultsApp />
       ) : (
         <AppStateProvider>
           <App />

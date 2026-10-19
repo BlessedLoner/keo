@@ -78,6 +78,16 @@ export interface Conversation {
 export type MessageRole = 'user' | 'assistant' | 'note';
 export type MessageStatus = 'complete' | 'streaming' | 'interrupted' | 'error' | 'cancelled';
 
+/** A research result as the results window shows it. */
+export interface ResearchResultView {
+  id: string;
+  title: string;
+  summary: string;
+  criteria: string[];
+  cards: ProductCard[];
+  createdAt: string;
+}
+
 /** A product comparison card (research.show_products): every field traced to a fetched page. */
 export interface ProductCard {
   name: string;
@@ -90,6 +100,8 @@ export interface ProductCard {
   availability: string | null;
   /** Shrunk copy downloaded by Keo (data: URL), never a remote address. */
   image: string | null;
+  /** Where the picture came from (the page's own product image), for saving it full size. */
+  imageUrl?: string | null;
   fit: string | null;
   pros: string[];
   cons: string[];
@@ -113,7 +125,7 @@ export interface ToolActivity {
   detail: string;
   taskId?: string;
   /** Product cards to show with this step (research.show_products). */
-  cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }> };
+  cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }>; resultId?: string; title?: string };
   /** Choices to offer as buttons when the action needs the user to pick (app, profile, window). */
   choices?: string[];
 }

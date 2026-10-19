@@ -14,6 +14,7 @@ export interface PushPayloads {
   'grants:changed': { grants: NavigationGrant[] };
   'livechat:changed': { sessions: LiveChatSession[] };
   'update:changed': UpdateDownload;
+  'results:changed': { id: string };
 }
 
 /** Instructions from the main process to a window (never from page content). */
@@ -21,6 +22,7 @@ export type PresenceCommand =
   | { type: 'stop_speaking' }
   | { type: 'record_command' }
   | { type: 'focus_input' }
+  | { type: 'results_open' }
   | { type: 'navigate'; view: string }
   | { type: 'transcript'; text: string; conversationId: string | null }
   | { type: 'listen_result'; reason: string }

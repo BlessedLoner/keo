@@ -85,6 +85,10 @@ describe('research cards', () => {
     expect(data.cards[1]).toMatchObject({ price: '$199', priceFrom: 'page text' });
     expect(data.cards[0]!.image).toMatch(/^data:image\/png;base64,/);
     expect(data.dropped.map((x) => x.name)).toEqual(['Made-up Mic 9000']);
+    // Kept for the results window (save / send), under the id the model is told.
+    const saved = h.services.results.get(undefined);
+    expect(saved?.cards.map((c) => c.name)).toEqual(['Shure MV7+', 'Rode PodMic USB']);
+    expect((cardsActivity as { resultId?: string }).resultId).toBe(saved?.id);
   });
 
   it('only pages Keo read can be opened from the cards', async () => {
