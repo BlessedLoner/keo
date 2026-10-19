@@ -437,37 +437,53 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
 }
 
 /**
- * Puts the caption in the preview's caption box: a real click into the box (accessibility focus does
- * not move the keyboard there in the WhatsApp app), then paste — never select-all, which would select
- * the page. Read back; if the box did not take it, the accessibility value is tried once. Throws (not
- * dispatched) when the caption is not in the box, so a picture is never sent without its text.
+ * Puts the caption in the preview's caption box and reads it back. Tried in turn: a real click into
+ * the box + paste (accessibility focus does not move the keyboard there in the WhatsApp app), the
+ * accessibility value, and typing straight into the focused box (works where Windows blocks
+ * simulated keyboard input). Never select-all, which would select the page. Returns true when the
+ * caption is in the box, false when it is not, null when the box cannot be read back.
  */
-async function enterCaption(d: CapabilityDeps, target: TargetT, box: UiaNodeRaw, caption: string): Promise<void> {
+async function enterCaption(d: CapabilityDeps, target: TargetT, box: UiaNodeRaw, caption: string): Promise<boolean | null> {
+  const head = caption.split(/\n+/).map((l) => l.trim()).find(Boolean) ?? caption;
   const inBox = async () => {
     const now = await d.desktop.backend.uiaDescribe(target.hwnd, box.rid).catch(() => null);
     if (now?.value === undefined) return null;
-    const head = caption.split(/\n+/).map((l) => l.trim()).find(Boolean) ?? caption;
     return textMatches(now.value ?? '', head) && normName(now.value ?? '').length >= normName(caption).length * 0.8;
   };
-  try {
-    const c = await centerOf(d, target, box);
-    await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
-  } catch (e) {
+  const clear = () => d.desktop.backend.uiaAct(target.hwnd, box.rid, 'set_value', '').catch(() => undefined);
+  const notDispatched = (e: unknown) => {
     if (!(e instanceof CapabilityError) || e.dispatched !== 'no') throw e;
-    await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'focus').catch(() => undefined);
-  }
-  await sleep(d.focusSettleMs === 0 ? 0 : 200);
-  await pasteViaClipboard(d, target.hwnd, caption).catch((e) => {
-    if (!(e instanceof CapabilityError) || e.dispatched !== 'no') throw e;
-  });
-  await sleep(d.focusSettleMs === 0 ? 0 : 250);
+  };
+  const focusBox = async () => {
+    try {
+      const c = await centerOf(d, target, box);
+      await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+    } catch (e) {
+      notDispatched(e);
+      await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'focus').catch(() => undefined);
+    }
+    await sleep(d.focusSettleMs === 0 ? 0 : 200);
+  };
+  // 1) Click + paste.
+  await focusBox();
+  await pasteViaClipboard(d, target.hwnd, caption).catch(notDispatched);
+  await sleep(d.focusSettleMs === 0 ? 0 : 300);
   let ok = await inBox();
-  if (ok === false) {
-    await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'set_value', caption).catch(() => undefined);
-    await sleep(d.focusSettleMs === 0 ? 0 : 300);
-    ok = await inBox();
-  }
-  if (ok === false) throw new CapabilityError('caption_failed', 'WhatsApp did not take the text for the picture, so nothing was sent.', { dispatched: 'no' });
+  if (ok !== false) return ok;
+  // 2) The accessibility value.
+  await clear();
+  await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'set_value', caption).catch(() => undefined);
+  await sleep(d.focusSettleMs === 0 ? 0 : 300);
+  ok = await inBox();
+  if (ok !== false) return ok;
+  // 3) Typing into the focused box (posted straight to it when simulated input is refused).
+  await clear();
+  await focusBox();
+  await d.desktop.backend.typeText(target.hwnd, caption.replace(/\r?\n/g, ' ')).catch(notDispatched);
+  await sleep(d.focusSettleMs === 0 ? 0 : 300);
+  ok = await inBox();
+  if (ok === false) await clear(); // never send a half-entered caption
+  return ok;
 }
 
 /** Closes an unsent attachment preview with its own button, so nothing half-made is left in the chat. */
@@ -477,7 +493,7 @@ async function discardPreview(d: CapabilityDeps, target: TargetT): Promise<void>
   if (remove) await actOn(d, target, remove, 'invoke').catch(() => undefined);
 }
 
-export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: string, filePath: string, caption: string, signal: AbortSignal): Promise<{ sent: boolean; appearsInChat: boolean; file: string; recipient: string }> {
+export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: string, filePath: string, caption: string, signal: AbortSignal): Promise<{ sent: boolean; appearsInChat: boolean; file: string; recipient: string; textSeparately?: boolean }> {
   const file = path.basename(filePath);
   let fresh = await freshView(d, target);
   if (!openChatIs(fresh.view, contact)) {
@@ -523,6 +539,7 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
   }
   if (!preview) throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview, so nothing was sent. (Pasting a file needs normal keyboard input on this computer.)', { dispatched: 'no' });
   let send: UiaNodeRaw | undefined;
+  let captionInPreview = !caption;
   try {
     if (caption) {
       // The preview's own caption box: named "…caption…" (Web), or the box the preview focused or added
@@ -533,8 +550,8 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
         edits.find((n) => n.focused && !elementsBefore.has(n.rid)) ??
         edits.find((n) => !elementsBefore.has(n.rid) && n !== preview!.view.search) ??
         edits.find((n) => n.focused && n !== preview!.view.search);
-      if (!box) throw new CapabilityError('not_recognized', 'Could not find the caption box of the attachment preview. Nothing was sent.', { dispatched: 'no' });
-      await step('adding the caption', () => enterCaption(d, target, box, caption));
+      // When the preview does not take the text, the picture goes first and the text right after it.
+      captionInPreview = box ? (await step('adding the caption', () => enterCaption(d, target, box, caption))) !== false : false;
     }
     if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
     // Re-verify the recipient immediately before the irreversible step. The app's preview may hide the
@@ -563,7 +580,17 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
     const lastOpen = [...f.nodes].reverse().find((n) => n.role === 'button' && /^open (picture|photo|image|video)$/i.test(n.name.trim()) && !n.offscreen);
     const newPicture = (!!lastPicture && !elementsBefore.has(lastPicture.rid)) || (!!lastOpen && !elementsBefore.has(lastOpen.rid) && /\.(png|jpe?g|gif|bmp|webp)$/i.test(file));
     const newRows = mine.slice(before).map((m) => m.text).join(' ');
-    if (newPicture || (mine.length > before && last && (textMatches(last.text, file) || (caption && textMatches(last.text, caption)) || (head && textMatches(newRows, head))))) {
+    const pictureThere = newPicture || (mine.length > before && last && (textMatches(last.text, file) || (captionInPreview && caption && textMatches(last.text, caption)) || (captionInPreview && head && textMatches(newRows, head))));
+    if (pictureThere && !captionInPreview) {
+      // The text the preview did not take, as the next message (verified like any message).
+      try {
+        const t = await step('sending the text after the picture', () => waSend(d, target, contact, caption, true, signal));
+        return { sent: true, appearsInChat: t.appearsInChat, file, recipient: t.recipient, textSeparately: true };
+      } catch (e) {
+        throw new CapabilityError((e as CapabilityError).code ?? 'text_failed', `The picture was sent, but its text could not be sent: ${(e as Error).message}`, { dispatched: 'yes' });
+      }
+    }
+    if (pictureThere) {
       return { sent: true, appearsInChat: true, file, recipient: v.header ?? contact };
     }
   }
@@ -581,6 +608,8 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   }
   if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
   const compose = view.compose;
+  // The newest message of mine before sending: the sent one must be a newer row.
+  const lastBefore = lastOutgoing(view)?.row?.rid ?? null;
   await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text));
   await sleep(d.focusSettleMs === 0 ? 0 : 300);
   // Re-verify recipient and draft immediately before the irreversible step.
@@ -597,13 +626,23 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   } else {
     await d.desktop.backend.keys(target.hwnd, [], 0x0d); // Enter sends in WhatsApp
   }
-  view = await viewUntil(d, target, (v) => { const o = lastOutgoing(v); return !!o && textMatches(o.text, text); }, 4000, signal);
+  // A message of several lines is shown as several rows: its first and last lines among my newest rows.
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const arrived = (v: WaView) => {
+    const o = lastOutgoing(v);
+    if (!o) return false;
+    if (textMatches(o.text, text)) return true;
+    if (lines.length < 2 || (o.row?.rid ?? null) === lastBefore) return false;
+    const recent = v.messages.filter((m) => m.from === 'me').slice(-(lines.length + 4)).map((m) => m.text).join(' ');
+    return textMatches(recent, lines[0]!) && textMatches(recent, lines.at(-1)!);
+  };
+  view = await viewUntil(d, target, arrived, 4000, signal);
   const now = lastOutgoing(view);
-  const appears = !!now && textMatches(now.text, text);
+  const appears = arrived(view);
   if (!appears) {
     throw new CapabilityError('unverified_send', 'Keo pressed Send but cannot see the message in the chat. It may or may not have been sent — check WhatsApp before trying again.', { dispatched: 'yes' });
   }
-  return { sent: true, alreadyPresent: false, appearsInChat: true, status: now.status, recipient: view.header as string };
+  return { sent: true, alreadyPresent: false, appearsInChat: true, status: now?.status ?? null, recipient: view.header ?? contact };
 }
 
 /** A fresh, completed view of the WhatsApp window (no focus change). */

@@ -167,6 +167,27 @@ describe('research results', () => {
     expect(rendered[0]!.html).not.toContain('href=');
   });
 
+  it('when the preview refuses the caption, the picture goes first and the text right after it', async () => {
+    harness();
+    h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] } });
+    const wa = new FakeWhatsApp();
+    wa.captionRefuses = true;
+    wa.rowPerLine = true; // and the text shows as one row per line, like the app
+    h.desktop.addApp({ hwnd: '4001', pid: 888, processName: 'chrome', title: 'WhatsApp - Google Chrome', className: 'X', minimized: false, x: 0, y: 0, width: 1200, height: 800, foreground: false }, wa);
+    const r = addResult();
+    const handlers = createHandlers(h.services, { appInfo: () => ({}) as never, openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const out = await handlers['results:send']({ id: r.id, contact: 'Mum', which: 'web', note: 'Here you go' });
+    expect(out.error).toBeNull();
+    expect(out.ok).toBe(true);
+    expect(wa.sentFiles).toHaveLength(1);
+    expect(wa.sentFiles[0]!.caption).toBe(''); // the preview took nothing…
+    const mum = wa.chats.find((c) => c.title === 'Mum')!;
+    const text = mum.messages.slice(-8).filter((m) => m.from === 'me').map((m) => m.text).join('\n');
+    expect(text).toContain('Here you go'); // …so the text followed as the next message
+    expect(text).toContain('https://shop.example.com/pro');
+    expect(out.detail).toMatch(/as the next message/);
+  });
+
   it('the results window can only reach its own channels', () => {
     for (const c of ['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl'] as const) expect(channelAllowed('results', c)).toBe(true);
     for (const c of ['settings:update', 'tasks:approveStep', 'chat:send', 'web:setKey', 'files:read'] as const) expect(channelAllowed('results', c as never)).toBe(false);

@@ -136,6 +136,10 @@ export class FakeWhatsApp implements FakeUiaApp {
   searchListsContacts = false;
   /** Accept accessibility value writes without the page noticing (rich web editors). */
   ignoreValueWrites = false;
+  /** The attachment preview's caption box takes no text at all (as on some PCs). */
+  captionRefuses = false;
+  /** Shows a message of several lines as one row per line (as the WhatsApp app does). */
+  rowPerLine = false;
   focused: 'search' | 'compose' | null = null;
   /** A pasted file waiting in WhatsApp's attachment preview (caption box + Send). */
   attachment: { name: string; caption: string } | null = null;
@@ -310,7 +314,7 @@ export class FakeWhatsApp implements FakeUiaApp {
       return 'value';
     }
     if (k === 'att.caption' && action === 'set_value' && this.attachment) {
-      this.attachment.caption = text ?? '';
+      if (!this.captionRefuses) this.attachment.caption = text ?? '';
       return 'value';
     }
     if (k === 'att.send' && action === 'invoke' && this.attachment) {
@@ -325,7 +329,8 @@ export class FakeWhatsApp implements FakeUiaApp {
     if (k === 'send' && action === 'invoke') {
       const chat = this.chats.find((c) => c.title === this.open)!;
       if (!this.dropSends) {
-        chat.messages.push({ from: 'me', text: this.compose, status: 'Sent' });
+        if (this.rowPerLine) for (const line of this.compose.split(/\r?\n/).filter((l) => l.trim())) chat.messages.push({ from: 'me', text: line, status: 'Sent' });
+        else chat.messages.push({ from: 'me', text: this.compose, status: 'Sent' });
         this.sent.push({ to: chat.title, text: this.compose });
       }
       this.compose = '';

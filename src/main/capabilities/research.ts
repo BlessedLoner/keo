@@ -243,7 +243,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
         note: z.string().trim().max(300).optional().describe('Optional line to put before the summary, e.g. "This is what I found"'),
       })
       .strict(),
-    output: z.object({ sent: z.boolean(), appearsInChat: z.boolean(), file: z.string(), recipient: z.string() }),
+    output: z.object({ sent: z.boolean(), appearsInChat: z.boolean(), file: z.string(), recipient: z.string(), textSeparately: z.boolean().optional() }),
     risk: 'high',
     approval: 'always',
     permissions: ['desktop.control'],
@@ -282,7 +282,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
       }, ctx.signal);
     },
     async verify(_i, o) {
-      return o.appearsInChat ? { verified: true, detail: `The comparison appears as your latest message to ${o.recipient}.` } : { verified: false, detail: 'Keo pressed Send but could not find the picture in the chat. Check WhatsApp before trying again.' };
+      return o.appearsInChat ? { verified: true, detail: o.textSeparately ? `The comparison picture was sent to ${o.recipient}, with the prices and links as the next message (WhatsApp did not take them as the picture’s caption).` : `The comparison appears as your latest message to ${o.recipient}.` } : { verified: false, detail: 'Keo pressed Send but could not find the picture in the chat. Check WhatsApp before trying again.' };
     },
   });
 

@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.6.2 fixes: the text always arrives with the picture
+
+- Reported (user's laptop, 1.6.1): “WhatsApp did not take the text for the picture, so nothing was sent” — the new safety check stopped a picture without its text, but the caption still did not go in there.
+- The caption is now tried three ways (click + paste, accessibility value, typing straight into the box — which also works where simulated input is blocked) and read back; a half-entered caption is cleared. If the preview still does not take it, the picture is sent and the caption (prices and links) follows immediately as the next message, both verified; Keo's report says so.
+- Messages of several lines are verified by their first and last lines among my newest rows (the app shows each line as a row) — this also fixes “cannot see the message” after multi-line sends.
+- Live (approved, own chat): normal send — picture with caption; forced fallback — picture, then the text as the next message (both arrived; the verification gap found there is the multi-line fix above, covered by a test).
+
 ### 1.6.1 fixes: picture captions, faster cloud voice choice
 
 - Reported: the picture was sent without its caption (prices and links), WhatsApp's page text was highlighted first, then “could not find the picture” (shown twice).
