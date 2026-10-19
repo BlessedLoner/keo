@@ -42,6 +42,7 @@ export const invokeSchemas = {
   'app:openLink': z.object({ id: z.enum(LINK_IDS) }).strict(),
   /** Opens a source page Keo read (research cards) in the default browser. */
   'app:openUrl': z.object({ url: z.string().min(8).max(2000) }).strict(),
+  'app:copyText': z.object({ text: z.string().max(200_000) }).strict(),
   'app:checkUpdate': z.object({ force: z.boolean().default(false) }).strict(),
   'app:openDataFolder': empty,
   'app:installUpdate': empty,
@@ -211,6 +212,7 @@ export interface InvokeOutputs {
   'app:info': AppInfo;
   'app:openLink': { opened: boolean };
   'app:openUrl': { opened: boolean };
+  'app:copyText': { copied: boolean };
   'app:checkUpdate': UpdateInfo | null;
   'app:openDataFolder': { opened: boolean };
   'app:installUpdate': { started: boolean };

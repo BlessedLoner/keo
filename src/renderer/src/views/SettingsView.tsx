@@ -967,7 +967,8 @@ function CheckComputer() {
   const copy = async () => {
     try {
       const { text } = await invoke('diag:report', {});
-      await navigator.clipboard.writeText(text);
+      const r = await invoke('app:copyText', { text });
+      if (!r.copied) throw new Error('Copy failed');
       ui.toast('Report copied — paste it where you ask for help', 'success');
     } catch (e) {
       ui.error(errText(e));

@@ -3,6 +3,7 @@ import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
 import { realPorcupine } from './voice/porcupineEngine';
 import { autoUpdater } from 'electron-updater';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -278,6 +279,37 @@ async function renderReport(html: string, kind: 'pdf' | 'png'): Promise<Buffer> 
   }
 }
 
+/**
+ * Says text with Windows' own voice (System.Speech) in a short-lived PowerShell process — the
+ * fallback when the app's voice does not start. The text arrives on stdin, never on the command line.
+ */
+function windowsSpeak(text: string): Promise<void> {
+  const script = [
+    'Add-Type -AssemblyName System.Speech',
+    '$t = [Console]::In.ReadToEnd()',
+    '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+    '$en = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like "en-*" } | Select-Object -First 1',
+    'if ($en) { $s.SelectVoice($en.VoiceInfo.Name) }',
+    '$s.SetOutputToDefaultAudioDevice()',
+    '$s.Speak($t)',
+    '$s.Dispose()',
+  ].join('; ');
+  return new Promise((resolve, reject) => {
+    const exe = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const p = spawn(exe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    const t = setTimeout(() => p.kill(), 15_000 + text.length * 120);
+    p.on('error', (e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+    p.on('exit', () => {
+      clearTimeout(t);
+      resolve();
+    });
+    p.stdin.end(text, 'utf8');
+  });
+}
+
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -308,6 +340,7 @@ app.whenReady().then(() => {
       clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
       documentsDir: app.getPath('documents'),
       renderReport: (html, kind) => renderReport(html, kind),
+      windowsSpeak: (text) => windowsSpeak(text),
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
     });
@@ -340,6 +373,7 @@ app.whenReady().then(() => {
         return screen.getAllDisplays().map((d) => ({ width: d.size.width, height: d.size.height, scale: d.scaleFactor, primary: d.id === main }));
       },
       openExternal: (url) => shell.openExternal(url),
+      copyText: (text) => clipboard.writeText(text),
       // Installed builds only (a development run would always look outdated).
       checkUpdate: async (force) => {
         if (!app.isPackaged && !force) return null;
@@ -642,6 +676,19 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     r.liveResultsBack = res.isVisible();
     fs.writeFileSync(path.join(app.getPath('temp'), 'keo-live-results-send.json'), JSON.stringify({ liveSend: r.liveSend, back: r.liveResultsBack }, null, 1));
     pw.hideResults();
+  }
+  // Copy from Keo's window goes through the main process (the page's own clipboard access is not granted).
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const before = await clipboard.readText();
+    const ok = await mainWindow.webContents.executeJavaScript(`window.keo.invoke('app:copyText', { text: 'keo smoke copy' }).then((x) => x.ok && x.value.copied)`);
+    r.copyText = ok === true && (await clipboard.readText()) === 'keo smoke copy';
+    await clipboard.writeText(before);
+  }
+  // Optional (KEO_SMOKE_VOICE=1, makes a sound): a voice-mode reply is spoken by the hidden main window.
+  if (process.env.KEO_SMOKE_VOICE === '1') {
+    const t0 = Date.now();
+    await (svc as unknown as { voiceSpeak(t: string): Promise<void> }).voiceSpeak('Keo voice check.');
+    r.voiceSpeak = { how: svc.lastVoiceSpeak, ms: Date.now() - t0 };
   }
   // The real report renderer, under Keo's real session hardening (Save / Send use it).
   try {

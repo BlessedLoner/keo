@@ -85,6 +85,8 @@ export interface DesktopBackend {
   /** Puts one file on the clipboard as a file (like Copy in Explorer), for attaching it by pasting. */
   /** Puts one file on the clipboard for pasting; a picture (`asImage`) goes on as the image itself. */
   setClipboardFiles?(path: string, asImage?: boolean): Promise<void>;
+  /** Left-button strokes in screen coordinates, inside the target window only. */
+  draw?(hwnd: string, strokes: Array<Array<[number, number]>>): Promise<{ points: number; method: 'mouse' | 'direct' }>;
   /** Reads the window's document text via UI Automation; null when unsupported. */
   readText(hwnd: string): Promise<string | null>;
   /** Bounded UI Automation tree of one window. */
@@ -385,6 +387,20 @@ export class Win32Backend implements DesktopBackend {
   async processWindows(pid: number): Promise<Array<RawWindow & { owner: string }>> {
     const r = await this.call<Array<RawWindow & { owner: string }> | (RawWindow & { owner: string }) | null>('proc_windows', { pid });
     return (Array.isArray(r) ? r : r ? [r] : []).map((w) => ({ ...normalize(w), owner: String(w.owner ?? '0') }));
+  }
+
+  /**
+   * Drags with the left button along strokes (screen coordinates), in the target window only.
+   * Falls back to posted mouse messages when Windows refuses simulated input.
+   */
+  async draw(hwnd: string, strokes: Array<Array<[number, number]>>): Promise<{ points: number; method: 'mouse' | 'direct' }> {
+    const PEN_UP = 2147483647;
+    const points = strokes.flatMap((s) => [...s.flatMap(([x, y]) => [Math.round(x), Math.round(y)]), PEN_UP, PEN_UP]);
+    const t = 20000 + points.length * 20;
+    return this.orDirect<{ points: number; method: 'mouse' | 'direct' }>(
+      async () => ({ points: Number((await this.call<{ points: number }>('draw', { hwnd, points }, t)).points), method: 'mouse' as const }),
+      async () => ({ points: Number((await this.call<{ points: number }>('post_draw', { hwnd, points }, t)).points), method: 'direct' as const }),
+    );
   }
 
   async clickScreen(hwnd: string, x: number, y: number): Promise<void> {

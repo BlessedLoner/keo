@@ -113,6 +113,8 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
   const stick = useRef(true);
   const turn = app.turns[conversation.id];
   const settings = app.settings.data;
+  const voiceModeActive = useRef(false);
+  voiceModeActive.current = !!app.presence?.voiceMode?.active;
 
   const load = useCallback(async () => {
     try {
@@ -164,7 +166,8 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
             delete n[e.message.id];
             return n;
           });
-          if (e.message.status === 'complete' && settings?.voice.speakResponses && settings.voice.ttsEngine !== 'none' && e.message.content) {
+          // In voice mode Keo's voice conversation speaks the reply (once); the chat does not as well.
+          if (e.message.status === 'complete' && settings?.voice.speakResponses && settings.voice.ttsEngine !== 'none' && e.message.content && !voiceModeActive.current) {
             void voice.speak(e.message.content, settings.voice.ttsEngine, settings.voice.systemVoice);
           }
         }
@@ -321,7 +324,7 @@ function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveTe
   const app = useApp();
   const text = liveText !== undefined && (m.status === 'streaming' || streaming) ? liveText : m.content;
   const tools = mergeTools(m.meta.tools ?? [], liveTools ?? []);
-  const copy = () => navigator.clipboard.writeText(m.content).then(() => ui.toast('Copied'), () => ui.error('Copy failed'));
+  const copy = () => invoke('app:copyText', { text: m.content }).then((r) => (r.copied ? ui.toast('Copied') : ui.error('Copy failed')), () => ui.error('Copy failed'));
 
   if (m.role === 'note') {
     return (

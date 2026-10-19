@@ -103,7 +103,8 @@ export function compactNodes(nodes: UiaNodeRaw[], limit = 260): { elements: Elem
   nodes.forEach((n, i) => {
     if (isDialogNode(n) && n.name) dialogs.push(n.name.slice(0, 120));
     const actionable = (n.patterns ?? []).some((p) => p !== 'text' && p !== 'scroll');
-    const keep = INTERESTING_ROLES.has(n.role) && (n.name || n.value !== undefined || actionable) && !(n.offscreen && !actionable);
+    const canvas = !n.offscreen && !!n.w && /canvas|drawing|sketch|ink/i.test(`${n.name} ${n.aid ?? ''} ${n.lct ?? ''}`);
+    const keep = canvas || (INTERESTING_ROLES.has(n.role) && (n.name || n.value !== undefined || actionable) && !(n.offscreen && !actionable));
     if (!keep) return;
     if (out.length >= limit) {
       omitted++;

@@ -74,6 +74,8 @@ export interface ServiceDeps {
   porcupineFactory?: () => PorcupineFactory;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
   voiceIo?: { listen(): Promise<{ text: string | null; reason: string }>; speak(text: string): Promise<void> };
+  /** Windows' own voice (System.Speech), used when the app's voice does not start. */
+  windowsSpeak?: (text: string) => Promise<void>;
   /** Windows' app list and app launcher (tests inject fakes; the app uses Get-StartApps / explorer.exe). */
   startApps?: () => Promise<StartApp[]>;
   launchApp?: (appId: string) => Promise<void>;
@@ -135,6 +137,9 @@ export class Services {
   readonly porcupine: PorcupineWakeEngine;
   /** Renderer round-trips for voice mode (recording, speaking), keyed by request id. */
   private voiceWaiters = new Map<string, (v: { text: string | null; reason: string }) => void>();
+  private readonly windowsSpeak: ((text: string) => Promise<void>) | null;
+  /** How the last voice-mode reply was spoken ('spoken', 'no_start', 'timeout'…), for diagnostics. */
+  lastVoiceSpeak: string | null = null;
   readonly agent: AgentService;
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
@@ -204,6 +209,7 @@ export class Services {
     this.apps = new AppDiscovery(d.startApps);
     this.workflows = new WorkflowStore(path.join(d.profile.userData, 'workflows.json'));
     this.documentsDir = d.documentsDir ?? null;
+    this.windowsSpeak = d.windowsSpeak ?? null;
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -347,7 +353,11 @@ export class Services {
       onState: (st) => this.presence.setWake({ status: st.status, message: st.message, muted: st.muted, listening: st.status === 'listening', enabled: getSettings().wake.enabled, phrase: getSettings().wake.phrases[0] ?? null }),
     });
     this.voiceMode = new VoiceMode({
-      listen: () => (d.voiceIo ? d.voiceIo.listen() : this.voiceListen()),
+      listen: () => {
+        // Nothing may still be speaking (or start speaking late) while the microphone is open.
+        this.push('presence:command', { type: 'stop_speaking' });
+        return d.voiceIo ? d.voiceIo.listen() : this.voiceListen();
+      },
       speak: (text) => (d.voiceIo ? d.voiceIo.speak(text) : this.voiceSpeak(text)),
       send: (text) => {
         try {
@@ -651,21 +661,31 @@ export class Services {
     return r;
   }
 
-  /** Speaks in the main window and resolves when playback ends (bounded by the text length). */
+  /**
+   * Speaks in the main window and resolves when playback ends. If the app's voice does not start
+   * (or never reports back), it is cancelled and Windows' own voice says it instead — a reply is
+   * never silent, and never spoken late.
+   */
   private async voiceSpeak(text: string): Promise<void> {
     await this.ui.ensureVoiceWindow?.();
     const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    return new Promise((resolve) => {
+    const how = await new Promise<string>((resolve) => {
+      // Up to 15 s for a cold voice to start, then the time the text takes to say.
       const t = setTimeout(() => {
         this.voiceWaiters.delete(id);
-        resolve();
-      }, 4000 + text.length * 90);
-      this.voiceWaiters.set(id, () => {
+        resolve('timeout');
+      }, 20_000 + text.length * 90);
+      this.voiceWaiters.set(id, (v) => {
         clearTimeout(t);
-        resolve();
+        resolve(v.reason);
       });
       this.push('presence:command', { type: 'voice_say', id, text });
     });
+    this.lastVoiceSpeak = how;
+    if (how === 'spoken' || how === 'cancelled') return;
+    this.push('presence:command', { type: 'stop_speaking' });
+    this.log.warn('voice.app_voice_silent', { how });
+    if (this.windowsSpeak) await this.windowsSpeak(text).catch((e) => this.log.warn('voice.windows_voice_failed', { error: (e as Error).message }));
   }
 
   /** The main window reports a finished recording or utterance. */

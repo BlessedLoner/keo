@@ -373,6 +373,145 @@ public static class KeoWin {
     Thread.Sleep(60);
   }
 
+  // ---- Drawing: strokes with the left button held. Points are screen coordinates; the pair
+  // (PEN_UP, PEN_UP) ends a stroke. Every point must lie inside the target window and on the
+  // target itself (or its own overlay); the target must stay in the foreground throughout.
+  public const int PEN_UP = 2147483647;
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+
+  static List<POINT> StrokePoints(IntPtr h, int[] pts) {
+    RECT wr; if (!GetWindowRect(h, out wr)) throw new Exception("target_gone");
+    var list = new List<POINT>();
+    for (int i = 0; i + 1 < pts.Length; i += 2) {
+      var p = new POINT(); p.X = pts[i]; p.Y = pts[i + 1];
+      if (p.X == PEN_UP) { list.Add(p); continue; }
+      if (p.X < wr.Left || p.Y < wr.Top || p.X >= wr.Right || p.Y >= wr.Bottom) throw new Exception("outside_client_area");
+      if (!PartOfTarget(WindowFromPoint(p), h)) throw new Exception("target_obscured");
+      list.Add(p);
+    }
+    return list;
+  }
+
+  static INPUT MouseAbs(int x, int y, uint extra) {
+    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);
+    var a = new INPUT(); a.type = 0;
+    a.U.mi.dx = (int)Math.Round((x - vx) * 65535.0 / Math.Max(1, vw - 1));
+    a.U.mi.dy = (int)Math.Round((y - vy) * 65535.0 / Math.Max(1, vh - 1));
+    a.U.mi.dwFlags = 0x0001 | 0x8000 | 0x4000 | extra; // MOVE | ABSOLUTE | VIRTUALDESK
+    return a;
+  }
+
+  public static int Draw(IntPtr h, int[] pts) {
+    RequireForeground(h);
+    ReleaseModifiers();
+    var list = StrokePoints(h, pts);
+    bool down = false; int n = 0; var last = new POINT();
+    try {
+      foreach (var p in list) {
+        if (p.X == PEN_UP) { if (down) { Send(new List<INPUT> { MouseAbs(last.X, last.Y, 0x0004) }); down = false; Thread.Sleep(20); } continue; }
+        if (!IsFg(h)) throw new Exception("foreground_lost:" + n);
+        if (!down) {
+          Send(new List<INPUT> { MouseAbs(p.X, p.Y, 0) }); Thread.Sleep(15);
+          Send(new List<INPUT> { MouseAbs(p.X, p.Y, 0x0002) }); Thread.Sleep(15);
+          down = true; last = p; n++; continue;
+        }
+        int dx = p.X - last.X, dy = p.Y - last.Y;
+        int steps = Math.Max(1, (int)(Math.Sqrt(dx * dx + dy * dy) / 5));
+        for (int k = 1; k <= steps; k++) { Send(new List<INPUT> { MouseAbs(last.X + dx * k / steps, last.Y + dy * k / steps, 0) }); Thread.Sleep(2); }
+        last = p; n++;
+      }
+    } finally {
+      if (down) { try { Send(new List<INPUT> { MouseAbs(last.X, last.Y, 0x0004) }); } catch { } }
+    }
+    return n;
+  }
+
+  // Synthetic pen (Windows 10 1809+): a separate input path that drawing apps take as a pen.
+  // Used for drawing when Windows refuses simulated mouse input.
+  [StructLayout(LayoutKind.Sequential)] struct SP_INFO {
+    public int pointerType; public uint pointerId; public uint frameId; public int pointerFlags;
+    public IntPtr sourceDevice; public IntPtr hwndTarget;
+    public POINT ptPixelLocation; public POINT ptHimetricLocation; public POINT ptPixelLocationRaw; public POINT ptHimetricLocationRaw;
+    public uint dwTime; public uint historyCount; public int InputData; public uint dwKeyStates; public ulong PerformanceCount; public int ButtonChangeType;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct SP_PEN { public SP_INFO info; public int penFlags; public int penMask; public uint pressure; public uint rotation; public int tiltX; public int tiltY; }
+  [StructLayout(LayoutKind.Explicit, Size = 152)] struct SP_TYPE { [FieldOffset(0)] public int type; [FieldOffset(8)] public SP_PEN pen; }
+  [DllImport("user32.dll", SetLastError = true)] static extern IntPtr CreateSyntheticPointerDevice(int type, uint max, int mode);
+  [DllImport("user32.dll", SetLastError = true)] static extern bool InjectSyntheticPointerInput(IntPtr dev, SP_TYPE[] info, uint count);
+  [DllImport("user32.dll")] static extern void DestroySyntheticPointerDevice(IntPtr dev);
+
+  static void PenFrame(IntPtr dev, POINT p, int flags) {
+    var t = new SP_TYPE(); t.type = 3;
+    t.pen.info.pointerType = 3; t.pen.info.pointerFlags = flags; t.pen.info.ptPixelLocation = p;
+    t.pen.penMask = 0x1; t.pen.pressure = (flags & 0x4) != 0 ? 512u : 0u;
+    if (!InjectSyntheticPointerInput(dev, new[] { t }, 1)) throw new Exception("pen_rejected:" + Marshal.GetLastWin32Error());
+  }
+
+  public static int PenDraw(IntPtr h, int[] pts) {
+    RequireForeground(h);
+    var list = StrokePoints(h, pts);
+    IntPtr dev;
+    try { dev = CreateSyntheticPointerDevice(3, 1, 1); } catch (EntryPointNotFoundException) { throw new Exception("pen_unavailable"); }
+    if (dev == IntPtr.Zero) throw new Exception("pen_unavailable:" + Marshal.GetLastWin32Error());
+    const int RANGE = 0x2, CONTACT = 0x4, DOWN = 0x10000, UPDATE = 0x20000, UP = 0x40000;
+    bool down = false; int n = 0; var last = new POINT();
+    try {
+      foreach (var p in list) {
+        if (p.X == PEN_UP) { if (down) { PenFrame(dev, last, RANGE | UP); PenFrame(dev, last, UPDATE); down = false; Thread.Sleep(20); } continue; }
+        if (!IsFg(h)) throw new Exception("foreground_lost:" + n);
+        if (!down) {
+          PenFrame(dev, p, RANGE | UPDATE); Thread.Sleep(15);
+          PenFrame(dev, p, RANGE | CONTACT | DOWN); Thread.Sleep(10);
+          down = true; last = p; n++; continue;
+        }
+        int dx = p.X - last.X, dy = p.Y - last.Y;
+        int steps = Math.Max(1, (int)(Math.Sqrt(dx * dx + dy * dy) / 5));
+        for (int k = 1; k <= steps; k++) {
+          var q = new POINT(); q.X = last.X + dx * k / steps; q.Y = last.Y + dy * k / steps;
+          PenFrame(dev, q, RANGE | CONTACT | UPDATE); Thread.Sleep(3);
+        }
+        last = p; n++;
+      }
+    } finally {
+      if (down) { try { PenFrame(dev, last, RANGE | UP); PenFrame(dev, last, UPDATE); } catch { } }
+      DestroySyntheticPointerDevice(dev);
+    }
+    return n;
+  }
+
+  // Direct delivery for drawing (simulated input refused): button and move messages posted to the
+  // window under each stroke, in its own client coordinates. Apps that read the pointer device
+  // directly may ignore these.
+  public static int PostDraw(IntPtr h, int[] pts) {
+    RequireForeground(h);
+    var list = StrokePoints(h, pts);
+    IntPtr hit = IntPtr.Zero; bool down = false; int n = 0; var last = new POINT();
+    foreach (var p in list) {
+      if (p.X == PEN_UP) { if (down) { PostMouse(hit, 0x0202, 0, last); down = false; } continue; }
+      if (!down) {
+        hit = WindowFromPoint(p);
+        PostMouse(hit, 0x0200, 0, p); PostMouse(hit, 0x0201, 1, p);
+        down = true; last = p; n++; continue;
+      }
+      int dx = p.X - last.X, dy = p.Y - last.Y;
+      int steps = Math.Max(1, (int)(Math.Sqrt(dx * dx + dy * dy) / 5));
+      for (int k = 1; k <= steps; k++) {
+        var q = new POINT(); q.X = last.X + dx * k / steps; q.Y = last.Y + dy * k / steps;
+        PostMouse(hit, 0x0200, 1, q);
+        if (k % 8 == 0) Thread.Sleep(2);
+      }
+      last = p; n++;
+    }
+    if (down) PostMouse(hit, 0x0202, 0, last);
+    Thread.Sleep(60);
+    return n;
+  }
+
+  static void PostMouse(IntPtr w, uint msg, int keys, POINT screen) {
+    var c = screen; ScreenToClient(w, ref c);
+    PostMessageW(w, msg, new IntPtr(keys), new IntPtr(((c.Y & 0xFFFF) << 16) | (c.X & 0xFFFF)));
+  }
+
   public static void RequireForeground(IntPtr h) {
     if (!IsWindow(h)) throw new Exception("target_gone");
     if (!IsFg(h)) throw new Exception("not_foreground");
@@ -925,6 +1064,13 @@ while ($true) {
       'browser_context' { RequireUia; ReplyRaw $req.id ([KeoUia]::BrowserContext($h, [int]$req.args.maxChars)) }
       'proc_windows' { Reply $req.id $true @([KeoWin]::ProcessWindows([uint32]$req.args.pid)) }
       'click_screen' { [KeoWin]::ClickScreen($h, [int]$req.args.x, [int]$req.args.y); Reply $req.id $true @{ clicked = $true } }
+      'draw'      { Reply $req.id $true @{ points = [KeoWin]::Draw($h, [int[]]@($req.args.points)) } }
+      'post_draw' {
+        # The synthetic pen first (drawing apps take it); posted mouse messages if there is no pen device.
+        $pts = [int[]]@($req.args.points)
+        try { Reply $req.id $true @{ points = [KeoWin]::PenDraw($h, $pts); via = 'pen' } }
+        catch { if ("$($_.Exception.InnerException.Message)$($_.Exception.Message)" -match 'pen_unavailable') { Reply $req.id $true @{ points = [KeoWin]::PostDraw($h, $pts); via = 'messages' } } else { throw } }
+      }
       'wheel'        { [KeoWin]::Wheel($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.notches); Reply $req.id $true @{ scrolled = $true } }
       'keys'  { [KeoWin]::Keys($h, [int[]]@($req.args.mods), [int]$req.args.key); Reply $req.id $true @{ sent = $true } }
       'click' { [KeoWin]::Click($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }

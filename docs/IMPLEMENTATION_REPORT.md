@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.5.3 fixes: spoken replies, copy, drawing
+
+- Voice replies were silent, then spoken late: a Windows voice can take several seconds to start the first time (5.2 s measured here, longer on slower PCs) and Keo waited only 2.5 s, then listened again while the reply was still queued; the chat view also spoke replies itself when *Speak responses* was on. Now Keo waits up to 15 s for the voice to start, warms it up when the wake word or spoken replies are on, cancels anything still queued before listening (so nothing plays during or after a session), and if the app voice still does not start says the reply with Windows' own voice (System.Speech). The chat view does not speak replies during voice mode. Two microphone hiccups are retried before a session ends.
+- Copy in the chat failed: the page's clipboard permission is not granted (only microphone audio is). Copy now goes through a write-only `app:copyText` channel.
+- Drawing (“draw me a dog”) had no drag action. New `desktop.draw` (strokes on a 0–1000 scale in the canvas box, every point inside the window and not covered; hands-free only in drawing apps). It uses simulated mouse input, and when Windows refuses that, Windows' synthetic pen input (which the new Paint takes), then posted mouse messages. Live in Paint on this PC: mouse and pen both draw; posted messages do not.
+- Live checks: `KEO_SMOKE_VOICE=1` (a reply spoken by the app voice), copy (smoke), `tests/live-paint.test.ts`.
+
 ### 1.5.2 fixes: sending research pictures on WhatsApp Desktop (live-verified)
 
 - Reported: Send from the results window failed with "not in the foreground" while the results window stayed above WhatsApp; by voice only text and links were sent.

@@ -162,3 +162,34 @@ describe('voice mode', () => {
     expect(long.length).toBeLessThan(650);
   });
 });
+
+describe('spoken replies', () => {
+  type Pushed = { channel: string; payload: { type?: string; id?: string; text?: string } };
+  function speaker(answer: 'spoken' | 'no_start' | null) {
+    const said: string[] = [];
+    h = makeHarness({ deps: { windowsSpeak: async (t) => void said.push(t) } });
+    h.services.ui = { showCommandBar: () => undefined, notify: () => undefined, ensureVoiceWindow: async () => undefined };
+    const pushed: Pushed[] = [];
+    h.services.setPush(((channel: string, payload: Pushed['payload']) => {
+      pushed.push({ channel, payload });
+      // The main window answers like the real one: the voice spoke, or never started.
+      if (answer && payload.type === 'voice_say') setTimeout(() => h.services.voiceDone(payload.id!, null, answer), 5);
+    }) as never);
+    const speak = (text: string) => (h.services as unknown as { voiceSpeak(t: string): Promise<void> }).voiceSpeak(text);
+    return { said, pushed, speak };
+  }
+
+  it('a reply the app voice spoke is not repeated', async () => {
+    const { said, speak } = speaker('spoken');
+    await speak('Hello there.');
+    expect(said).toEqual([]);
+  });
+
+  it('when the app voice never starts, it is cancelled and Windows’ own voice says the reply', async () => {
+    const { said, pushed, speak } = speaker('no_start');
+    await speak('The weather is sunny.');
+    expect(said).toEqual(['The weather is sunny.']);
+    const types = pushed.filter((p) => p.channel === 'presence:command').map((p) => p.payload.type);
+    expect(types.indexOf('stop_speaking')).toBeGreaterThan(types.indexOf('voice_say'));
+  });
+});

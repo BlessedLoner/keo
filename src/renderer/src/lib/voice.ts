@@ -262,13 +262,29 @@ class VoiceController {
     }
   }
 
-  /** Speaks and resolves once playback has finished (or failed). */
-  async speakAndWait(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<void> {
+  /**
+   * Speaks and resolves once playback has finished: 'spoken', or 'no_start' when the voice never
+   * began (it is then cancelled, so it cannot start late — while Keo listens, or after voice mode).
+   * A Windows voice can take several seconds to start the first time.
+   */
+  async speakAndWait(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
     await this.speak(text, engine === 'none' ? 'system' : engine, systemVoice);
     const started = performance.now();
-    // Wait for speech to begin (system voices start asynchronously), then for it to end.
-    while (!this.state.speaking && performance.now() - started < 2500) await new Promise((r) => setTimeout(r, 50));
+    while (!this.state.speaking && performance.now() - started < 15_000) await new Promise((r) => setTimeout(r, 50));
+    if (!this.state.speaking) {
+      this.stopSpeaking();
+      return 'no_start';
+    }
     while (this.state.speaking && performance.now() - started < 120_000) await new Promise((r) => setTimeout(r, 100));
+    return 'spoken';
+  }
+
+  /** Loads the system voice ahead of time (silently), so the first spoken reply starts promptly. */
+  prime(): void {
+    if (!('speechSynthesis' in window) || speechSynthesis.speaking) return;
+    const u = new SpeechSynthesisUtterance('.');
+    u.volume = 0;
+    speechSynthesis.speak(u);
   }
 
   stopSpeaking(): void {

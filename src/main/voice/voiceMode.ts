@@ -135,8 +135,8 @@ export class VoiceMode {
         text = r.text?.trim() || null;
         if (!text) {
           const quietReason = r.reason === 'silence' || r.reason === 'no_speech' || r.reason === 'unclear';
-          // A hiccup of the recognizer (microphone briefly busy, helper restarting) is retried once.
-          if (!quietReason && TRANSIENT.has(r.reason) && hiccups++ < 1) {
+          // A hiccup of the recognizer (microphone briefly busy, helper restarting) is retried twice.
+          if (!quietReason && TRANSIENT.has(r.reason) && hiccups++ < 2) {
             await new Promise((res) => setTimeout(res, 600));
             continue;
           }

@@ -73,7 +73,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         } else if (c.type === 'voice_say') {
           void voice
             .speakAndWait(c.text, vs?.ttsEngine ?? 'system', vs?.systemVoice ?? '')
-            .finally(() => void invoke('voice:done', { id: c.id, text: null, reason: 'spoken' }).catch(() => undefined));
+            .then(
+              (how) => invoke('voice:done', { id: c.id, text: null, reason: how }),
+              () => invoke('voice:done', { id: c.id, text: null, reason: 'no_start' }),
+            )
+            .catch(() => undefined);
         } else if (c.type === 'voice_cancel') {
           voice.abort();
           voice.stopSpeaking();
@@ -91,6 +95,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [voiceSettings],
   );
   useEffect(() => voice.subscribe(setVoiceState), []);
+  // Warm up the system voice once when Keo may talk (wake word or spoken replies are on).
+  const mayTalk = !!settings.data && (settings.data.wake.enabled || settings.data.voice.speakResponses) && settings.data.voice.ttsEngine !== 'openai';
+  useEffect(() => {
+    if (mayTalk) voice.prime();
+  }, [mayTalk]);
 
   useEffect(
     () =>

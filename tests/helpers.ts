@@ -92,6 +92,13 @@ export class FakeDesktop implements DesktopBackend {
       return { chars: text.length };
     });
   }
+  /** Strokes drawn with desktop.draw (screen coordinates). */
+  drawn: Array<{ hwnd: string; strokes: Array<Array<[number, number]>> }> = [];
+  async draw(hwnd: string, strokes: Array<Array<[number, number]>>) {
+    this.calls.push({ op: 'draw', args: [hwnd, strokes.length] });
+    this.drawn.push({ hwnd, strokes });
+    return { points: strokes.reduce((n, s) => n + s.length, 0), method: 'mouse' as const };
+  }
   /** A file put on the clipboard (pasted as an attachment). */
   clipboardFile: string | null = null;
   async setClipboardFiles(path: string, asImage = false) {

@@ -20,6 +20,8 @@ export interface HostHooks {
   openPath(p: string): Promise<boolean>;
   /** Opens one of Keo's allow-listed web pages in the default browser. */
   openExternal?(url: string): Promise<void>;
+  /** Writes text to the clipboard (the renderer's own clipboard access is not granted). Write-only. */
+  copyText?(text: string): Promise<void> | void;
   /** Checks GitHub Releases (packaged app only unless forced); null when not applicable. */
   checkUpdate?(force: boolean): Promise<UpdateInfo | null>;
   /** Restarts into a downloaded update; false when none is ready. */
@@ -187,6 +189,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       };
     },
     // Only pages Keo actually read (shown as research sources) can be opened from the app.
+    'app:copyText': async ({ text }) => {
+      if (!host.copyText) return { copied: false };
+      await host.copyText(text);
+      return { copied: true };
+    },
     'app:openUrl': async ({ url }) => {
       const page = s.web.visitedPage(url);
       if (!page || !/^https?:\/\//i.test(page.finalUrl) || !host.openExternal) return { opened: false };

@@ -89,6 +89,8 @@ check('results window: cannot approve tasks', p.resultsTasksApprove === 'forbidd
 check('results window: steps aside during desktop work', p.resultsStepsAside === true, p.resultsStepsAside);
 check('results window: stays closed once closed', p.resultsStaysClosed === true, p.resultsStaysClosed);
 if (p.liveSend) console.log('LIVE send from the results window:', JSON.stringify(p.liveSend), 'window back:', p.liveResultsBack);
+check('copy from Keo’s window reaches the clipboard', p.copyText === true, p.copyText);
+if (p.voiceSpeak) check('voice reply is spoken by the app voice', p.voiceSpeak.how === 'spoken', JSON.stringify(p.voiceSpeak));
 check('report renders as PDF', p.reportPdf === true, p.reportError ?? p.reportPdf);
 check('report renders as picture', p.reportPng === true, p.reportError ?? p.reportPng);
 check('report renders again', p.reportAgain === true, p.reportError ?? p.reportAgain);

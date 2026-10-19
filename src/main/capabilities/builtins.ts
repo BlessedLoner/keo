@@ -692,6 +692,66 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     },
   });
 
+  /** Apps whose canvas is meant for drawing: drawing there can run hands-free. */
+  const DRAWING_APPS = /^(mspaint|paint|paintdotnet|paint\.net|krita|gimp.*|inkscape|clipstudiopaint|artrage|sketchbook|fresh ?paint|whiteboard|ms-whiteboard.*)$/i;
+
+  const draw = defineCapability({
+    id: 'desktop.draw',
+    version: '1.0.0',
+    title: 'Draw in a window',
+    description:
+      'Draw lines and shapes by dragging with the left mouse button on a drawing surface (for example the canvas in Paint). Give `area`, the canvas box [x, y, w, h] from desktop__inspect_window (window coordinates; if the canvas is not listed, use a clear middle part of the window), and `strokes`: each stroke is a flat list of points x1, y1, x2, y2, … on a 0–1000 scale inside the area (0,0 = top-left, 1000,1000 = bottom-right); the pen lifts between strokes. Pick the tool, brush size and colour first with desktop__invoke_element. Draw a whole picture in one or a few calls (up to 80 strokes each); use many points for curves (circles: 24 or more).' +
+      FRESH_TARGET_NOTE,
+    input: z
+      .object({
+        target: Target,
+        area: z.object({ x: z.number().int().min(0).max(10000), y: z.number().int().min(0).max(10000), w: z.number().int().min(10).max(10000), h: z.number().int().min(10).max(10000) }).strict(),
+        strokes: z.array(z.array(z.number().min(0).max(1000)).min(2).max(1200)).min(1).max(80),
+        what: z.string().trim().max(120).optional().describe('What is being drawn, e.g. "the dog’s head"'),
+      })
+      .strict()
+      .refine((i) => i.strokes.every((st) => st.length % 2 === 0), { message: 'Each stroke needs x, y pairs.' })
+      .refine((i) => i.strokes.reduce((n, st) => n + st.length / 2, 0) <= 6000, { message: 'At most 6000 points per call.' }),
+    output: z.object({ strokes: z.number(), points: z.number(), method: z.enum(['mouse', 'direct']) }),
+    risk: 'high',
+    // A drag elsewhere can move or select things; on a drawing app's canvas it only draws.
+    autonomy: (i) => (DRAWING_APPS.test(i.target.processName.replace(/\.exe$/i, '')) ? { tier: 'important' } : { tier: 'always_ask', reason: 'Dragging in an app that is not a drawing app can move or select things.' }),
+    approval: 'always',
+    permissions: ['desktop.control'],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 120000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Every point is checked to be inside the window and not covered by another window; the drawing itself is not checked.',
+    precheck: (i, s) => allowCheck(i.target, s),
+    preview: (i) => ({
+      summary: `Draw${i.what ? ` ${i.what}` : ''} in ${i.target.processName} (${i.strokes.length} stroke${i.strokes.length === 1 ? '' : 's'})`,
+      target: targetLabel(i.target),
+      consequences: ['Keo holds the left mouse button and moves it inside the area of that window.'],
+      dataExport: null,
+    }),
+    auditView: (i) => ({ target: i.target, area: i.area, strokes: i.strokes.length, points: i.strokes.reduce((n, st) => n + st.length / 2, 0) }),
+    async execute(i, ctx) {
+      if (!d.desktop.backend.draw) throw new CapabilityError('unsupported', 'Drawing is not available on this computer.', { dispatched: 'no' });
+      await bringToFront(d, i.target, ctx.settings);
+      const w = await d.desktop.backend.info(i.target.hwnd);
+      if (!w) throw new CapabilityError('target_gone', 'The window is gone.', { dispatched: 'no' });
+      if (i.area.x + i.area.w > w.width || i.area.y + i.area.h > w.height) throw new CapabilityError('outside_client_area', `The area does not fit in the window (${w.width}×${w.height}). Inspect the window again.`, { dispatched: 'no' });
+      const toScreen = (px: number, py: number): [number, number] => [w.x + i.area.x + (px / 1000) * (i.area.w - 1), w.y + i.area.y + (py / 1000) * (i.area.h - 1)];
+      const strokes = i.strokes.map((st) => {
+        const pts: Array<[number, number]> = [];
+        for (let k = 0; k + 1 < st.length; k += 2) pts.push(toScreen(st[k]!, st[k + 1]!));
+        return pts;
+      });
+      const r = await d.desktop.backend.draw(i.target.hwnd, strokes);
+      return { strokes: strokes.length, points: r.points, method: r.method };
+    },
+    async verify(_i, o) {
+      return { verified: null, detail: `${o.strokes} stroke(s) drawn${o.method === 'direct' ? ' with direct window messages (Windows refused simulated mouse input; some apps ignore these)' : ''}. Look at the canvas to check the picture.` };
+    },
+  });
+
   const launchApp = defineCapability({
     id: 'desktop.launch_app',
     version: '1.1.0',
@@ -869,6 +929,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     typeText,
     pressKeys,
     click,
+    draw,
     launchApp,
     observeWindow,
     getObservation,

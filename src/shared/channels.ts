@@ -8,6 +8,7 @@ export const INVOKE_CHANNELS = [
   'app:openDataFolder',
   'app:openLink',
   'app:openUrl',
+  'app:copyText',
   'app:checkUpdate',
   'app:installUpdate',
   'diag:checkComputer',
