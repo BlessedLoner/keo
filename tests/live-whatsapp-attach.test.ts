@@ -78,6 +78,24 @@ it.runIf(process.env.KEO_LIVE_WA_ATTACH === '1')('explores the Attach menu and f
     out.previewShown = preview;
     out.ms = Date.now() - t0;
     out.dialogClosed = !(await b.fileDialogs()).some((x) => x.hwnd === dlg!.hwnd);
+    if (preview && process.env.KEO_LIVE_WA_CAPTION === '1') {
+      // The caption box of the preview: what it exposes, and whether a click + paste puts text in it.
+      const ps = await snap(w.hwnd);
+      out.edits = ps.nodes.filter((n) => n.role === 'edit' && !n.offscreen).map((n) => ({ name: n.name.slice(0, 40), patterns: n.patterns, value: n.value === undefined ? '(none)' : n.value.slice(0, 40), focused: !!n.focused, y: n.y }));
+      const box = ps.nodes.filter((n) => n.role === 'edit' && !n.offscreen && /^type a message$/i.test(n.name.trim()))[0];
+      if (box) {
+        const c = await b.uiaCenter(w.hwnd, box.rid);
+        await b.clickScreen(w.hwnd, c.x, c.y);
+        await sleep(250);
+        execFileSync('powershell.exe', ['-NoProfile', '-Command', "Set-Clipboard -Value 'Keo caption test 123'"]);
+        await b.paste(w.hwnd);
+        await sleep(700);
+        const after = await snap(w.hwnd);
+        const nb = await b.uiaDescribe(w.hwnd, box.rid).catch(() => null);
+        out.captionValue = nb?.value ?? '(none)';
+        out.captionTextNodes = after.nodes.filter((n) => /keo caption test 123/i.test(n.name) || /keo caption test 123/i.test(n.value ?? '')).map((n) => `${n.role}:${n.name.slice(0, 30)}`);
+      }
+    }
     const remove = (await snap(w.hwnd)).nodes.find((n) => n.role === 'button' && /^remove attachment$/i.test(n.name));
     if (remove) await b.uiaAct(w.hwnd, remove.rid, 'invoke');
     await sleep(800);

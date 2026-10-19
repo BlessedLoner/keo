@@ -79,7 +79,7 @@ export function ResultsApp() {
     setStatus(null);
     try {
       const res = await invoke('results:send', { id: r.id, contact: contact.trim(), which, ...(note.trim() ? { note: note.trim() } : {}) });
-      setStatus(res.ok ? { kind: 'ok', text: res.detail ?? `Sent to ${contact.trim()}.` } : { kind: 'error', text: [res.error, res.detail].filter(Boolean).join(' ') || 'Could not send.' });
+      setStatus(res.ok ? { kind: 'ok', text: res.detail ?? `Sent to ${contact.trim()}.` } : { kind: 'error', text: [...new Set([res.error, res.detail].filter(Boolean))].join(' ') || 'Could not send.' });
       if (res.ok) setSendOpen(false);
     } catch (e) {
       setStatus({ kind: 'error', text: errText(e) });

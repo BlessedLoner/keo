@@ -760,8 +760,14 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
               <label htmlFor="oaivoice">OpenAI voice / model</label>
               <div className="row">
                 <input id="oaivoice" className="input" defaultValue={v.openaiTtsVoice} onBlur={(e) => void patch({ voice: { openaiTtsVoice: e.target.value } })} />
-                <input className="input" aria-label="OpenAI TTS model" defaultValue={v.openaiTtsModel} onBlur={(e) => void patch({ voice: { openaiTtsModel: e.target.value } })} />
+                <select className="select" aria-label="OpenAI TTS model" value={['tts-1', 'gpt-4o-mini-tts', 'tts-1-hd'].includes(v.openaiTtsModel) ? v.openaiTtsModel : 'custom'} onChange={(e) => e.target.value !== 'custom' && void patch({ voice: { openaiTtsModel: e.target.value } })}>
+                  <option value="tts-1">tts-1 — fastest to start</option>
+                  <option value="gpt-4o-mini-tts">gpt-4o-mini-tts — most natural</option>
+                  <option value="tts-1-hd">tts-1-hd — higher quality, slower</option>
+                  {!['tts-1', 'gpt-4o-mini-tts', 'tts-1-hd'].includes(v.openaiTtsModel) && <option value="custom">{v.openaiTtsModel}</option>}
+                </select>
               </div>
+              <span className="hint">For quick spoken answers choose tts-1. The Windows voices start fastest of all (no network).</span>
             </div>
           ) : (
             <div />

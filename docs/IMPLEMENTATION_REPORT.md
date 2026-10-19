@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.6.1 fixes: picture captions, faster cloud voice choice
+
+- Reported: the picture was sent without its caption (prices and links), WhatsApp's page text was highlighted first, then “could not find the picture” (shown twice).
+- Found live: the preview's caption box is named “Type a message” and focused; some WhatsApp versions name the message box the same, so Keo took it for an existing box and typed into the hidden message box behind the preview (select-all highlighted the page). The caption box is now recognised by element (focused or new since the preview opened); the caption is entered with a real click + paste (no select-all) and read back; if it cannot be confirmed the attachment is removed and nothing is sent. A newly appeared picture entry also counts as proof of sending. The same error is shown once.
+- Settings → Voice: OpenAI TTS model choice (tts-1 fastest to start, gpt-4o-mini-tts most natural, tts-1-hd).
+- Live (approved, own chat): picture + caption + links sent through the file-dialog route and verified.
+
 ### 1.6.0: Keo's pencil, file dialog, faster spoken answers
 
 - **WhatsApp on other PCs:** the Attach → Photos & videos file dialog stayed open untouched while a pasted picture appeared. Likely cause: the dialog's file list (a folder with many pictures) used up the accessibility reading budget before the “File name” box, so Keo fell back to pasting. Keo now operates the dialog as a Windows dialog: the visible `#32770` dialog owned by WhatsApp's window or process (or the only new one) gets the path in its “File name” box (id 1148, `WM_SETTEXT`, read back) and its OK command; a dialog Keo opened is cancelled if anything fails, never left open. Live here: dialog found (owned by WhatsApp), file chosen, preview in 5 s, then removed — nothing sent.

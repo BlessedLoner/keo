@@ -436,6 +436,40 @@ async function attachViaMenu(d: CapabilityDeps, target: TargetT, filePath: strin
   throw new CapabilityError('attach_failed', 'WhatsApp did not show the attachment preview after choosing the file, so nothing was sent.', { dispatched: 'no' });
 }
 
+/**
+ * Puts the caption in the preview's caption box: a real click into the box (accessibility focus does
+ * not move the keyboard there in the WhatsApp app), then paste — never select-all, which would select
+ * the page. Read back; if the box did not take it, the accessibility value is tried once. Throws (not
+ * dispatched) when the caption is not in the box, so a picture is never sent without its text.
+ */
+async function enterCaption(d: CapabilityDeps, target: TargetT, box: UiaNodeRaw, caption: string): Promise<void> {
+  const inBox = async () => {
+    const now = await d.desktop.backend.uiaDescribe(target.hwnd, box.rid).catch(() => null);
+    if (now?.value === undefined) return null;
+    const head = caption.split(/\n+/).map((l) => l.trim()).find(Boolean) ?? caption;
+    return textMatches(now.value ?? '', head) && normName(now.value ?? '').length >= normName(caption).length * 0.8;
+  };
+  try {
+    const c = await centerOf(d, target, box);
+    await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
+  } catch (e) {
+    if (!(e instanceof CapabilityError) || e.dispatched !== 'no') throw e;
+    await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'focus').catch(() => undefined);
+  }
+  await sleep(d.focusSettleMs === 0 ? 0 : 200);
+  await pasteViaClipboard(d, target.hwnd, caption).catch((e) => {
+    if (!(e instanceof CapabilityError) || e.dispatched !== 'no') throw e;
+  });
+  await sleep(d.focusSettleMs === 0 ? 0 : 250);
+  let ok = await inBox();
+  if (ok === false) {
+    await d.desktop.backend.uiaAct(target.hwnd, box.rid, 'set_value', caption).catch(() => undefined);
+    await sleep(d.focusSettleMs === 0 ? 0 : 300);
+    ok = await inBox();
+  }
+  if (ok === false) throw new CapabilityError('caption_failed', 'WhatsApp did not take the text for the picture, so nothing was sent.', { dispatched: 'no' });
+}
+
 /** Closes an unsent attachment preview with its own button, so nothing half-made is left in the chat. */
 async function discardPreview(d: CapabilityDeps, target: TargetT): Promise<void> {
   const f = await freshView(d, target).catch(() => null);
@@ -455,7 +489,6 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
   // Checked again right before pasting: the preview opens over this chat.
   if (!openChatIs(view, contact)) throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
   if (!view.compose) throw new CapabilityError('not_recognized', 'Could not find the message box in this chat. Nothing was sent.', { dispatched: 'no' });
-  const shownBefore = new Set(fresh.nodes.filter((n) => !n.offscreen).map((n) => `${n.role}:${n.name}`));
   const elementsBefore = new Set(fresh.nodes.map((n) => n.rid));
   const before = view.messages.filter((m) => m.from === 'me').length;
   const picture = /\.(png|jpe?g|gif|bmp)$/i.test(filePath);
@@ -492,12 +525,16 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
   let send: UiaNodeRaw | undefined;
   try {
     if (caption) {
-      // The preview's own caption box: named "…caption…" (Web), or the text box the preview added (app).
+      // The preview's own caption box: named "…caption…" (Web), or the box the preview focused or added
+      // (the app). Recognised by element, not name: some versions name the message box the same way.
+      const edits = preview.nodes.filter((n) => n.role === 'edit' && !n.offscreen);
       const box =
-        preview.nodes.find((n) => n.role === 'edit' && /caption/i.test(n.name) && !n.offscreen) ??
-        preview.nodes.find((n) => n.role === 'edit' && !n.offscreen && !shownBefore.has(`${n.role}:${n.name}`)) ??
-        preview.view.compose;
-      if (box) await step('typing the caption', () => enterTextChecked(d, target, box, caption));
+        edits.find((n) => /caption/i.test(n.name)) ??
+        edits.find((n) => n.focused && !elementsBefore.has(n.rid)) ??
+        edits.find((n) => !elementsBefore.has(n.rid) && n !== preview!.view.search) ??
+        edits.find((n) => n.focused && n !== preview!.view.search);
+      if (!box) throw new CapabilityError('not_recognized', 'Could not find the caption box of the attachment preview. Nothing was sent.', { dispatched: 'no' });
+      await step('adding the caption', () => enterCaption(d, target, box, caption));
     }
     if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
     // Re-verify the recipient immediately before the irreversible step. The app's preview may hide the
@@ -522,7 +559,9 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
     const last = mine.at(-1);
     // A new element (not one seen before pasting), so an identical earlier message does not count.
     const lastPicture = [...f.nodes].reverse().find((n) => n.role === 'image' && !!n.name && !!head && textMatches(n.name, head));
-    const newPicture = !!lastPicture && !elementsBefore.has(lastPicture.rid);
+    // Or, for a picture, the newest "Open picture" entry of the chat is a new element.
+    const lastOpen = [...f.nodes].reverse().find((n) => n.role === 'button' && /^open (picture|photo|image|video)$/i.test(n.name.trim()) && !n.offscreen);
+    const newPicture = (!!lastPicture && !elementsBefore.has(lastPicture.rid)) || (!!lastOpen && !elementsBefore.has(lastOpen.rid) && /\.(png|jpe?g|gif|bmp|webp)$/i.test(file));
     const newRows = mine.slice(before).map((m) => m.text).join(' ');
     if (newPicture || (mine.length > before && last && (textMatches(last.text, file) || (caption && textMatches(last.text, caption)) || (head && textMatches(newRows, head))))) {
       return { sent: true, appearsInChat: true, file, recipient: v.header ?? contact };
