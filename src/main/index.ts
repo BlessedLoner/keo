@@ -724,8 +724,12 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 300));
+      for (let i = 0; i < 50; i++) {
+        if (await pen.webContents.executeJavaScript(`!document.querySelector('.pencil-send').disabled`)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       await pen.webContents.executeJavaScript(`document.querySelector('.pencil-send').click()`);
-      for (let i = 0; i < 50 && pw.pencil; i++) await new Promise((resolve) => setTimeout(resolve, 100));
+      for (let i = 0; i < 150 && pw.pencil; i++) await new Promise((resolve) => setTimeout(resolve, 100));
       const conv = svc.settings.get().commandBar.conversationId;
       const msgs = conv ? svc.conversations.messages(conv) : [];
       r.pencilSent = msgs.some((m) => m.role === 'user' && m.content.startsWith('what is in this circle') && m.content.includes('Keo’s pencil'));

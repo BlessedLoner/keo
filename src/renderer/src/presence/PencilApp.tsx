@@ -38,6 +38,8 @@ export function PencilApp() {
   const [error, setError] = useState<string | null>(null);
   const lastStrokeAt = useRef(0);
   const shot = useRef<HTMLImageElement | null>(null);
+  // The screen picture is large: Send waits until it is loaded and decoded (never a blank picture).
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.add('pencil-root');
@@ -49,6 +51,10 @@ export function PencilApp() {
       const img = new Image();
       img.src = c.image;
       shot.current = img;
+      void img
+        .decode()
+        .catch(() => undefined)
+        .then(() => setReady(img.naturalWidth > 0));
     });
     const off = subscribe('presence:command', (c) => {
       if (c.type !== 'pencil_heard') return;
@@ -108,7 +114,7 @@ export function PencilApp() {
   };
 
   const send = useCallback(async () => {
-    if (busy || !ctx || ctx.consentNeeded || !strokes.length || !shot.current) return;
+    if (busy || !ctx || ctx.consentNeeded || !strokes.length || !shot.current || !ready) return;
     setBusy(true);
     setError(null);
     try {
@@ -122,7 +128,7 @@ export function PencilApp() {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [busy, ctx, strokes, typed]);
+  }, [busy, ctx, strokes, typed, ready]);
 
   // Send by itself once the user has both marked something and said what they want.
   useEffect(() => {
@@ -217,8 +223,8 @@ export function PencilApp() {
               }}
             />
           </div>
-          <button className="btn primary pencil-send" disabled={busy || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()}>
-            <Icon name="send" size={14} /> {busy ? 'Sending…' : 'Send'}
+          <button className="btn primary pencil-send" disabled={busy || !ready || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()}>
+            <Icon name="send" size={14} /> {busy ? 'Sending…' : !ready ? 'Preparing…' : 'Send'}
           </button>
         </div>
       </div>

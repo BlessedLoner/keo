@@ -16,6 +16,9 @@
   --accent-2: #cfe2ff;
   --accent-soft: rgba(255, 255, 255, 0.09);
   --glow: #cfe2ff;
+  --bg-side: #070708;
+  --bg-inset: #09090b;
+  --bg-panel: rgba(10, 10, 12, 0.97);
   --primary-bg: #f5f5f7;
   --primary-bg-hover: #ffffff;
   --primary-text: #050506;
@@ -47,6 +50,9 @@ html[data-theme='classic'] {
   --accent-2: #8b6bff;
   --accent-soft: rgba(61, 214, 255, 0.12);
   --glow: #3dd6ff;
+  --bg-side: #0b0d13;
+  --bg-inset: #0c0f15;
+  --bg-panel: rgba(13, 16, 23, 0.97);
   --primary-bg: linear-gradient(180deg, #2fc5ee, #1fa9d3);
   --primary-bg-hover: linear-gradient(180deg, #45d2f7, #24b5de);
   --primary-text: #04121a;
@@ -217,7 +223,7 @@ a { color: var(--accent); }
 
 /* -- Chat --------------------------------------------------------------------- */
 .chat { display: grid; grid-template-columns: 270px 1fr; flex: 1; min-width: 0; }
-.convs { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: #0b0d13; }
+.convs { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg-side); }
 .convs-head { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
 .convs-list { flex: 1; overflow: auto; padding: 6px; }
 .conv-item { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--radius-sm); border: 0; background: transparent; cursor: pointer; color: var(--text-2); }
@@ -314,7 +320,7 @@ a { color: var(--accent); }
 .step:last-child { border-bottom: 0; }
 .step-idx { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; background: var(--bg-hover); color: var(--text-2); }
 .step .err { color: #ffb3bb; font-size: 12.5px; }
-.step pre { margin: 6px 0 0; font-size: 11.5px; max-height: 160px; overflow: auto; background: #0c0f15; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
+.step pre { margin: 6px 0 0; font-size: 11.5px; max-height: 160px; overflow: auto; background: var(--bg-inset); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
 
 /* -- Memory / projects ---------------------------------------------------------- */
 .mem { border: 1px solid var(--line); background: var(--bg-elev); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
@@ -335,7 +341,7 @@ a { color: var(--accent); }
 .win-card { border: 1px solid var(--line); background: var(--bg-elev); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .win-card .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .obs { display: grid; grid-template-columns: 220px 1fr; gap: 14px; border: 1px solid var(--line); background: var(--bg-elev); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
-.obs .thumb { width: 220px; height: 140px; border-radius: 8px; background: #07090d; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--text-3); font-size: 12px; text-align: center; }
+.obs .thumb { width: 220px; height: 140px; border-radius: 8px; background: var(--bg-inset); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--text-3); font-size: 12px; text-align: center; }
 .obs .thumb img { width: 100%; height: 100%; object-fit: contain; }
 .analysis { background: var(--bg-elev); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 
@@ -417,7 +423,7 @@ html.companion-root body, html.command-root body { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .orb, .orb-ring { animation: none; } }
 
 /* -- Command bar --------------------------------------------------------------- */
-.command-shell { position: fixed; inset: 6px; display: flex; flex-direction: column; background: rgba(13, 16, 23, 0.97); border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); overflow: hidden; }
+.command-shell { position: fixed; inset: 6px; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); overflow: hidden; }
 .command-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .command-state { font-weight: 600; font-size: 13px; }
 .command-activity { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
