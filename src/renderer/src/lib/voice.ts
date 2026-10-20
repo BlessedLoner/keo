@@ -35,6 +35,9 @@ class VoiceController {
   private speechSeq = 0;
   /** Ends the clip that is playing now (stopSpeaking), so a waiting speak() returns at once. */
   private endClip: (() => void) | null = null;
+  /** Continuous speech: parts said back to back; a cloud part's audio is fetched as soon as it is queued. */
+  private queue: Array<{ text: string; engine: 'system' | 'openai'; systemVoice: string; audio?: Promise<{ audio: Uint8Array; mimeType: string }>; seq: number; resolve: (r: 'spoken' | 'no_start') => void }> = [];
+  private draining = false;
   private audioUrl: string | null = null;
   private resolveRecording: ((text: string | null) => void) | null = null;
 
@@ -339,7 +342,104 @@ class VoiceController {
     speechSynthesis.speak(u);
   }
 
+  /**
+   * Queues one part of a reply and resolves when it has been said ('spoken'), or 'no_start' when the
+   * voice could not say it. Parts play one after another without a gap (the next part's audio is
+   * already downloading while one plays), so a reply sounds like one continuous answer.
+   */
+  enqueue(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
+    const clean = speakable(text);
+    if (!clean) return Promise.resolve('spoken');
+    const eng = engine === 'openai' ? 'openai' : 'system';
+    return new Promise((resolve) => {
+      const item: (typeof this.queue)[number] = { text: clean, engine: eng, systemVoice, seq: this.speechSeq, resolve };
+      if (eng === 'openai') {
+        item.audio = invoke('voice:speak', { text: clean.slice(0, 4000) });
+        item.audio.catch(() => undefined);
+      }
+      this.queue.push(item);
+      void this.drain();
+    });
+  }
+
+  private async drain(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      while (this.queue.length) {
+        const item = this.queue.shift()!;
+        if (item.seq !== this.speechSeq) {
+          item.resolve('spoken'); // stopped meanwhile: dropped, never said late
+          continue;
+        }
+        this.set({ speaking: true, speakingSync: null, error: null });
+        let ok = false;
+        if (item.engine === 'openai') {
+          try {
+            const clip = await item.audio!;
+            if (item.seq === this.speechSeq) {
+              await this.playClip(clip, item.seq);
+              ok = true;
+            }
+          } catch (e) {
+            if (item.seq === this.speechSeq) this.set({ error: e instanceof Error ? e.message : String(e) });
+          }
+        } else ok = await this.utter(item.text, item.systemVoice, item.seq);
+        item.resolve(ok || item.seq !== this.speechSeq ? 'spoken' : 'no_start');
+      }
+    } finally {
+      this.draining = false;
+      this.stopMeter();
+      if (!this.queue.length && this.state.speaking) this.set({ speaking: false, speakingSync: null });
+    }
+  }
+
+  /** One system-voice utterance, without cancelling what is queued; false when it never started. */
+  private utter(text: string, systemVoice: string, seq: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!('speechSynthesis' in window)) return resolve(false);
+      const u = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      const v = voices.find((x) => x.name === systemVoice) ?? voices.find((x) => /^en[-_]/i.test(x.lang) && x.localService) ?? voices.find((x) => /^en[-_]/i.test(x.lang));
+      if (v) u.voice = v;
+      u.lang = v?.lang ?? 'en-US';
+      let started = false;
+      let env = 0;
+      const decay = () => {
+        env *= 0.88;
+        levelBus.set(env, 'playback');
+        this.raf = this.next(decay, 'playback');
+      };
+      u.onstart = () => {
+        started = true;
+        this.set({ speaking: true, speakingSync: 'word-boundaries' });
+        this.raf = this.next(decay, 'playback');
+      };
+      u.onboundary = () => {
+        env = 0.85;
+      };
+      const done = (ok: boolean) => {
+        clearTimeout(t);
+        if (this.endClip === end) this.endClip = null;
+        resolve(ok);
+      };
+      const end = () => done(started);
+      u.onend = end;
+      u.onerror = end;
+      this.endClip = end;
+      // A cold Windows voice can take seconds to start; give up (and cancel it) after 15 s.
+      const t = setTimeout(() => {
+        if (!started && seq === this.speechSeq) {
+          speechSynthesis.cancel();
+          done(false);
+        }
+      }, 15_000);
+      speechSynthesis.speak(u);
+    });
+  }
+
   stopSpeaking(): void {
+    for (const item of this.queue.splice(0)) item.resolve('spoken');
     this.speechSeq++;
     const end = this.endClip;
     this.endClip = null;

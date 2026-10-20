@@ -326,6 +326,33 @@ async function captureScreen(): Promise<{ png: Buffer; width: number; height: nu
   return { png: img.toPNG(), width, height, bounds: display.bounds, toScreen: (x, y) => screen.dipToScreenPoint({ x, y }) };
 }
 
+/**
+ * A picture in a format Keo's image tools cannot open (WebP, AVIF, GIF) as a PNG of side×side,
+ * letterboxed on white: shown by Chromium in a hidden window of the locked-down report session
+ * (JavaScript off, no network) and captured.
+ */
+async function convertImage(bytes: Buffer, mime: string, side: number): Promise<Buffer> {
+  if (!/^image\/(webp|avif|gif)$/.test(mime)) throw new Error('unsupported picture type');
+  const html = `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:${side}px;height:${side}px;overflow:hidden;background:#fff}img{width:${side}px;height:${side}px;object-fit:contain;display:block}</style><img src="data:${mime};base64,${bytes.toString('base64')}">`;
+  const file = path.join(app.getPath('temp'), `keo-picture-${process.pid}-${Date.now()}.html`);
+  fs.writeFileSync(file, html, 'utf8');
+  const key = normalizeFileUrl(pathToFileURL(file).href);
+  renderingReports.add(key);
+  const win = new BrowserWindow({ show: false, width: side, height: side, useContentSize: true, webPreferences: { session: reportSession(), javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await win.loadFile(file);
+    await new Promise((r) => setTimeout(r, 150));
+    const img = await win.webContents.capturePage({ x: 0, y: 0, width: side, height: side });
+    const png = img.resize({ width: side, height: side }).toPNG();
+    if (!png.length) throw new Error('empty picture');
+    return png;
+  } finally {
+    renderingReports.delete(key);
+    win.destroy();
+    fs.rm(file, { force: true }, () => undefined);
+  }
+}
+
 function showMain(view?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -356,6 +383,7 @@ app.whenReady().then(() => {
       clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
       documentsDir: app.getPath('documents'),
       renderReport: (html, kind) => renderReport(html, kind),
+      convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
       windowsSpeak: (text) => windowsSpeak(text),
       captureScreen: () => captureScreen(),
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
@@ -449,10 +477,10 @@ app.whenReady().then(() => {
       hideKeoMode: () => presenceWindows?.hideKeoMode(),
       keoModeOpen: () => !!presenceWindows?.keoMode,
       mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
-      notify: (title, body) => {
+      notify: (title, body, view = 'tasks') => {
         if (!Notification.isSupported()) return;
         const n = new Notification({ title, body: body.slice(0, 240), silent: false });
-        n.on('click', () => showMain('tasks'));
+        n.on('click', () => showMain(view));
         n.show();
       },
     };
@@ -761,6 +789,16 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     r.keoModeClosed = pw.keoMode === null;
   } catch (e) {
     r.keoModeError = errorMessage(e);
+  }
+  // A WebP picture (made by Chromium itself) becomes a PNG through the converter research cards use.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      const b64 = String(await mainWindow.webContents.executeJavaScript(`(() => { const c = document.createElement('canvas'); c.width = 60; c.height = 40; const g = c.getContext('2d'); g.fillStyle = '#c0392b'; g.fillRect(0, 0, 60, 40); return c.toDataURL('image/webp').split(',')[1]; })()`));
+      const png = await convertImage(Buffer.from(b64, 'base64'), 'image/webp', 120);
+      r.webpConverted = png.subarray(1, 4).toString('latin1') === 'PNG' && png.length > 100;
+    } catch (e) {
+      r.webpConverted = errorMessage(e);
+    }
   }
   // Copy from Keo's window goes through the main process (the page's own clipboard access is not granted).
   if (mainWindow && !mainWindow.isDestroyed()) {

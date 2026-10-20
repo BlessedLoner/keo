@@ -71,8 +71,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             .then((text) => invoke('voice:done', { id: c.id, text: text ?? null, reason: text ? 'ok' : voice.get().error ? 'error' : 'silence' }))
             .catch(() => invoke('voice:done', { id: c.id, text: null, reason: 'error' }).catch(() => undefined));
         } else if (c.type === 'voice_say') {
-          void voice
-            .speakAndWait(c.text, vs?.ttsEngine ?? 'system', vs?.systemVoice ?? '')
+          void (c.queue ? voice.enqueue(c.text, vs?.ttsEngine ?? 'system', vs?.systemVoice ?? '') : voice.speakAndWait(c.text, vs?.ttsEngine ?? 'system', vs?.systemVoice ?? ''))
             .then(
               (how) => invoke('voice:done', { id: c.id, text: null, reason: how }),
               () => invoke('voice:done', { id: c.id, text: null, reason: 'no_start' }),

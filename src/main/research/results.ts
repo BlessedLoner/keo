@@ -47,7 +47,7 @@ export function reportHtml(r: ResearchResult, opts: { forImage?: boolean } = {})
   const cards = r.cards
     .map(
       (c) => `<article class="card">
-  ${c.image ? `<img src="${c.image}" alt="${esc(c.name)}">` : '<div class="noimg">No picture on the page</div>'}
+  ${c.image ? `<img src="${c.image}" alt="${esc(c.name)}">${c.imageFrom === 'wikipedia' ? '<span class="picsrc">Picture: Wikipedia</span>' : ''}` : '<div class="noimg">No picture found</div>'}
   <div class="body">
     <h2>${esc(c.name)}</h2>
     <div class="price">${esc(priceOf(c))}${c.merchant ? ` <span class="merchant">· ${esc(c.merchant)}</span>` : ''}</div>
@@ -70,6 +70,7 @@ h1{margin:0 0 6px;font-size:22px}.summary{color:#aeb8cc;margin:0 0 10px}
 .grid{display:grid;grid-template-columns:repeat(${Math.min(3, Math.max(1, r.cards.length))},1fr);gap:14px;margin-top:12px}
 .card{background:#151924;border:1px solid #222a3a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
 .card img,.noimg{width:100%;height:190px;object-fit:contain;background:#fff;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px}
+.picsrc{display:block;text-align:right;font-size:10px;color:#888;margin:2px 8px 0}
 .body{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
 h2{margin:0;font-size:15px}.price{font-size:18px;font-weight:700;color:#7fd3ff}.merchant{font-size:13px;font-weight:400;color:#aeb8cc}
 ul{margin:0;padding-left:18px;color:#c9d1e0}.pro{color:#4fd18b}.con{color:#ff8a95}a{color:#7fd3ff;word-break:break-all}

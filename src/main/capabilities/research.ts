@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { ProductCard } from '../../shared/domain';
 import { folderName, reportHtml, shareText, type ResearchResult, type ResearchResults } from '../research/results';
 import { bringToFront, Target } from './builtins';
-import { resolveWhatsApp, waSendFile } from './advanced';
+import { resolveWhatsApp, waOpenChat, waSend, waSendFile } from './advanced';
 import { CapabilityError } from './types';
 import type { ImageTools } from '../vision/visionService';
 import type { WebService } from '../web/webService';
@@ -40,6 +40,7 @@ const Card = z.object({
   specs: z.array(z.string()),
   fetchedAt: z.string(),
   imageUrl: z.string().nullable().optional(),
+  imageFrom: z.enum(['page', 'wikipedia']).nullable().optional(),
 });
 
 const digits = (s: string) => s.replace(/[^\d.,]/g, '').replace(/,(?=\d{3}\b)/g, '').replace(',', '.');
@@ -59,6 +60,8 @@ export interface ResearchDeps extends CapabilityDeps {
   showResult: (r: ResearchResult) => void;
   /** Turns the report page into a PDF or a picture (Keo's own hidden window; a fake in tests). */
   render: (html: string, kind: 'pdf' | 'png') => Promise<Buffer>;
+  /** A WebP/AVIF/GIF picture as a PNG of side×side (Keo's own hidden window; absent in tests). */
+  convertImage?: (bytes: Buffer, mime: string, side: number) => Promise<Buffer>;
   /** Where saved results go (Documents\Keo Research) and where pictures for sending are made. */
   saveRoot: () => string;
   workRoot: () => string;
@@ -110,16 +113,33 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
           currency = p.currency ?? null;
           priceFrom = 'page text';
         }
+        // The page's own product picture: every picture it offers, best first, until one loads.
         let image: string | null = null;
-        if (pp.image) {
-          const img = await d.web.fetchImage(pp.image, ctx.signal);
-          if (img) {
-            try {
-              image = `data:image/png;base64,${d.images.fit(img.bytes, 240).toString('base64')}`;
-            } catch {
-              image = null;
-            }
+        let imageUrl: string | null = null;
+        let imageFrom: ProductCard['imageFrom'] = null;
+        const tryImage = async (url: string): Promise<boolean> => {
+          const img = await d.web.fetchImage(url, ctx.signal).catch(() => null);
+          if (!img) return false;
+          try {
+            const png = /png|jpe?g/.test(img.contentType) ? d.images.fit(img.bytes, 360) : d.convertImage ? await d.convertImage(img.bytes, img.contentType, 360) : null;
+            if (!png?.length) return false;
+            image = `data:image/png;base64,${png.toString('base64')}`;
+            imageUrl = url;
+            return true;
+          } catch {
+            return false;
           }
+        };
+        for (const url of [...(pp.image ? [pp.image] : []), ...(page.images ?? [])].filter((u, k, all) => all.indexOf(u) === k).slice(0, 6)) {
+          if (await tryImage(url)) {
+            imageFrom = 'page';
+            break;
+          }
+        }
+        // None usable on the page: the picture of the matching Wikipedia article (labelled as such).
+        if (!image && d.web.wikipediaImage) {
+          const wiki = await d.web.wikipediaImage(p.name, ctx.signal).catch(() => null);
+          if (wiki && (await tryImage(wiki.url))) imageFrom = 'wikipedia';
         }
         cards.push({
           name: p.name,
@@ -142,7 +162,8 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
           cons: p.cons,
           specs: p.specs,
           fetchedAt: page.fetchedAt,
-          imageUrl: pp.image ?? null,
+          imageUrl,
+          imageFrom,
         });
       }
       const title = i.title ?? cards.map((c) => c.name).slice(0, 3).join(' vs ').slice(0, 120) ?? 'Research';
@@ -208,7 +229,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
         let ext = 'png';
         if (c.imageUrl) {
           const img = await d.web.fetchImage(c.imageUrl, ctx.signal).catch(() => null);
-          if (img) {
+          if (img && /png|jpe?g/.test(img.contentType)) {
             bytes = img.bytes;
             ext = /jpe?g/.test(img.contentType) ? 'jpg' : img.contentType.includes('webp') ? 'webp' : img.contentType.includes('gif') ? 'gif' : 'png';
           }
@@ -243,7 +264,7 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
         note: z.string().trim().max(300).optional().describe('Optional line to put before the summary, e.g. "This is what I found"'),
       })
       .strict(),
-    output: z.object({ sent: z.boolean(), appearsInChat: z.boolean(), file: z.string(), recipient: z.string(), textSeparately: z.boolean().optional() }),
+    output: z.object({ sent: z.boolean(), appearsInChat: z.boolean(), file: z.string(), recipient: z.string(), textSeparately: z.boolean().optional(), textFirst: z.boolean().optional() }),
     risk: 'high',
     approval: 'always',
     permissions: ['desktop.control'],
@@ -274,15 +295,26 @@ export function researchCapabilities(d: ResearchDeps): AnyCapability[] {
       fs.mkdirSync(dir, { recursive: true });
       const picture = path.join(dir, `${folderName(r).slice(11) || 'research'}.png`);
       fs.writeFileSync(picture, await render(reportHtml(r, { forImage: true }), 'png', 'sent'));
-      const caption = `${i.note ? `${i.note}\n\n` : ''}${shareText(r)}`;
+      const text = `${i.note ? `${i.note}\n\n` : ''}${shareText(r)}`;
       const t = await resolveWhatsApp(d, i.target, ctx.settings, i.which);
       return d.desktop.exclusive(`research.send_whatsapp:${ctx.correlationId}`, async () => {
         await bringToFront(d, t, ctx.settings);
-        return waSendFile(d, t, i.contact, picture, caption, ctx.signal);
+        // The prices and links go first as a normal message (the most dependable way to send text
+        // on every PC), then the picture on its own — no caption box involved.
+        const opened = await waOpenChat(d, t, i.contact, ctx.signal);
+        if (!opened.opened) throw new CapabilityError('not_opened', `Could not open the chat with “${i.contact}”: ${opened.reason ?? 'not found'}. Nothing was sent.`, { dispatched: 'no' });
+        const sentText = await waSend(d, t, i.contact, text, true, ctx.signal);
+        try {
+          const pic = await waSendFile(d, t, i.contact, picture, '', ctx.signal);
+          return { ...pic, textFirst: sentText.appearsInChat };
+        } catch (e) {
+          const err = e as CapabilityError;
+          throw new CapabilityError(err.code ?? 'picture_failed', `The prices and links were sent, but the picture could not be sent: ${err.message}`, { dispatched: 'yes' });
+        }
       }, ctx.signal);
     },
     async verify(_i, o) {
-      return o.appearsInChat ? { verified: true, detail: o.textSeparately ? `The comparison picture was sent to ${o.recipient}, with the prices and links as the next message (WhatsApp did not take them as the picture’s caption).` : `The comparison appears as your latest message to ${o.recipient}.` } : { verified: false, detail: 'Keo pressed Send but could not find the picture in the chat. Check WhatsApp before trying again.' };
+      return o.appearsInChat ? { verified: true, detail: o.textFirst ? `Sent to ${o.recipient}: the prices and links, then the comparison picture — both appear in the chat.` : `The comparison appears as your latest message to ${o.recipient}.` } : { verified: false, detail: 'Keo pressed Send but could not find the picture in the chat. Check WhatsApp before trying again.' };
     },
   });
 

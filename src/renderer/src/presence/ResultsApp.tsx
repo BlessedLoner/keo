@@ -119,7 +119,10 @@ export function ResultsApp() {
               <ul className="results-cards">
                 {r.cards.map((c, i) => (
                   <li key={`${c.url}-${i}`} className="results-card" style={{ animationDelay: `${120 + i * 90}ms` }}>
-                    <div className="results-pic">{c.image ? <img src={c.image} alt={c.name} /> : <span>No picture on the page</span>}</div>
+                    <div className="results-pic">
+                      {c.image ? <img src={c.image} alt={c.name} /> : <span>No picture found</span>}
+                      {c.image && c.imageFrom === 'wikipedia' && <small className="results-pic-src">Picture: Wikipedia</small>}
+                    </div>
                     <div className="results-info">
                       <h2>{c.name}</h2>
                       <div className="results-price">

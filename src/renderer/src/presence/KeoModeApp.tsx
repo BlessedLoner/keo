@@ -18,6 +18,54 @@ const CARDS = [
   { icon: 'settings', x: 44, y: -2, z: 60, d: 4.9 },
 ];
 
+/**
+ * Keo's open eyes over the art's closed ones (eyes at 377,434 and 476,421 of the 880×1168 art, the
+ * head tilted about 7°): the lids are covered with skin, and glossy eyes look toward the mouse
+ * (the scene's --px/--py) and blink now and then.
+ */
+function KeoEyes() {
+  const eye = (cx: number, cy: number, key: string) => (
+    <g key={key} transform={`translate(${cx} ${cy}) rotate(-7.5)`}>
+      <ellipse className="ke2-skin" rx="30" ry="15" cy="1" />
+      <g className="ke2-eye">
+        <clipPath id={`ke2-clip-${key}`}>
+          <path d="M-22 1 C-14 -14 14 -15 22 -1 C14 10 -14 11 -22 1 Z" />
+        </clipPath>
+        <path className="ke2-white" d="M-22 1 C-14 -14 14 -15 22 -1 C14 10 -14 11 -22 1 Z" />
+        <g clipPath={`url(#ke2-clip-${key})`}>
+          <g className="ke2-look">
+            <circle className="ke2-iris" r="10.5" />
+            <circle className="ke2-iris-in" r="7" />
+            <circle className="ke2-pupil" r="4.2" />
+            <circle className="ke2-shine" cx="-3.5" cy="-4" r="2.6" />
+            <circle className="ke2-shine small" cx="3.6" cy="3" r="1.2" />
+          </g>
+        </g>
+        <path className="ke2-lash" d="M-24 2 C-15 -16 15 -17 24 -2" />
+        <path className="ke2-lash-tip" d="M20 -6 L27 -9" />
+      </g>
+    </g>
+  );
+  return (
+    <svg className="km-eyes" viewBox="0 0 880 1168" aria-hidden="true">
+      <defs>
+        <radialGradient id="ke2-skin-g" cx="50%" cy="45%" r="60%">
+          <stop offset="0%" stopColor="#f3e2e0" />
+          <stop offset="70%" stopColor="#eed8d6" />
+          <stop offset="100%" stopColor="#eed8d6" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="ke2-iris-g" cx="50%" cy="35%" r="70%">
+          <stop offset="0%" stopColor="#7d8798" />
+          <stop offset="55%" stopColor="#2b2f3a" />
+          <stop offset="100%" stopColor="#0b0c10" />
+        </radialGradient>
+      </defs>
+      {eye(377, 434, 'l')}
+      {eye(476, 421, 'r')}
+    </svg>
+  );
+}
+
 export function KeoModeApp() {
   const p = usePresence();
   const state = emblemFor(p);
@@ -127,8 +175,8 @@ export function KeoModeApp() {
           <div className="km-ring r3" />
         </div>
         <div className="km-figure">
-          <img className="km-shadow-img" src={keoArt} alt="" draggable={false} />
           <img className="km-img" src={keoArt} alt="" draggable={false} />
+          <KeoEyes />
           <div className="km-core" />
         </div>
         <div className="km-cards">

@@ -98,6 +98,7 @@ check('keo mode: shows Keo', p.keoModeRendered === true, p.keoModeError ?? p.keo
 check('keo mode: may read presence', p.keoModePresence === 'ok', p.keoModePresence);
 check('keo mode: cannot send chat', p.keoModeChatSend === 'forbidden', p.keoModeChatSend);
 check('keo mode: closes', p.keoModeClosed === true, p.keoModeClosed);
+check('WebP product pictures are converted to PNG', p.webpConverted === true, p.webpConverted);
 check('copy from Keo’s window reaches the clipboard', p.copyText === true, p.copyText);
 if (p.voiceSpeak) check('voice reply is spoken by the app voice', p.voiceSpeak.how === 'spoken', JSON.stringify(p.voiceSpeak));
 check('report renders as PDF', p.reportPdf === true, p.reportError ?? p.reportPdf);

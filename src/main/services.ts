@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AutoSpeechEngine, ModernSpeechEngine } from './voice/modernSpeech';
-import { VoiceMode } from './voice/voiceMode';
+import { spokenVersion, VoiceMode } from './voice/voiceMode';
 import { PorcupineWakeEngine, type PorcupineFactory } from './voice/porcupineEngine';
 import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type TestWindow } from './desktop/selfTest';
 import type { Settings } from '../shared/settings';
@@ -68,6 +68,7 @@ export interface ServiceDeps {
   speechEngine?: SpeechEngine;
   /** Turns a report page into a PDF or picture (the app uses a hidden window; tests a fake). */
   renderReport?: (html: string, kind: 'pdf' | 'png') => Promise<Buffer>;
+  convertImage?: (bytes: Buffer, mime: string, side: number) => Promise<Buffer>;
   /** The user's Documents folder (saved research goes to Documents\Keo Research). */
   documentsDir?: string;
   /** Porcupine and its recorder (tests inject a fake). */
@@ -140,7 +141,7 @@ export class Services {
   /** Window-side hooks set by the Electron entry point (no-ops in tests). */
   ui: {
     showCommandBar(): void;
-    notify(title: string, body: string): void;
+    notify(title: string, body: string, view?: 'chat' | 'tasks'): void;
     showMain?(view: 'chat' | 'tasks' | 'settings'): void;
     ensureVoiceWindow?(): Promise<void>;
     mainFocused?(): boolean;
@@ -269,6 +270,7 @@ export class Services {
           if (getSettings().research.showWindow) this.ui.showResults?.();
         },
         render: (html, kind) => (d.renderReport ? d.renderReport(html, kind) : Promise.reject(new Error('Pictures and PDFs can be made only in the Keo app.'))),
+        ...(d.convertImage ? { convertImage: d.convertImage } : {}),
         saveRoot: () => this.researchSaveRoot(),
         workRoot: () => path.join(d.profile.userData, 'research'),
       }),
@@ -340,7 +342,7 @@ export class Services {
       this.researchContext() +
       this.activeWindowContext() +
       (this.voiceMode?.isActive()
-        ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Answer in one to three short, natural sentences (no lists, Markdown, tables or code unless asked — those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
+        ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Sound like a warm, upbeat friend who is great at their job: natural spoken English with contractions, flowing sentences, a little light humour when it fits (never at the user’s expense), and genuine enthusiasm when something works. Keep it short — one to three sentences — with no lists, Markdown, tables or code unless asked (those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
         : '');
     // Answers to a waiting live chat (and "stop" / "send it") go straight to it — never lost to a model
     // that only *says* it passed them on. The command bar (voice) may answer any running chat.
@@ -396,7 +398,7 @@ export class Services {
         this.push('presence:command', { type: 'stop_speaking' });
         return d.voiceIo ? d.voiceIo.listen() : this.voiceListen();
       },
-      speak: (text) => (d.voiceIo ? d.voiceIo.speak(text) : this.voiceSpeak(text)),
+      speak: (text, opts) => (d.voiceIo ? d.voiceIo.speak(text) : this.voiceSpeak(text, !!opts?.queue)),
       send: (text) => {
         try {
           const sent = this.agent.send(this.commandConversation(), text);
@@ -776,7 +778,16 @@ export class Services {
     this.push('conversations:changed', { conversationId: conv });
     this.audit.record({ kind: 'pencil', decision: 'sent', detail: { spoke: !!spoken, typed: !!i.text.trim(), window: !!where } });
     if (spoken) this.voiceMode.startWithTurn(spoken, sent);
-    else this.ui.showCommandBar();
+    else {
+      // Typed: no mini-chat pops up. Research opens the results window by itself; any other answer
+      // arrives as a notification (click it for the conversation).
+      const since = Date.now();
+      void sent.done.then((m) => {
+        const r = this.results.get(undefined);
+        if (r && Date.parse(r.createdAt) >= since) return;
+        if (m.status === 'complete' && m.content.trim()) this.ui.notify('Keo', spokenVersion(m.content, 230), 'chat');
+      }, () => undefined);
+    }
     return { ok: true, error: null };
   }
 
@@ -851,7 +862,7 @@ export class Services {
    * (or never reports back), it is cancelled and Windows' own voice says it instead — a reply is
    * never silent, and never spoken late.
    */
-  private async voiceSpeak(text: string): Promise<void> {
+  private async voiceSpeak(text: string, queue = false): Promise<void> {
     await this.ui.ensureVoiceWindow?.();
     const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const how = await new Promise<string>((resolve) => {
@@ -864,7 +875,7 @@ export class Services {
         clearTimeout(t);
         resolve(v.reason);
       });
-      this.push('presence:command', { type: 'voice_say', id, text });
+      this.push('presence:command', { type: 'voice_say', id, text, queue });
     });
     this.lastVoiceSpeak = how;
     if (how === 'spoken' || how === 'cancelled') return;

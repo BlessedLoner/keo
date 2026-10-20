@@ -278,7 +278,9 @@ export class OpenAICompatProvider implements ChatProvider {
   async speak(text: string, model: string, voice: string, signal: AbortSignal): Promise<Uint8Array> {
     if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Cloud text-to-speech is only available through the OpenAI provider.');
     try {
-      const res = await this.client().audio.speech.create({ model, voice, input: text, response_format: 'mp3' }, { signal });
+      // gpt-4o voices take a speaking style; tts-1 models do not.
+      const style = /^gpt-4o/i.test(model) ? { instructions: 'Speak like a warm, upbeat, friendly assistant: natural, smooth and lively, with a light smile in your voice.' } : {};
+      const res = await this.client().audio.speech.create({ model, voice, input: text, response_format: 'mp3', ...style }, { signal });
       return new Uint8Array(await res.arrayBuffer());
     } catch (err) {
       throw mapOpenAIError(err, signal, this.label);

@@ -32,8 +32,8 @@ function setup(opts: { heard?: string | null } = {}) {
       captureScreen: async () => ({ png: PNG, width: 1920, height: 1080, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, toScreen: (x, y) => ({ x, y }) }),
     },
   });
-  const ui = { shown: 0, hidden: 0, commandBar: 0 };
-  h.services.ui = { showCommandBar: () => void ui.commandBar++, notify: () => undefined, showPencil: () => void ui.shown++, hidePencil: () => void ui.hidden++ };
+  const ui = { shown: 0, hidden: 0, commandBar: 0, notified: [] as string[] };
+  h.services.ui = { showCommandBar: () => void ui.commandBar++, notify: (_t, body) => void ui.notified.push(body), showPencil: () => void ui.shown++, hidePencil: () => void ui.hidden++ };
   return { requests, spoken, ui };
 }
 
@@ -64,12 +64,13 @@ describe('Keo’s pencil', () => {
     expect(stored.every((m) => typeof m.content === 'string')).toBe(true);
   });
 
-  it('typed requests open the mini-chat instead of speaking', async () => {
+  it('typed requests do not pop up the mini-chat: the answer comes as a notification', async () => {
     const { requests, spoken, ui } = setup({ heard: null });
     await h.services.startPencil();
     expect((await submit('make this text bold')).ok).toBe(true);
-    await waitFor(() => requests.length > 0, 3000);
-    expect(ui.commandBar).toBe(1);
+    await waitFor(() => ui.notified.length > 0, 3000);
+    expect(ui.commandBar).toBe(0);
+    expect(ui.notified[0]).toContain('Save button');
     expect(spoken).toEqual([]);
     expect(JSON.stringify(requests[0]!.messages.at(-1)!.content)).toContain('make this text bold');
   });

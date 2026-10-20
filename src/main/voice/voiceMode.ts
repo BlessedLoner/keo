@@ -19,7 +19,7 @@ export interface VoiceModeDeps {
   /** Records one utterance (local engine or the renderer's recorder); null text on silence. */
   listen(): Promise<{ text: string | null; reason: string }>;
   /** Speaks and resolves when finished. */
-  speak(text: string): Promise<void>;
+  speak(text: string, opts?: { queue?: boolean }): Promise<void>;
   /** Sends a user message to the conversation; resolves with Keo's reply. */
   send(text: string): { done: Promise<Message> } | null;
   conversationId(): string;
@@ -190,15 +190,17 @@ export class VoiceMode {
     // Speak finished sentences while the model is still writing (the answer starts sooner).
     let raw = '';
     let spokenUpTo = 0;
-    let early = Promise.resolve();
+    const queued: Array<Promise<void>> = [];
     const off = this.d.onReplyText?.((delta) => {
       raw += delta;
       const end = lastSentenceEnd(raw);
       if (end <= spokenUpTo || !this.alive(session)) return;
       const chunk = spokenVersion(raw.slice(spokenUpTo, end), 400);
       spokenUpTo = end;
-      if (chunk) early = early.then(() => this.say(session, chunk));
+      // Queued at once: the voice says the parts back to back, like one answer.
+      if (chunk) queued.push(this.sayQueued(session, chunk));
     });
+    const early = () => Promise.all(queued).then(() => undefined);
     const sent = presend ?? this.d.send(text);
     if (!sent) {
       off?.();
@@ -212,7 +214,7 @@ export class VoiceMode {
     } finally {
       off?.();
     }
-    await early;
+    await early();
     if (!this.alive(session)) return;
     // Actions still waiting for approval after the reply: ask now (instead of reading out "waiting for approval").
     let decided = false;
@@ -230,7 +232,7 @@ export class VoiceMode {
     // Say what was not spoken early: the rest of the same text, or the whole (corrected) reply.
     const rest = spokenUpTo > 0 && reply.content.startsWith(raw.slice(0, spokenUpTo)) ? reply.content.slice(spokenUpTo) : spokenUpTo > 0 ? '' : reply.content;
     const spoken = spokenVersion(rest);
-    if (spoken) await this.say(session, spoken);
+    if (spoken) await this.sayQueued(session, spoken);
   }
 
   /** After a voice approval: wait briefly for the action and say how it went. */
@@ -311,6 +313,17 @@ export class VoiceMode {
     this.d.showApprovals();
     await this.say(session, 'I’ll leave it for you to approve on screen.');
     return false;
+  }
+
+  /** Says one part of a reply right after the parts before it (no pause in between). */
+  private async sayQueued(session: number, text: string): Promise<void> {
+    if (!this.alive(session) || !text) return;
+    this.set({ state: 'speaking', said: text });
+    try {
+      await this.d.speak(text, { queue: true });
+    } catch (e) {
+      this.d.log.warn('voice.speak_failed', { error: (e as Error).message });
+    }
   }
 
   private async say(session: number, text: string): Promise<void> {

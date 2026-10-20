@@ -107,6 +107,14 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.8.0: text and picture on WhatsApp, real product pictures, continuous voice, new Keo art
+
+- **WhatsApp**: research results are sent as the prices-and-links text first (a normal message — the most dependable way on every PC), then the picture on its own (no caption box). WhatsApp steps never press Ctrl+A any more (with the keyboard outside the box it selected the whole page — the “highlighted UI text”); boxes are cleared through accessibility. Live (approved, own chat): text, then picture, both verified.
+- **Product pictures**: Keo now tries every picture a page offers (declared product image, Open Graph/Twitter/itemprop/image_src, <img> pictures whose description names the product, largest srcset size; logos/icons skipped), asks image servers for JPEG/PNG, and converts WebP/AVIF/GIF to PNG in a hidden, script-free window of the locked-down report session. When a page has no usable picture, the matching Wikipedia article's picture is used (Wikipedia API) and labelled “Picture: Wikipedia”. Live: mbusa.com offers 3 product photos (WebP — converted), apple.com opens directly, Wikipedia finds GLE / MacBook Air.
+- **Voice**: parts of a reply are queued and said back to back (the next part's cloud audio downloads while one plays) — one continuous answer, no pause per sentence. Voice replies are warmer and livelier (prompt; gpt-4o voices also get a cheerful speaking style).
+- **Pencil**: typed requests no longer open the mini-chat; research opens the results window, other answers arrive as a notification.
+- **Keo's art**: the new black-and-white Keo — the portrait (studio background) in the emblem/orb and the app icon (`scripts/render-icon.cjs`, also `site/icon.png`); the cut-out (background removed) in Keo mode, with open eyes over the closed lids that follow the mouse and blink. The old robot icon (`build/icon.svg`) is removed.
+
 ### 1.7.0: Noir look, Keo's character, Keo mode; WhatsApp focus fix
 
 - **WhatsApp text after the picture** (user's laptop): the picture arrived but the text did not. Likely cause: after the Windows file dialog closes, focus does not return to WhatsApp there, so typing/pasting was refused. Keo now puts WhatsApp back in front after the dialog, before the caption and before the follow-up text, and types straight into the message box as a last way in. Not reproducible on this PC (focus returns there); covered by the existing fake-WhatsApp tests.

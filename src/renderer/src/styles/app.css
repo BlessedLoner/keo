@@ -512,6 +512,8 @@ html.results-root, html.results-root body { background: transparent !important; 
 .results-pic { width: 128px; height: 112px; flex: none; border-radius: 10px; background: #fff; display: grid; place-items: center; overflow: hidden; }
 .results-pic img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .results-pic span { color: #6b7280; font-size: 11px; text-align: center; padding: 6px; }
+.results-pic { position: relative; }
+.results-pic-src { position: absolute; right: 6px; bottom: 5px; font-size: 9.5px; color: #fff; background: rgba(0, 0, 0, 0.55); padding: 1px 6px; border-radius: 6px; }
 .results-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .results-info h2 { margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; color: var(--text); }
 .results-price { font-size: 13px; color: var(--text-2); }
@@ -625,12 +627,25 @@ html.keomode-root, html.keomode-root body { background: #000 !important; overflo
 .km-glow { position: absolute; left: 50%; top: 48%; width: 70vmin; height: 70vmin; transform: translate(-50%, -50%) translate3d(calc(var(--px, 0) * -10px), calc(var(--py, 0) * -8px), -200px); border-radius: 50%; background: radial-gradient(closest-side, rgba(207, 226, 255, 0.22), rgba(207, 226, 255, 0.05) 60%, transparent 72%); filter: blur(10px); animation: km-breathe 6s ease-in-out infinite; }
 
 /* The figure: a 2.5D card that tilts toward the mouse and floats. */
-.km-figure { position: absolute; left: 50%; top: 45%; height: 72vh; aspect-ratio: 1094 / 1438; transform: translate(-50%, -50%) rotateX(var(--rx, 0)) rotateY(var(--ry, 0)); animation: km-float 7s ease-in-out infinite; }
-.km-img, .km-shadow-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-mask-image: radial-gradient(52% 50% at 50% 46%, #000 48%, rgba(0, 0, 0, 0.55) 70%, transparent 92%); mask-image: radial-gradient(52% 50% at 50% 46%, #000 48%, rgba(0, 0, 0, 0.55) 70%, transparent 92%); }
-.km-img { transform: translateZ(40px); filter: drop-shadow(0 30px 50px rgba(0, 0, 0, 0.6)); animation: km-breathe-img 6s ease-in-out infinite; }
-.km-shadow-img { transform: translateZ(-60px) scale(1.08); filter: blur(28px) brightness(1.2); opacity: 0.45; }
+.km-figure { position: absolute; left: 50%; top: 45%; height: 76vh; aspect-ratio: 880 / 1168; transform: translate(-50%, -50%) rotateX(var(--rx, 0)) rotateY(var(--ry, 0)); animation: km-float 7s ease-in-out infinite; }
+.km-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; user-select: none; transform: translateZ(40px); filter: drop-shadow(0 0 22px rgba(207, 226, 255, 0.28)) drop-shadow(0 30px 40px rgba(0, 0, 0, 0.7)); animation: km-breathe-img 6s ease-in-out infinite; }
+/* Keo's eyes: open, looking toward the mouse, blinking now and then. */
+.km-eyes { position: absolute; inset: 0; width: 100%; height: 100%; transform: translateZ(41px); pointer-events: none; animation: km-breathe-img 6s ease-in-out infinite; }
+.km-eyes .ke2-skin { fill: url(#ke2-skin-g); }
+.km-eyes .ke2-eye { transform-box: fill-box; transform-origin: center; animation: ke2-blink 6.5s infinite; }
+.km-eyes .ke2-white { fill: #f7f7fa; }
+.km-eyes .ke2-look { transform: translate(calc(var(--px, 0) * 7px), calc(var(--py, 0) * 3.5px)); transition: transform 120ms linear; }
+.km-eyes .ke2-iris { fill: url(#ke2-iris-g); }
+.km-eyes .ke2-iris-in { fill: none; stroke: rgba(207, 226, 255, 0.35); stroke-width: 1.2; }
+.km-eyes .ke2-pupil { fill: #050506; }
+.km-eyes .ke2-shine { fill: #fff; opacity: 0.95; }
+.km-eyes .ke2-shine.small { opacity: 0.75; }
+.km-eyes .ke2-lash { fill: none; stroke: #121216; stroke-width: 3.6; stroke-linecap: round; }
+.km-eyes .ke2-lash-tip { fill: none; stroke: #121216; stroke-width: 2.6; stroke-linecap: round; }
+.keomode.voice-speaking .km-eyes .ke2-look { transform: translate(calc(var(--px, 0) * 5px), calc(var(--py, 0) * 2px - 1px)); }
+@keyframes ke2-blink { 0%, 93%, 100% { transform: scaleY(1); } 95.5% { transform: scaleY(0.08); } }
 /* Chest light at the core of the art (47% across, 52% down). */
-.km-core { position: absolute; left: 47%; top: 52.5%; width: 7%; aspect-ratio: 1; transform: translate(-50%, -50%) translateZ(60px); border-radius: 50%; background: radial-gradient(closest-side, #fff, var(--core) 35%, rgba(220, 236, 255, 0.25) 60%, transparent 72%); mix-blend-mode: screen; opacity: 0.55; animation: km-core 3.2s ease-in-out infinite; }
+.km-core { position: absolute; left: 50%; top: 56%; width: 7%; aspect-ratio: 1; transform: translate(-50%, -50%) translateZ(60px); border-radius: 50%; background: radial-gradient(closest-side, #fff, var(--core) 35%, rgba(220, 236, 255, 0.25) 60%, transparent 72%); mix-blend-mode: screen; opacity: 0.55; animation: km-core 3.2s ease-in-out infinite; }
 .keomode.voice-listening .km-core { animation-duration: 1.4s; opacity: 0.8; }
 .keomode.voice-speaking .km-core { animation: km-speak 0.42s ease-in-out infinite alternate; opacity: 0.95; }
 .keomode.voice-thinking .km-core, .keomode.state-planning .km-core, .keomode.state-acting .km-core { animation: km-spin-glow 1.6s linear infinite; }
@@ -677,5 +692,5 @@ html.keomode-root, html.keomode-root body { background: #000 !important; overflo
 @keyframes km-caption-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .keomode, .km-figure, .km-img, .km-glow, .km-core, .km-ring, .km-card, .km-mic.live, .km-caption { animation: none !important; }
+  .keomode, .km-figure, .km-img, .km-eyes, .km-eyes .ke2-eye, .km-glow, .km-core, .km-ring, .km-card, .km-mic.live, .km-caption { animation: none !important; }
 }

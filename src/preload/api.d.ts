@@ -29,7 +29,7 @@ export type PresenceCommand =
   | { type: 'listen_result'; reason: string }
   | { type: 'announce'; text: string }
   | { type: 'voice_listen'; id: string }
-  | { type: 'voice_say'; id: string; text: string }
+  | { type: 'voice_say'; id: string; text: string; queue?: boolean }
   | { type: 'voice_cancel' };
 
 export interface KeoBridge {

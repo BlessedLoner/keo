@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from 'react';
 import { levelBus } from '../lib/levelBus';
-import keoArt from '../assets/keo.webp';
+import keoArt from '../assets/keo-portrait.jpg';
 
 export type EmblemState =
   | 'idle'
@@ -123,7 +123,7 @@ export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
 
       {/* Keo's portrait in the inner disc (the character art), with a soft rim for depth */}
       <circle cx="100" cy="98" r="72" fill="#0a0a0c" />
-      <image className="ke-portrait" href={keoArt} x="-58" y="-25" width="322" height="423" preserveAspectRatio="none" clipPath={`url(#${id('disc')})`} />
+      <image className="ke-portrait" href={keoArt} x="-10" y="-5" width="226" height="300" preserveAspectRatio="none" clipPath={`url(#${id('disc')})`} />
       <circle cx="100" cy="98" r="72" fill={`url(#${id('vignette')})`} />
       <circle className="ke-rim" cx="100" cy="98" r="72" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.55" strokeWidth="1.4" />
       <g className="ke-scan" clipPath={`url(#${id('disc')})`}>

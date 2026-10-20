@@ -102,6 +102,8 @@ export interface ProductCard {
   image: string | null;
   /** Where the picture came from (the page's own product image), for saving it full size. */
   imageUrl?: string | null;
+  /** 'page': the product page's own picture; 'wikipedia': the matching Wikipedia article's picture. */
+  imageFrom?: 'page' | 'wikipedia' | null;
   fit: string | null;
   pros: string[];
   cons: string[];

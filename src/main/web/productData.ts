@@ -93,3 +93,46 @@ export function extractProduct(html: string, baseUrl: string): PageProduct {
   for (const k of Object.keys(out) as Array<keyof PageProduct>) if (out[k] === undefined) delete out[k];
   return out;
 }
+
+const NOT_A_PRODUCT_PICTURE = /logo|icon|sprite|avatar|badge|pixel|spacer|blank|placeholder|favicon|flag|rating|star|arrow|banner-ad|tracking|1x1|\.svg(\?|$)|\.gif(\?|$)/i;
+
+/**
+ * All pictures a page offers for its product, best first: its declared product picture (JSON-LD,
+ * Open Graph, Twitter, itemprop, image_src), then <img> pictures whose description mentions the
+ * product, then other large pictures. Logos, icons and tracking pixels are skipped.
+ */
+export function imageCandidates(html: string, baseUrl: string, productName?: string): string[] {
+  const out: string[] = [];
+  const add = (u: string | undefined) => {
+    const a = absolute(u?.trim(), baseUrl);
+    if (a && !NOT_A_PRODUCT_PICTURE.test(a) && !out.includes(a)) out.push(a);
+  };
+  const p = extractProduct(html, baseUrl);
+  add(p.image);
+  for (const k of ['og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src', 'image']) add(meta(html, k));
+  add(/<link\b[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i.exec(html)?.[1]);
+  const words = (productName ?? p.name ?? '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3);
+  const imgs: Array<{ url: string; score: number }> = [];
+  for (const m of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    const attr = (n: string) => new RegExp(`\\b${n}=["']([^"']+)["']`, 'i').exec(tag)?.[1];
+    const srcset = attr('srcset') ?? attr('data-srcset');
+    // The largest picture of a srcset ("a.jpg 400w, b.jpg 1200w").
+    const fromSet = srcset
+      ?.split(',')
+      .map((x) => x.trim().split(/\s+/))
+      .sort((a, b) => parseInt(b[1] ?? '0', 10) - parseInt(a[1] ?? '0', 10))[0]?.[0];
+    const url = attr('data-src') ?? attr('data-lazy-src') ?? attr('data-original') ?? fromSet ?? attr('src');
+    if (!url || url.startsWith('data:')) continue;
+    const alt = (attr('alt') ?? attr('title') ?? '').toLowerCase();
+    const width = parseInt(attr('width') ?? '0', 10);
+    const hits = words.filter((w) => alt.includes(w)).length;
+    if (!hits && width && width < 200) continue;
+    imgs.push({ url, score: hits * 10 + (width >= 400 ? 3 : 0) + (fromSet ? 1 : 0) });
+  }
+  for (const i of imgs.sort((a, b) => b.score - a.score).slice(0, 12)) add(i.url);
+  return out.slice(0, 10);
+}

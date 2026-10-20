@@ -147,7 +147,7 @@ describe('research results', () => {
     expect(opened).toEqual([folder]);
   });
 
-  it('Send puts the comparison picture with the prices and links in the named chat, and finds it there', async () => {
+  it('Send puts the prices and links, then the comparison picture, in the named chat, and finds both there', async () => {
     harness();
     h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] } });
     const wa = new FakeWhatsApp();
@@ -161,13 +161,17 @@ describe('research results', () => {
     expect(wa.sentFiles).toHaveLength(1);
     expect(wa.sentFiles[0]!.to).toBe('Mum');
     expect(wa.sentFiles[0]!.file).toMatch(/\.png$/);
-    expect(wa.sentFiles[0]!.caption).toContain('Here you go');
-    expect(wa.sentFiles[0]!.caption).toContain('https://shop.example.com/pro');
+    // The text went first as its own message (no caption box involved).
+    expect(wa.sent).toHaveLength(1);
+    expect(wa.sent[0]!.to).toBe('Mum');
+    expect(wa.sent[0]!.text).toContain('Here you go');
+    expect(wa.sent[0]!.text).toContain('https://shop.example.com/pro');
+    expect(wa.sentFiles[0]!.caption).toBe('');
     expect(rendered.map((x) => x.kind)).toEqual(['png']);
     expect(rendered[0]!.html).not.toContain('href=');
   });
 
-  it('when the preview refuses the caption, the picture goes first and the text right after it', async () => {
+  it('a preview that refuses captions does not matter: the text goes as its own message first', async () => {
     harness();
     h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] } });
     const wa = new FakeWhatsApp();
@@ -180,12 +184,12 @@ describe('research results', () => {
     expect(out.error).toBeNull();
     expect(out.ok).toBe(true);
     expect(wa.sentFiles).toHaveLength(1);
-    expect(wa.sentFiles[0]!.caption).toBe(''); // the preview took nothing…
+    expect(wa.sentFiles[0]!.caption).toBe('');
     const mum = wa.chats.find((c) => c.title === 'Mum')!;
     const text = mum.messages.slice(-8).filter((m) => m.from === 'me').map((m) => m.text).join('\n');
-    expect(text).toContain('Here you go'); // …so the text followed as the next message
+    expect(text).toContain('Here you go');
     expect(text).toContain('https://shop.example.com/pro');
-    expect(out.detail).toMatch(/as the next message/);
+    expect(out.detail).toMatch(/prices and links, then the comparison picture/);
   });
 
   it('the results window can only reach its own channels', () => {
@@ -236,8 +240,8 @@ describe('sending a research result by voice or chat', () => {
     expect(refusal).toMatch(/repeats the research result/);
     expect(wa.sentFiles).toHaveLength(1);
     expect(wa.sentFiles[0]!.file).toMatch(/\.png$/);
-    expect(wa.sentFiles[0]!.caption).toContain('https://shop.example.com/air');
-    // No plain text message was sent.
+    expect(wa.sent.map((m) => m.text).join(' ')).toContain('https://shop.example.com/air');
+    // The model's own text-only copy was refused (the result's send carries the text itself).
     expect(h.services.tasks.list(5).flatMap((t) => t.steps).filter((st) => st.capabilityId === 'whatsapp.send_message' && st.state === 'succeeded')).toEqual([]);
   });
 

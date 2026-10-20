@@ -170,7 +170,11 @@ async function selectAll(d: CapabilityDeps, target: TargetT): Promise<void> {
   await d.desktop.backend.keys(target.hwnd, [0x11], 0x41).catch(ignoreBlocked);
 }
 
-async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string): Promise<'value' | 'paste' | 'click+paste'> {
+/**
+ * `clearFirst`: empty the field through accessibility instead of Ctrl+A. In WhatsApp, Ctrl+A with the
+ * keyboard outside the field selects the whole page, so WhatsApp steps never use it.
+ */
+async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string, clearFirst = false): Promise<'value' | 'paste' | 'click+paste'> {
   try {
     await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'set_value', text);
     return 'value';
@@ -187,7 +191,8 @@ async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, t
     method = 'click+paste';
   }
   await sleep(d.focusSettleMs === 0 ? 0 : 150);
-  await selectAll(d, target);
+  if (clearFirst) await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'set_value', '').catch(() => undefined);
+  else await selectAll(d, target);
   await pasteViaClipboard(d, target.hwnd, text);
   return method;
 }
@@ -197,8 +202,8 @@ async function enterText(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, t
  * accept an accessibility value without noticing, or a browser hands focus elsewhere right after
  * activation), clicks the field and pastes it for real. Returns whether the read-back matched.
  */
-async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string): Promise<boolean> {
-  await enterText(d, target, node, text);
+async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string, clearFirst = false): Promise<boolean> {
+  await enterText(d, target, node, text, clearFirst);
   await sleep(d.focusSettleMs === 0 ? 0 : 250);
   const has = async () => {
     const now = await d.desktop.backend.uiaDescribe(target.hwnd, node.rid).catch(() => null);
@@ -209,7 +214,8 @@ async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNod
   const c = await centerOf(d, target, node);
   await d.desktop.backend.clickScreen(target.hwnd, c.x, c.y);
   await sleep(d.focusSettleMs === 0 ? 0 : 150);
-  await selectAll(d, target);
+  if (clearFirst) await d.desktop.backend.uiaAct(target.hwnd, node.rid, 'set_value', '').catch(() => undefined);
+  else await selectAll(d, target);
   await pasteViaClipboard(d, target.hwnd, text);
   await sleep(d.focusSettleMs === 0 ? 0 : 250);
   return (await has()) !== false;
@@ -271,7 +277,7 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   const searchNode = view.search;
   // Your own chat is listed as "Name (You)", but WhatsApp's search finds it by the name alone.
   const query = contact.replace(/\s*\(you\)\s*$/i, '').trim() || contact;
-  await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, query));
+  await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, query, true));
   if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
   // Wait only until the results show the contact (not a fixed pause).
   view = await viewUntil(d, target, (v) => v.chats.some((c) => sameChat(c.title, contact)), 2500, signal);
@@ -631,7 +637,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   // The newest message of mine before sending: the sent one must be a newer row.
   const lastBefore = lastOutgoing(view)?.row?.rid ?? null;
   await refront(d, target);
-  const took = await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text));
+  const took = await step('typing the message into the message box', () => enterTextChecked(d, target, compose, text, true));
   if (!took) {
     // Last way in: clear the box and type straight into it (posted to it when simulated input is refused).
     await d.desktop.backend.uiaAct(target.hwnd, compose.rid, 'set_value', '').catch(() => undefined);

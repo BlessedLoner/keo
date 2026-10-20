@@ -1,4 +1,4 @@
-import { extractProduct, type PageProduct } from './productData';
+import { extractProduct, imageCandidates, type PageProduct } from './productData';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { CapabilityError } from '../capabilities/types';
@@ -30,6 +30,8 @@ export interface VisitedPage {
   fetchedAt: string;
   text: string;
   product: PageProduct;
+  /** Pictures the page offers for its product, best first. */
+  images?: string[];
 }
 
 type FetchImpl = typeof fetch;
@@ -177,7 +179,8 @@ export class WebService {
     this.log.info('web.fetch', { host: current.host, chars: text.length, truncated });
     const product = isHtml ? extractProduct(raw, current.toString()) : {};
     const fetchedAt = new Date().toISOString();
-    this.remember({ finalUrl: current.toString(), title, fetchedAt, text: text.slice(0, 60_000), product }, rawUrl);
+    const images = isHtml ? imageCandidates(raw, current.toString()) : [];
+    this.remember({ finalUrl: current.toString(), title, fetchedAt, text: text.slice(0, 60_000), product, images }, rawUrl);
     return { url: rawUrl, finalUrl: current.toString(), title, text, truncated, contentType: contentType.split(';')[0] ?? '', fetchedAt, ...(Object.keys(product).length ? { product } : {}) };
   }
 
@@ -205,17 +208,38 @@ export class WebService {
     try {
       // Redirects are followed by hand so every hop is checked to be public (no private-network access).
       let cur = u;
-      let res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers: { 'User-Agent': USER_AGENT, Accept: 'image/png,image/jpeg,image/*;q=0.8' } });
+      const headers = { 'User-Agent': USER_AGENT, Accept: 'image/jpeg,image/png;q=0.9' };
+      let res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers });
       for (let hop = 0; hop < 3 && res.status >= 300 && res.status < 400; hop++) {
         const loc = res.headers.get('location');
         if (!loc) return null;
         cur = await this.assertPublicUrl(new URL(loc, cur).toString());
-        res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers: { 'User-Agent': USER_AGENT, Accept: 'image/png,image/jpeg,image/*;q=0.8' } });
+        res = await this.fetchImpl(cur, { redirect: 'manual', signal, headers });
       }
       const type = (res.headers.get('content-type') ?? '').toLowerCase().split(';')[0] ?? '';
-      if (!res.ok || !/^image\/(png|jpe?g)$/.test(type)) return null;
-      const { truncatedBytes, bytes } = await readCappedBytes(res, 3_000_000);
+      // PNG and JPEG are opened directly; WebP, AVIF and GIF are converted to PNG by Keo's own window.
+      if (!res.ok || !/^image\/(png|jpe?g|webp|avif|gif)$/.test(type)) return null;
+      const { truncatedBytes, bytes } = await readCappedBytes(res, 6_000_000);
       return truncatedBytes ? null : { bytes, contentType: type };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The main picture of the Wikipedia article that best matches a product name (Wikipedia's own
+   * API; for cards whose page offers no usable picture). Returns its address and the article.
+   */
+  async wikipediaImage(name: string, signal: AbortSignal): Promise<{ url: string; article: string } | null> {
+    const q = new URL('https://en.wikipedia.org/w/api.php');
+    for (const [k, v] of Object.entries({ action: 'query', format: 'json', generator: 'search', gsrsearch: name.slice(0, 200), gsrlimit: '3', prop: 'pageimages', piprop: 'thumbnail', pithumbsize: '800', origin: '*' })) q.searchParams.set(k, v);
+    try {
+      const res = await this.fetchImpl(q, { signal, headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+      if (!res.ok) return null;
+      const j = (await res.json()) as { query?: { pages?: Record<string, { title?: string; index?: number; thumbnail?: { source?: string } }> } };
+      const pages = Object.values(j.query?.pages ?? {}).sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
+      const hit = pages.find((p) => p.thumbnail?.source && !/\.svg/i.test(p.thumbnail.source));
+      return hit?.thumbnail?.source ? { url: hit.thumbnail.source, article: hit.title ?? '' } : null;
     } catch {
       return null;
     }
