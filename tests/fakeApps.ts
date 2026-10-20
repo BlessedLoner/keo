@@ -140,6 +140,8 @@ export class FakeWhatsApp implements FakeUiaApp {
   captionRefuses = false;
   /** Shows a message of several lines as one row per line (as the WhatsApp app does). */
   rowPerLine = false;
+  /** Reports only the last paragraph of the message box (as on some PCs). */
+  valueLastParagraph = false;
   focused: 'search' | 'compose' | null = null;
   /** A pasted file waiting in WhatsApp's attachment preview (caption box + Send). */
   attachment: { name: string; caption: string } | null = null;
@@ -218,7 +220,7 @@ export class FakeWhatsApp implements FakeUiaApp {
         );
       } else {
         s.push(
-          { key: 'compose', parentKey: 'root', role: 'edit', name: this.composeName, x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.compose },
+          { key: 'compose', parentKey: 'root', role: 'edit', name: this.composeName, x: 420, y: 740, w: 680, h: 40, patterns: ['value'], value: this.valueLastParagraph ? (this.compose.split(/\r?\n\s*\r?\n/).at(-1) ?? '') : this.compose },
           { key: 'send', parentKey: 'root', role: 'button', name: 'Send', x: 1120, y: 740, w: 50, h: 40, patterns: ['invoke'] },
         );
       }

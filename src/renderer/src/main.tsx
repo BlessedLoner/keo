@@ -6,6 +6,7 @@ import { CompanionApp } from './presence/CompanionApp';
 import { ResultsApp } from './presence/ResultsApp';
 import { PencilApp } from './presence/PencilApp';
 import { KeoModeApp } from './presence/KeoModeApp';
+import { MarksApp } from './presence/MarksApp';
 import { UiProvider } from './components/ui';
 import { invoke, subscribe } from './lib/api';
 import { AppStateProvider } from './state/AppState';
@@ -38,6 +39,8 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <PencilApp />
       ) : route === '#keomode' ? (
         <KeoModeApp />
+      ) : route === '#marks' ? (
+        <MarksApp />
       ) : (
         <AppStateProvider>
           <App />

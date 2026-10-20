@@ -176,6 +176,7 @@ export const invokeSchemas = {
   'commandBar:show': empty,
   'pencil:start': empty,
   'keomode:open': empty,
+  'marks:get': empty,
   'keomode:close': empty,
   'pencil:context': empty,
   'pencil:submit': z
@@ -316,6 +317,7 @@ export interface InvokeOutputs {
   'commandBar:show': { ok: true };
   'pencil:start': { ok: boolean; error: string | null };
   'keomode:open': { ok: true };
+  'marks:get': { marks: Array<{ shape: 'circle' | 'box' | 'arrow' | 'underline' | 'label'; x: number; y: number; w?: number; h?: number; fromX?: number; fromY?: number; label?: string }>; seconds: number } | null;
   'keomode:close': { ok: true };
   'pencil:context': { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null } | null;
   'pencil:submit': { ok: boolean; error: string | null };

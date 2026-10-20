@@ -5,7 +5,7 @@ import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { meaningfulNodes } from '../desktop/backend';
 import { compactNodes, isCriticalControl, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, holdsText, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -207,7 +207,7 @@ async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNod
   await sleep(d.focusSettleMs === 0 ? 0 : 250);
   const has = async () => {
     const now = await d.desktop.backend.uiaDescribe(target.hwnd, node.rid).catch(() => null);
-    return now?.value === undefined ? null : textMatches(now.value ?? '', text);
+    return now?.value === undefined ? null : holdsText(now.value ?? '', text);
   };
   if ((await has()) !== false) return true;
   await sleep(d.focusSettleMs === 0 ? 0 : 400);
@@ -654,8 +654,10 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   if (!openChatIs(view, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
   const draft = view.compose ? await d.desktop.backend.uiaDescribe(target.hwnd, view.compose.rid).catch(() => null) : null;
   const draftText = draft?.value ?? draft?.name ?? '';
-  if (draft?.value !== undefined && !textMatches(draftText, text)) {
-    throw new CapabilityError('draft_mismatch', 'The message box does not contain the approved text. Nothing was sent.', { dispatched: 'no' });
+  if (draft?.value !== undefined && !holdsText(draftText, text)) {
+    // Never leave a half-made draft behind.
+    if (view.compose) await d.desktop.backend.uiaAct(target.hwnd, view.compose.rid, 'set_value', '').catch(() => undefined);
+    throw new CapabilityError('draft_mismatch', 'WhatsApp’s message box did not hold the approved text, so Keo cleared it and sent nothing.', { dispatched: 'no' });
   }
   if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled before sending. Nothing was sent.', { dispatched: 'no' });
   if (view.send) {
@@ -668,7 +670,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   const arrived = (v: WaView) => {
     const o = lastOutgoing(v);
     if (!o) return false;
-    if (textMatches(o.text, text)) return true;
+    if (holdsText(o.text, text) && (lines.length < 2 || (o.row?.rid ?? null) !== lastBefore || textMatches(o.text, text))) return true;
     if (lines.length < 2 || (o.row?.rid ?? null) === lastBefore) return false;
     const recent = v.messages.filter((m) => m.from === 'me').slice(-(lines.length + 4)).map((m) => m.text).join(' ');
     return textMatches(recent, lines[0]!) && textMatches(recent, lines.at(-1)!);

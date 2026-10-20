@@ -107,6 +107,13 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.9.0: WhatsApp text check, pencil over videos, Keo points things out on screen
+
+- **WhatsApp** (user's laptop): “The message box does not contain the approved text” — the text was in the box, but WhatsApp there reports the box differently (e.g. only its current paragraph). Keo now compares letters and digits only and accepts a box that holds a solid part of the approved text and nothing else (Keo clears the box first and only ever puts the approved text in it); a box that really differs is cleared and nothing is sent. Reproduced with a fake box that reports only its last paragraph: fails without the fix (the user's exact error), passes with it.
+- **Pencil over videos**: a full-screen transparent window makes Chrome treat the video as hidden and stop painting it (blank video). The pencil now shows the screen picture it took as a still frame under the drawing layer — nothing goes blank and the video does not move while marking.
+- **Keo points things out**: `screen.look` (the active model looks at the whole screen and answers with 0–1000 positions; screen-content consent required; hands-free may do it) and `screen.point_out` (circles, boxes, arrows, underlines and numbered notes drawn one after another, then faded; display-only, click-through, never focused, sized to the marked area so videos keep playing). The prompt tells Keo to point at things on the pencil's whole-screen picture or after looking, while explaining.
+- Tests: `tests/screen.test.ts`, WhatsApp partial-box test; smoke: marks drawn, click-through, partial window, channel limits, closed.
+
 ### 1.8.0: text and picture on WhatsApp, real product pictures, continuous voice, new Keo art
 
 - **WhatsApp**: research results are sent as the prices-and-links text first (a normal message — the most dependable way on every PC), then the picture on its own (no caption box). WhatsApp steps never press Ctrl+A any more (with the keyboard outside the box it selected the whole page — the “highlighted UI text”); boxes are cleared through accessibility. Live (approved, own chat): text, then picture, both verified.

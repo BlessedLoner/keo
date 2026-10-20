@@ -1,7 +1,7 @@
 import type { InvokeChannel } from '../../shared/ipc';
 
 /** Each Keo window gets only the IPC channels its job needs. */
-export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil' | 'keomode';
+export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil' | 'keomode' | 'marks';
 
 const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'presence:get',
@@ -69,5 +69,7 @@ export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolea
   if (role === 'results') return RESULTS.has(channel);
   if (role === 'pencil') return PENCIL.has(channel);
   if (role === 'keomode') return KEOMODE.has(channel);
+  // Keo's on-screen marks: it can only read the marks it shows.
+  if (role === 'marks') return channel === 'marks:get';
   return (role === 'command' ? COMMAND : COMPANION).has(channel);
 }

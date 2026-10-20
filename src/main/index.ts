@@ -435,6 +435,7 @@ app.whenReady().then(() => {
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
       hideResults: () => presenceWindows?.hideResults(),
+      currentMarks: () => presenceWindows?.currentMarks() ?? null,
       pickWakeModel: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
@@ -474,6 +475,7 @@ app.whenReady().then(() => {
       showPencil: (bounds) => presenceWindows?.showPencil(bounds),
       hidePencil: () => presenceWindows?.hidePencil(),
       showKeoMode: () => presenceWindows?.showKeoMode(),
+      showMarks: (bounds, marks, seconds) => presenceWindows?.showMarks(bounds, marks, seconds),
       hideKeoMode: () => presenceWindows?.hideKeoMode(),
       keoModeOpen: () => !!presenceWindows?.keoMode,
       mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
@@ -767,6 +769,26 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     r.pencilClosed = pw.pencil === null;
   } catch (e) {
     r.pencilError = errorMessage(e);
+  }
+  // Keo's marks on the screen: a click-through window over the marked area only, then gone.
+  try {
+    pw.showMarks(null, [{ shape: 'circle', x: 300, y: 300, w: 80, label: 'Play button' }, { shape: 'arrow', x: 420, y: 360, fromX: 520, fromY: 460, label: 'Then here' }], 6);
+    for (let i = 0; i < 60 && !(pw.marksWin && !pw.marksWin.webContents.isLoading()); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const mw = pw.marksWin;
+    if (mw) {
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+      r.marksRendered = await mw.webContents.executeJavaScript(`document.querySelectorAll('.mk-line').length`);
+      r.marksClickThrough = !mw.isFocusable();
+      const db = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
+      const b = mw.getBounds();
+      r.marksPartial = b.width < db.width && b.height < db.height;
+      r.marksChatSend = await tryCall(mw, 'chat:send', { conversationId: 'x', text: 'x' });
+      if (shots && !app.isPackaged) fs.writeFileSync(path.join(shots, 'marks.png'), (await mw.webContents.capturePage()).toPNG());
+    }
+    pw.hideMarks();
+    r.marksClosed = pw.marksWin === null;
+  } catch (e) {
+    r.marksError = errorMessage(e);
   }
   // Keo mode: the full-screen Keo, its own channels only, closed again (no voice conversation in the smoke run).
   try {

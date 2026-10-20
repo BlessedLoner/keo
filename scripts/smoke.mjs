@@ -94,6 +94,11 @@ check('pencil: may read its screen picture', p.pencilContext === 'ok', p.pencilC
 check('pencil: cannot send chat', p.pencilChatSend === 'forbidden', p.pencilChatSend);
 check('pencil: draw, type and send reaches Keo', p.pencilSent === true, p.pencilSent);
 check('pencil: closes', p.pencilClosed === true, p.pencilClosed);
+check('marks: drawn over the screen', p.marksRendered === 2, p.marksError ?? p.marksRendered);
+check('marks: click-through, never focused', p.marksClickThrough === true, p.marksClickThrough);
+check('marks: cover only the marked area', p.marksPartial === true, p.marksPartial);
+check('marks: cannot send chat', p.marksChatSend === 'forbidden', p.marksChatSend);
+check('marks: gone again', p.marksClosed === true, p.marksClosed);
 check('keo mode: shows Keo', p.keoModeRendered === true, p.keoModeError ?? p.keoModeRendered);
 check('keo mode: may read presence', p.keoModePresence === 'ok', p.keoModePresence);
 check('keo mode: cannot send chat', p.keoModeChatSend === 'forbidden', p.keoModeChatSend);

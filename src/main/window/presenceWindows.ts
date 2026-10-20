@@ -1,3 +1,4 @@
+import type { Mark } from '../capabilities/screen';
 import { BrowserWindow, globalShortcut, screen, type Rectangle } from 'electron';
 import path from 'node:path';
 import type { Logger } from '../logging/logger';
@@ -259,13 +260,111 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | 'marks' | null {
+    if (this.marksWin && !this.marksWin.isDestroyed() && this.marksWin.webContents.id === id) return 'marks';
     if (this.keoMode && !this.keoMode.isDestroyed() && this.keoMode.webContents.id === id) return 'keomode';
     if (this.pencil && !this.pencil.isDestroyed() && this.pencil.webContents.id === id) return 'pencil';
     if (this.companion && !this.companion.isDestroyed() && this.companion.webContents.id === id) return 'companion';
     if (this.command && !this.command.isDestroyed() && this.command.webContents.id === id) return 'command';
     if (this.results && !this.results.isDestroyed() && this.results.webContents.id === id) return 'results';
     return null;
+  }
+
+  // ---------------------------------------------------------------- Keo's marks on the screen
+  marksWin: BrowserWindow | null = null;
+  private marksNow: { marks: Mark[]; seconds: number } | null = null;
+  private marksTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Shows Keo's marks over the screen: a click-through, never-focused window sized to the marked
+   * area only (a window covering a whole video would make the browser pause painting it). The marks
+   * use 0–1000 coordinates of `bounds` (the display Keo saw) and are sent in the window's own pixels.
+   */
+  showMarks(bounds: { x: number; y: number; width: number; height: number } | null, marks: Mark[], seconds: number): void {
+    this.hideMarks();
+    const d = bounds ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
+    const px = (v: number) => (v / 1000) * d.width;
+    const py = (v: number) => (v / 1000) * d.height;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    const take = (x: number, y: number) => {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    };
+    for (const m of marks) {
+      const w = px(m.w ?? (m.shape === 'circle' ? 80 : 0));
+      const h = py(m.h ?? (m.shape === 'circle' ? (m.w ?? 80) : 0));
+      if (m.shape === 'circle' || m.shape === 'label') {
+        take(px(m.x) - w / 2, py(m.y) - h / 2);
+        take(px(m.x) + w / 2, py(m.y) + h / 2);
+      } else {
+        take(px(m.x), py(m.y));
+        take(px(m.x) + w, py(m.y) + h);
+      }
+      if (m.shape === 'arrow') take(px(m.fromX ?? m.x - 80), py(m.fromY ?? m.y - 80));
+      if (m.label) take(px(m.x) + 260, py(m.y) + 40);
+    }
+    const pad = 70;
+    const bx = Math.max(0, Math.floor(x0 - pad));
+    const by = Math.max(0, Math.floor(y0 - pad));
+    const bw = Math.min(d.width, Math.ceil(x1 + pad)) - bx;
+    const bh = Math.min(d.height, Math.ceil(y1 + pad)) - by;
+    if (bw < 10 || bh < 10) return;
+    // In the window's own pixels.
+    const local = marks.map((m) => ({
+      ...m,
+      x: px(m.x) - bx,
+      y: py(m.y) - by,
+      ...(m.w !== undefined ? { w: px(m.w) } : {}),
+      ...(m.h !== undefined ? { h: py(m.h) } : {}),
+      ...(m.fromX !== undefined ? { fromX: px(m.fromX) - bx } : {}),
+      ...(m.fromY !== undefined ? { fromY: py(m.fromY) - by } : {}),
+    }));
+    this.marksNow = { marks: local, seconds };
+    const win = new BrowserWindow({
+      x: d.x + bx,
+      y: d.y + by,
+      width: bw,
+      height: bh,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      show: false,
+      alwaysOnTop: true,
+      backgroundColor: '#00000000',
+      webPreferences: webPreferences(this.preload),
+    });
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setIgnoreMouseEvents(true);
+    win.on('closed', () => {
+      if (this.marksWin === win) this.marksWin = null;
+    });
+    void win.loadURL(this.url('#marks'));
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) win.showInactive();
+    });
+    this.marksWin = win;
+    this.marksTimer = setTimeout(() => this.hideMarks(), seconds * 1000 + 700);
+  }
+
+  currentMarks(): { marks: Mark[]; seconds: number } | null {
+    return this.marksNow;
+  }
+
+  hideMarks(): void {
+    if (this.marksTimer) clearTimeout(this.marksTimer);
+    this.marksTimer = null;
+    const w = this.marksWin;
+    this.marksWin = null;
+    if (w && !w.isDestroyed()) w.destroy();
   }
 
   // ---------------------------------------------------------------- Keo mode
@@ -454,6 +553,7 @@ export class PresenceWindows {
     this.pencil = null;
     this.keoMode?.destroy();
     this.keoMode = null;
+    this.hideMarks();
     this.companion = null;
     this.command = null;
     this.results = null;

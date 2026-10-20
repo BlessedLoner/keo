@@ -274,6 +274,26 @@ export function lastOutgoing(view: WaView): WaMessage | null {
   return null;
 }
 
+/**
+ * Whether a message box (or a sent message) holds the given text. Letters and digits only: WhatsApp
+ * may report the lines of a message run together, without the line breaks or spaces between them,
+ * and may change punctuation (links, bullets, *bold*). A small tail may differ (a link turned into a
+ * preview); anything else missing or different does not match.
+ */
+export function holdsText(box: string, text: string): boolean {
+  const sq = (s: string) => normName(s).replace(/\s+/g, '');
+  const a = sq(box);
+  const b = sq(text);
+  if (!b.length) return false;
+  if (a.includes(b)) return true;
+  // Some versions report only part of a long box (its current paragraph): a solid part of the
+  // approved text — and nothing else — still is the approved text (Keo cleared the box first).
+  if (a.length >= 20 && b.includes(a)) return true;
+  let k = 0;
+  while (k < a.length && k < b.length && a[k] === b[k]) k++;
+  return b.length >= 40 && k >= b.length * 0.95;
+}
+
 export function textMatches(haystack: string, needle: string): boolean {
   const a = normName(haystack);
   const b = normName(needle);

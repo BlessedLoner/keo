@@ -142,6 +142,9 @@ export function PencilApp() {
 
   return (
     <div className="pencil-stage" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+      {/* The screen as it was when the pencil opened: a still frame, so videos neither go blank nor move. */}
+      {ctx && <img className="pencil-shot" src={ctx.image} alt="" draggable={false} />}
+      <div className="pencil-tint" aria-hidden="true" />
       <canvas ref={canvas} className="pencil-canvas" />
       <div className="pencil-frame" aria-hidden="true" />
       {ctx?.consentNeeded && (

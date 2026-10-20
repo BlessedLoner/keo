@@ -41,6 +41,8 @@ export interface HostHooks {
   hideCommandBar?(): void;
   hideCompanion?(): void;
   hideResults?(): void;
+  /** The marks the on-screen drawing window shows (in its own pixels). */
+  currentMarks?(): { marks: Array<{ shape: 'circle' | 'box' | 'arrow' | 'underline' | 'label'; x: number; y: number; w?: number; h?: number; fromX?: number; fromY?: number; label?: string }>; seconds: number } | null;
   setCompanionInteractive?(interactive: boolean): void;
   companionDrag?(phase: 'start' | 'end'): void;
   shortcutStatus?(): { accelerator: string; enabled: boolean; registered: boolean; error: string | null };
@@ -481,6 +483,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { ok: true as const };
     },
     'pencil:start': () => s.startPencil(),
+    'marks:get': () => host.currentMarks?.() ?? null,
     'keomode:open': () => {
       s.openKeoMode();
       return { ok: true as const };

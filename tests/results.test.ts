@@ -192,6 +192,22 @@ describe('research results', () => {
     expect(out.detail).toMatch(/prices and links, then the comparison picture/);
   });
 
+  it('a message box that reports only its last paragraph still sends the text, then the picture', async () => {
+    harness();
+    h.services.settings.update({ permissions: { observationEnabled: true, desktopControlEnabled: true, allowedApps: [{ processName: 'chrome', label: 'Chrome' }] } });
+    const wa = new FakeWhatsApp();
+    wa.valueLastParagraph = true;
+    h.desktop.addApp({ hwnd: '4001', pid: 888, processName: 'chrome', title: 'WhatsApp - Google Chrome', className: 'X', minimized: false, x: 0, y: 0, width: 1200, height: 800, foreground: false }, wa);
+    const r = addResult();
+    const handlers = createHandlers(h.services, { appInfo: () => ({}) as never, openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const out = await handlers['results:send']({ id: r.id, contact: 'Mum', which: 'web' });
+    expect(out.error).toBeNull();
+    expect(out.ok).toBe(true);
+    expect(wa.sent).toHaveLength(1);
+    expect(wa.sent[0]!.text).toContain('https://shop.example.com/pro');
+    expect(wa.sentFiles).toHaveLength(1);
+  });
+
   it('the results window can only reach its own channels', () => {
     for (const c of ['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl'] as const) expect(channelAllowed('results', c)).toBe(true);
     for (const c of ['settings:update', 'tasks:approveStep', 'chat:send', 'web:setKey', 'files:read'] as const) expect(channelAllowed('results', c as never)).toBe(false);
