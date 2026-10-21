@@ -107,6 +107,10 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### 1.10.0: smart routing
+
+- Optional (off by default; Settings → Providers): Keo picks the model per message — a fast model for voice, small talk and quick questions, the strong model for pictures, code, research, analysis, planning, multi-step and long typed requests (a local rule, no extra model call). Both models are the user's choice; each reply shows which one answered. With the setting off nothing changes. Tests: `tests/routing.test.ts`.
+
 ### 1.9.0: WhatsApp text check, pencil over videos, Keo points things out on screen
 
 - **WhatsApp** (user's laptop): “The message box does not contain the approved text” — the text was in the box, but WhatsApp there reports the box differently (e.g. only its current paragraph). Keo now compares letters and digits only and accepts a box that holds a solid part of the approved text and nothing else (Keo clears the box first and only ever puts the approved text in it); a box that really differs is cleared and nothing is sent. Reproduced with a fake box that reports only its last paragraph: fails without the fix (the user's exact error), passes with it.

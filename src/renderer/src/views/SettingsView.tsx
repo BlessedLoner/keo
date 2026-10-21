@@ -88,7 +88,73 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
       {list.map((p) => (
         <ProviderCard key={p.id} p={p} active={s.activeProvider === p.id} s={s} patch={patch} />
       ))}
+      <SmartRouting s={s} patch={patch} list={list} />
     </>
+  );
+}
+
+function SmartRouting({ s, patch, list }: { s: Settings; patch: Patch; list: ProviderInfo[] }) {
+  const r = s.routing;
+  return (
+    <section className="card" aria-label="Smart routing">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Smart routing</h2>
+        {r.enabled && <span className="chip accent">On</span>}
+      </div>
+      <p className="muted small">
+        Keo picks the model for each message itself, without an extra model call: the fast model for voice conversations, small talk and quick questions, the strong model for complex work (multi-step tasks, research, coding, planning, long requests). Each reply shows which model answered.
+      </p>
+      <div className="field">
+        <Toggle checked={r.enabled} onChange={(v) => void patch({ routing: { enabled: v } })} label="Choose the model automatically for each message" />
+      </div>
+      {r.enabled && (
+        <div className="grid-2">
+          <RouteSide side="fast" title="Fast model" s={s} patch={patch} list={list} />
+          <RouteSide side="strong" title="Strong model" s={s} patch={patch} list={list} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RouteSide({ side, title, s, patch, list }: { side: 'fast' | 'strong'; title: string; s: Settings; patch: Patch; list: ProviderInfo[] }) {
+  const t = s.routing[side];
+  const set = (v: Record<string, unknown>) => void patch({ routing: { [side]: v } });
+  const p = list.find((x) => x.id === (t.provider ?? s.activeProvider));
+  return (
+    <div className="field">
+      <label htmlFor={`route-${side}-provider`}>{title}</label>
+      <select id={`route-${side}-provider`} className="select" value={t.provider ?? ''} onChange={(e) => set({ provider: e.target.value || null, model: '' })}>
+        <option value="">Active provider</option>
+        {list.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.label}
+            {x.status.kind !== 'ready' ? ' (needs setup)' : ''}
+          </option>
+        ))}
+      </select>
+      {p?.id === 'anthropic' ? (
+        <select aria-label={`${title} id`} className="select" style={{ marginTop: 6 }} value={t.model} onChange={(e) => set({ model: e.target.value })}>
+          <option value="">Provider’s model ({p.selectedModel})</option>
+          {p.models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} ({m.id})
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          key={`${side}-${t.provider ?? 'active'}`}
+          aria-label={`${title} id`}
+          className="input"
+          style={{ marginTop: 6 }}
+          placeholder={p?.selectedModel ? `Provider’s model (${p.selectedModel})` : 'Model id'}
+          defaultValue={t.model}
+          onBlur={(e) => e.target.value.trim() !== t.model && set({ model: e.target.value.trim() })}
+        />
+      )}
+      <span className="hint">{side === 'fast' ? 'Voice, small talk, quick questions.' : 'Multi-step tasks, research, coding, planning.'} If this provider is not set up, Keo uses the active provider.</span>
+    </div>
   );
 }
 

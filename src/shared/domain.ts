@@ -135,6 +135,8 @@ export interface ToolActivity {
 export interface MessageMeta {
   providerId?: ProviderId;
   model?: string;
+  /** Smart routing chose the fast or the strong model for this reply (absent when routing is off). */
+  route?: 'fast' | 'strong';
   usage?: TokenUsage;
   error?: string;
   errorKind?: ProviderErrorKind;

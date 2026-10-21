@@ -15,6 +15,7 @@ import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { SYSTEM_PROMPT } from './systemPrompt';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
+import { chooseRoute, type RouteDecision } from './routing';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
 const UNTRUSTED_OUTPUT = new Set([
@@ -139,12 +140,16 @@ export class AgentService {
   /** Pictures that go with one user message (Keo's pencil): shown to the model in that turn only. */
   private readonly pictures = new Map<string, Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>>();
 
+  /** User messages that were spoken (voice conversation, wake command): smart routing prefers the fast model. */
+  private readonly spoken = new Set<string>();
+
   /** Persists the user message and starts a turn in the background. */
-  send(conversationId: string, text: string, opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }> } = {}): { userMessageId: string; done: Promise<Message> } {
+  send(conversationId: string, text: string, opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>; voice?: boolean } = {}): { userMessageId: string; done: Promise<Message> } {
     if (this.active.has(conversationId)) throw new KeoError('busy', 'Keo is still responding in this conversation. Stop it or wait.');
     const conv = this.conversations.require(conversationId);
     const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
     if (opts.images?.length) this.pictures.set(user.id, opts.images);
+    if (opts.voice) this.spoken.add(user.id);
     if (conv.messageCount === 0 && (conv.title === 'New conversation' || !conv.title.trim())) {
       this.conversations.rename(conversationId, deriveTitle(text));
     }
@@ -155,6 +160,7 @@ export class AgentService {
       handled = `That didn't work: ${errorMessage(e)}`;
     }
     if (handled !== null) {
+      this.spoken.delete(user.id);
       const reply = this.conversations.addMessage({ conversationId, role: 'assistant', content: handled, status: 'complete' });
       return { userMessageId: user.id, done: Promise.resolve(reply) };
     }
@@ -218,6 +224,30 @@ export class AgentService {
     }
   }
 
+  /**
+   * The provider and model for this turn. Without smart routing: the active
+   * provider and its model, as before. With it: the fast or strong side; a side
+   * whose provider is not set up falls back to the active provider.
+   */
+  private pickModel(settings: Settings, sourceMessageId: string, hasImages: boolean, openQuestion: boolean, correlationId: string): { provider: ChatProvider; model: string; route?: RouteDecision } {
+    const voice = this.spoken.delete(sourceMessageId);
+    if (!settings.routing.enabled) {
+      const provider = this.providers.active();
+      return { provider, model: provider.selectedModel() };
+    }
+    const route = chooseRoute({ text: this.conversations.getMessage(sourceMessageId)?.content ?? '', voice, images: hasImages, openQuestion });
+    const target = settings.routing[route.route];
+    if (target.provider) {
+      const p = this.providers.has(target.provider) ? this.providers.get(target.provider) : null;
+      if (p?.status().kind === 'ready') return { provider: p, model: target.model || p.selectedModel(), route };
+      this.log.warn('agent.route_unavailable', { route: route.route, providerId: target.provider }, correlationId);
+      const active = this.providers.active();
+      return { provider: active, model: active.selectedModel(), route };
+    }
+    const active = this.providers.active();
+    return { provider: active, model: target.model || active.selectedModel(), route };
+  }
+
   private async runTurn(conversationId: string, sourceMessageId: string): Promise<Message> {
     this.loadPending();
     const open = this.pending.get(conversationId);
@@ -248,11 +278,15 @@ export class AgentService {
 
     let finalStatus: Message['status'] = 'complete';
     try {
-      const provider = this.providers.active();
-      const model = provider.selectedModel();
-      const info = provider.models().find((m) => m.id === model);
+      // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only.
+      const pics = this.pictures.get(sourceMessageId);
+      this.pictures.delete(sourceMessageId);
+      const { provider, model, route } = this.pickModel(settings, sourceMessageId, !!pics?.length, !!open, correlationId);
+      // A routed model id the provider does not list uses the capabilities declared for that provider.
+      const info = provider.models().find((m) => m.id === model) ?? (route ? provider.models()[0] : undefined);
       meta.providerId = provider.id;
       meta.model = model;
+      if (route) meta.route = route.route;
       const unresolved = this.tasks
         .list(200)
         .filter((t) => t.conversationId === conversationId && !TERMINAL_TASK.has(t.state) && t.state !== 'proposed');
@@ -260,9 +294,6 @@ export class AgentService {
       // The in-flight assistant message is excluded by the builder (status "streaming").
       const messages: NeutralMessage[] = built.messages;
       meta.memoryIds = built.memoryIds;
-      // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only.
-      const pics = this.pictures.get(sourceMessageId);
-      this.pictures.delete(sourceMessageId);
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       if (pics?.length && lastUser) {
         if (info?.capabilities.vision) lastUser.content.push(...pics.map((p) => ({ type: 'image' as const, mediaType: p.mediaType, dataBase64: p.dataBase64 })));
@@ -275,7 +306,7 @@ export class AgentService {
       );
       this.log.info(
         'agent.turn_started',
-        { conversationId, providerId: provider.id, model, tools: tools.length, history: built.stats.historyMessages, dropped: built.stats.droppedMessages, memories: built.memoryIds.length },
+        { conversationId, providerId: provider.id, model, route: route ? `${route.route} (${route.reason})` : null, tools: tools.length, history: built.stats.historyMessages, dropped: built.stats.droppedMessages, memories: built.memoryIds.length },
         correlationId,
       );
       phase('thinking');

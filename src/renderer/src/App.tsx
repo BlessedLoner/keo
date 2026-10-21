@@ -52,13 +52,21 @@ export function App() {
     if (settingsLoaded && !onboarded && ready) void invoke('settings:update', { patch: { ui: { onboarded: true } } }).catch(() => undefined);
   }, [settingsLoaded, onboarded, ready]);
   const showWelcome = settingsLoaded && !onboarded && !ready && !welcomeClosed;
+  const routing = app.settings.data?.routing;
+  const routeName = (side: 'fast' | 'strong') => {
+    const t = routing?.[side];
+    const p = (t?.provider && app.providers.data?.find((x) => x.id === t.provider)) || provider;
+    return `${t?.model || p?.selectedModel || '?'}${p ? ` (${p.label})` : ''}`;
+  };
+  const routingTitle = routing?.enabled ? ` · Smart routing: fast ${routeName('fast')}, strong ${routeName('strong')}` : '';
   const providerChip = !provider ? (
     <button className="chip warn" onClick={() => app.setView('settings')}>
       <span className="dot" /> No model provider configured
     </button>
   ) : provider.status.kind === 'ready' ? (
-    <button className={`chip ${provider.id === 'test' ? 'violet' : 'ok'}`} onClick={() => app.setView('settings')} title={`Requests go to ${provider.destination}`}>
+    <button className={`chip ${provider.id === 'test' ? 'violet' : 'ok'}`} onClick={() => app.setView('settings')} title={`Requests go to ${provider.destination}${routingTitle}`}>
       <span className="dot" /> {provider.id === 'test' ? 'Test provider (not an AI model)' : `${provider.label} · ${provider.selectedModel}`}
+      {routing?.enabled && ' · smart routing'}
     </button>
   ) : (
     <button className="chip warn" onClick={() => app.setView('settings')} title={provider.status.reason}>

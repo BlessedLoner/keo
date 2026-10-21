@@ -366,7 +366,7 @@ function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveTe
       <div className="msg-author">
         <KeoEmblem state={isStreaming ? 'thinking' : m.status === 'error' ? 'error' : 'idle'} size={20} live={false} />
         <span>Keo</span>
-        {m.meta.model && <span className="muted small">· {m.meta.providerId === 'test' ? 'test provider' : m.meta.model}</span>}
+        {m.meta.model && <span className="muted small">· {m.meta.providerId === 'test' ? 'test provider' : m.meta.model}{m.meta.route && ` (${m.meta.route})`}</span>}
       </div>
       {tools.length > 0 && (
         <div className="tool-list">

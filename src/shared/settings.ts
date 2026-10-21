@@ -41,6 +41,14 @@ export const OpenAICompatSettings = z
   })
   .strict();
 
+/** One side of smart routing: a provider and a model id ('' = that provider's own model setting). */
+export const RouteTarget = z
+  .object({
+    provider: z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/@-]*$/, 'Invalid model id').default(''),
+  })
+  .strict();
+
 const Accelerator = z
   .string()
   .trim()
@@ -98,6 +106,19 @@ export const SettingsSchema = z
           contextTokens: 32000,
           maxOutputTokens: 4096,
         }),
+      })
+      .strict()
+      .prefault({}),
+    /**
+     * Smart routing (off by default): Keo picks a model per turn — the fast one
+     * for voice, small talk and quick questions, the strong one for complex work.
+     * A side with no provider uses the active provider.
+     */
+    routing: z
+      .object({
+        enabled: z.boolean().default(false),
+        fast: RouteTarget.prefault({}),
+        strong: RouteTarget.prefault({}),
       })
       .strict()
       .prefault({}),

@@ -425,7 +425,7 @@ export class Services {
       speak: (text, opts) => (d.voiceIo ? d.voiceIo.speak(text) : this.voiceSpeak(text, !!opts?.queue)),
       send: (text) => {
         try {
-          const sent = this.agent.send(this.commandConversation(), text);
+          const sent = this.agent.send(this.commandConversation(), text, { voice: true });
           this.push('conversations:changed', { conversationId: this.commandConversation() });
           return sent;
         } catch {
@@ -965,7 +965,7 @@ export class Services {
     const conversationId = this.commandConversation();
     this.push('presence:command', { type: 'transcript', text: r.text, conversationId });
     try {
-      const sent = this.agent.send(conversationId, r.text);
+      const sent = this.agent.send(conversationId, r.text, { voice: true });
       sent.done.catch((e) => this.log.error('agent.unhandled', { error: String(e) }));
       this.push('conversations:changed', { conversationId });
       return { text: r.text, reason: 'ok', sent: true, conversationId };
