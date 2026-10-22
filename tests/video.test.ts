@@ -385,7 +385,8 @@ describe('video capabilities', () => {
     const s = setup({ ffmpeg: false });
     const st = await run(s, 'video.check_tools', {});
     expect(st.step!.result).toMatchObject({ found: false, message: NO_FFMPEG });
-    expect(NO_FFMPEG).toMatch(/does not download it/);
+    expect(NO_FFMPEG).toMatch(/Set up video tools/);
+    expect(NO_FFMPEG).toMatch(/only when you click it/);
     const r = await run(s, 'video.analyze_template', { templatePath: s.template });
     expect(r.step!.state).toBe('failed');
     expect(r.step!.error).toMatch(/ffmpeg is not installed/);

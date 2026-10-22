@@ -4,6 +4,7 @@ import type {
   SelfTestResult,
   ResearchResultView,
   VideoView,
+  VideoToolsSetup,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -66,6 +67,10 @@ export const invokeSchemas = {
   'video:status': empty,
   'video:pickFfmpeg': empty,
   'video:pickOutput': empty,
+  'video:setupState': empty,
+  'video:setupStart': empty,
+  'video:setupCancel': empty,
+  'video:setupRemove': empty,
   'workflows:list': empty,
   'apps:installed': z.object({ refresh: z.boolean().default(false) }).strict(),
   'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
@@ -263,6 +268,10 @@ export interface InvokeOutputs {
   'video:status': { found: boolean; encoder: string | null; captions: boolean; message: string };
   'video:pickFfmpeg': { path: string | null; ok: boolean; message: string };
   'video:pickOutput': { path: string | null };
+  'video:setupState': VideoToolsSetup;
+  'video:setupStart': VideoToolsSetup;
+  'video:setupCancel': VideoToolsSetup;
+  'video:setupRemove': VideoToolsSetup;
   'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
   'workflows:saveFromTask': { id: string; name: string };
   'workflows:delete': { deleted: boolean };

@@ -577,6 +577,19 @@ export interface SelfTestResult {
   advice: string | null;
 }
 
+/** "Set up video tools": Keo's own ffmpeg download, as Settings → Video shows it. */
+export interface VideoToolsSetup {
+  phase: 'idle' | 'downloading' | 'checking' | 'unpacking' | 'done' | 'failed' | 'cancelled';
+  receivedBytes: number;
+  totalBytes: number;
+  message: string;
+  /** A part of the download is kept, so the next try continues from there. */
+  canResume: boolean;
+  /** Keo's own copy, when there is one. */
+  installed: { version: string; dir: string } | null;
+  build: { version: string; sizeBytes: number; publisher: string; licence: string; sourceUrl: string; buildUrl: string };
+}
+
 /** A video project as Keo's preview window shows it. */
 export interface VideoView {
   id: string;

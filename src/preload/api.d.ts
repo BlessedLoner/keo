@@ -1,4 +1,4 @@
-import type { AgentEvent, LiveChatSession, NavigationGrant, Presence, UpdateDownload } from '../shared/domain';
+import type { AgentEvent, LiveChatSession, NavigationGrant, Presence, UpdateDownload, VideoToolsSetup } from '../shared/domain';
 import type { InvokeChannel, InvokeInput, InvokeOutputs, IpcResult, PushChannel } from '../shared/ipc';
 
 export interface PushPayloads {
@@ -16,6 +16,7 @@ export interface PushPayloads {
   'update:changed': UpdateDownload;
   'results:changed': { id: string };
   'video:changed': { id: string };
+  'video:setupChanged': VideoToolsSetup;
 }
 
 /** Instructions from the main process to a window (never from page content). */

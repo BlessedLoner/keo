@@ -95,6 +95,7 @@ check('video window: cannot read memory', p.videoMemoryList === 'forbidden', p.v
 check('video window: cannot send chat', p.videoChatSend === 'forbidden', p.videoChatSend);
 check('video window: cannot change settings', p.videoSettingsUpdate === 'forbidden', p.videoSettingsUpdate);
 check('video window: cannot choose ffmpeg', p.videoPickFfmpeg === 'forbidden', p.videoPickFfmpeg);
+check('video window: cannot start the ffmpeg download', p.videoSetupStart === 'forbidden', p.videoSetupStart);
 check('video window: closes', p.videoClosed === true, p.videoClosed);
 if (p.liveSend) console.log('LIVE send from the results window:', JSON.stringify(p.liveSend), 'window back:', p.liveResultsBack);
 check('pencil: opens over the screen', p.pencilStarted === true && p.pencilRendered === true, p.pencilError ?? p.pencilStarted);

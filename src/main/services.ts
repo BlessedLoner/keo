@@ -16,6 +16,7 @@ import { screenCapabilities, type Mark } from './capabilities/screen';
 import { videoCapabilities } from './capabilities/video';
 import { VideoStudio } from './video/studio';
 import { locateFfmpeg, ProcessRunner, type FfmpegRunner } from './video/ffmpeg';
+import { FfmpegSetup } from './video/setup';
 import { parseDirection, type Word } from './video/recipe';
 import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
@@ -94,6 +95,8 @@ export interface ServiceDeps {
   launchTestWindow?: (title: string) => TestWindow;
   /** ffmpeg for video editing (tests inject a fake; the app finds the real one from settings or PATH). */
   videoRunner?: (s: Settings) => { runner: FfmpegRunner; key: string } | null;
+  /** HTTP for "Set up video tools" (tests inject a fake; nothing is downloaded in tests). */
+  ffmpegFetch?: (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<Response>;
   /** Speech with word times for captions (tests inject a fake; the app uses OpenAI when allowed). */
   videoTranscribe?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>;
   /** Keo's picker for a template, clips folder or music file (the app uses Windows' dialog). */
@@ -147,6 +150,8 @@ export class Services {
   readonly workflows: WorkflowStore;
   readonly results = new ResearchResults();
   readonly video: VideoStudio;
+  /** "Set up video tools": Keo's own ffmpeg, downloaded on the user's click. */
+  readonly ffmpegSetup: FfmpegSetup;
   private readonly videosDir: string | null;
   private videoShown = '';
   private readonly documentsDir: string | null;
@@ -262,10 +267,24 @@ export class Services {
     this.imageTools = d.imageTools;
     this.voiceIoDeps = d.voiceIo ?? null;
     this.videosDir = d.videosDir ?? null;
+    this.ffmpegSetup = new FfmpegSetup({
+      root: path.join(d.profile.userData, 'tools'),
+      ...(d.ffmpegFetch ? { fetch: d.ffmpegFetch } : {}),
+      audit: (decision, detail) => this.audit.record({ kind: 'video.tools_setup', decision, detail }),
+      changed: (state) => this.push('video:setupChanged', state),
+      freeBytes: (dir) => {
+        try {
+          const f = fs.statfsSync(dir);
+          return f.bavail * f.bsize;
+        } catch {
+          return null;
+        }
+      },
+    });
     this.video = new VideoStudio({
       runner: () => {
         if (d.videoRunner) return d.videoRunner(getSettings());
-        const t = locateFfmpeg(getSettings().video.ffmpegPath);
+        const t = locateFfmpeg(getSettings().video.ffmpegPath, process.env.PATH, undefined, this.ffmpegSetup.installed()?.dir ?? null);
         return t ? { runner: new ProcessRunner(t), key: t.ffmpeg } : null;
       },
       workRoot: () => path.join(d.profile.userData, 'video'),

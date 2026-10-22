@@ -19,6 +19,9 @@ export const LINKS = {
   anthropicKeys: 'https://console.anthropic.com/settings/keys',
   braveKeys: 'https://api-dashboard.search.brave.com/app/keys',
   ollama: 'https://ollama.com/download',
+  // The ffmpeg that "Set up video tools" downloads: its source code and the build's own page.
+  ffmpegSource: 'https://ffmpeg.org/download.html',
+  ffmpegBuild: 'https://www.gyan.dev/ffmpeg/builds/',
 } as const;
 
 export type LinkId = keyof typeof LINKS;

@@ -104,7 +104,7 @@ export class VideoStudio {
 
   // ---------------------------------------------------------------- tools
 
-  /** ffmpeg, its encoders and filters, or a clear error saying how to get it (nothing is downloaded). */
+  /** ffmpeg, its encoders and filters, or a clear error saying how to get it (nothing is downloaded here). */
   async tools(signal: AbortSignal): Promise<{ runner: FfmpegRunner; encoder: VideoEncoder; subtitles: boolean }> {
     const t = this.d.runner();
     if (!t) throw fail('no_ffmpeg', NO_FFMPEG);
@@ -568,7 +568,7 @@ export class VideoStudio {
 }
 
 export const NO_FFMPEG =
-  'ffmpeg is not installed, so Keo cannot edit videos yet. Install ffmpeg yourself (for example from ffmpeg.org) and either add it to PATH or choose ffmpeg.exe in Settings → Video (ffprobe.exe must be in the same folder). Keo does not download it by itself.';
+  'ffmpeg is not installed, so Keo cannot edit videos yet. Open Settings → Video and click “Set up video tools”: Keo downloads ffmpeg (about 115 MB) into its own folder, only when you click it. Or install ffmpeg yourself and add it to PATH, or choose ffmpeg.exe there (ffprobe.exe must be in the same folder).';
 
 // ---------------------------------------------------------------- helpers
 

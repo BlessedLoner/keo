@@ -162,6 +162,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const st = await s.video.status(AbortSignal.timeout(30_000));
       return { path: file, ok: st.found, message: st.message };
     },
+    // Keo's own ffmpeg: only ever started by the user's click in Settings → Video.
+    'video:setupState': () => s.ffmpegSetup.state(),
+    'video:setupStart': () => s.ffmpegSetup.start(),
+    'video:setupCancel': () => s.ffmpegSetup.cancel(),
+    'video:setupRemove': () => s.ffmpegSetup.remove(),
     'video:pickOutput': async () => {
       const dir = (await host.pickFolder?.('Where should Keo save finished videos?')) ?? null;
       if (dir) s.settings.update({ video: { outputDir: dir } });

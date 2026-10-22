@@ -4,8 +4,9 @@ import path from 'node:path';
 
 /**
  * ffmpeg and ffprobe, run as plain processes with fixed argument lists (never a shell, never a
- * command line built from text). Keo does not ship or download ffmpeg: it uses the copy the user
- * chose in Settings → Video, or one on PATH.
+ * command line built from text). Keo does not ship ffmpeg: it uses the copy the user chose in
+ * Settings → Video, else the copy Keo downloaded when the user clicked "Set up video tools", else
+ * one on PATH.
  */
 export interface RunResult {
   stdout: Buffer;
@@ -32,7 +33,7 @@ export interface FfmpegRunner {
 export interface FfmpegTools {
   ffmpeg: string;
   ffprobe: string;
-  source: 'settings' | 'path';
+  source: 'settings' | 'keo' | 'path';
 }
 
 export class FfmpegError extends Error {
@@ -46,13 +47,21 @@ export class FfmpegError extends Error {
 
 const exe = (name: string) => (process.platform === 'win32' ? `${name}.exe` : name);
 
-/** The user's chosen ffmpeg.exe (with ffprobe.exe beside it), else the first pair on PATH. */
-export function locateFfmpeg(chosen: string | null, envPath: string | undefined = process.env.PATH, exists: (p: string) => boolean = isFile): FfmpegTools | null {
+/**
+ * The user's chosen ffmpeg.exe (with ffprobe.exe beside it), else Keo's own copy (`ownDir`, from
+ * "Set up video tools"), else the first pair on PATH.
+ */
+export function locateFfmpeg(chosen: string | null, envPath: string | undefined = process.env.PATH, exists: (p: string) => boolean = isFile, ownDir: string | null = null): FfmpegTools | null {
   if (chosen) {
     const dir = path.dirname(chosen);
     const probe = path.join(dir, exe('ffprobe'));
     if (path.basename(chosen).toLowerCase() === exe('ffmpeg') && exists(chosen) && exists(probe)) return { ffmpeg: chosen, ffprobe: probe, source: 'settings' };
     return null;
+  }
+  if (ownDir) {
+    const f = path.join(ownDir, exe('ffmpeg'));
+    const p = path.join(ownDir, exe('ffprobe'));
+    if (exists(f) && exists(p)) return { ffmpeg: f, ffprobe: p, source: 'keo' };
   }
   for (const dir of (envPath ?? '').split(path.delimiter).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean)) {
     const f = path.join(dir, exe('ffmpeg'));

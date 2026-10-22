@@ -30,6 +30,10 @@ export const INVOKE_CHANNELS = [
   'video:status',
   'video:pickFfmpeg',
   'video:pickOutput',
+  'video:setupState',
+  'video:setupStart',
+  'video:setupCancel',
+  'video:setupRemove',
   'workflows:list',
   'apps:installed',
   'workflows:saveFromTask',
@@ -158,6 +162,7 @@ export const pushChannels = [
   'update:changed',
   'results:changed',
   'video:changed',
+  'video:setupChanged',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

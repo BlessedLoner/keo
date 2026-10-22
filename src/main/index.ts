@@ -741,6 +741,7 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
   r.videoChatSend = await tryCall(vid, 'chat:send', { conversationId: 'xxxxxxxx', text: 'x' });
   r.videoSettingsUpdate = await tryCall(vid, 'settings:update', { patch: {} });
   r.videoPickFfmpeg = await tryCall(vid, 'video:pickFfmpeg', {});
+  r.videoSetupStart = await tryCall(vid, 'video:setupStart', {});
   if (shots && !app.isPackaged) fs.writeFileSync(path.join(shots, 'video.png'), (await vid.webContents.capturePage()).toPNG());
   await vid.webContents.executeJavaScript(`window.keo.invoke('video:close', {})`);
   await new Promise((resolve) => setTimeout(resolve, 200));
