@@ -275,6 +275,21 @@ export class OpenAICompatProvider implements ChatProvider {
     }
   }
 
+  /** Speech with a time for every word (whisper-1; used for video captions). */
+  async transcribeWords(wav: Uint8Array, signal: AbortSignal, opts: { language?: string } = {}): Promise<Array<{ word: string; start: number; end: number }>> {
+    if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Speech-to-text is only available through the OpenAI provider.');
+    try {
+      const file = await toFile(Buffer.from(wav), 'clip.wav', { type: 'audio/wav' });
+      const r = await this.client().audio.transcriptions.create(
+        { file, model: 'whisper-1', response_format: 'verbose_json', timestamp_granularities: ['word'], ...(opts.language ? { language: opts.language } : {}) },
+        { signal },
+      );
+      return (r.words ?? []).map((w) => ({ word: w.word, start: w.start, end: w.end }));
+    } catch (err) {
+      throw mapOpenAIError(err, signal, this.label);
+    }
+  }
+
   async speak(text: string, model: string, voice: string, signal: AbortSignal): Promise<Uint8Array> {
     if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Cloud text-to-speech is only available through the OpenAI provider.');
     try {

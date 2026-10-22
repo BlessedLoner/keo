@@ -20,6 +20,16 @@ export const INVOKE_CHANNELS = [
   'results:send',
   'results:openFolder',
   'results:close',
+  'video:get',
+  'video:preview',
+  'video:say',
+  'video:undo',
+  'video:export',
+  'video:openFolder',
+  'video:close',
+  'video:status',
+  'video:pickFfmpeg',
+  'video:pickOutput',
   'workflows:list',
   'apps:installed',
   'workflows:saveFromTask',
@@ -147,6 +157,7 @@ export const pushChannels = [
   'livechat:changed',
   'update:changed',
   'results:changed',
+  'video:changed',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

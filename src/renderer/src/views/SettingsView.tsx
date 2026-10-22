@@ -9,7 +9,7 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 
-type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'appearance' | 'data' | 'help';
+type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
 
 export function SettingsView() {
   const app = useApp();
@@ -34,6 +34,7 @@ export function SettingsView() {
               ['voice', 'Voice & shortcuts'],
               ['autonomy', 'Approvals & live chat'],
               ['agent', 'Agent'],
+              ['video', 'Video'],
               ['appearance', 'Appearance'],
               ['data', 'Privacy & data'],
               ['help', 'Check & help'],
@@ -63,6 +64,8 @@ export function SettingsView() {
           <ApprovalsAndLiveChat s={s} patch={patch} />
         ) : section === 'agent' ? (
           <Agent s={s} patch={patch} />
+        ) : section === 'video' ? (
+          <Video s={s} patch={patch} />
         ) : section === 'appearance' ? (
           <Appearance s={s} patch={patch} />
         ) : section === 'help' ? (
@@ -76,6 +79,78 @@ export function SettingsView() {
 }
 
 type Patch = (p: Record<string, unknown>) => Promise<void>;
+
+/** Video editing: which ffmpeg, where finished videos go, and whether clip sound may go to OpenAI. */
+function Video({ s, patch }: { s: Settings; patch: Patch }) {
+  const ui = useUi();
+  const [st, setSt] = useState<{ found: boolean; encoder: string | null; captions: boolean; message: string } | null>(null);
+  const check = useCallback(() => {
+    setSt(null);
+    void invoke('video:status', {})
+      .then(setSt)
+      .catch((e) => setSt({ found: false, encoder: null, captions: false, message: errText(e) }));
+  }, []);
+  useEffect(check, [check, s.video.ffmpegPath]);
+  return (
+    <>
+      <section className="card">
+        <h2>ffmpeg</h2>
+        <p className="muted small">Keo edits videos with ffmpeg on this PC: fast and exact, nothing is uploaded. Keo does not install or download ffmpeg; install it yourself and add it to PATH, or choose ffmpeg.exe here (ffprobe.exe must be in the same folder).</p>
+        <p className="small">
+          {st ? (
+            <>
+              <Icon name={st.found ? 'check' : 'warn'} size={13} /> {st.message}
+            </>
+          ) : (
+            <span className="muted">Checking…</span>
+          )}
+        </p>
+        <p className="small muted">{s.video.ffmpegPath ? `Using ${s.video.ffmpegPath}` : 'Looking for ffmpeg on PATH.'}</p>
+        <div className="row">
+          <button
+            className="btn sm"
+            onClick={() =>
+              void invoke('video:pickFfmpeg', {})
+                .then((r) => {
+                  if (r.path) (r.ok ? ui.toast : ui.error)(r.message);
+                  check();
+                })
+                .catch((e) => ui.error(errText(e)))
+            }
+          >
+            <Icon name="folder" size={13} /> Choose ffmpeg.exe…
+          </button>
+          {s.video.ffmpegPath && (
+            <button className="btn ghost sm" onClick={() => void patch({ video: { ffmpegPath: null } })}>
+              Use PATH instead
+            </button>
+          )}
+        </div>
+      </section>
+      <section className="card">
+        <h2>Finished videos</h2>
+        <p className="muted small">Saved as new MP4 files in {s.video.outputDir ?? 'your Videos\\Keo folder'}; existing files are never replaced. Previews stay in Keo’s own data folder.</p>
+        <div className="row">
+          <button className="btn sm" onClick={() => void invoke('video:pickOutput', {}).catch((e) => ui.error(errText(e)))}>
+            <Icon name="folder" size={13} /> Choose folder…
+          </button>
+          {s.video.outputDir && (
+            <button className="btn ghost sm" onClick={() => void patch({ video: { outputDir: null } })}>
+              Use Videos\Keo
+            </button>
+          )}
+        </div>
+        <div style={{ height: 8 }} />
+        <Toggle checked={s.video.showWindow} onChange={(v) => void patch({ video: { showWindow: v } })} label="Open the preview window when a new preview is ready" />
+      </section>
+      <section className="card">
+        <h2>Captions</h2>
+        <p className="muted small">Captions need the words spoken in your clips. Keo sends the clips’ sound (not the picture) to OpenAI’s speech-to-text and keeps the words only in memory. Without this, videos are made without captions. Music and stock footage are never downloaded: use your own files or ones you have a licence for.</p>
+        <Toggle checked={s.video.transcribeAudio} onChange={(v) => void patch({ video: { transcribeAudio: v } })} label="I allow Keo to send my clips’ sound to OpenAI for captions" />
+      </section>
+    </>
+  );
+}
 
 function Providers({ s, patch }: { s: Settings; patch: Patch }) {
   const app = useApp();

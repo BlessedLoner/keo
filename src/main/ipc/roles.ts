@@ -1,7 +1,7 @@
 import type { InvokeChannel } from '../../shared/ipc';
 
 /** Each Keo window gets only the IPC channels its job needs. */
-export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil' | 'keomode' | 'marks';
+export type WindowRole = 'main' | 'command' | 'companion' | 'results' | 'pencil' | 'keomode' | 'marks' | 'video';
 
 const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'presence:get',
@@ -58,6 +58,9 @@ const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
 /** The research results window: show results, save or send them, open sources. Nothing else. */
 const RESULTS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl', 'presence:openMain', 'settings:get']);
 
+/** The video preview window: watch the preview, give instructions, undo, save the finished video. Nothing else. */
+const VIDEO: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['video:get', 'video:preview', 'video:say', 'video:undo', 'video:export', 'video:openFolder', 'video:close', 'presence:openMain', 'settings:get']);
+
 /** Keo's pencil overlay: its own screenshot, sending the marked area, listening. Nothing else. */
 const PENCIL: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['pencil:context', 'pencil:submit', 'pencil:cancel', 'pencil:allowExport', 'pencil:listen', 'settings:get']);
 
@@ -67,6 +70,7 @@ const KEOMODE: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['presence:ge
 export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolean {
   if (role === 'main') return true;
   if (role === 'results') return RESULTS.has(channel);
+  if (role === 'video') return VIDEO.has(channel);
   if (role === 'pencil') return PENCIL.has(channel);
   if (role === 'keomode') return KEOMODE.has(channel);
   // Keo's on-screen marks: it can only read the marks it shows.

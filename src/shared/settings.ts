@@ -260,6 +260,20 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Video editing with ffmpeg (Keo never installs or downloads ffmpeg itself). */
+    video: z
+      .object({
+        /** ffmpeg.exe the user chose (ffprobe.exe must be beside it); null = look on PATH. */
+        ffmpegPath: z.string().max(500).nullable().default(null),
+        /** Where finished videos go; null = Videos\Keo. */
+        outputDir: z.string().max(500).nullable().default(null),
+        /** The user allowed sending the clips' sound to OpenAI for captions. */
+        transcribeAudio: z.boolean().default(false),
+        /** Open the preview window when a preview is ready. */
+        showWindow: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
     /** Which task events show a Windows notification (only while Keo's window is not in front). */
     notifications: z
       .object({

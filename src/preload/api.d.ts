@@ -15,6 +15,7 @@ export interface PushPayloads {
   'livechat:changed': { sessions: LiveChatSession[] };
   'update:changed': UpdateDownload;
   'results:changed': { id: string };
+  'video:changed': { id: string };
 }
 
 /** Instructions from the main process to a window (never from page content). */
@@ -23,6 +24,7 @@ export type PresenceCommand =
   | { type: 'record_command' }
   | { type: 'focus_input' }
   | { type: 'results_open' }
+  | { type: 'video_open' }
   | { type: 'pencil_heard'; text: string | null; reason: string; listening: boolean }
   | { type: 'navigate'; view: string }
   | { type: 'transcript'; text: string; conversationId: string | null }

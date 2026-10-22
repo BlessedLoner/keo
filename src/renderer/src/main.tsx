@@ -4,6 +4,7 @@ import { App } from './App';
 import { CommandBarApp } from './presence/CommandBarApp';
 import { CompanionApp } from './presence/CompanionApp';
 import { ResultsApp } from './presence/ResultsApp';
+import { VideoApp } from './presence/VideoApp';
 import { PencilApp } from './presence/PencilApp';
 import { KeoModeApp } from './presence/KeoModeApp';
 import { MarksApp } from './presence/MarksApp';
@@ -35,6 +36,8 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <CommandBarApp />
       ) : route === '#results' ? (
         <ResultsApp />
+      ) : route === '#video' ? (
+        <VideoApp />
       ) : route === '#pencil' ? (
         <PencilApp />
       ) : route === '#keomode' ? (

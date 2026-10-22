@@ -7,7 +7,9 @@ import type { Services } from '../services';
 const COMPANION_W = 300;
 const COMPANION_H = 270;
 const RESULTS_W = 560;
-const RESULTS_H = 700; // room for up to four task chips above the companion (the window is click-through)
+const RESULTS_H = 700;
+const VIDEO_W = 460;
+const VIDEO_H = 760; // room for up to four task chips above the companion (the window is click-through)
 const COMMAND_W = 680;
 const COMMAND_H = 500;
 
@@ -260,7 +262,8 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | 'marks' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | 'marks' | 'video' | null {
+    if (this.video && !this.video.isDestroyed() && this.video.webContents.id === id) return 'video';
     if (this.marksWin && !this.marksWin.isDestroyed() && this.marksWin.webContents.id === id) return 'marks';
     if (this.keoMode && !this.keoMode.isDestroyed() && this.keoMode.webContents.id === id) return 'keomode';
     if (this.pencil && !this.pencil.isDestroyed() && this.pencil.webContents.id === id) return 'pencil';
@@ -534,8 +537,59 @@ export class PresenceWindows {
     };
   }
 
+  // ---------------------------------------------------------------- video preview
+  video: BrowserWindow | null = null;
+
+  /** The video preview window, at the left of the screen, without stealing focus (the user may be talking to Keo). */
+  showVideo(): void {
+    let win = this.video && !this.video.isDestroyed() ? this.video : null;
+    if (win?.isVisible()) return;
+    if (!win) {
+      win = new BrowserWindow({
+        width: VIDEO_W,
+        height: VIDEO_H,
+        frame: false,
+        transparent: true,
+        resizable: true,
+        minWidth: 360,
+        minHeight: 480,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: false,
+        show: false,
+        alwaysOnTop: true,
+        title: 'Keo video preview',
+        backgroundColor: '#00000000',
+        webPreferences: webPreferences(this.preload),
+      });
+      win.setAlwaysOnTop(true, 'floating');
+      win.on('closed', () => {
+        if (this.video === win) this.video = null;
+      });
+      void win.loadURL(this.url('#video'));
+      this.video = win;
+      const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+      const w = Math.min(VIDEO_W, d.width - 40);
+      const h = Math.min(VIDEO_H, d.height - 40);
+      win.setBounds({ x: Math.round(d.x + 24), y: Math.round(d.y + (d.height - h) / 2), width: w, height: h });
+    }
+    const show = () => {
+      win!.showInactive();
+      win!.webContents.send('presence:command', { type: 'video_open' });
+      setTimeout(() => {
+        if (!win!.isDestroyed()) win!.webContents.invalidate();
+      }, 700);
+    };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', show);
+    else show();
+  }
+
+  hideVideo(): void {
+    if (this.video && !this.video.isDestroyed()) this.video.hide();
+  }
+
   broadcast(channel: string, payload: unknown): void {
-    for (const w of [this.companion, this.command, this.results, this.pencil, this.keoMode]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+    for (const w of [this.companion, this.command, this.results, this.pencil, this.keoMode, this.video]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
   }
 
   openMain(view?: string): void {
@@ -549,6 +603,8 @@ export class PresenceWindows {
     this.companion?.destroy();
     this.command?.destroy();
     this.results?.destroy();
+    this.video?.destroy();
+    this.video = null;
     this.pencil?.destroy();
     this.pencil = null;
     this.keoMode?.destroy();

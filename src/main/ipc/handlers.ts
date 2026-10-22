@@ -8,6 +8,7 @@ import { validateWakePhrase } from '../voice/wakeService';
 import { diagnosticReport } from '../desktop/diagnosticReport';
 import { packageScripts } from '../projects/workspace';
 import { importBundle } from '../workflows/portability';
+import { locateFfmpeg } from '../video/ffmpeg';
 import type { Services } from '../services';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,6 +42,9 @@ export interface HostHooks {
   hideCommandBar?(): void;
   hideCompanion?(): void;
   hideResults?(): void;
+  hideVideo?(): void;
+  /** File picker for ffmpeg.exe. */
+  pickFfmpeg?(): Promise<string | null>;
   /** The marks the on-screen drawing window shows (in its own pixels). */
   currentMarks?(): { marks: Array<{ shape: 'circle' | 'box' | 'arrow' | 'underline' | 'label'; x: number; y: number; w?: number; h?: number; fromX?: number; fromY?: number; label?: string }>; seconds: number } | null;
   setCompanionInteractive?(interactive: boolean): void;
@@ -128,6 +132,40 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'results:close': () => {
       host.hideResults?.();
       return { closed: true };
+    },
+    'video:get': () => s.video.view(),
+    'video:preview': ({ id, version }) => ({ bytes: s.video.previewBytes(id, version) }),
+    // Typed in Keo's own preview window: the user's instruction.
+    'video:say': ({ text }) => s.videoSay(text),
+    'video:undo': () => s.videoUndo(),
+    // The window's Save button is the user's own click; it runs through the normal task path.
+    'video:export': async ({ name }) => {
+      const p = s.video.get(undefined);
+      const r = await s.runUserAction('video.render_final', { ...(p ? { projectId: p.id } : {}), ...(name ? { name } : {}) });
+      return { ok: r.ok, file: r.ok ? ((r.result as { file: string }).file ?? null) : null, error: r.error, detail: r.detail };
+    },
+    'video:openFolder': async () => {
+      // Only the folder Keo saves videos into.
+      const root = s.videoOutputRoot();
+      return { opened: fs.existsSync(root) ? await host.openPath(root) : false };
+    },
+    'video:close': () => {
+      host.hideVideo?.();
+      return { closed: true };
+    },
+    'video:status': () => s.video.status(AbortSignal.timeout(30_000)),
+    'video:pickFfmpeg': async () => {
+      const file = (await host.pickFfmpeg?.()) ?? null;
+      if (!file) return { path: null, ok: false, message: 'Nothing chosen.' };
+      if (!locateFfmpeg(file)) return { path: file, ok: false, message: 'Choose ffmpeg.exe; ffprobe.exe must be in the same folder. Nothing was changed.' };
+      s.settings.update({ video: { ffmpegPath: file } });
+      const st = await s.video.status(AbortSignal.timeout(30_000));
+      return { path: file, ok: st.found, message: st.message };
+    },
+    'video:pickOutput': async () => {
+      const dir = (await host.pickFolder?.('Where should Keo save finished videos?')) ?? null;
+      if (dir) s.settings.update({ video: { outputDir: dir } });
+      return { path: dir };
     },
     'workflows:list': () => s.workflows.list().map((w) => ({ id: w.id, name: w.name, description: w.description, steps: w.steps.length, imported: w.imported, createdAt: w.createdAt })),
     'workflows:saveFromTask': ({ taskId, name }) => {

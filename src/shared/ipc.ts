@@ -3,6 +3,7 @@ import type {
   UpdateInfo,
   SelfTestResult,
   ResearchResultView,
+  VideoView,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -55,6 +56,16 @@ export const invokeSchemas = {
   'results:send': z.object({ id: z.string().regex(/^rr_[a-z0-9]{6,20}$/), contact: z.string().trim().min(1).max(120), which: z.enum(['app', 'web']).optional(), note: z.string().trim().max(300).optional() }).strict(),
   'results:openFolder': z.object({ folder: z.string().min(3).max(500) }).strict(),
   'results:close': empty,
+  'video:get': empty,
+  'video:preview': z.object({ id: z.string().regex(/^vp_[a-z0-9]{6,20}$/), version: z.number().int().min(1).max(1_000_000) }).strict(),
+  'video:say': z.object({ text: z.string().trim().min(1).max(1000) }).strict(),
+  'video:undo': empty,
+  'video:export': z.object({ name: z.string().trim().min(1).max(60).optional() }).strict(),
+  'video:openFolder': empty,
+  'video:close': empty,
+  'video:status': empty,
+  'video:pickFfmpeg': empty,
+  'video:pickOutput': empty,
   'workflows:list': empty,
   'apps:installed': z.object({ refresh: z.boolean().default(false) }).strict(),
   'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
@@ -242,6 +253,16 @@ export interface InvokeOutputs {
   'results:send': { ok: boolean; error: string | null; detail: string | null };
   'results:openFolder': { opened: boolean };
   'results:close': { closed: boolean };
+  'video:get': VideoView | null;
+  'video:preview': { bytes: Uint8Array | null };
+  'video:say': { applied: boolean; changes: string[]; forwarded: boolean; error: string | null };
+  'video:undo': { ok: boolean; error: string | null };
+  'video:export': { ok: boolean; file: string | null; error: string | null; detail: string | null };
+  'video:openFolder': { opened: boolean };
+  'video:close': { closed: boolean };
+  'video:status': { found: boolean; encoder: string | null; captions: boolean; message: string };
+  'video:pickFfmpeg': { path: string | null; ok: boolean; message: string };
+  'video:pickOutput': { path: string | null };
   'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
   'workflows:saveFromTask': { id: string; name: string };
   'workflows:delete': { deleted: boolean };

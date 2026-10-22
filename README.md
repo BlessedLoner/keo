@@ -135,6 +135,18 @@ There is no background or ongoing auto-replying: every message is drafted, shown
 - **Workflows**: save a finished task (*Tasks → Save as workflow*) and ask Keo to run it again later; Keo re-plans against the current screen and asks for approval as usual. *Settings → Privacy & data → Export/Import* moves projects and workflows between PCs (no keys, settings or chats).
 - **Task chips** above the companion show unfinished tasks with their real state (working, queued, needs you, check result) and a cancel button. Choose which task events notify you in *Settings → Approvals & live chat*.
 
+## Videos (phase 1: local editing with ffmpeg)
+
+Give Keo a template video and a folder of clips — “make a video like `C:\Users\me\Videos\template.mp4` from the clips in `C:\Users\me\Videos\Trip`” — and it makes a similar video in seconds, then lets you direct changes while it plays.
+
+- **ffmpeg is needed and is not installed by Keo.** Install it yourself (for example from ffmpeg.org) and add it to PATH, or choose `ffmpeg.exe` in *Settings → Video* (`ffprobe.exe` must be in the same folder). *Settings → Video* shows whether ffmpeg was found and which encoder it will use. Without ffmpeg, Keo says so and changes nothing.
+- **Template analysis** (`video.analyze_template`): length, format, frame rate, the shot list from scene cuts, and the beat of its sound — all with ffmpeg on this PC. When screen-content export to the active model is allowed, up to six frames are shown to the model to describe the look (on-screen text, caption style and colours, hook, pacing, transitions).
+- **Clips** (`video.analyze_clips`): every video file in the folder is probed and scanned for its liveliest moments; with screen-content export allowed, one frame per clip is described by the model. **Captions** need the spoken words: only when you tick *Settings → Video → I allow Keo to send my clips’ sound to OpenAI* (and have an OpenAI key) is the sound sent to OpenAI's speech-to-text; otherwise the video is made without captions and Keo says why.
+- **The edit recipe** (`video.plan_edit`): a typed, validated plan — shots (clip, in point, length, speed), transition, texts, caption style, music, format (9:16, 16:9, 1:1, 4:5). The template's rhythm is scaled to the length you want and the cuts are moved onto the beat (of your music file if you give one). Music must be a file on your PC that you own or have a licence for; Keo does not download music or stock footage.
+- **Preview window and live direction**: a quick 640-pixel preview opens in a small window (it does not take focus). Type “shorter intro”, “bigger captions”, “make it 20 seconds”, “captions at the top”, “no music”… — common instructions are applied at once; anything else goes to Keo, which changes the recipe with `video.direct`. Every change re-renders the preview (a newer change cancels the one in progress); **Undo** goes back a version. You can also just talk to Keo with your voice shortcut while it plays.
+- **Saving** (`video.render_final`, needs your OK; the window's *Save video* button is that OK): the full-size MP4 goes into `Videos\Keo` (or the folder chosen in *Settings → Video*) as a new file — existing files are never replaced — and is checked afterwards: length, picture size, sound track and frames at 10 %, 50 % and 90 %.
+- Keo prefers libx264 when your ffmpeg has it and otherwise uses Windows' own H.264 encoder (`h264_mf`) or the graphics card's, so LGPL builds of ffmpeg work. Captions and texts need ffmpeg's `subtitles` filter (libass); without it they are left out with a note.
+
 ## Trained wake word (optional)
 
 *Settings → Voice & shortcuts → Trained wake word*: Picovoice Porcupine listens on this PC for one trained phrase (no audio leaves the computer). Create a free account at console.picovoice.ai, paste your AccessKey, and either choose a trained “Hey Keo” model (`.ppn` for Windows, made in the Picovoice console) or a built-in word such as “Jarvis”; then pick *Trained wake word* as the speech engine. Commands after the wake word are still understood by Windows speech or OpenAI. If Porcupine cannot start (no key, missing file), Keo says why and uses Windows speech.
@@ -189,6 +201,8 @@ npm run e2e:desktop # builds, then drives a disposable WhatsApp-like test app th
 npm run check       # typecheck + lint + test + build
 ```
 
+With ffmpeg already installed, `KEO_LIVE_VIDEO=1 npx vitest run tests/live-video.test.ts` renders a tiny real video from test pictures ffmpeg makes itself (`KEO_LIVE_VIDEO=<path to ffmpeg.exe>` to use a specific copy).
+
 ## Package for Windows
 
 ```bash
@@ -219,6 +233,7 @@ src/main/
   desktop/         Win32 helper (fixed PowerShell script) + identity validation
   vision/          capture pipeline, provenance, retention
   voice/           speech-to-text / text-to-speech services
+  video/           ffmpeg runner, edit recipe, render plan, video studio
   ipc/             handlers + validated router
 src/renderer/      React UI, design system, animated emblem
 tests/             Vitest suites

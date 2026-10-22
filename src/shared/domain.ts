@@ -576,3 +576,24 @@ export interface SelfTestResult {
   /** One-line hint for the first failing step. */
   advice: string | null;
 }
+
+/** A video project as Keo's preview window shows it. */
+export interface VideoView {
+  id: string;
+  title: string;
+  status: 'idle' | 'analyzing' | 'rendering' | 'ready' | 'error';
+  progress: number | null;
+  message: string | null;
+  aspect: string;
+  totalSec: number;
+  shots: Array<{ index: number; clip: string; startSec: number; durationSec: number; speed: number }>;
+  texts: Array<{ text: string; startSec: number; endSec: number }>;
+  captions: { enabled: boolean; sizePct: number; position: string };
+  music: string | null;
+  notes: string[];
+  lastChanges: string[];
+  preview: { version: number; durationSec: number } | null;
+  exports: string[];
+  canUndo: boolean;
+}
+

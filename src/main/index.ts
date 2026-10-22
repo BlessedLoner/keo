@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
 import { realPorcupine } from './voice/porcupineEngine';
@@ -382,6 +382,17 @@ app.whenReady().then(() => {
       imageTools: electronImageTools,
       clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
       documentsDir: app.getPath('documents'),
+      videosDir: app.getPath('videos'),
+      pickVideo: async (what) => {
+        const opts: OpenDialogOptions =
+          what === 'clips_folder'
+            ? { title: 'Choose the folder with your clips', properties: ['openDirectory'] }
+            : what === 'music'
+              ? { title: 'Choose a music file (your own or licensed)', properties: ['openFile'], filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'wma'] }] }
+              : { title: 'Choose the template video', properties: ['openFile'], filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'wmv', 'mts', '3gp'] }] };
+        const r = await dialog.showOpenDialog(opts);
+        return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
       renderReport: (html, kind) => renderReport(html, kind),
       convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
       windowsSpeak: (text) => windowsSpeak(text),
@@ -435,6 +446,11 @@ app.whenReady().then(() => {
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
       hideResults: () => presenceWindows?.hideResults(),
+      hideVideo: () => presenceWindows?.hideVideo(),
+      pickFfmpeg: async () => {
+        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose ffmpeg.exe (ffprobe.exe must be in the same folder)', properties: ['openFile'], filters: [{ name: 'ffmpeg', extensions: ['exe'] }] });
+        return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
       currentMarks: () => presenceWindows?.currentMarks() ?? null,
       pickWakeModel: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
@@ -472,6 +488,7 @@ app.whenReady().then(() => {
       // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
       ensureVoiceWindow: () => ensureVoiceWindow(),
       showResults: () => presenceWindows?.showResults(),
+      showVideo: () => presenceWindows?.showVideo(),
       showPencil: (bounds) => presenceWindows?.showPencil(bounds),
       hidePencil: () => presenceWindows?.hidePencil(),
       showKeoMode: () => presenceWindows?.showKeoMode(),
@@ -712,6 +729,22 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
   await svc.desktop.exclusive('smoke', async () => undefined);
   await new Promise((resolve) => setTimeout(resolve, 900));
   r.resultsStaysClosed = !res.isVisible();
+  // Video preview window: no project and no ffmpeg needed; its own channels only.
+  pw.showVideo();
+  const vid = pw.video!;
+  await loaded(vid);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  r.videoRendered = await vid.webContents.executeJavaScript(`!!document.querySelector('.video-panel')`);
+  r.videoFocused = vid.isFocused();
+  r.videoGet = await tryCall(vid, 'video:get', {});
+  r.videoMemoryList = await tryCall(vid, 'memory:list', {});
+  r.videoChatSend = await tryCall(vid, 'chat:send', { conversationId: 'xxxxxxxx', text: 'x' });
+  r.videoSettingsUpdate = await tryCall(vid, 'settings:update', { patch: {} });
+  r.videoPickFfmpeg = await tryCall(vid, 'video:pickFfmpeg', {});
+  if (shots && !app.isPackaged) fs.writeFileSync(path.join(shots, 'video.png'), (await vid.webContents.capturePage()).toPNG());
+  await vid.webContents.executeJavaScript(`window.keo.invoke('video:close', {})`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  r.videoClosed = !vid.isVisible();
   // Manual live check (development only, KEO_LIVE_RESULTS_SEND=<contact>): the real Send of the results
   // window — focused as after the user's click — into the real WhatsApp app. Sends one real message.
   const liveContact = process.env.KEO_LIVE_RESULTS_SEND;

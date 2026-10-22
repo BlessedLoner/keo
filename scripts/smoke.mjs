@@ -88,6 +88,14 @@ check('results window: cannot change settings', p.resultsSettingsUpdate === 'for
 check('results window: cannot approve tasks', p.resultsTasksApprove === 'forbidden', p.resultsTasksApprove);
 check('results window: steps aside during desktop work', p.resultsStepsAside === true, p.resultsStepsAside);
 check('results window: stays closed once closed', p.resultsStaysClosed === true, p.resultsStaysClosed);
+check('video window: rendered', p.videoRendered === true, p.videoRendered);
+check('video window: does not take focus', p.videoFocused === false, p.videoFocused);
+check('video window: may read the project', p.videoGet === 'ok', p.videoGet);
+check('video window: cannot read memory', p.videoMemoryList === 'forbidden', p.videoMemoryList);
+check('video window: cannot send chat', p.videoChatSend === 'forbidden', p.videoChatSend);
+check('video window: cannot change settings', p.videoSettingsUpdate === 'forbidden', p.videoSettingsUpdate);
+check('video window: cannot choose ffmpeg', p.videoPickFfmpeg === 'forbidden', p.videoPickFfmpeg);
+check('video window: closes', p.videoClosed === true, p.videoClosed);
 if (p.liveSend) console.log('LIVE send from the results window:', JSON.stringify(p.liveSend), 'window back:', p.liveResultsBack);
 check('pencil: opens over the screen', p.pencilStarted === true && p.pencilRendered === true, p.pencilError ?? p.pencilStarted);
 check('pencil: may read its screen picture', p.pencilContext === 'ok', p.pencilContext);
