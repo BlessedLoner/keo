@@ -33,6 +33,8 @@ export interface VoiceModeDeps {
   /** Bring Keo's window up (for approvals that must be clicked). */
   showApprovals(): void;
   changed(v: VoiceModeView): void;
+  /** Background jobs started from this conversation that are still running (their approvals are asked by voice too). */
+  jobConversations?(): Array<{ conversationId: string; title: string }>;
 }
 
 const STOP = /^\s*(ok(ay)?[,.\s]+)?(stop|that'?s all|that is all|that'?ll be all|goodbye|bye|good ?night|thanks?,? keo|thank you,? keo|never ?mind|cancel|go to sleep|we'?re done|i'?m done)\b/i;
@@ -78,6 +80,10 @@ export function spokenVersion(md: string, max = 600): string {
 export class VoiceMode {
   private view: VoiceModeView = { active: false, state: 'off', heard: null, said: null };
   private session = 0;
+  /** Short reports (finished background jobs) to say at the next pause: never while listening or mid-reply. */
+  private announcements: string[] = [];
+  /** Background-job approvals already asked in this conversation. */
+  private askedJobSteps = new Set<string>();
 
   constructor(private readonly d: VoiceModeDeps) {}
 
@@ -102,6 +108,8 @@ export class VoiceMode {
       return;
     }
     const session = ++this.session;
+    this.announcements = [];
+    this.askedJobSteps = new Set();
     this.set({ active: true, state: 'listening', heard: null, said: null });
     this.d.pauseWake(true);
     this.d.audit.record({ kind: 'voice.mode', decision: 'started', detail: { withCommand: !!first } });
@@ -118,6 +126,8 @@ export class VoiceMode {
   startWithTurn(heard: string, sent: { done: Promise<Message> }): void {
     if (this.view.active) this.stop('replaced');
     const session = ++this.session;
+    this.announcements = [];
+    this.askedJobSteps = new Set();
     this.set({ active: true, state: 'thinking', heard, said: null });
     this.d.pauseWake(true);
     this.d.audit.record({ kind: 'voice.mode', decision: 'started', detail: { withCommand: true, from: 'pencil' } });
@@ -132,6 +142,7 @@ export class VoiceMode {
   stop(reason = 'stopped'): void {
     if (!this.view.active) return;
     this.session++;
+    this.announcements = [];
     this.set({ active: false, state: 'off' });
     this.d.pauseWake(false);
     this.d.audit.record({ kind: 'voice.mode', decision: 'ended', detail: { reason } });
@@ -139,6 +150,38 @@ export class VoiceMode {
 
   private alive(session: number): boolean {
     return this.view.active && session === this.session;
+  }
+
+  /**
+   * A short spoken report (e.g. a background job finished). Said at the next
+   * pause in the conversation, after anything Keo is saying; false when voice
+   * mode is off (the report is on screen and in a notification anyway).
+   */
+  announce(text: string): boolean {
+    if (!this.view.active || !text.trim()) return false;
+    this.announcements.push(text.trim());
+    return true;
+  }
+
+  /** Between turns: say queued reports, then ask for background-job approvals waiting for the user. */
+  private async atPause(session: number): Promise<void> {
+    while (this.alive(session) && this.announcements.length) await this.sayQueued(session, this.announcements.shift()!);
+    for (let pa = this.pendingJobApproval(); pa && this.alive(session); pa = this.pendingJobApproval()) {
+      this.askedJobSteps.add(pa.step.id);
+      const approved = await this.confirm(session, pa.task, pa.step, `For the background job “${pa.title}”: `);
+      if (approved) await this.reportOutcome(session, pa.task.id, pa.step.id);
+    }
+  }
+
+  private pendingJobApproval(): { task: Task; step: Task['steps'][number]; title: string } | null {
+    const jobs = this.d.jobConversations?.() ?? [];
+    if (!jobs.length) return null;
+    for (const t of this.d.tasks.list(30)) {
+      const job = jobs.find((j) => j.conversationId === t.conversationId);
+      if (!job) continue;
+      for (const s of t.steps) if (s.state === 'awaiting_authorization' && !this.askedJobSteps.has(s.id)) return { task: t, step: s, title: job.title };
+    }
+    return null;
   }
 
   private async loop(session: number, first: string | null): Promise<void> {
@@ -149,6 +192,8 @@ export class VoiceMode {
       let text = pending;
       pending = null;
       if (!text) {
+        await this.atPause(session);
+        if (!this.alive(session)) return;
         this.set({ state: 'listening' });
         const r = await this.d.listen();
         if (!this.alive(session)) return;
@@ -282,16 +327,16 @@ export class VoiceMode {
   }
 
   /** Asks for one approval by voice; true when approved. */
-  private async confirm(session: number, task: Task, step: Task['steps'][number]): Promise<boolean> {
+  private async confirm(session: number, task: Task, step: Task['steps'][number], prefix = ''): Promise<boolean> {
     const what = step.preview.summary;
     if (step.preview.autoTier === 'critical') {
       this.d.showApprovals();
-      await this.say(session, `${what}. This one needs your approval on screen.`);
+      await this.say(session, `${prefix}${what}. This one needs your approval on screen.`);
       return false;
     }
     this.set({ state: 'confirming' });
     for (let attempt = 0; attempt < 2 && this.alive(session); attempt++) {
-      await this.say(session, attempt === 0 ? `I need your OK to ${lowerFirst(what)}. Shall I?` : 'Please say yes or no.');
+      await this.say(session, attempt === 0 ? `${prefix}I need your OK to ${lowerFirst(what)}. Shall I?` : 'Please say yes or no.');
       this.set({ state: 'confirming' });
       const r = await this.d.listen();
       const a = r.text?.trim() ?? '';

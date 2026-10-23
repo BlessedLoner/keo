@@ -150,6 +150,28 @@ export interface MessageMeta {
   languageCorrected?: boolean;
   /** Marks a Keo note about a task outcome (taskId:state). */
   taskNote?: string;
+  /** A background job's report (posted in the conversation that started it). */
+  jobId?: string;
+}
+
+/** A long request Keo runs in the background in its own hidden conversation. */
+export interface BackgroundJob {
+  id: string;
+  title: string;
+  kind: 'research' | 'video' | 'reading' | 'other';
+  /** The conversation that asked for it (where the report goes). */
+  parentConversationId: string;
+  /** The job's own hidden conversation. */
+  conversationId: string;
+  state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  /** True while the job waits for another job to finish using the mouse and keyboard. */
+  waitingForDesktop: boolean;
+  createdAt: ISODate;
+  startedAt: ISODate | null;
+  finishedAt: ISODate | null;
+  /** The job's final reply (completed) or what went wrong. */
+  result: string | null;
+  error: string | null;
 }
 
 export interface Message {

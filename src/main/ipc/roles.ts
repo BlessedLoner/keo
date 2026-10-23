@@ -53,6 +53,8 @@ const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'voice:speak',
   'providers:list',
   'app:info',
+  'jobs:list',
+  'jobs:cancel',
 ]);
 
 /** The research results window: show results, save or send them, open sources. Nothing else. */
