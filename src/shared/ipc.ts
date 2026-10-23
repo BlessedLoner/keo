@@ -167,6 +167,31 @@ export const invokeSchemas = {
   'web:clearKey': empty,
   'web:test': empty,
 
+  'email:status': empty,
+  'email:save': z
+    .object({
+      provider: z.enum(['gmail', 'outlook', 'yahoo', 'icloud', 'custom']),
+      address: z.string().trim().min(3).max(254).regex(/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/, 'Invalid email address'),
+      displayName: z.string().trim().max(120).default(''),
+      imapHost: z.string().trim().min(3).max(253).regex(/^[A-Za-z0-9.-]+$/, 'Invalid server name'),
+      imapPort: z.number().int().min(1).max(65535),
+      imapSecure: z.boolean(),
+      smtpHost: z.string().trim().min(3).max(253).regex(/^[A-Za-z0-9.-]+$/, 'Invalid server name'),
+      smtpPort: z.number().int().min(1).max(65535),
+      smtpSecure: z.boolean(),
+      /** Omitted = keep the stored app password. */
+      password: z.string().min(4).max(200).optional(),
+    })
+    .strict(),
+  'email:test': empty,
+  'email:disconnect': empty,
+  'calendar:status': empty,
+  /** Empty removes it. */
+  'calendar:setClientSecret': z.object({ secret: z.string().trim().max(200) }).strict(),
+  'calendar:signIn': empty,
+  'calendar:cancelSignIn': empty,
+  'calendar:signOut': empty,
+
   'vision:capture': z.object({ hwnd: z.string().regex(/^\d{1,20}$/), pid: z.number().int().positive() }).strict(),
   'vision:list': z.object({ limit: z.number().int().min(1).max(200).default(50) }).strict(),
   'vision:image': z.object({ id }).strict(),
@@ -331,6 +356,15 @@ export interface InvokeOutputs {
   'web:setKey': WebStatus;
   'web:clearKey': WebStatus;
   'web:test': { ok: boolean; message: string; sample: Array<{ title: string; url: string }> };
+  'email:status': EmailStatus;
+  'email:save': EmailStatus;
+  'email:test': { ok: boolean; message: string };
+  'email:disconnect': EmailStatus;
+  'calendar:status': CalendarStatus;
+  'calendar:setClientSecret': CalendarStatus;
+  'calendar:signIn': { ok: boolean; message: string };
+  'calendar:cancelSignIn': CalendarStatus;
+  'calendar:signOut': CalendarStatus;
   'vision:capture': Observation;
   'vision:list': Observation[];
   'vision:image': { dataUrl: string | null; reason: string | null };
@@ -416,6 +450,25 @@ export interface WebStatus {
   hasKey: boolean;
   searchEnabled: boolean;
   fetchEnabled: boolean;
+  secretStorage: boolean;
+}
+
+/** The email account, without its password (only whether one is stored). */
+export interface EmailStatus {
+  connected: boolean;
+  address: string;
+  hasPassword: boolean;
+  secretStorage: boolean;
+}
+
+/** Google Calendar sign-in state (never the tokens or the client secret). */
+export interface CalendarStatus {
+  clientId: string;
+  hasClientSecret: boolean;
+  signedIn: boolean;
+  signingIn: boolean;
+  /** When the user signed in (ISO), for the 7-day "Testing" limit hint. */
+  signedInAt: string | null;
   secretStorage: boolean;
 }
 

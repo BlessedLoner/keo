@@ -19,6 +19,10 @@ import { chooseRoute, type RouteDecision } from './routing';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
 const UNTRUSTED_OUTPUT = new Set([
+  'email.list_new',
+  'email.search',
+  'email.read_thread',
+  'calendar.list_events',
   'desktop.list_windows',
   'desktop.inspect_window',
   'browser.read_page',

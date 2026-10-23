@@ -276,6 +276,40 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /**
+     * The user's own email account, reached directly over IMAP (reading) and
+     * SMTP (sending) with an app password. The password lives in the secret
+     * store, never here. An empty address = not connected.
+     */
+    email: z
+      .object({
+        provider: z.enum(['gmail', 'outlook', 'yahoo', 'icloud', 'custom']).default('gmail'),
+        address: z.string().trim().max(254).regex(/^([^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+)?$/, 'Invalid email address').default(''),
+        displayName: z.string().trim().max(120).default(''),
+        imapHost: z.string().trim().max(253).regex(/^[A-Za-z0-9.-]*$/, 'Invalid host').default(''),
+        imapPort: z.number().int().min(1).max(65535).default(993),
+        imapSecure: z.boolean().default(true),
+        smtpHost: z.string().trim().max(253).regex(/^[A-Za-z0-9.-]*$/, 'Invalid host').default(''),
+        smtpPort: z.number().int().min(1).max(65535).default(465),
+        smtpSecure: z.boolean().default(true),
+        /** Look for new mail every few minutes and show a notification (off by default). */
+        checkNew: z.boolean().default(false),
+        checkMinutes: z.number().int().min(2).max(240).default(10),
+      })
+      .strict()
+      .prefault({}),
+    /**
+     * Google Calendar through "Sign in with Google" (OAuth for installed apps).
+     * The client ID is the user's own Google Cloud project; its secret and the
+     * tokens live in the secret store.
+     */
+    calendar: z
+      .object({
+        googleClientId: z.string().trim().max(200).regex(/^([A-Za-z0-9-]+\.apps\.googleusercontent\.com)?$/, 'Paste the client ID that ends in .apps.googleusercontent.com').default(''),
+        calendarId: z.string().trim().min(1).max(200).default('primary'),
+      })
+      .strict()
+      .prefault({}),
     /** Which task events show a Windows notification (only while Keo's window is not in front). */
     notifications: z
       .object({

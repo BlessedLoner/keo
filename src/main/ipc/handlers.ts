@@ -73,6 +73,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     pencilShortcut: host.pencilShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.pencil, enabled: s.settings.get().shortcuts.pencilEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
+  const emailStatus = () => ({ connected: s.email.connected(), address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
+  const calendarStatus = () => {
+    const at = s.googleAuth.obtainedAt();
+    return { clientId: s.settings.get().calendar.googleClientId, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
+  };
   const webStatus = () => {
     const st = s.settings.get();
     return { hasKey: s.secrets.has('brave'), searchEnabled: st.permissions.webSearchEnabled, fetchEnabled: st.permissions.webFetchEnabled, secretStorage: s.secrets.available() };
@@ -461,6 +466,54 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : String(e), sample: [] };
       }
+    },
+
+    // The email account: settings plus the app password (encrypted; never returned or logged).
+    'email:status': () => emailStatus(),
+    'email:save': ({ password, ...account }) => {
+      const before = s.settings.get().email;
+      const accountChanged = before.address.toLowerCase() !== account.address.toLowerCase() || before.imapHost !== account.imapHost || before.smtpHost !== account.smtpHost;
+      if (!password && (!s.secrets.has('email_password') || accountChanged)) throw new KeoError('password_needed', 'Enter the app password for this account.');
+      if (password) s.secrets.set('email_password', password);
+      s.settings.update({ email: account });
+      s.email.reset();
+      s.log.info('email.account_saved', { provider: account.provider, passwordChanged: !!password });
+      s.audit.record({ kind: 'permission.setting', decision: 'email.account_connected', detail: { provider: account.provider } });
+      return emailStatus();
+    },
+    'email:test': () => s.email.test(abortAfter(60000)),
+    'email:disconnect': () => {
+      s.secrets.delete('email_password');
+      s.settings.update({ email: { address: '', checkNew: false } });
+      s.email.reset();
+      s.log.info('email.account_removed', {});
+      s.audit.record({ kind: 'permission.setting', decision: 'email.account_removed' });
+      return emailStatus();
+    },
+    'calendar:status': () => calendarStatus(),
+    'calendar:setClientSecret': ({ secret }) => {
+      if (secret) s.secrets.set('google_client_secret', secret);
+      else s.secrets.delete('google_client_secret');
+      s.log.info('calendar.client_secret_set', { stored: !!secret });
+      return calendarStatus();
+    },
+    'calendar:signIn': async () => {
+      try {
+        await s.googleAuth.signIn();
+        s.audit.record({ kind: 'permission.setting', decision: 'calendar.google_signed_in' });
+        return { ok: true, message: 'Google Calendar is connected.' };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Google did not complete the sign-in.' };
+      }
+    },
+    'calendar:cancelSignIn': () => {
+      s.googleAuth.cancelSignIn();
+      return calendarStatus();
+    },
+    'calendar:signOut': async () => {
+      await s.googleAuth.signOut();
+      s.audit.record({ kind: 'permission.setting', decision: 'calendar.google_signed_out' });
+      return calendarStatus();
     },
 
     'vision:capture': async ({ hwnd, pid }) => {

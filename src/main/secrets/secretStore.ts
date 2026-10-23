@@ -9,7 +9,19 @@ export interface SecretCipher {
   decrypt(cipher: Buffer): string;
 }
 
-export type SecretName = 'anthropic' | 'openai' | 'openrouter' | 'local' | 'brave' | 'picovoice';
+export type SecretName =
+  | 'anthropic'
+  | 'openai'
+  | 'openrouter'
+  | 'local'
+  | 'brave'
+  | 'picovoice'
+  /** The email account's app password (IMAP and SMTP). */
+  | 'email_password'
+  /** Google OAuth client secret of the user's own "Desktop app" client, if it has one. */
+  | 'google_client_secret'
+  /** Google Calendar tokens (JSON: refresh and access token, expiry). */
+  | 'google_tokens';
 
 /**
  * Stores provider credentials as OS-encrypted blobs in Keo's own profile.

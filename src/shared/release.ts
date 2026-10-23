@@ -22,6 +22,17 @@ export const LINKS = {
   // The ffmpeg that "Set up video tools" downloads: its source code and the build's own page.
   ffmpegSource: 'https://ffmpeg.org/download.html',
   ffmpegBuild: 'https://www.gyan.dev/ffmpeg/builds/',
+  // Email app passwords and "Sign in with Google" setup (Settings → Email & calendar).
+  google2sv: 'https://myaccount.google.com/signinoptions/twosv',
+  googleAppPasswords: 'https://myaccount.google.com/apppasswords',
+  microsoftAppPasswords: 'https://account.live.com/proofs/AppPassword',
+  yahooAppPasswords: 'https://login.yahoo.com/account/security/app-passwords',
+  appleAppPasswords: 'https://account.apple.com/account/manage',
+  googleCloudProject: 'https://console.cloud.google.com/projectcreate',
+  googleCalendarApi: 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com',
+  googleConsentScreen: 'https://console.cloud.google.com/auth/overview',
+  googleCredentials: 'https://console.cloud.google.com/auth/clients',
+  emailCalendarGuide: `https://github.com/${RELEASE.owner}/${RELEASE.repo}/blob/main/docs/EMAIL_AND_CALENDAR.md`,
 } as const;
 
 export type LinkId = keyof typeof LINKS;

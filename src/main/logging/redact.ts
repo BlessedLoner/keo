@@ -12,6 +12,9 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:x-api-key|api-key)\s*[:=]\s*\S+/gi, '[REDACTED_AUTH]'],
   [/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_KEY]'],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[REDACTED_KEY]'],
+  // Google OAuth access and refresh tokens.
+  [/\bya29\.[A-Za-z0-9._-]{20,}/g, '[REDACTED_TOKEN]'],
+  [/\b1\/\/[A-Za-z0-9._-]{20,}/g, '[REDACTED_TOKEN]'],
   [/\b(?:\d[ -]?){13,19}\b/g, '[REDACTED_NUMBER]'],
   [/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, '[REDACTED_IMAGE]'],
 ];
@@ -25,7 +28,7 @@ export function redactString(s: string, maxLen = 2000): string {
 
 /** Returns true when a string looks like it contains a credential. */
 export function containsSecret(s: string): boolean {
-  return PATTERNS.slice(0, 6).some(([re]) => {
+  return PATTERNS.slice(0, 8).some(([re]) => {
     re.lastIndex = 0;
     const hit = re.test(s);
     re.lastIndex = 0;
