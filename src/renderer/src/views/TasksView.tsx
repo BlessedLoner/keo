@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { LiveChatSession, Task } from '@shared/domain';
+import type { BackgroundJob, LiveChatSession, Task } from '@shared/domain';
 import { TaskCard } from '../components/TaskWidgets';
 import { Empty, ErrorBanner, ViewHeader } from '../components/ui';
 import { useApp } from '../state/AppState';
@@ -162,6 +162,42 @@ function LiveChats() {
   );
 }
 
+const JOB_LABEL: Record<BackgroundJob['state'], string> = { queued: 'Queued', running: 'Working', completed: 'Done', failed: 'Failed', cancelled: 'Stopped', interrupted: 'Interrupted' };
+const JOB_CHIP: Record<BackgroundJob['state'], string> = { queued: 'info', running: 'accent', completed: 'ok', failed: 'danger', cancelled: '', interrupted: 'warn' };
+
+/** Long requests Keo works on in the background; their reports go to the conversation that asked. */
+function BackgroundJobs() {
+  const q = useInvoke('jobs:list', {}, { refreshOn: ['jobs:changed'], pollMs: 15000 });
+  const list = q.data ?? [];
+  const active = list.filter((j) => j.state === 'running' || j.state === 'queued');
+  const recent = list.filter((j) => j.state !== 'running' && j.state !== 'queued' && j.finishedAt && Date.now() - Date.parse(j.finishedAt) < 2 * 3600_000).slice(0, 3);
+  if (!active.length && !recent.length) return null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <h3 style={{ margin: '0 0 6px' }}>Background jobs</h3>
+      {[...active, ...recent].map((j) => (
+        <div key={j.id} className="card">
+          <div className="row">
+            <Icon name="tasks" size={16} />
+            <strong className="grow">{j.title}</strong>
+            <span className={`chip ${JOB_CHIP[j.state]}`}>{j.waitingForDesktop ? 'Waiting for the desktop' : JOB_LABEL[j.state]}</span>
+            {(j.state === 'running' || j.state === 'queued') && (
+              <button className="btn sm danger" onClick={() => void invoke('jobs:cancel', { id: j.id })}>
+                Stop
+              </button>
+            )}
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            {j.kind} · started {new Date(j.startedAt ?? j.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {j.finishedAt ? ` · ended ${new Date(j.finishedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+            {j.error ? ` · ${j.error}` : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type Filter = 'attention' | 'active' | 'done' | 'all';
 
 const ATTENTION = new Set(['proposed', 'awaiting_authorization', 'awaiting_clarification', 'outcome_uncertain']);
@@ -196,6 +232,7 @@ export function TasksView() {
       </ViewHeader>
       <div className="view-body">
         <ErrorBanner error={app.tasks.error} onRetry={() => void app.tasks.refresh()} />
+        <BackgroundJobs />
         <LiveChats />
         <GrantsBanner />
         {shown.length === 0 ? (

@@ -6,7 +6,7 @@ import { PorcupineWakeEngine, type PorcupineFactory } from './voice/porcupineEng
 import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type TestWindow } from './desktop/selfTest';
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
-import { AgentService, type PendingQuestion } from './agent/agentService';
+import { AgentService, deriveTitle, type PendingQuestion } from './agent/agentService';
 import { advancedCapabilities, whatsappCheck } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
@@ -20,6 +20,7 @@ import { FfmpegSetup } from './video/setup';
 import { parseDirection, type Word } from './video/recipe';
 import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
+import { BackgroundJobs, backgroundJobCapabilities } from './agent/backgroundJobs';
 import { fileCapabilities } from './capabilities/files';
 import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
 import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
@@ -53,7 +54,7 @@ import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote, nameMentioned } from './agent/quotes';
-import type { AgentEvent, LiveChatSession, Message, Presence } from '../shared/domain';
+import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
 export interface ServiceDeps {
@@ -144,6 +145,8 @@ export class Services {
   readonly web: WebService;
   readonly grants: GrantService;
   readonly live: LiveChatService;
+  /** Long requests running in the background, each in its own hidden conversation. */
+  readonly jobs: BackgroundJobs;
   /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
   readonly capDeps: CapabilityDeps;
   readonly apps: AppDiscovery;
@@ -251,7 +254,7 @@ export class Services {
       clipboard: this.clipboard,
       launchAppId: d.launchApp,
       findUserQuote: (conversationId, quote) => {
-        const msgs = this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user');
+        const msgs = this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user');
         const hit = findQuote(msgs.map((m) => ({ id: m.id, text: m.content })), quote);
         return hit ? { messageId: hit } : null;
       },
@@ -316,6 +319,23 @@ export class Services {
       },
       log: this.log,
     });
+    const jobsFile = path.join(d.profile.userData, 'background-jobs.json');
+    this.jobs = new BackgroundJobs({
+      conversations: this.conversations,
+      agent: () => this.agent,
+      getSettings,
+      audit: this.audit,
+      log: this.log,
+      store: {
+        load: () => (fs.existsSync(jobsFile) ? (JSON.parse(fs.readFileSync(jobsFile, 'utf8')) as { jobs: BackgroundJob[]; hidden: string[] }) : null),
+        save: (all) => {
+          fs.writeFileSync(`${jobsFile}.tmp`, JSON.stringify(all));
+          fs.renameSync(`${jobsFile}.tmp`, jobsFile);
+        },
+      },
+      finished: (job, report) => this.jobFinished(job, report),
+      changed: () => this.push('jobs:changed', {}),
+    });
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -371,17 +391,19 @@ export class Services {
         showPreview: () => this.ui.showVideo?.(),
         outputRoot: () => this.videoOutputRoot(),
         visionDestination: () => this.providers.active().destination(),
-        userTexts: (conversationId) => this.conversations.recentMessages(conversationId, 40).filter((m) => m.role === 'user').map((m) => m.content),
+        userTexts: (conversationId) => this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user').map((m) => m.content),
       }),
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
+      ...backgroundJobCapabilities(() => this.jobs),
       ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
         live: this.live,
         userMessage: (id) => {
           const m = id ? this.conversations.getMessage(id) : null;
-          return m && m.role === 'user' ? m.content : null;
+          // A background job's brief is Keo's text, not the user's.
+          return m && m.role === 'user' && !this.jobs.isJobConversation(m.conversationId) ? m.content : null;
         },
       }),
     ]) {
@@ -399,7 +421,7 @@ export class Services {
       if (!task.conversationId || (task.origin === 'plan' && level !== 'hands_free')) return null;
       const named = step.preview.mustBeNamed;
       if (named) {
-        const said = this.conversations.recentMessages(task.conversationId, 40).filter((m) => m.role === 'user');
+        const said = this.conversations.recentMessages(this.jobs.userConversation(task.conversationId), 40).filter((m) => m.role === 'user');
         if (!nameMentioned(said.map((m) => ({ text: m.content })), named)) return null;
       }
       return level;
@@ -435,10 +457,21 @@ export class Services {
         fs.renameSync(`${pendingFile}.tmp`, pendingFile);
       },
     };
-    this.agent.systemExtra = () =>
+    this.agent.desktopGate = (conversationId, signal) => this.jobs.desktopGate(conversationId, signal);
+    // A new request while the conversation is still busy runs as a background job.
+    this.agent.whenBusy = (conversationId, text) => {
+      const job = this.jobs.start({ title: deriveTitle(text), kind: 'other', parentConversationId: conversationId, brief: `The user asked (their own words): “${text}”` });
+      return job.state === 'running'
+        ? 'I’m still on your last request, so I’ve started this one in the background — I’ll tell you when it’s done.'
+        : 'I’m still on your last request and other jobs are running, so this one is queued — I’ll tell you when it’s done.';
+    };
+    this.agent.systemExtra = (conversationId) =>
+      this.jobs.isJobConversation(conversationId) ? this.live.agentContext() + this.researchContext() + this.videoContext() + this.jobs.jobContext(conversationId) : this.agentExtra();
+    this.agentExtra = () =>
       this.live.agentContext() +
       this.researchContext() +
       this.videoContext() +
+      this.jobs.statusContext() +
       this.activeWindowContext() +
       (this.voiceMode?.isActive()
         ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Sound like a warm, upbeat friend who is great at their job: natural spoken English with contractions, flowing sentences, a little light humour when it fits (never at the user’s expense), and genuine enthusiasm when something works. Keep it short — one to three sentences — with no lists, Markdown, tables or code unless asked (those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
@@ -520,6 +553,11 @@ export class Services {
       log: this.log,
       pauseWake: (p) => this.wake.setVoiceMode(p),
       showApprovals: () => this.ui.showMain?.('tasks'),
+      jobConversations: () =>
+        this.jobs
+          .active()
+          .filter((j) => j.parentConversationId === this.commandConversation())
+          .map((j) => ({ conversationId: j.conversationId, title: j.title })),
       changed: (v) => {
         this.presence.setVoiceMode(v);
         // Cancel a pending recording or speech when voice mode ends.
@@ -550,6 +588,24 @@ export class Services {
       if (channel === 'agent:event') this.presence.agentEvent(payload as AgentEvent);
       p(channel, payload);
     };
+  }
+
+  /** Context for the user's own turns (live chats, results, video, jobs, window, voice). */
+  private agentExtra: () => string = () => '';
+
+  /** A background job ended: its report is in the conversation; tell the user now. */
+  private jobFinished(job: BackgroundJob, report: Message | null): void {
+    this.push('conversations:changed', { conversationId: job.parentConversationId });
+    const prefs = this.settings.get().notifications;
+    const ok = job.state === 'completed';
+    if (ok ? prefs.finished : job.state !== 'cancelled' && prefs.failed) {
+      this.ui.notify(ok ? `Keo finished: ${job.title}` : `Background job ${job.state}: ${job.title}`, spokenVersion(ok ? (job.result ?? '') : (job.error ?? ''), 230) || job.title, 'chat');
+    }
+    // Spoken only in a voice conversation, at the next pause (never over the user or a reply).
+    if (report && job.state !== 'cancelled') {
+      const said = ok ? `The ${job.title} job is done. ${spokenVersion(job.result ?? '', 260)}` : `The ${job.title} job ${job.state}. The details are on screen.`;
+      this.voiceMode.announce(said);
+    }
   }
 
   /** Task events already notified (step/task id + event), so each shows at most once. */
@@ -641,6 +697,7 @@ export class Services {
         }
       }
     }
+    cancelledTurns += this.jobs.cancelAll();
     const revokedGrants = this.grants.revokeAll();
     this.voiceMode.stop('stop_everything');
     const stoppedLiveChats = this.live.stopAll('Stopped with Stop everything');
@@ -1144,6 +1201,8 @@ export class Services {
   start(): { interruptedMessages: number; recovery: ReturnType<TaskOrchestrator['recover']> } {
     const interruptedMessages = this.conversations.markInterrupted();
     const recovery = this.tasks.recover();
+    const interruptedJobs = this.jobs.recover();
+    if (interruptedJobs) this.log.info('jobs.interrupted_on_start', { jobs: interruptedJobs });
     this.tasks.pump();
     // Warm Windows' app list in the background (it takes a few seconds), only if launching is on.
     setTimeout(() => {
@@ -1243,6 +1302,7 @@ export class Services {
     this.live.stopAll('Keo was closed');
     this.grants.revokeAll();
     this.snapshots.clear();
+    this.jobs.shutdown();
     for (const id of this.agent.activeConversations()) this.agent.cancel(id);
     this.tasks.dispose();
     this.video.shutdown();

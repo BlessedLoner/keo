@@ -17,6 +17,7 @@ export interface PushPayloads {
   'results:changed': { id: string };
   'video:changed': { id: string };
   'video:setupChanged': VideoToolsSetup;
+  'jobs:changed': Record<string, never>;
 }
 
 /** Instructions from the main process to a window (never from page content). */

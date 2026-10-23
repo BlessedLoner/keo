@@ -130,6 +130,8 @@ export const SettingsSchema = z
         contextCharBudget: z.number().int().min(2000).max(400000).default(60000),
         memoryTopK: z.number().int().min(0).max(30).default(8),
         approvalWaitSeconds: z.number().int().min(10).max(1800).default(300),
+        /** Background jobs that may run at once (more wait in a queue). */
+        maxBackgroundJobs: z.number().int().min(1).max(6).default(3),
       })
       .strict()
       .prefault({}),

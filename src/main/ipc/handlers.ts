@@ -284,7 +284,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return d;
     },
 
-    'conversations:list': ({ projectId, query }) => s.conversations.list({ projectId: projectId ?? null, ...(query ? { query } : {}) }),
+    // Background jobs' own conversations stay out of the list (their reports are in the conversation that asked).
+    'conversations:list': ({ projectId, query }) => s.conversations.list({ projectId: projectId ?? null, ...(query ? { query } : {}) }).filter((c) => !s.jobs.isJobConversation(c.id)),
     'conversations:create': ({ title, projectId }) => {
       if (projectId) s.projects.require(projectId);
       const c = s.conversations.create(title ?? 'New conversation', projectId ?? null);
@@ -609,6 +610,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'livechat:stop': ({ id }) => ({ stopped: id ? (s.live.stop(id) ? 1 : 0) : s.live.stopAll() }),
     'livechat:sendNow': ({ id }) => s.live.sendDraftNow(id),
     'livechat:discardDraft': ({ id }) => s.live.discardDraft(id),
+    'jobs:list': () => s.jobs.list(),
+    'jobs:cancel': ({ id }) => ({ cancelled: s.jobs.cancel(id) }),
     'grants:list': () => s.grants.list(),
     'grants:revoke': ({ id }) => ({ revoked: s.grants.revoke(id) }),
     'grants:revokeAll': () => ({ revoked: s.grants.revokeAll() }),

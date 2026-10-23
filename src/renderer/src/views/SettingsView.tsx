@@ -1116,6 +1116,7 @@ function Agent({ s, patch }: { s: Settings; patch: Patch }) {
         {num('memoryTopK', 'Memories per request', 'Most relevant confirmed memories included.', 0, 30)}
         {num('maxToolIterations', 'Max tool rounds per reply', 'Stops runaway tool loops.', 1, 20)}
         {num('approvalWaitSeconds', 'Wait for approval (seconds)', 'After this the reply continues and the task stays pending.', 10, 1800)}
+        {num('maxBackgroundJobs', 'Background jobs at once', 'Long requests (research, video) run in the background; more wait in a queue. Only one at a time uses the mouse and keyboard.', 1, 6)}
       </div>
     </section>
   );

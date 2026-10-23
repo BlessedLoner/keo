@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentPhase, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
-import type { CapabilityRegistry } from '../capabilities/registry';
+import type { Admission, CapabilityRegistry } from '../capabilities/registry';
 import { CapabilityError } from '../capabilities/types';
 import type { Logger } from '../logging/logger';
 import type { AuditRepo } from '../repos/audit';
@@ -113,6 +113,18 @@ export class AgentService {
    */
   interceptor: ((conversationId: string, text: string) => string | null) | null = null;
 
+  /**
+   * A new request while this conversation is still busy: Keo may hand it to a
+   * background job instead of refusing. Returns Keo's reply, or null to refuse.
+   */
+  whenBusy: ((conversationId: string, text: string) => string | null) | null = null;
+
+  /**
+   * Waits until this turn may drive the mouse and keyboard (background jobs
+   * share one desktop). Returns a release for after the action, or null.
+   */
+  desktopGate: ((conversationId: string, signal: AbortSignal) => Promise<(() => void) | null>) | null = null;
+
   private readonly active = new Map<string, ActiveTurn>();
 
   constructor(
@@ -144,8 +156,31 @@ export class AgentService {
   private readonly spoken = new Set<string>();
 
   /** Persists the user message and starts a turn in the background. */
-  send(conversationId: string, text: string, opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>; voice?: boolean } = {}): { userMessageId: string; done: Promise<Message> } {
-    if (this.active.has(conversationId)) throw new KeoError('busy', 'Keo is still responding in this conversation. Stop it or wait.');
+  send(
+    conversationId: string,
+    text: string,
+    opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>; voice?: boolean; background?: boolean } = {},
+  ): { userMessageId: string; done: Promise<Message> } {
+    if (this.active.has(conversationId)) {
+      // A new request (not a picture, not a one-word "yes"/"stop") can go to a background job.
+      if (!opts.background && !opts.images?.length && this.whenBusy && isNewRequest(text)) {
+        this.conversations.require(conversationId);
+        const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
+        let handed: string | null;
+        try {
+          handed = this.whenBusy(conversationId, text);
+        } catch (e) {
+          handed = null;
+          this.log.warn('agent.busy_handoff_failed', { error: errorMessage(e) });
+        }
+        if (handed !== null) {
+          const reply = this.conversations.addMessage({ conversationId, role: 'assistant', content: handed, status: 'complete' });
+          return { userMessageId: user.id, done: Promise.resolve(reply) };
+        }
+        this.conversations.deleteMessage(user.id);
+      }
+      throw new KeoError('busy', 'Keo is still responding in this conversation. Stop it or wait.');
+    }
     const conv = this.conversations.require(conversationId);
     const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
     if (opts.images?.length) this.pictures.set(user.id, opts.images);
@@ -155,7 +190,8 @@ export class AgentService {
     }
     let handled: string | null;
     try {
-      handled = this.interceptor?.(conversationId, text) ?? null;
+      // A background job's brief is Keo's own text, never a command for Keo itself.
+      handled = opts.background ? null : (this.interceptor?.(conversationId, text) ?? null);
     } catch (e) {
       handled = `That didn't work: ${errorMessage(e)}`;
     }
@@ -493,8 +529,7 @@ export class AgentService {
       onPending: (a: ToolActivity) => void;
     },
   ): Promise<{ activity: ToolActivity; content: string; isError: boolean }> {
-    const settings = this.getSettings();
-    const capabilityId = this.registry.resolveToolName(call.name) ?? call.name;
+    const capabilityId =this.registry.resolveToolName(call.name) ?? call.name;
     const base = { callId: call.id, capabilityId };
     if (call.parseError) {
       return { activity: { ...base, summary: 'Malformed tool request', outcome: 'rejected', detail: call.parseError }, content: json({ status: 'rejected', error: call.parseError }), isError: true };
@@ -509,6 +544,33 @@ export class AgentService {
     }
     const cap = admission.capability;
     const summary = admission.preview.summary;
+
+    // Mouse and keyboard: one owner at a time across background jobs and the user's turns.
+    let releaseDesktop: (() => void) | null = null;
+    if (this.desktopGate && (cap.permissions.includes('desktop.control') || cap.permissions.includes('desktop.launch'))) {
+      try {
+        releaseDesktop = await this.desktopGate(ctx.conversationId, ctx.signal);
+      } catch (e) {
+        if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
+        throw e;
+      }
+    }
+    try {
+      return await this.runAdmitted(call, admission, ctx, base, summary);
+    } finally {
+      releaseDesktop?.();
+    }
+  }
+
+  private async runAdmitted(
+    call: ToolCall,
+    admission: Extract<Admission, { ok: true }>,
+    ctx: { conversationId: string; sourceMessageId: string; correlationId: string; signal: AbortSignal; turn: ActiveTurn; messageId: string; onPending: (a: ToolActivity) => void },
+    base: { callId: string; capabilityId: string },
+    summary: string,
+  ): Promise<{ activity: ToolActivity; content: string; isError: boolean }> {
+    const settings = this.getSettings();
+    const cap = admission.capability;
 
     // Read-only / proposal-only capabilities run immediately (still validated + audited).
     if (!admission.requiresApproval && !cap.consequential) {
@@ -623,6 +685,14 @@ function hostOf(u: string): string {
   } catch {
     return 'the page';
   }
+}
+
+/** Words that answer or control a running reply rather than ask for something new. */
+const NOT_A_REQUEST = /^\s*(yes|yeah|yep|no|nope|ok(ay)?|sure|stop|cancel|wait|thanks?|thank you|never ?mind|go ahead|do it)\b[\s.!?]*$/i;
+
+function isNewRequest(text: string): boolean {
+  const t = text.trim();
+  return t.length >= 8 && !NOT_A_REQUEST.test(t);
 }
 
 export function deriveTitle(text: string): string {
