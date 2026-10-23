@@ -252,6 +252,19 @@ describe('email over IMAP/SMTP', () => {
     expect(r.step.error).toMatch(/app password/);
     expect(r.step.error).not.toContain(PASSWORD);
   });
+
+  it('a refused test login is remembered until it works or the account is saved again', async () => {
+    const { server } = setup();
+    expect(h.services.email.lastTestOk).toBeNull();
+    server.refuseLogin = true;
+    expect((await h.services.email.test(new AbortController().signal)).ok).toBe(false);
+    expect(h.services.email.lastTestOk).toBe(false);
+    server.refuseLogin = false;
+    expect((await h.services.email.test(new AbortController().signal)).ok).toBe(true);
+    expect(h.services.email.lastTestOk).toBe(true);
+    h.services.email.reset();
+    expect(h.services.email.lastTestOk).toBeNull();
+  });
 });
 
 describe('message building', () => {

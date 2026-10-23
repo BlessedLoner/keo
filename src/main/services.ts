@@ -1,3 +1,4 @@
+import { builtinGoogleClient, type GoogleClient } from './calendar/builtinClient';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AutoSpeechEngine, ModernSpeechEngine } from './voice/modernSpeech';
@@ -116,6 +117,8 @@ export interface ServiceDeps {
   mailSender?: MailSender;
   /** HTTP to Google (sign-in and Calendar); tests inject a fake Google. */
   googleFetch?: FetchLike;
+  /** Keo's built-in Google client (tests inject one; by default the one baked into the build, if any). */
+  googleClient?: GoogleClient | null;
   googleEndpoints?: typeof GOOGLE_ENDPOINTS;
   calendarApi?: string;
   /** Opens "Sign in with Google" in the default browser (the app uses the system browser). */
@@ -384,9 +387,10 @@ export class Services {
       log: this.log,
       notify: (title, body) => this.ui.notify(title, body),
     });
+    this.builtinGoogle = d.googleClient !== undefined ? d.googleClient : builtinGoogleClient();
     this.googleAuth = new GoogleAuth({
-      clientId: () => getSettings().calendar.googleClientId,
-      clientSecret: () => this.secrets.get('google_client_secret'),
+      clientId: () => this.googleClientId(),
+      clientSecret: () => (getSettings().calendar.googleClientId ? this.secrets.get('google_client_secret') : (this.builtinGoogle?.secret ?? null)),
       load: () => {
         try {
           const raw = this.secrets.get('google_tokens');
@@ -433,7 +437,7 @@ export class Services {
       }),
       ...fileCapabilities(capDeps),
       ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
-      ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => getSettings().calendar.googleClientId, timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
+      ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => this.googleClientId(), timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
       ...videoCapabilities({
         ...capDeps,
         studio: this.video,
@@ -1227,6 +1231,14 @@ export class Services {
   }
 
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
+
+  /** Keo's built-in Google client, if this build has one. */
+  readonly builtinGoogle: GoogleClient | null;
+
+  /** The Google client in use: the user's own (Settings) if set, otherwise Keo's built-in one. */
+  googleClientId(): string {
+    return this.settings.get().calendar.googleClientId || this.builtinGoogle?.id || '';
+  }
 
   /** The main window reports a finished recording or utterance. */
   voiceDone(id: string, text: string | null, reason: string): void {

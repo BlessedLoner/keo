@@ -62,9 +62,11 @@ To disconnect, choose **Disconnect** (the app password is deleted from Keo). To 
 
 Keo uses Google's standard sign-in for installed apps: your **own browser** opens Google's sign-in page; Keo never sees your Google password. Keo asks only for the `calendar.events` permission (see and change events in your calendars) — not Gmail, contacts, Drive or your profile. The sign-in is stored encrypted with Windows (DPAPI).
 
-Because Keo is open-source and has no central server, it does not ship a Google client of its own: you create a free Google Cloud **client ID** once (about five minutes). Nothing is billed.
+**Keo releases include Keo's own Google client**, so all you do is choose **Sign in with Google** in *Settings → Email & calendar*, pick your account in the browser and allow calendar access. Until Google has verified Keo, Google shows *"Google hasn't verified this app"*: choose *Advanced → Go to Keo*. (How the publisher sets this up: [GOOGLE_CLIENT_SETUP.md](GOOGLE_CLIENT_SETUP.md).)
 
-### One-time setup
+The steps below are only needed for a build without the built-in client (a local or forked build), or if you prefer your own Google Cloud client. *Settings → Advanced: use your own Google Cloud client* — your client then takes precedence. Nothing is billed.
+
+### One-time setup (own client only)
 
 1. **Create a project.** Go to <https://console.cloud.google.com/projectcreate>, name it `Keo`, create it, and make sure it is selected at the top of the page.
 2. **Turn on the Google Calendar API.** Open <https://console.cloud.google.com/apis/library/calendar-json.googleapis.com> and choose **Enable**.

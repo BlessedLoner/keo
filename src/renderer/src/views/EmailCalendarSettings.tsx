@@ -115,6 +115,7 @@ function EmailAccount({ s, patch }: { s: Settings; patch: Patch }) {
       setPassword('');
       ui.toast('Email account saved (the app password is encrypted)', 'success');
       setTest(await invoke('email:test'));
+      setStatus(await invoke('email:status'));
     } catch (err) {
       ui.error(errText(err));
     } finally {
@@ -126,7 +127,13 @@ function EmailAccount({ s, patch }: { s: Settings; patch: Patch }) {
     <section className="card">
       <div className="row">
         <h2 style={{ margin: 0 }}>Email account</h2>
-        {connected ? <span className="chip ok">Connected: {status?.address}</span> : <span className="chip warn">Not connected</span>}
+        {connected && status?.loginRefused ? (
+          <span className="chip warn">Saved, but the login was refused</span>
+        ) : connected ? (
+          <span className="chip ok">Connected: {status?.address}</span>
+        ) : (
+          <span className="chip warn">Not connected</span>
+        )}
       </div>
       <p className="muted small">
         Keo reads, searches, drafts and sends your mail directly with your mail server (IMAP and SMTP over TLS), not by clicking around a web page. Reading happens when you ask; the messages Keo reads go to your active AI provider to answer you. Sending, replying and invitations always ask
@@ -205,6 +212,7 @@ function EmailAccount({ s, patch }: { s: Settings; patch: Patch }) {
               setBusy(true);
               try {
                 setTest(await invoke('email:test'));
+                setStatus(await invoke('email:status'));
               } catch (err) {
                 ui.error(errText(err));
               } finally {
@@ -257,6 +265,10 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
   useEffect(() => {
     void invoke('calendar:status').then(setStatus, (err) => ui.error(errText(err)));
   }, [ui, s.calendar.googleClientId]);
+  // Keo's built-in client is used unless the user entered their own.
+  const builtIn = !!status?.builtIn;
+  const own = !!clientId.trim();
+  const canSignIn = own ? /\.apps\.googleusercontent\.com$/.test(clientId.trim()) : builtIn;
   const days = status?.signedInAt ? Math.floor((Date.now() - new Date(status.signedInAt).getTime()) / 86400_000) : null;
   const signIn = async () => {
     setSigning(true);
@@ -286,8 +298,9 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
         “Sign in with Google” lets Keo see and change your calendar’s events (only that: not your mail, contacts or files). Adding, changing and deleting events always ask you first; inviting people always asks. Sign-in happens in your own browser; Keo keeps the sign-in encrypted and never
         sees your Google password. Without Google Calendar, Keo can still set meetings by emailing a calendar invitation (.ics).
       </p>
-      <details className="small" open={!s.calendar.googleClientId}>
-        <summary>One-time setup: your own Google Cloud client (about 5 minutes)</summary>
+      {builtIn && !own && !status?.signedIn && <p className="small">Choose Sign in with Google, pick your account in the browser and allow calendar access. That’s all.</p>}
+      <details className="small" open={!builtIn && !s.calendar.googleClientId}>
+        <summary>{builtIn ? 'Advanced: use your own Google Cloud client instead' : 'One-time setup: your own Google Cloud client (about 5 minutes)'}</summary>
         <ol style={{ paddingLeft: 18 }}>
           <li>
             Create a Google Cloud project (any name, e.g. “Keo”). <LinkButton id="googleCloudProject">New project</LinkButton>
@@ -306,10 +319,9 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
         <p className="muted">
           While the app’s publishing status is <em>Testing</em>, Google ends the sign-in after 7 days and Keo will ask you to sign in again. Publishing the app (Audience → Publish app) stops that; for your own use Google does not require verification. <LinkButton id="emailCalendarGuide">Full guide</LinkButton>
         </p>
-      </details>
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="g-client">OAuth client ID</label>
+          <label htmlFor="g-client">{builtIn ? 'Your own OAuth client ID (leave empty to use Keo’s)' : 'OAuth client ID'}</label>
           <input id="g-client" className="input" spellCheck={false} autoComplete="off" value={clientId} placeholder="1234…apps.googleusercontent.com" onChange={(ev) => setClientId(ev.target.value)} onBlur={() => clientId.trim() !== s.calendar.googleClientId && void patch({ calendar: { googleClientId: clientId.trim() } })} />
         </div>
         <div className="field">
@@ -324,6 +336,7 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
           </div>
         </div>
       </div>
+      </details>
       <div className="row">
         {signing ? (
           <>
@@ -333,7 +346,7 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
             </button>
           </>
         ) : (
-          <button className="btn primary" disabled={!/\.apps\.googleusercontent\.com$/.test(clientId.trim())} onClick={() => void signIn()}>
+          <button className="btn primary" disabled={!canSignIn} onClick={() => void signIn()}>
             <Icon name="key" size={14} /> {status?.signedIn ? 'Sign in again' : 'Sign in with Google'}
           </button>
         )}
@@ -343,7 +356,7 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
           </button>
         )}
       </div>
-      {status?.signedIn && days !== null && <p className="muted small">Signed in {days === 0 ? 'today' : `${days} day(s) ago`}. If your Google app is still in Testing, the sign-in ends after 7 days.</p>}
+      {status?.signedIn && days !== null && (own || !builtIn) && <p className="muted small">Signed in {days === 0 ? 'today' : `${days} day(s) ago`}. If your Google app is still in Testing, the sign-in ends after 7 days.</p>}
       {note && (
         <div className={`banner ${note.ok ? 'info' : 'danger'} small`} style={{ marginTop: 10 }}>
           <Icon name={note.ok ? 'check' : 'warn'} size={15} />

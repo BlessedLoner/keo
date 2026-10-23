@@ -7,6 +7,12 @@ const shared = { '@shared': resolve(__dirname, 'src/shared') };
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    // Keo's own Google OAuth client (see src/main/calendar/builtinClient.ts): from the build's
+    // environment, never from the repo.
+    define: {
+      __KEO_GOOGLE_CLIENT_ID__: JSON.stringify(process.env.KEO_GOOGLE_CLIENT_ID ?? ''),
+      __KEO_GOOGLE_CLIENT_SECRET__: JSON.stringify(process.env.KEO_GOOGLE_CLIENT_SECRET ?? ''),
+    },
     resolve: { alias: shared },
     build: {
       rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } },

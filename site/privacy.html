@@ -22,6 +22,7 @@
   <h2>What stays on your PC</h2>
   <ul>
     <li>Conversations, memories, projects, tasks, the audit log and settings — in your Windows profile (<code>%APPDATA%\Keo</code>).</li>
+    <li>Your email app password and your Google sign-in — encrypted the same way. Keo has no server: they are only ever sent to your own mail server and to Google.</li>
     <li>API keys — encrypted with Windows' own data protection; Keo never shows them again.</li>
     <li>Screen captures you take in Keo — kept for 24 hours by default (adjustable), then deleted.</li>
     <li>Wake-word audio (“Hey Keo”) — processed by Windows speech recognition on your PC and discarded.</li>
@@ -34,6 +35,18 @@
     <li><strong>OpenAI speech-to-text</strong>, only if you turn it on and consent: recorded voice commands.</li>
     <li><strong>GitHub</strong>: once a day Keo asks GitHub for the latest version and, when there is one, downloads the new installer from GitHub in the background. No personal data is sent; you can turn this off in Settings → Privacy &amp; data.</li>
     <li><strong>WhatsApp</strong>: messages you approve (or allow in a live chat) are sent from your own WhatsApp, as if you typed them.</li>
+    <li><strong>Your email provider</strong>, if you connect an account: Keo signs in to your own mail server (IMAP and SMTP over TLS) to read, search and draft mail when you ask, and sends only messages you approved. Mail Keo reads for you goes to your AI provider as part of that request.</li>
+    <li><strong>Google</strong>, if you choose Sign in with Google: see below.</li>
+  </ul>
+
+  <h2>Google Calendar (Google user data)</h2>
+  <ul>
+    <li><strong>What Keo asks for</strong>: only the Google Calendar events permission (<code>calendar.events</code>) — to see your events, find free time, and add, change or delete events. Not your Gmail, contacts, Drive or anything else.</li>
+    <li><strong>How it is used</strong>: only to do what you ask Keo in the app — for example “what’s on my calendar tomorrow?” or “book a meeting on Friday at 3”. Adding, changing and deleting events always asks you first, and inviting people always asks.</li>
+    <li><strong>Where it goes</strong>: calendar data comes straight from Google to your PC. To answer you, the events relevant to your request are sent to the AI provider you connected (see above), as part of that one request. Keo has no server; no one else receives your Google data. It is not sold, not used for advertising, and not used to train AI models.</li>
+    <li><strong>Storage</strong>: Keo keeps only the sign-in (encrypted on your PC), not a copy of your calendar. Events you discussed stay in that conversation’s history on your PC until you delete it.</li>
+    <li><strong>Removing access</strong>: Settings → Email &amp; calendar → Sign out (Keo also revokes the access at Google), or at any time in your Google Account → Security → Your connections to third-party apps.</li>
+    <li>Keo’s use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</li>
   </ul>
 
   <h2>Your control</h2>

@@ -73,10 +73,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     pencilShortcut: host.pencilShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.pencil, enabled: s.settings.get().shortcuts.pencilEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
-  const emailStatus = () => ({ connected: s.email.connected(), address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
+  const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
-    return { clientId: s.settings.get().calendar.googleClientId, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
+    return { clientId: s.settings.get().calendar.googleClientId, builtIn: !!s.builtinGoogle, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
   };
   const webStatus = () => {
     const st = s.settings.get();

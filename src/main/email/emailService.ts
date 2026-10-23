@@ -217,12 +217,17 @@ export class EmailService {
   }
 
   /** Settings → Test: log in to both servers, send nothing. */
+  /** The last connection test since the account was saved: null until one ran. */
+  lastTestOk: boolean | null = null;
+
   async test(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
     try {
       const unread = await this.session(signal, (c) => c.search('inbox', { unseen: true }));
       await this.sender.verify(this.account());
+      this.lastTestOk = true;
       return { ok: true, message: `Connected. ${unread.length} unread message(s) in the inbox, and the outgoing server accepted the login. Nothing was sent.` };
     } catch (e) {
+      this.lastTestOk = false;
       return { ok: false, message: e instanceof Error ? e.message : 'Could not connect.' };
     }
   }
@@ -282,6 +287,7 @@ export class EmailService {
 
   /** Forget the account's state (sign-out / account change). */
   reset(): void {
+    this.lastTestOk = null;
     this.known.clear();
     this.notified = null;
     this.lastCheck = 0;

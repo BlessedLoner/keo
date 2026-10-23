@@ -15,6 +15,8 @@ const b64url = (b: Buffer) => b.toString('base64').replace(/\+/g, '-').replace(/
 
 /** Google's token endpoint and Calendar API, in memory. No request leaves the process. */
 class FakeGoogle {
+  /** The client Google knows. */
+  clientId = CLIENT_ID;
   challenge = '';
   redirectUri = '';
   code = 'fake-auth-code-1';
@@ -36,7 +38,7 @@ class FakeGoogle {
     if (url === ENDPOINTS.token) {
       const p = Object.fromEntries(new URLSearchParams(init.body ?? ''));
       this.tokenCalls.push(p);
-      if (p.client_id !== CLIENT_ID) return res(401, { error: 'invalid_client' });
+      if (p.client_id !== this.clientId) return res(401, { error: 'invalid_client' });
       if (p.grant_type === 'authorization_code') {
         const ok = p.code === this.code && p.redirect_uri === this.redirectUri && b64url(crypto.createHash('sha256').update(p.code_verifier ?? '').digest()) === this.challenge;
         if (!ok) return res(400, { error: 'invalid_grant' });
@@ -85,7 +87,7 @@ class FakeGoogle {
     const u = new URL(url);
     expect(`${u.origin}${u.pathname}`).toBe(ENDPOINTS.auth);
     const q = u.searchParams;
-    expect(q.get('client_id')).toBe(CLIENT_ID);
+    expect(q.get('client_id')).toBe(this.clientId);
     expect(q.get('response_type')).toBe('code');
     expect(q.get('scope')).toBe(CALENDAR_SCOPE);
     expect(q.get('code_challenge_method')).toBe('S256');
@@ -111,9 +113,11 @@ afterEach(async () => {
   await h?.close();
 });
 
-function setup(o: { signIn?: 'allow' | 'deny'; clientId?: string } = {}) {
+const BUILTIN = { id: '9999-keo-builtin.apps.googleusercontent.com', secret: 'GOCSPX-fake-builtin-secret' };
+
+function setup(o: { signIn?: 'allow' | 'deny'; clientId?: string; builtin?: boolean } = {}) {
   const g = new FakeGoogle();
-  h = makeHarness({ deps: { googleFetch: g.fetch, googleEndpoints: ENDPOINTS, calendarApi: API, openBrowser: g.browser(o.signIn ?? 'allow') } });
+  h = makeHarness({ deps: { googleFetch: g.fetch, googleEndpoints: ENDPOINTS, calendarApi: API, openBrowser: g.browser(o.signIn ?? 'allow'), ...(o.builtin ? { googleClient: BUILTIN } : {}) } });
   h.services.settings.update({ calendar: { googleClientId: o.clientId ?? CLIENT_ID } });
   h.services.secrets.set('google_client_secret', CLIENT_SECRET);
   return g;
@@ -172,6 +176,24 @@ describe('Sign in with Google (OAuth for installed apps)', () => {
     await expect(h.services.googleAuth.signIn()).rejects.toThrow(/client ID/);
     const r = await run('calendar.list_events', {});
     expect('rejected' in r && r.rejected).toMatch(/Settings → Email & calendar/);
+  });
+
+  it('with Keo’s built-in client, signing in needs no setup and uses that client and its secret', async () => {
+    const g = setup({ clientId: '', builtin: true });
+    g.clientId = BUILTIN.id;
+    h.services.secrets.delete('google_client_secret');
+    await h.services.googleAuth.signIn();
+    expect(g.tokenCalls[0]!.client_id).toBe(BUILTIN.id);
+    expect(g.tokenCalls[0]!.client_secret).toBe(BUILTIN.secret);
+    expect(h.services.registry.toolSpecs().map((t) => t.name)).toContain('calendar__list_events');
+    expect(fs.readFileSync(path.join(h.dir, 'settings.json'), 'utf8')).not.toContain(BUILTIN.secret);
+  });
+
+  it('the user’s own client ID (and secret) take precedence over the built-in one', async () => {
+    const g = setup({ builtin: true });
+    await h.services.googleAuth.signIn();
+    expect(g.tokenCalls[0]!.client_id).toBe(CLIENT_ID);
+    expect(g.tokenCalls[0]!.client_secret).toBe(CLIENT_SECRET);
   });
 
   it('refreshes an expired access token and keeps the refresh token', async () => {

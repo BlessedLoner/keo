@@ -37,6 +37,10 @@ jobs:
         env:
           FORCE_COLOR: '0'
           NO_COLOR: '1'
+          # Keo's own Google OAuth client (Desktop app) for one-click "Sign in with Google".
+          # Repository secrets; when absent, the build simply has no built-in client.
+          KEO_GOOGLE_CLIENT_ID: ${{ secrets.KEO_GOOGLE_CLIENT_ID }}
+          KEO_GOOGLE_CLIENT_SECRET: ${{ secrets.KEO_GOOGLE_CLIENT_SECRET }}
         run: |
           check() {
             local name="$1"; shift
@@ -47,6 +51,14 @@ jobs:
             fi
             echo "$name passed" >> "$GITHUB_STEP_SUMMARY"
           }
+          # Whether this build carries Keo's built-in Google client (never the values).
+          if [ -n "$KEO_GOOGLE_CLIENT_ID" ] && [ -n "$KEO_GOOGLE_CLIENT_SECRET" ]; then
+            echo "::notice title=Google sign-in::Built-in Google client included"
+            echo "Built-in Google client: included" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=Google sign-in::No built-in Google client (KEO_GOOGLE_CLIENT_ID / KEO_GOOGLE_CLIENT_SECRET secrets missing)"
+            echo "Built-in Google client: missing" >> "$GITHUB_STEP_SUMMARY"
+          fi
           check typecheck npm run typecheck
           check lint npm run lint
           check test npm test

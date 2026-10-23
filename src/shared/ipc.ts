@@ -455,7 +455,10 @@ export interface WebStatus {
 
 /** The email account, without its password (only whether one is stored). */
 export interface EmailStatus {
+  /** An account and app password are saved (not that the server accepted them: see loginRefused). */
   connected: boolean;
+  /** The last connection test since saving failed. */
+  loginRefused: boolean;
   address: string;
   hasPassword: boolean;
   secretStorage: boolean;
@@ -463,7 +466,10 @@ export interface EmailStatus {
 
 /** Google Calendar sign-in state (never the tokens or the client secret). */
 export interface CalendarStatus {
+  /** The user's own client ID (Settings); empty when Keo's built-in client is used. */
   clientId: string;
+  /** This build ships Keo's own Google client: users only choose Sign in with Google. */
+  builtIn: boolean;
   hasClientSecret: boolean;
   signedIn: boolean;
   signingIn: boolean;
