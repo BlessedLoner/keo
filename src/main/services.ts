@@ -14,6 +14,13 @@ import { appCapabilities } from './capabilities/apps';
 import { researchCapabilities } from './capabilities/research';
 import { screenCapabilities, type Mark } from './capabilities/screen';
 import { videoCapabilities } from './capabilities/video';
+import { emailCapabilities } from './capabilities/email';
+import { calendarCapabilities } from './capabilities/calendar';
+import { EmailService } from './email/emailService';
+import type { MailConnector } from './email/mailbox';
+import type { MailSender } from './email/smtp';
+import { GoogleAuth, GOOGLE_ENDPOINTS, type FetchLike, type GoogleTokens } from './calendar/googleAuth';
+import { GoogleCalendar } from './calendar/googleCalendar';
 import { VideoStudio } from './video/studio';
 import { locateFfmpeg, ProcessRunner, type FfmpegRunner } from './video/ffmpeg';
 import { FfmpegSetup } from './video/setup';
@@ -103,6 +110,15 @@ export interface ServiceDeps {
   pickVideo?: (what: 'template' | 'clips_folder' | 'music') => Promise<string | null>;
   /** The user's Videos folder (finished videos go to Videos\Keo). */
   videosDir?: string;
+  /** IMAP and SMTP for the email account (tests inject fakes; no test reaches a mail server). */
+  mailConnect?: MailConnector;
+  mailSender?: MailSender;
+  /** HTTP to Google (sign-in and Calendar); tests inject a fake Google. */
+  googleFetch?: FetchLike;
+  googleEndpoints?: typeof GOOGLE_ENDPOINTS;
+  calendarApi?: string;
+  /** Opens "Sign in with Google" in the default browser (the app uses the system browser). */
+  openBrowser?: (url: string) => Promise<void>;
   /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
   liveChatTiming?: { pollMs?: number; debounceMs?: number; minGapMs?: number; sleep?: (ms: number) => Promise<void> };
 }
@@ -150,6 +166,11 @@ export class Services {
   readonly workflows: WorkflowStore;
   readonly results = new ResearchResults();
   readonly video: VideoStudio;
+  /** The user's own email account (IMAP/SMTP with an app password). */
+  readonly email: EmailService;
+  /** "Sign in with Google" and Google Calendar. */
+  readonly googleAuth: GoogleAuth;
+  readonly calendar: GoogleCalendar;
   /** "Set up video tools": Keo's own ffmpeg, downloaded on the user's click. */
   readonly ffmpegSetup: FfmpegSetup;
   private readonly videosDir: string | null;
@@ -335,6 +356,33 @@ export class Services {
       },
       ...(d.liveChatTiming ?? {}),
     });
+    this.email = new EmailService({
+      settings: getSettings,
+      password: () => this.secrets.get('email_password'),
+      ...(d.mailConnect ? { connect: d.mailConnect } : {}),
+      ...(d.mailSender ? { sender: d.mailSender } : {}),
+      log: this.log,
+      notify: (title, body) => this.ui.notify(title, body),
+    });
+    this.googleAuth = new GoogleAuth({
+      clientId: () => getSettings().calendar.googleClientId,
+      clientSecret: () => this.secrets.get('google_client_secret'),
+      load: () => {
+        try {
+          const raw = this.secrets.get('google_tokens');
+          return raw ? (JSON.parse(raw) as GoogleTokens) : null;
+        } catch {
+          return null;
+        }
+      },
+      save: (t) => this.secrets.set('google_tokens', JSON.stringify(t)),
+      clear: () => this.secrets.delete('google_tokens'),
+      openBrowser: d.openBrowser ?? (() => Promise.reject(new Error('Signing in with Google works only in the Keo app.'))),
+      ...(d.googleFetch ? { fetch: d.googleFetch } : {}),
+      ...(d.googleEndpoints ? { endpoints: d.googleEndpoints } : {}),
+      log: this.log,
+    });
+    this.calendar = new GoogleCalendar(this.googleAuth, () => getSettings().calendar.calendarId, { ...(d.googleFetch ? { fetch: d.googleFetch } : {}), ...(d.calendarApi ? { base: d.calendarApi } : {}) });
     for (const cap of [
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
@@ -364,6 +412,8 @@ export class Services {
         workRoot: () => path.join(d.profile.userData, 'research'),
       }),
       ...fileCapabilities(capDeps),
+      ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
+      ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => getSettings().calendar.googleClientId, timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
       ...videoCapabilities({
         ...capDeps,
         studio: this.video,
@@ -1164,6 +1214,8 @@ export class Services {
     }
     this.retentionTimer = setInterval(purge, 15 * 60 * 1000);
     this.retentionTimer.unref?.();
+    // New-mail check (Settings → Email & calendar; off by default): it only runs when switched on.
+    this.email.startWatcher();
     this.log.info('app.recovered', { interruptedMessages, ...recovery });
     return { interruptedMessages, recovery };
   }
@@ -1233,11 +1285,14 @@ export class Services {
     });
     this.db.db.exec('VACUUM');
     this.secrets.clear();
+    this.email.reset();
     this.log.info('data.deleted_all', {});
   }
 
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.email.stopWatcher();
+    this.googleAuth.cancelSignIn();
     this.voiceMode.stop('closing');
     this.wake.stop();
     this.live.stopAll('Keo was closed');

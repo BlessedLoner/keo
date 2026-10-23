@@ -399,6 +399,11 @@ app.whenReady().then(() => {
       captureScreen: () => captureScreen(),
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
+      // "Sign in with Google" opens Google's own page in the user's browser (https only).
+      openBrowser: async (url) => {
+        if (!url.startsWith('https://accounts.google.com/')) throw new Error('Not a Google sign-in page.');
+        await shell.openExternal(url);
+      },
     });
     services.setPush(push);
     const svcForUpdates = services;

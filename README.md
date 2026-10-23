@@ -6,6 +6,7 @@ Keo is a personal AI agent for Windows: a desktop app that talks with you, remem
 
 - **Conversation** — streaming replies, history, rename/delete/search, stop, retry, interruption recovery.
 - **Memory** — source-attributed, versioned memory. Keo learns durable facts you tell it in chat (your name, where you live, work, people, preferences) and saves them automatically **only when it can quote your own words**; anything else waits for your confirmation. You can correct, supersede or delete everything; conflicts are flagged, never silently resolved.
+- **Email & calendar** — your own mailbox over IMAP/SMTP with an app password (check new mail, search, summarise threads, drafts, replies, sending) and Google Calendar through *Sign in with Google* (free time, appointments, meetings with Meet links). Sending, inviting and deleting always ask you first (opt-in).
 - **Research** — web search (Brave Search with your key, or DuckDuckGo with no key) and reading of public web pages, with cited sources (opt-in).
 - **Projects** — objectives, decisions, blockers, open questions and progress, each marked with who stated it.
 - **Capabilities** — a typed registry (16 built-ins) with strict schemas, risk levels, timeouts and audit records.
@@ -65,6 +66,16 @@ Open **Settings → Providers** (or click the provider chip in the title bar):
 4. **Local model** — any OpenAI-compatible server on `127.0.0.1`/`localhost` (Ollama: `http://127.0.0.1:11434/v1`). Non-loopback URLs are refused.
 
 Keys are encrypted with Windows DPAPI (Electron `safeStorage`) and never shown again or logged. Keo does not reuse any other application's credentials.
+
+## Email and calendar
+
+Keo reads and sends your mail **directly with your mail server**, and books meetings through **Google Calendar's API** — it does not click around Gmail or Outlook in a browser. Step-by-step setup: [docs/EMAIL_AND_CALENDAR.md](docs/EMAIL_AND_CALENDAR.md).
+
+1. **Settings → Email & calendar → Email account**: your address, the provider (Gmail, Outlook/Hotmail, Yahoo, iCloud or your own IMAP/SMTP servers) and an **app password** (Gmail needs 2-Step Verification for app passwords; the card links to the right pages). *Save and test* logs in to both servers and sends nothing. The app password is encrypted with Windows (DPAPI).
+2. Optional: **New mail** — Keo checks every few minutes and notifies you (“2 new emails from …”). Off by default.
+3. Optional: **Google Calendar → Sign in with Google**. You create a free Google Cloud *Desktop app* client once (the card shows the steps) and paste its client ID; sign-in happens in your browser with PKCE and a one-time `127.0.0.1` redirect, asking only for calendar events. While your Google app is in *Testing*, Google ends the sign-in after 7 days and Keo asks you to sign in again.
+
+Then ask: “check my email”, “summarise the thread with Sam”, “draft a reply saying yes”, “send it”, “when am I free on Thursday?”, “set a 30-minute meeting with carol@example.com tomorrow at 10 with a Meet link”. Reading is routine; saving a draft or marking mail asks (routine); **sending, replying, email invitations, inviting people and deleting events always ask**, and the approval shows the exact recipients, subject and text. Without Google Calendar, Keo sets meetings by emailing a standard `.ics` invitation. Email content is treated as untrusted data — instructions inside emails are never followed.
 
 ## Web research
 

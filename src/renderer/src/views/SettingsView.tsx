@@ -8,8 +8,9 @@ import { KeoEmblem, type EmblemState } from '../components/KeoEmblem';
 import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
+import { EmailCalendarSettings } from './EmailCalendarSettings';
 
-type Section = 'providers' | 'web' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
+type Section = 'providers' | 'web' | 'email' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
 
 export function SettingsView() {
   const app = useApp();
@@ -31,6 +32,7 @@ export function SettingsView() {
             [
               ['providers', 'Providers'],
               ['web', 'Web search'],
+              ['email', 'Email & calendar'],
               ['voice', 'Voice & shortcuts'],
               ['autonomy', 'Approvals & live chat'],
               ['agent', 'Agent'],
@@ -55,6 +57,8 @@ export function SettingsView() {
           <Providers s={s} patch={patch} />
         ) : section === 'web' ? (
           <WebSearch s={s} patch={patch} />
+        ) : section === 'email' ? (
+          <EmailCalendarSettings s={s} patch={patch} />
         ) : section === 'voice' ? (
           <>
             <WakeAndShortcuts s={s} patch={patch} />

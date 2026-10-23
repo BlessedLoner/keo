@@ -80,7 +80,9 @@ export function ApprovalCard({ task, step }: { task: Task; step: TaskStep }) {
       {step.preview.consequences.length > 0 && (
         <ul>
           {step.preview.consequences.map((c) => (
-            <li key={c}>{c}</li>
+            <li key={c} style={{ whiteSpace: 'pre-wrap' }}>
+              {c}
+            </li>
           ))}
         </ul>
       )}
