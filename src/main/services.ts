@@ -1187,16 +1187,25 @@ export class Services {
    * Speaks in the main window and resolves when playback ends. If the app's voice does not start
    * (or never reports back), it is cancelled and Windows' own voice says it instead — a reply is
    * never silent, and never spoken late.
+   *
+   * A queued part waits behind the parts before it, so its clock is the main window's own: the
+   * window says it (or a failed cloud part in its system voice) in order, or reports it skipped
+   * (a cloud part that failed mid-reply — its text is on screen). Only a window that stops
+   * answering lets Windows' voice step in.
    */
   private async voiceSpeak(text: string, queue = false): Promise<void> {
     await this.ui.ensureVoiceWindow?.();
     const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const how = await new Promise<string>((resolve) => {
-      // Up to 15 s for a cold voice to start, then the time the text takes to say.
-      const t = setTimeout(() => {
-        this.voiceWaiters.delete(id);
-        resolve('timeout');
-      }, 30_000 + text.length * 100);
+      // Up to 15 s for a cold voice to start, then the time the text takes to say (a queued part
+      // also waits for the parts ahead of it).
+      const t = setTimeout(
+        () => {
+          this.voiceWaiters.delete(id);
+          resolve('timeout');
+        },
+        (queue ? 600_000 : 30_000) + text.length * 100,
+      );
       this.voiceWaiters.set(id, (v) => {
         clearTimeout(t);
         resolve(v.reason);
@@ -1204,11 +1213,20 @@ export class Services {
       this.push('presence:command', { type: 'voice_say', id, text, queue });
     });
     this.lastVoiceSpeak = how;
-    if (how === 'spoken' || how === 'cancelled') return;
-    this.push('presence:command', { type: 'stop_speaking' });
+    if (how === 'spoken' || how === 'cancelled' || how === 'skipped') return;
+    // A queued part the window could not say: the window has already moved on to the next part,
+    // so the rest of the reply is not cut off.
+    if (!queue || how === 'timeout') this.push('presence:command', { type: 'stop_speaking' });
     this.log.warn('voice.app_voice_silent', { how });
-    if (this.windowsSpeak) await this.windowsSpeak(text).catch((e) => this.log.warn('voice.windows_voice_failed', { error: (e as Error).message }));
+    const ws = this.windowsSpeak;
+    if (!ws) return;
+    // One at a time, never over each other.
+    const turn = this.windowsVoiceTurn.then(() => ws(text).catch((e) => this.log.warn('voice.windows_voice_failed', { error: (e as Error).message })));
+    this.windowsVoiceTurn = turn;
+    await turn;
   }
+
+  private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
   /** The main window reports a finished recording or utterance. */
   voiceDone(id: string, text: string | null, reason: string): void {

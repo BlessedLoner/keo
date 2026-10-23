@@ -36,7 +36,9 @@ class VoiceController {
   /** Ends the clip that is playing now (stopSpeaking), so a waiting speak() returns at once. */
   private endClip: (() => void) | null = null;
   /** Continuous speech: parts said back to back; a cloud part's audio is fetched as soon as it is queued. */
-  private queue: Array<{ text: string; engine: 'system' | 'openai'; systemVoice: string; audio?: Promise<{ audio: Uint8Array; mimeType: string }>; seq: number; resolve: (r: 'spoken' | 'no_start') => void }> = [];
+  private queue: Array<{ text: string; engine: 'system' | 'openai'; systemVoice: string; audio?: Promise<{ audio: Uint8Array; mimeType: string }>; seq: number; resolve: (r: 'spoken' | 'no_start' | 'skipped') => void }> = [];
+  /** The utterance (speechSeq) the cloud voice last played a part of. */
+  private cloudPlayedSeq = -1;
   private draining = false;
   private audioUrl: string | null = null;
   private resolveRecording: ((text: string | null) => void) | null = null;
@@ -347,7 +349,7 @@ class VoiceController {
    * voice could not say it. Parts play one after another without a gap (the next part's audio is
    * already downloading while one plays), so a reply sounds like one continuous answer.
    */
-  enqueue(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
+  enqueue(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start' | 'skipped'> {
     const clean = speakable(text);
     if (!clean) return Promise.resolve('spoken');
     const eng = engine === 'openai' ? 'openai' : 'system';
@@ -380,9 +382,19 @@ class VoiceController {
             if (item.seq === this.speechSeq) {
               await this.playClip(clip, item.seq);
               ok = true;
+              this.cloudPlayedSeq = item.seq;
             }
           } catch (e) {
             if (item.seq === this.speechSeq) this.set({ error: e instanceof Error ? e.message : String(e) });
+          }
+          if (!ok && item.seq === this.speechSeq) {
+            // Mid-reply, a part the cloud voice could not fetch is skipped (it is on screen) rather
+            // than said in another voice; before anything played, the system voice says it, in order.
+            if (this.cloudPlayedSeq === item.seq) {
+              item.resolve('skipped');
+              continue;
+            }
+            ok = await this.utter(item.text, item.systemVoice, item.seq);
           }
         } else ok = await this.utter(item.text, item.systemVoice, item.seq);
         item.resolve(ok || item.seq !== this.speechSeq ? 'spoken' : 'no_start');

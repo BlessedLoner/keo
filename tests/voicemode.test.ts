@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spokenVersion } from '../src/main/voice/voiceMode';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { FakeSpeech, makeHarness, waitFor, type Harness } from './helpers';
@@ -165,7 +165,7 @@ describe('voice mode', () => {
 
 describe('spoken replies', () => {
   type Pushed = { channel: string; payload: { type?: string; id?: string; text?: string } };
-  function speaker(answer: 'spoken' | 'no_start' | null) {
+  function speaker(answer: 'spoken' | 'no_start' | 'skipped' | null) {
     const said: string[] = [];
     h = makeHarness({ deps: { windowsSpeak: async (t) => void said.push(t) } });
     h.services.ui = { showCommandBar: () => undefined, notify: () => undefined, ensureVoiceWindow: async () => undefined };
@@ -175,7 +175,7 @@ describe('spoken replies', () => {
       // The main window answers like the real one: the voice spoke, or never started.
       if (answer && payload.type === 'voice_say') setTimeout(() => h.services.voiceDone(payload.id!, null, answer), 5);
     }) as never);
-    const speak = (text: string) => (h.services as unknown as { voiceSpeak(t: string): Promise<void> }).voiceSpeak(text);
+    const speak = (text: string, queue = false) => (h.services as unknown as { voiceSpeak(t: string, q: boolean): Promise<void> }).voiceSpeak(text, queue);
     return { said, pushed, speak };
   }
 
@@ -191,6 +191,55 @@ describe('spoken replies', () => {
     expect(said).toEqual(['The weather is sunny.']);
     const types = pushed.filter((p) => p.channel === 'presence:command').map((p) => p.payload.type);
     expect(types.indexOf('stop_speaking')).toBeGreaterThan(types.indexOf('voice_say'));
+  });
+
+  it('a part skipped mid-reply is not said in Windows’ voice, and the reply is not cut off', async () => {
+    const { said, pushed, speak } = speaker('skipped');
+    await Promise.all([speak('First part.', true), speak('Second part.', true)]);
+    expect(said).toEqual([]);
+    expect(pushed.some((p) => p.payload.type === 'stop_speaking')).toBe(false);
+  });
+
+  it('a queued part waits behind the parts before it instead of timing out', async () => {
+    vi.useFakeTimers();
+    try {
+      const { said, pushed, speak } = speaker(null);
+      let done = false;
+      void speak('A part queued behind a long answer.', true).then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(done).toBe(false);
+      expect(said).toEqual([]);
+      const id = pushed.find((p) => p.payload.type === 'voice_say')!.payload.id!;
+      h.services.voiceDone(id, null, 'spoken');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      expect(said).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queued parts the window could not say are said by Windows one at a time, in order, without stopping the window', async () => {
+    const order: string[] = [];
+    h = makeHarness({
+      deps: {
+        windowsSpeak: async (t) => {
+          order.push(`start ${t}`);
+          await new Promise((r) => setTimeout(r, 20));
+          order.push(`end ${t}`);
+        },
+      },
+    });
+    h.services.ui = { showCommandBar: () => undefined, notify: () => undefined, ensureVoiceWindow: async () => undefined };
+    const types: string[] = [];
+    h.services.setPush(((_c: string, payload: { type?: string; id?: string }) => {
+      if (payload.type) types.push(payload.type);
+      if (payload.type === 'voice_say') setTimeout(() => h.services.voiceDone(payload.id!, null, 'no_start'), 5);
+    }) as never);
+    const speak = (t: string) => (h.services as unknown as { voiceSpeak(t: string, q: boolean): Promise<void> }).voiceSpeak(t, true);
+    await Promise.all([speak('One.'), speak('Two.')]);
+    expect(order).toEqual(['start One.', 'end One.', 'start Two.', 'end Two.']);
+    expect(types).not.toContain('stop_speaking');
   });
 });
 
