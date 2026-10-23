@@ -167,6 +167,8 @@ export interface ProbeResult {
   fps: number;
   hasVideo: boolean;
   hasAudio: boolean;
+  /** How long the sound track lasts (null when ffprobe does not say). */
+  audioDurationSec: number | null;
   videoCodec: string | null;
   audioCodec: string | null;
 }
@@ -205,6 +207,7 @@ export function parseProbe(json: string): ProbeResult {
     fps: Math.round((rate(v?.avg_frame_rate) || rate(v?.r_frame_rate)) * 100) / 100,
     hasVideo: !!v,
     hasAudio: !!a,
+    audioDurationSec: a && Number(a.duration) > 0 ? Math.round(Number(a.duration) * 1000) / 1000 : null,
     videoCodec: (v?.codec_name as string | undefined) ?? null,
     audioCodec: (a?.codec_name as string | undefined) ?? null,
   };
@@ -274,6 +277,8 @@ export async function monoPcm(r: FfmpegRunner, file: string, signal: AbortSignal
 export function detectBeats(pcm: Int16Array, rate = BEAT_RATE): { onsets: number[]; beats: number[]; bpm: number | null } {
   const hop = 256;
   const win = 1024;
+  // A rise in frame f's energy means the sound started near the end of its window, not its start.
+  const shift = win - hop / 2;
   const frames = Math.floor((pcm.length - win) / hop);
   if (frames < 20) return { onsets: [], beats: [], bpm: null };
   const energy = new Float64Array(frames);
@@ -302,7 +307,7 @@ export function detectBeats(pcm: Int16Array, rate = BEAT_RATE): { onsets: number
     }
     const thr = (sum / n) * 1.6 + 0.08;
     if (flux[f]! > thr && flux[f]! >= flux[f - 1]! && flux[f]! >= flux[f + 1]! && f - last > fps * 0.1) {
-      onsets.push(Math.round((f * hop) / rate * 1000) / 1000);
+      onsets.push(Math.round(((f * hop + shift) / rate) * 1000) / 1000);
       last = f;
     }
   }
@@ -343,9 +348,33 @@ export function detectBeats(pcm: Int16Array, rate = BEAT_RATE): { onsets: number
       bestPhase = p;
     }
   }
+  // The lag is a whole number of frames (about 23 ms), so the tempo and phase are refined on the
+  // onsets themselves (least squares), and each beat then moves onto an onset within 60 ms: a grid
+  // that drifted 20 ms a beat would be off the music within a few seconds.
+  const ms = (t: number) => Math.round(t * 1000) / 1000;
+  let period = (bestLag * hop) / rate;
+  let phase = (bestPhase * hop + shift) / rate;
+  for (let pass = 0; pass < 2; pass++) {
+    const pts = onsets.map((o) => ({ k: Math.round((o - phase) / period), o })).filter((p) => Math.abs(p.o - (phase + p.k * period)) < period * 0.25);
+    if (pts.length < 4) break;
+    const n = pts.length;
+    const mk = pts.reduce((a, p) => a + p.k, 0) / n;
+    const mo = pts.reduce((a, p) => a + p.o, 0) / n;
+    const vk = pts.reduce((a, p) => a + (p.k - mk) ** 2, 0);
+    if (vk <= 0) break;
+    const fit = pts.reduce((a, p) => a + (p.k - mk) * (p.o - mo), 0) / vk;
+    if (fit < period * 0.8 || fit > period * 1.2) break;
+    period = fit;
+    phase = mo - fit * mk;
+  }
+  phase = ((phase % period) + period) % period;
+  const end = (frames * hop + win) / rate;
   const beats: number[] = [];
-  for (let f = bestPhase; f < frames; f += bestLag) beats.push(Math.round((f * hop) / rate * 1000) / 1000);
-  return { onsets, beats, bpm: Math.round((60 * fps) / bestLag) };
+  for (let t = phase; t < end; t += period) {
+    const close = onsets.reduce<number | null>((b, o) => (Math.abs(o - t) <= 0.06 && (b === null || Math.abs(o - t) < Math.abs(b - t)) ? o : b), null);
+    beats.push(ms(close ?? t));
+  }
+  return { onsets, beats, bpm: Math.round(60 / period) };
 }
 
 // ------------------------------------------------------------------ frames

@@ -142,6 +142,7 @@ export function VideoApp() {
               </p>
               {v.message && <p className="results-summary">{v.message}</p>}
               {v.lastChanges.length > 0 && <p className="video-changes">Last change: {v.lastChanges.join(' · ')}</p>}
+              {v.style && <p className="video-changes">{v.style}</p>}
               {v.notes.length > 0 && (
                 <ul className="video-notes">
                   {v.notes.map((n) => (
@@ -152,7 +153,10 @@ export function VideoApp() {
               <ol className="video-shots" aria-label="Shots">
                 {v.shots.map((s) => (
                   <li key={s.index} title={`${s.clip} · starts at ${s.startSec.toFixed(1)} s`}>
-                    <b>{s.index + 1}</b> <span>{s.clip}</span> <em>{s.durationSec.toFixed(1)} s{s.speed !== 1 ? ` · ${s.speed}×` : ''}</em>
+                    <b>{s.index + 1}</b> <span>{s.clip}</span> <em>
+                      {s.durationSec.toFixed(1)} s{s.speed !== 1 ? ` · ${s.speed}×` : ''}
+                      {s.edit ? ` · ${s.edit}` : ''}
+                    </em>
                   </li>
                 ))}
               </ol>

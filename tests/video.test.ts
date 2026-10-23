@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mentions } from '../src/main/capabilities/video';
+import { Logger } from '../src/main/logging/logger';
 import { channelAllowed } from '../src/main/ipc/roles';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { detectBeats, lastError, locateFfmpeg, parseProbe, parseSceneScores, pickEncoder, shotsFromCuts } from '../src/main/video/ffmpeg';
@@ -9,19 +10,24 @@ import {
   applyDirection,
   buildRecipe,
   captionCues,
+  cutInto,
   dimensions,
+  editLabel,
   nearestAspect,
   parseDirection,
   RecipeError,
   RecipeSchema,
+  round2,
+  shotStarts,
   snapToBeats,
+  sourceSeconds,
   totalSeconds,
   type ClipInfo,
   type Recipe,
   type TemplateAnalysis,
 } from '../src/main/video/recipe';
-import { assColour, assText, assTime, buildAss, buildRenderPlan } from '../src/main/video/render';
-import { momentsOf, NO_FFMPEG, parseStyle, pickFrameTimes, safeName } from '../src/main/video/studio';
+import { assColour, assText, assTime, buildAss, buildRenderPlan, speedFilter, xfadeName, zoomFilter } from '../src/main/video/render';
+import { momentsOf, NO_FFMPEG, parseStyle, pickFrameTimes, safeName, VideoStudio } from '../src/main/video/studio';
 import { FakeFfmpeg } from './fakeFfmpeg';
 import { makeHarness, tempDir, waitFor, type Harness } from './helpers';
 
@@ -186,6 +192,8 @@ describe('ffmpeg helpers', () => {
     expect(nearestAspect(p.width, p.height)).toBe('9:16');
     expect(nearestAspect(1280, 720)).toBe('16:9');
     expect(() => parseProbe('not json')).toThrow();
+    expect(p.audioDurationSec).toBeNull();
+    expect(parseProbe(JSON.stringify({ format: { duration: '6' }, streams: [{ codec_type: 'audio', duration: '2.21' }] })).audioDurationSec).toBe(2.21);
   });
 
   it('reads scene changes and turns cuts into shots', () => {
@@ -210,6 +218,10 @@ describe('ffmpeg helpers', () => {
     expect(r.bpm).toBeLessThanOrEqual(125);
     expect(r.onsets.length).toBeGreaterThanOrEqual(14);
     expect(Math.abs(r.beats[1]! - r.beats[0]! - 0.5)).toBeLessThan(0.05);
+    // On the clicks themselves (0.25, 0.75, …), without drifting over 8 seconds.
+    expect(r.bpm).toBe(120);
+    const offClick = (b: number) => Math.abs(b - 0.25 - 0.5 * Math.round((b - 0.25) / 0.5));
+    for (const b of r.beats) expect(offClick(b)).toBeLessThan(0.03);
     expect(detectBeats(new Int16Array(100))).toEqual({ onsets: [], beats: [], bpm: null });
   });
 
@@ -257,8 +269,8 @@ describe('render plan', () => {
     expect(p).toMatchObject({ width: 360, height: 640, durationSec: 5 });
     const graph = p.args[p.args.indexOf('-filter_complex') + 1]!;
     expect(graph).toContain('scale=360:640:force_original_aspect_ratio=increase,crop=360:640');
-    expect(graph).toContain('concat=n=2:v=1:a=1');
-    expect(graph).toContain('anullsrc'); // c2 has no sound
+    expect(graph).toContain('concat=n=2:v=1:a=0');
+    expect(graph).not.toContain('[1:a]'); // c2 has no sound: silence there
     expect(graph).toContain('subtitles=keo-text.ass');
     expect(p.args.join(' ')).not.toMatch(/Trip|ok'|rm -rf/);
     expect(p.args.slice(-1)[0]).toBe('C:\\w\\p.mp4');
@@ -272,7 +284,8 @@ describe('render plan', () => {
     const graph = p.args[p.args.indexOf('-filter_complex') + 1]!;
     // First shot is 2 s + 0.5 s of overlap; the fade starts at 2 s. Total stays 5 s.
     expect(graph).toContain('xfade=transition=fade:duration=0.500:offset=2.000');
-    expect(graph).toContain('acrossfade=d=0.500');
+    // The sound crossfades with the picture.
+    expect(graph).toContain('afade=t=out:st=2.000:d=0.500');
     expect(graph).toContain('[aj]volume=0.3[ac]');
     expect(graph).toContain('amix=inputs=2:duration=first');
     expect(p.durationSec).toBe(5);
@@ -299,6 +312,227 @@ describe('render plan', () => {
   it('sizes previews small and finals full', () => {
     expect(dimensions('16:9', true)).toEqual({ width: 640, height: 360 });
     expect(dimensions('4:5', false)).toEqual({ width: 1080, height: 1350 });
+  });
+});
+
+// ------------------------------------------------------------------ editing like an editor
+
+describe('editing per cut', () => {
+  const grid = (to: number, step = 0.5) => Array.from({ length: Math.round(to / step) + 1 }, (_, i) => round2(i * step));
+  const graphOf = (p: { args: string[] }) => p.args[p.args.indexOf('-filter_complex') + 1]!;
+  const two = [clip('c1', 12), clip('c2', 12)];
+
+  it('keeps old recipes valid: one transition for every cut, rendered as before', () => {
+    // A recipe saved by Keo 1.12 (no per-cut fields, no beats, no style).
+    const old = RecipeSchema.parse({
+      schema: 1,
+      title: 'Old',
+      aspect: '9:16',
+      fps: 30,
+      shots: [
+        { clipId: 'c1', inSec: 0, durationSec: 2, speed: 1 },
+        { clipId: 'c2', inSec: 0, durationSec: 2, speed: 1 },
+        { clipId: 'c1', inSec: 4, durationSec: 2, speed: 1 },
+      ],
+      transition: { kind: 'fade', seconds: 0.3 },
+      texts: [],
+      music: null,
+      clipVolume: 1,
+      notes: [],
+    });
+    expect(old.beats).toEqual([]);
+    expect(old.style).toBe('');
+    expect(cutInto(old, 0)).toEqual({ kind: 'cut', seconds: 0 });
+    expect(cutInto(old, 1)).toEqual({ kind: 'fade', seconds: 0.3 });
+    expect(editLabel(old, 2)).toBe('fade in');
+    const graph = graphOf(buildRenderPlan(old, clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true }));
+    expect(graph).toContain('xfade=transition=fade:duration=0.300:offset=2.000');
+    expect(graph).toContain('xfade=transition=fade:duration=0.300:offset=4.000');
+    // The old change "use fades / hard cuts" still means every cut.
+    const out = applyDirection(old, [{ op: 'transition', kind: 'cut' }], clipsMap(two));
+    expect(out.recipe.shots.map((_, i) => cutInto(out.recipe, i).kind)).toEqual(['cut', 'cut', 'cut']);
+    expect(graphOf(buildRenderPlan(out.recipe, clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true }))).not.toContain('xfade');
+  });
+
+  it('validates the new edit fields strictly', () => {
+    const shot = { clipId: 'c1', inSec: 0, durationSec: 2 };
+    const ok = (s: Record<string, unknown>) => RecipeSchema.safeParse({ title: 't', aspect: '9:16', shots: [shot, { ...shot, ...s }] }).success;
+    expect(ok({ transition: { kind: 'whip' }, zoom: { kind: 'punch', atSec: 1 }, ramp: { atSec: 1, speed: 0.5 }, audio: { kind: 'l', seconds: 0.3 } })).toBe(true);
+    expect(ok({ transition: { kind: 'spin' } })).toBe(false);
+    expect(ok({ ramp: { atSec: 2.5, speed: 1 } })).toBe(false); // after the shot ends
+    expect(ok({ zoom: { kind: 'punch', atSec: 3 } })).toBe(false);
+    expect(ok({ zoom: { kind: 'punch', amount: 3 } })).toBe(false);
+    expect(ok({ audio: { kind: 'x', seconds: 0.3 } })).toBe(false);
+    expect(ok({ zoom: { kind: 'push', filter: 'crop' } })).toBe(false);
+    // Quick transitions stay quick.
+    const r = RecipeSchema.parse({ title: 't', aspect: '9:16', shots: [shot, { ...shot, transition: { kind: 'flash', seconds: 1 } }] });
+    expect(cutInto(r, 1)).toEqual({ kind: 'flash', seconds: 0.2 });
+  });
+
+  it('plans hard cuts on the beat, with punch-ins on beats, matching a fast template', () => {
+    const t = template({ durationSec: 6, shots: [1, 1.5, 1, 1.5, 1].map((d, i, a) => ({ startSec: a.slice(0, i).reduce((x, y) => x + y, 0), durationSec: d })) });
+    const r = buildRecipe(t, [clip('c1', 20), clip('c2', 20), clip('c3', 20)], { music: { path: 'C:\\m\\song.mp3', beats: grid(8), bpm: 120 } });
+    expect(r.transition.kind).toBe('cut');
+    expect(r.shots.every((s) => !s.transition)).toBe(true);
+    const starts = shotStarts(r);
+    for (const st of starts) expect(r.beats).toContain(st);
+    const punches = r.shots.map((s, i) => ({ s, i })).filter(({ s }) => s.zoom?.kind === 'punch');
+    expect(punches.length).toBe(2);
+    for (const { s, i } of punches) expect(r.beats).toContain(round2(starts[i]! + s.zoom!.atSec));
+    expect(r.shots.slice(1).every((s) => /hard cut on the beat/.test(s.why ?? ''))).toBe(true);
+    expect(r.style).toMatch(/^Hard cuts on the beat \(120 BPM\), matching the template’s fast pace \(1\.2 s a shot\)/);
+    expect(r.style).toMatch(/2 punch-ins/);
+    expect(RecipeSchema.parse(r)).toEqual(r);
+  });
+
+  it('uses the template’s stylised transition only where it fits, never on every cut', () => {
+    const nine = template({ durationSec: 9, shots: Array.from({ length: 9 }, (_, i) => ({ startSec: i, durationSec: 1 })), style: { ...style(), transitions: 'whip', pacing: 'fast' } });
+    const r = buildRecipe(nine, [clip('c1', 30), clip('c2', 30)]);
+    const kinds = r.shots.map((_, i) => cutInto(r, i).kind).slice(1);
+    expect(kinds.filter((k) => k === 'whip').length).toBeGreaterThanOrEqual(1);
+    expect(kinds.filter((k) => k === 'whip').length).toBeLessThanOrEqual(2);
+    expect(kinds.filter((k) => k === 'cut').length).toBeGreaterThanOrEqual(6);
+    expect(r.style).toMatch(/^Mostly hard cuts/);
+
+    // A soft template look goes into the slower moment only.
+    const soft = buildRecipe(template({ durationSec: 6.5, shots: [1, 1, 1, 3.5].map((d, i) => ({ startSec: i, durationSec: d })), style: style() }), [clip('c1', 30), clip('c2', 30)]);
+    expect(soft.shots.map((_, i) => cutInto(soft, i).kind)).toEqual(['cut', 'cut', 'cut', 'fade']);
+    expect(soft.shots[3]!.why).toMatch(/fade into a slower moment/);
+
+    // Asked for one look everywhere: that is what it gets.
+    const asked = buildRecipe(nine, [clip('c1', 30)], { transition: 'fade' });
+    expect(asked.transition.kind).toBe('fade');
+    expect(asked.style).toMatch(/Every cut is a fade, as asked/);
+  });
+
+  it('plans a speed ramp and an L-cut where speech carries over', () => {
+    const ramp = buildRecipe(template({ durationSec: 8, shots: [2, 2, 2, 2].map((d, i) => ({ startSec: i * 2, durationSec: d })) }), [clip('c1', 20), clip('c2', 20)], { music: { path: 'C:\\m\\s.mp3', beats: grid(9) } });
+    const ramped = ramp.shots.filter((s) => s.ramp);
+    expect(ramped.length).toBe(1);
+    expect(ramped[0]).toMatchObject({ speed: 1.8, ramp: { speed: 1 } });
+    expect(ramped[0]!.why).toMatch(/speed ramp 1\.8× → 1× landing on the beat/);
+    // The ramp uses more footage, and the clip has it.
+    expect(ramped[0]!.inSec + sourceSeconds(ramped[0]!)).toBeLessThanOrEqual(20);
+
+    const talk = buildRecipe(template({ durationSec: 4, shots: [{ startSec: 0, durationSec: 2 }, { startSec: 2, durationSec: 2 }] }), [clip('c1', 20, { words: [w(2.8, 3.3, 'carry')] }), clip('c2', 20)]);
+    expect(talk.shots[0]).toMatchObject({ clipId: 'c1', inSec: 1 });
+    expect(talk.shots[1]!.audio).toEqual({ kind: 'l', seconds: 0.35 });
+    expect(talk.shots[1]!.why).toMatch(/L-cut/);
+  });
+
+  it('renders per-cut transitions: hard-cut runs concatenated, xfade between them, a blurred whip', () => {
+    const r = RecipeSchema.parse({
+      title: 't',
+      aspect: '9:16',
+      shots: [
+        { clipId: 'c1', inSec: 0, durationSec: 2 },
+        { clipId: 'c2', inSec: 0, durationSec: 2, transition: { kind: 'whip' } },
+        { clipId: 'c1', inSec: 3, durationSec: 2 },
+        { clipId: 'c2', inSec: 3, durationSec: 2, transition: { kind: 'dissolve', seconds: 0.4 } },
+      ],
+    });
+    const p = buildRenderPlan(r, clipsMap(two), { preview: false, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true, blurFilter: true });
+    const graph = graphOf(p);
+    expect(graph).toContain('[v1][v2]concat=n=2:v=1:a=0[g1]');
+    expect(graph).toContain("[v0][g1]xfade=transition=slideleft:duration=0.200:offset=2.000,dblur=angle=0:radius=43:enable='between(t,2.000,2.200)'[x1]");
+    expect(graph).toContain('[x1][v3]xfade=transition=dissolve:duration=0.400:offset=6.000[x2]');
+    expect(graph).toContain('trim=duration=2.200,setpts=PTS-STARTPTS,settb=AVTB[v0]'); // shot 1 runs on under the whip; one time base for xfade
+    expect(p.durationSec).toBe(totalSeconds(r));
+    // Each shot's sound sits where its picture is, crossfading like the picture.
+    expect(graph).toContain('adelay=delays=2000:all=1');
+    expect(graph).toContain('adelay=delays=6000:all=1');
+    expect(graph).toContain('amix=inputs=4:duration=longest:dropout_transition=0:normalize=0');
+    // Without dblur in this ffmpeg, the whip is a plain fast slide.
+    expect(graphOf(buildRenderPlan(r, clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true }))).not.toContain('dblur');
+    expect(xfadeName('punch')).toBe('zoomin');
+    expect(xfadeName('flash')).toBe('fadewhite');
+  });
+
+  it('renders punch-ins, slow pushes and speed ramps as per-frame filters', () => {
+    const s = (over: Record<string, unknown>) => RecipeSchema.parse({ title: 't', aspect: '9:16', shots: [{ clipId: 'c1', inSec: 0, durationSec: 2, ...over }] }).shots[0]!;
+    expect(zoomFilter(s({ zoom: { kind: 'punch', amount: 1.2, atSec: 0.8 } }), 1080, 1920, 2)).toBe(",scale=w='2*trunc(1080*(1+0.2000*clip((t-0.800)/0.07,0,1))/2)':h='2*trunc(1920*(1+0.2000*clip((t-0.800)/0.07,0,1))/2)':eval=frame,crop=1080:1920,setsar=1");
+    expect(zoomFilter(s({ zoom: { kind: 'push', amount: 1.1 } }), 360, 640, 2)).toContain('1+0.1000*min(t/2.000,1)');
+    expect(zoomFilter(s({}), 360, 640, 2)).toBe('');
+    const rampShot = s({ speed: 1.8, ramp: { atSec: 1, speed: 1 } });
+    expect(speedFilter(rampShot)).toBe("setpts='if(lt((PTS-STARTPTS)*TB,1.800),(PTS-STARTPTS)/1.8,(1.800/1.8+((PTS-STARTPTS)*TB-1.800)/1)/TB)'");
+    expect(speedFilter(s({ speed: 2 }))).toBe('setpts=(PTS-STARTPTS)/2');
+    const p = buildRenderPlan(RecipeSchema.parse({ title: 't', aspect: '9:16', shots: [{ clipId: 'c1', inSec: 0, durationSec: 2, speed: 1.8, ramp: { atSec: 1, speed: 1 } }] }), clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true });
+    // 1 s at 1.8× and 1 s at 1× use 2.8 s of footage.
+    expect(p.args.slice(0, 8)).toEqual(['-y', '-v', 'error', '-ss', '0.000', '-t', '2.900', '-i']);
+    const graph = graphOf(p);
+    expect(graph).toContain('asplit=2[s0a][s0b]');
+    expect(graph).toContain('[s0a]atrim=end=1.800,asetpts=PTS-STARTPTS,atempo=1.8,');
+    expect(graph).toContain('[s0b]atrim=start=1.800,asetpts=PTS-STARTPTS,aresample');
+  });
+
+  it('a saved video whose sound stops early fails its check', async () => {
+    const dir = tempDir('keo-video-verify-');
+    const file = path.join(dir, 'v.mp4');
+    fs.writeFileSync(file, 'x');
+    const fake = new FakeFfmpeg();
+    fake.add(file, { durationSec: 6, width: 1080, height: 1920, audioSec: 2.21 });
+    const studio = new VideoStudio({
+      runner: () => ({ runner: fake, key: 'fake' }),
+      workRoot: () => dir,
+      outputRoot: () => dir,
+      visionBlocked: () => 'no',
+      askVision: async () => '',
+      transcribeBlocked: () => 'no',
+      transcribe: async () => [],
+      sent: () => undefined,
+      changed: () => undefined,
+      log: new Logger(null),
+    });
+    const v = await studio.verify(file, { durationSec: 6, width: 1080, height: 1920 }, AbortSignal.timeout(5000));
+    expect(v).toEqual({ ok: false, detail: 'The video was saved, but its sound stops at 2.2 s.' });
+  });
+
+  it('renders J and L cuts by moving the sound boundary, never the picture', () => {
+    const r = (audio: Record<string, unknown>) =>
+      RecipeSchema.parse({ title: 't', aspect: '9:16', shots: [{ clipId: 'c1', inSec: 0, durationSec: 2 }, { clipId: 'c2', inSec: 3, durationSec: 2, audio }] });
+    const j = buildRenderPlan(r({ kind: 'j', seconds: 0.5 }), clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true });
+    const jg = graphOf(j);
+    expect(jg).toContain('[v0][v1]concat=n=2:v=1:a=0'); // picture: a straight cut at 2 s
+    expect(jg).toContain('[0:a]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=1.520');
+    // Shot 2's sound comes from 0.5 s before its in-point and starts at 1.5 s.
+    expect(j.args.join(' ')).toContain('-ss 2.500 -t 2.600 -i C:\\clips\\c2.mp4');
+    expect(jg).toMatch(/\[2:a\]asetpts=PTS-STARTPTS,.*adelay=delays=1500:all=1,apad=whole_dur=4.000\[p1\]/);
+    const l = graphOf(buildRenderPlan(r({ kind: 'l', seconds: 0.3 }), clipsMap(two), { preview: true, outFile: 'o.mp4', encoder: 'libx264', subtitlesFilter: true }));
+    expect(l).toContain('atrim=duration=2.320');
+    expect(l).toContain('adelay=delays=2300:all=1');
+    expect(j.durationSec).toBe(4);
+  });
+
+  it('changes cuts, zooms, ramps and sound cuts live, and keeps cuts on the beat', () => {
+    const cs = [clip('c1', 20), clip('c2', 20), clip('c3', 20)];
+    const base = RecipeSchema.parse({ title: 't', aspect: '9:16', shots: [2, 3, 5].map((d, i) => ({ clipId: `c${i + 1}`, inSec: 0, durationSec: d })), beats: grid(12), music: { path: 'C:\\m\\s.mp3' } });
+    const out = applyDirection(
+      base,
+      [
+        { op: 'transition', kind: 'whip', index: 2 },
+        { op: 'zoom', index: 1, kind: 'punch', atSec: 0.5 },
+        { op: 'speed_ramp', index: 0, speed: 0.5, atSec: 1 },
+        { op: 'audio_cut', index: 1, kind: 'j', seconds: 0.4 },
+      ],
+      clipsMap(cs),
+    ).recipe;
+    expect(out.shots.map((_, i) => cutInto(out, i).kind)).toEqual(['cut', 'cut', 'whip']);
+    expect(out.shots[1]!.zoom).toEqual({ kind: 'punch', amount: 1.15, atSec: 0.5 });
+    expect(out.shots[0]!.ramp).toEqual({ atSec: 1, speed: 0.5 });
+    expect(out.shots[1]!.audio).toEqual({ kind: 'j', seconds: 0.4 });
+    expect(() => applyDirection(base, [{ op: 'audio_cut', index: 0, kind: 'l' }], clipsMap(cs))).toThrow(/first shot has no cut/);
+    expect(() => applyDirection({ ...base, beats: [] }, [{ op: 'beat_sync' }], clipsMap(cs))).toThrow(/no music beat/);
+    // A new length keeps every cut on a beat.
+    const shorter = applyDirection(base, [{ op: 'set_length', seconds: 7 }], clipsMap(cs)).recipe;
+    expect(shorter.shots.map((s) => s.durationSec)).toEqual([1.5, 2, 3.5]);
+    for (const st of shotStarts(shorter)) expect(base.beats).toContain(st);
+    // A shot made shorter than its punch-in moves the punch inside it.
+    const cutDown = applyDirection(out, [{ op: 'shot_length', index: 1, seconds: 0.4 }], clipsMap(cs)).recipe;
+    expect(cutDown.shots[1]!.zoom!.atSec).toBe(0.2);
+    expect(parseDirection('no zooms and hard cuts', base)).toEqual([{ op: 'zoom', index: null, kind: 'none' }, { op: 'transition', kind: 'cut' }]);
+    expect(parseDirection('whip transitions', base)).toEqual([{ op: 'transition', kind: 'whip' }]);
+    expect(parseDirection('cut on the beat', base)).toEqual([{ op: 'beat_sync' }]);
+    expect(parseDirection('cut on the beat', { ...base, beats: [] })).toBeNull();
   });
 });
 

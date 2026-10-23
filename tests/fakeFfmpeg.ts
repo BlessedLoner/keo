@@ -11,6 +11,8 @@ export interface FakeMedia {
   hasVideo?: boolean;
   /** Scene changes (time, score) the fake reports for this file. */
   scenes?: Array<{ t: number; score: number }>;
+  /** The sound track ends here (default: with the picture). */
+  audioSec?: number;
   /** Clicks at these times in the fake sound (for beat detection). */
   clicks?: number[];
 }
@@ -56,7 +58,7 @@ export class FakeFfmpeg implements FfmpegRunner {
     if (!m || !fs.existsSync(file)) return { stdout: Buffer.alloc(0), stderr: `${file}: No such file or directory`, code: 1 };
     const streams = [
       ...(m.hasVideo === false ? [] : [{ codec_type: 'video', codec_name: 'h264', width: m.width, height: m.height, avg_frame_rate: `${m.fps ?? 30}/1` }]),
-      ...(m.hasAudio === false ? [] : [{ codec_type: 'audio', codec_name: 'aac' }]),
+      ...(m.hasAudio === false ? [] : [{ codec_type: 'audio', codec_name: 'aac', ...(m.audioSec ? { duration: String(m.audioSec) } : {}) }]),
     ];
     return { stdout: Buffer.from(JSON.stringify({ format: { duration: String(m.durationSec) }, streams })), stderr: '', code: 0 };
   }

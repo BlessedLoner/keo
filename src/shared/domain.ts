@@ -621,7 +621,10 @@ export interface VideoView {
   message: string | null;
   aspect: string;
   totalSec: number;
-  shots: Array<{ index: number; clip: string; startSec: number; durationSec: number; speed: number }>;
+  /** edit: how the shot is cut and moved ("whip in · punch-in at 0.8 s"), empty for a plain shot. */
+  shots: Array<{ index: number; clip: string; startSec: number; durationSec: number; speed: number; edit: string }>;
+  /** The editing style and why (from the planner). */
+  style: string;
   texts: Array<{ text: string; startSec: number; endSec: number }>;
   captions: { enabled: boolean; sizePct: number; position: string };
   music: string | null;

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { Aspect, DirectionOp, TRANSITIONS, totalSeconds } from '../video/recipe';
+import { Aspect, cutInto, DirectionOp, editLabel, TRANSITIONS, totalSeconds } from '../video/recipe';
 import { AUDIO_EXT, VIDEO_EXT, type VideoProject, type VideoStudio } from '../video/studio';
 import type { CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability, type CapabilityContext } from './types';
@@ -75,10 +75,12 @@ function summary(p: VideoProject) {
     title: r.title,
     aspect: r.aspect,
     totalSec: totalSeconds(r),
-    shots: r.shots.map((s, i) => ({ index: i, clipId: s.clipId, inSec: s.inSec, durationSec: s.durationSec, speed: s.speed })),
+    shots: r.shots.map((s, i) => ({ index: i, clipId: s.clipId, inSec: s.inSec, durationSec: s.durationSec, speed: s.speed, cutIn: cutInto(r, i).kind, edit: editLabel(r, i), why: s.why ?? null })),
     texts: r.texts.map((t, i) => ({ index: i, text: t.text, startSec: t.startSec, endSec: t.endSec })),
     captions: { enabled: r.captions.enabled, sizePct: r.captions.sizePct, position: r.captions.position },
     transition: r.transition.kind,
+    style: r.style,
+    beats: r.beats.length,
     music: r.music ? path.basename(r.music.path) : null,
     notes: r.notes,
   };
@@ -89,10 +91,14 @@ const Summary = z.object({
   title: z.string(),
   aspect: z.string(),
   totalSec: z.number(),
-  shots: z.array(z.object({ index: z.number(), clipId: z.string(), inSec: z.number(), durationSec: z.number(), speed: z.number() })),
+  shots: z.array(
+    z.object({ index: z.number(), clipId: z.string(), inSec: z.number(), durationSec: z.number(), speed: z.number(), cutIn: z.string(), edit: z.string(), why: z.string().nullable() }),
+  ),
   texts: z.array(z.object({ index: z.number(), text: z.string(), startSec: z.number(), endSec: z.number() })),
   captions: z.object({ enabled: z.boolean(), sizePct: z.number(), position: z.string() }),
   transition: z.string(),
+  style: z.string(),
+  beats: z.number(),
   music: z.string().nullable(),
   notes: z.array(z.string()),
 });
@@ -243,7 +249,7 @@ export function videoCapabilities(d: VideoDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Plan the video edit',
     description:
-      'Make the edit recipe from the analysed template and clips: the template’s rhythm scaled to the length, cuts on the beat, the best clip moments, captions and an optional hook text and music file the user chose. Keo then renders a quick preview and opens the preview window, where the user can direct changes (video__direct). Nothing is saved to the user’s folders until video__render_final.',
+      'Make the edit recipe from the analysed template and clips: the template’s rhythm scaled to the length, cuts on the music’s beat, the best clip moments, captions and an optional hook text and music file the user chose. Keo edits each cut like a short-form editor: mostly hard cuts, a stylised transition only where the template’s style fits, punch-ins on beats or spoken words, slow pushes on long shots, one speed ramp, and J/L cuts where speech crosses a cut. The result lists each shot’s cut and edit with why, and the overall style; tell the user the style in a sentence. Keo then renders a quick preview and opens the preview window, where the user can direct changes (video__direct). Nothing is saved to the user’s folders until video__render_final.',
     input: z
       .object({
         projectId: ProjectId.optional(),
@@ -252,7 +258,7 @@ export function videoCapabilities(d: VideoDeps): AnyCapability[] {
         aspect: Aspect.optional().describe('Default: the template’s format'),
         captions: z.boolean().optional(),
         hook: z.string().trim().min(1).max(120).optional().describe('Text shown on screen for the first seconds, only if the user gave it or agreed to it'),
-        transition: z.enum(TRANSITIONS).optional(),
+        transition: z.enum(TRANSITIONS).optional().describe('Only when the user asked for one look on every cut; omit it so Keo chooses per cut (mostly hard cuts)'),
         musicPath: FilePath.optional().describe('A music file on this PC that the user named or picked (their own or licensed). Never a downloaded song.'),
         clipVolume: z.number().min(0).max(2).optional(),
       })
@@ -288,7 +294,7 @@ export function videoCapabilities(d: VideoDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Change the video',
     description:
-      'Apply the user’s live instructions to the current edit as exact changes, then Keo re-renders the preview. Examples: "shorter intro" → trim_start; "bigger captions" → captions with a larger sizePct (current × 1.3); "make it 20 seconds" → set_length; "use clip 3 for the second shot" → swap_clip index 1 clipId c3. Shot and text indexes start at 0. If any change cannot be applied, nothing is changed.',
+      'Apply the user’s live instructions to the current edit as exact changes, then Keo re-renders the preview. Examples: "shorter intro" → trim_start; "bigger captions" → captions with a larger sizePct (current × 1.3); "make it 20 seconds" → set_length; "use clip 3 for the second shot" → swap_clip index 1 clipId c3; "whip into the third shot" → transition kind whip index 2; "punch in on shot 2" → zoom index 1 kind punch; "slow-mo the jump" → speed_ramp; "let the talking carry over" → audio_cut kind l; "cut on the beat" → beat_sync. Shot and text indexes start at 0; a cut is named by the shot it leads into. If any change cannot be applied, nothing is changed.',
     input: z.object({ projectId: ProjectId.optional(), changes: z.array(DirectionOp).min(1).max(20) }).strict(),
     output: Summary.extend({ changes: z.array(z.string()) }),
     risk: 'low',
