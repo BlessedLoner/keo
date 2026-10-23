@@ -10,9 +10,61 @@ export const ASPECTS = ['9:16', '16:9', '1:1', '4:5'] as const;
 export const Aspect = z.enum(ASPECTS);
 export type AspectT = z.infer<typeof Aspect>;
 
-/** Simple transitions (ffmpeg xfade names; 'cut' = none). */
-export const TRANSITIONS = ['cut', 'fade', 'fadeblack', 'fadewhite', 'slideleft', 'slideup', 'zoomin'] as const;
+/**
+ * How one shot meets the next. 'cut' is a hard cut; the others are ffmpeg xfade transitions of
+ * the same name (all checked against ffmpeg 9.0.2's xfade list), except Keo's three quick ones:
+ * 'whip' (a fast slide with directional blur), 'flash' (a few white frames) and 'punch' (a quick
+ * zoom through the cut). The first seven are the original list; old recipes keep working.
+ * (xfade's squeezev is left out on purpose: it crashes ffmpeg 9.0.2.)
+ */
+export const TRANSITIONS = [
+  'cut',
+  'fade',
+  'fadeblack',
+  'fadewhite',
+  'slideleft',
+  'slideup',
+  'zoomin',
+  'dissolve',
+  'slideright',
+  'slidedown',
+  'smoothleft',
+  'smoothright',
+  'smoothup',
+  'smoothdown',
+  'wipeleft',
+  'wiperight',
+  'wipeup',
+  'wipedown',
+  'coverleft',
+  'coverright',
+  'revealleft',
+  'revealright',
+  'circleopen',
+  'circleclose',
+  'radial',
+  'pixelize',
+  'hblur',
+  'squeezeh',
+  'whip',
+  'flash',
+  'punch',
+] as const;
 export const Transition = z.enum(TRANSITIONS);
+export type TransitionKind = (typeof TRANSITIONS)[number];
+
+/** Gentle transitions (they suit slower moments); the rest are lively. */
+export const SOFT_TRANSITIONS: ReadonlySet<TransitionKind> = new Set(['fade', 'dissolve', 'fadeblack', 'fadewhite', 'hblur']);
+/** Keo's quick transitions only look right when short. */
+const QUICK_MAX: Partial<Record<TransitionKind, number>> = { whip: 0.3, flash: 0.2, punch: 0.3 };
+
+/** A sensible length for a transition of this kind (seconds). */
+export function defaultTransitionSeconds(kind: TransitionKind): number {
+  if (kind === 'cut') return 0;
+  if (kind === 'flash') return 0.12;
+  if (kind === 'whip' || kind === 'punch') return 0.2;
+  return SOFT_TRANSITIONS.has(kind) ? 0.4 : 0.3;
+}
 
 /** Fonts every Windows PC has (captions and text are drawn with the PC's own fonts). */
 export const FONTS = ['Arial', 'Arial Black', 'Impact', 'Segoe UI', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Georgia', 'Comic Sans MS'] as const;
@@ -24,6 +76,27 @@ const Sec = z.number().finite().min(0).max(3600);
 
 export const ClipId = z.string().regex(/^c\d{1,3}$/, 'a clip id like c1 from the clip analysis');
 
+/** The cut into a shot (from the one before it). */
+export const CutTransition = z.object({ kind: Transition, seconds: z.number().min(0.05).max(1.5).optional() }).strict();
+
+export const ZOOM_KINDS = ['punch', 'push', 'pull'] as const;
+/** punch = a sudden punch-in at atSec (emphasis); push / pull = a slow zoom in / out over the whole shot. */
+export const Zoom = z
+  .object({
+    kind: z.enum(ZOOM_KINDS),
+    /** How far in (1.15 = 15 % closer). */
+    amount: z.number().min(1.02).max(1.6).default(1.15),
+    /** For punch: seconds into the shot. */
+    atSec: z.number().min(0).max(120).default(0),
+  })
+  .strict();
+
+/** A speed ramp: the shot plays at its speed until atSec (seconds into the shot), then at this speed. */
+export const Ramp = z.object({ atSec: z.number().min(0.1).max(120), speed: z.number().min(0.25).max(4) }).strict();
+
+/** A split edit at the cut into this shot: J = its sound starts early, L = the previous shot's sound carries on. */
+export const AudioSplit = z.object({ kind: z.enum(['j', 'l']), seconds: z.number().min(0.05).max(1.5) }).strict();
+
 export const Shot = z
   .object({
     clipId: ClipId,
@@ -33,8 +106,17 @@ export const Shot = z
     durationSec: z.number().finite().min(0.2).max(120),
     /** Playback speed (0.5 = slow motion, 2 = double speed). */
     speed: z.number().min(0.25).max(4).default(1),
+    /** The cut into this shot (absent: the recipe's transition; ignored for the first shot). */
+    transition: CutTransition.optional(),
+    zoom: Zoom.optional(),
+    ramp: Ramp.optional(),
+    audio: AudioSplit.optional(),
+    /** Why the planner edited this shot this way (shown to the user and the model). */
+    why: z.string().max(160).optional(),
   })
-  .strict();
+  .strict()
+  .refine((s) => !s.ramp || s.ramp.atSec < s.durationSec, 'a speed ramp must start inside its shot')
+  .refine((s) => !s.zoom || s.zoom.kind !== 'punch' || s.zoom.atSec < s.durationSec, 'a punch-in must happen inside its shot');
 export type ShotT = z.infer<typeof Shot>;
 
 export const TextOverlay = z
@@ -86,7 +168,8 @@ export const RecipeSchema = z
     aspect: Aspect,
     fps: z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(60)]).default(30),
     shots: z.array(Shot).min(1).max(200),
-    transition: z.object({ kind: Transition.default('cut'), seconds: z.number().min(0.1).max(1.5).default(0.3) }).strict().prefault({}),
+    /** The look of every cut that has none of its own (shots[i].transition). */
+    transition: z.object({ kind: Transition.default('cut'), seconds: z.number().min(0.05).max(1.5).default(0.3) }).strict().prefault({}),
     texts: z.array(TextOverlay).max(30).default([]),
     captions: CaptionStyle.prefault({}),
     music: Music.nullable().default(null),
@@ -94,6 +177,10 @@ export const RecipeSchema = z
     clipVolume: z.number().min(0).max(2).default(1),
     /** What Keo could not follow from the template (shown to the user). */
     notes: z.array(z.string().max(300)).max(20).default([]),
+    /** Music beats on the finished video's timeline (cuts can be moved onto them again later). */
+    beats: z.array(Sec).max(4000).default([]),
+    /** The editing style in one or two sentences, and why. */
+    style: z.string().max(400).default(''),
   })
   .strict();
 export type Recipe = z.infer<typeof RecipeSchema>;
@@ -191,6 +278,41 @@ export function shotStarts(r: Pick<Recipe, 'shots'>): number[] {
   return out;
 }
 
+/** The cut into shot i: its own transition, else the recipe's (the first shot has none). */
+export function cutInto(r: Pick<Recipe, 'shots' | 'transition'>, i: number): { kind: TransitionKind; seconds: number } {
+  const s = r.shots[i];
+  if (i <= 0 || !s) return { kind: 'cut', seconds: 0 };
+  const kind = s.transition?.kind ?? r.transition.kind;
+  if (kind === 'cut') return { kind, seconds: 0 };
+  const want = s.transition ? (s.transition.seconds ?? defaultTransitionSeconds(kind)) : r.transition.seconds;
+  return { kind, seconds: Math.min(want, QUICK_MAX[kind] ?? 1.5) };
+}
+
+/** Seconds of source footage the first `outSec` seconds of a shot use (speed and ramp included). */
+export function sourceSeconds(s: ShotT, outSec: number = s.durationSec): number {
+  if (!s.ramp || outSec <= s.ramp.atSec) return outSec * s.speed;
+  return s.ramp.atSec * s.speed + (outSec - s.ramp.atSec) * s.ramp.speed;
+}
+
+/** When (seconds into the shot) the footage `srcSec` after its in-point is shown. */
+export function outputSeconds(s: ShotT, srcSec: number): number {
+  if (!s.ramp || srcSec <= s.ramp.atSec * s.speed) return srcSec / s.speed;
+  return s.ramp.atSec + (srcSec - s.ramp.atSec * s.speed) / s.ramp.speed;
+}
+
+/** A short description of how a shot is edited ("whip in · punch-in at 0.8 s"); empty for a plain shot. */
+export function editLabel(r: Pick<Recipe, 'shots' | 'transition'>, i: number): string {
+  const s = r.shots[i];
+  if (!s) return '';
+  const parts: string[] = [];
+  const cut = cutInto(r, i);
+  if (i > 0 && cut.kind !== 'cut') parts.push(`${cut.kind} in`);
+  if (s.zoom) parts.push(s.zoom.kind === 'punch' ? `punch-in at ${s.zoom.atSec.toFixed(1)} s` : s.zoom.kind === 'push' ? 'slow push-in' : 'slow pull-out');
+  if (s.ramp) parts.push(`ramp ${s.speed}×→${s.ramp.speed}×`);
+  if (i > 0 && s.audio) parts.push(`${s.audio.kind.toUpperCase()}-cut ${s.audio.seconds.toFixed(1)} s`);
+  return parts.join(' · ');
+}
+
 const PACE: Record<TemplateStyle['pacing'], number> = { fast: 1.2, medium: 2.2, slow: 3.5 };
 
 export interface PlanOptions {
@@ -198,7 +320,7 @@ export interface PlanOptions {
   targetSeconds?: number;
   aspect?: AspectT;
   captions?: boolean;
-  music?: { path: string; beats: number[] } | null;
+  music?: { path: string; beats: number[]; bpm?: number | null } | null;
   hook?: string | null;
   transition?: (typeof TRANSITIONS)[number];
   clipVolume?: number;
@@ -231,9 +353,19 @@ export function buildRecipe(template: TemplateAnalysis | null, clips: ClipInfo[]
   if (beats.length >= 4) lengths = snapToBeats(lengths, beats, target);
 
   // 3. Clips: best moments first, a different clip for each shot where possible.
-  const shots = assignClips(lengths, usable, notes);
+  const assigned = assignClips(lengths, usable, notes);
 
-  const transition = o.transition ?? style?.transitions ?? 'cut';
+  // 4. The editing itself: the look of each cut, punch-ins, a speed ramp, split sound edits.
+  const musicBeats = o.music?.beats.length ? [...o.music.beats].sort((a, b) => a - b) : [];
+  const edit = editShots(assigned, {
+    beats: musicBeats,
+    bpm: o.music?.bpm ?? null,
+    style,
+    template,
+    clips: new Map(usable.map((c) => [c.id, c])),
+    ...(o.transition ? { transition: o.transition } : {}),
+  });
+  const shots = edit.shots;
   const cap = style?.captions;
   const anyWords = usable.some((c) => c.words?.length);
   const wantCaptions = o.captions ?? (cap?.present ?? true);
@@ -252,13 +384,207 @@ export function buildRecipe(template: TemplateAnalysis | null, clips: ClipInfo[]
     aspect: o.aspect ?? template?.aspect ?? '9:16',
     fps: 30,
     shots,
-    transition: { kind: transition, seconds: 0.3 },
+    transition: edit.transition,
     texts,
     captions,
     music: o.music ? { path: o.music.path } : null,
     clipVolume: o.clipVolume ?? (o.music ? 0.35 : 1),
     notes,
+    beats: musicBeats.filter((b) => b <= total + 1).slice(0, 4000).map(round2),
+    style: edit.style,
   });
+}
+
+/** How fast the template cuts, measured from its shots (else the pace the model saw, else medium). */
+export function templatePace(template: TemplateAnalysis | null): { pace: TemplateStyle['pacing']; avgShotSec: number | null } {
+  if (template && template.shots.length >= 2) {
+    const avg = template.durationSec / template.shots.length;
+    return { pace: avg < 1.3 ? 'fast' : avg < 2.8 ? 'medium' : 'slow', avgShotSec: round2(avg) };
+  }
+  return { pace: template?.style?.pacing ?? 'medium', avgShotSec: null };
+}
+
+interface EditContext {
+  /** Music beats on the video's timeline (empty without music). */
+  beats: number[];
+  bpm: number | null;
+  style: TemplateStyle | null;
+  template: TemplateAnalysis | null;
+  clips: Map<string, ClipInfo>;
+  /** The user asked for this look on every cut. */
+  transition?: TransitionKind;
+}
+
+/**
+ * Edits the planned shots the way a short-form editor would: hard cuts (on the beat when there
+ * is music), a stylised transition only where the template's style and the music call for one,
+ * punch-ins on beats or spoken emphasis, slow pushes that keep long shots alive, one speed ramp
+ * into the strongest moment, and J/L cuts where speech runs across a cut. Every choice is
+ * written into the shot's `why`, and the whole style into `style`.
+ */
+export function editShots(input: ShotT[], c: EditContext): { shots: ShotT[]; transition: { kind: TransitionKind; seconds: number }; style: string } {
+  const shots: ShotT[] = input.map((s) => ({ ...s }));
+  const n = shots.length;
+  const starts = shotStarts({ shots });
+  const end = (i: number) => starts[i]! + shots[i]!.durationSec;
+  const { pace, avgShotSec } = templatePace(c.template);
+  const beatNear = (t: number, tol = 0.06) => c.beats.findIndex((b) => Math.abs(b - t) <= tol);
+  const beatsIn = (i: number, fromSec: number, toEndSec: number) => c.beats.filter((b) => b > starts[i]! + fromSec && b < end(i) - toEndSec);
+  const why: string[][] = shots.map(() => []);
+  const said: string[] = [];
+
+  // ---- cuts
+  let transition = { kind: 'cut' as TransitionKind, seconds: 0.3 };
+  const styled: TransitionKind[] = [];
+  let onBeat = 0;
+  if (c.transition) {
+    transition = { kind: c.transition, seconds: c.transition === 'cut' ? 0.3 : defaultTransitionSeconds(c.transition) };
+    said.push(c.transition === 'cut' ? 'Hard cuts throughout, as asked' : `Every cut is a ${c.transition}, as asked`);
+  } else {
+    const liked = c.style?.transitions ?? 'cut';
+    const flavour = liked === 'cut' ? 'hard' : SOFT_TRANSITIONS.has(liked) ? 'soft' : 'lively';
+    const budget = flavour === 'soft' ? Math.max(1, Math.floor((n - 1) / 3)) : Math.max(1, Math.ceil((n - 1) / 4));
+    let lastStyled = -10;
+    for (let i = 1; i < n; i++) {
+      const prev = shots[i - 1]!.durationSec;
+      const cur = shots[i]!.durationSec;
+      const k = beatNear(starts[i]!);
+      const down = k >= 0 && k % 4 === 0;
+      const change = cur >= prev * 1.8 || prev >= cur * 1.8 || i === n - 1;
+      let pick: string | null = null;
+      if (flavour === 'soft' && styled.length < budget && (cur >= 2.5 || i === n - 1) && pace !== 'fast') pick = `${liked} into a slower moment, like the template`;
+      else if (flavour === 'soft' && styled.length < budget && i === n - 1) pick = `${liked} into the last shot, like the template`;
+      else if (flavour === 'lively' && styled.length < budget && i - lastStyled >= 3 && (down || change)) pick = `${liked} at a ${down ? 'downbeat' : 'change of pace'}, like the template`;
+      if (pick) {
+        shots[i]!.transition = { kind: liked, seconds: defaultTransitionSeconds(liked) };
+        styled.push(liked);
+        lastStyled = i;
+        why[i]!.push(pick);
+      } else {
+        const clip = c.clips.get(shots[i]!.clipId);
+        const onAction = clip?.moments.some((m) => Math.abs(m.startSec - shots[i]!.inSec) < 0.05) ?? false;
+        why[i]!.push(k >= 0 ? 'hard cut on the beat' : onAction ? 'hard cut into the action' : 'hard cut');
+      }
+      if (k >= 0) onBeat++;
+    }
+    const cuts = n - 1;
+    if (cuts > 0) {
+      const hard = cuts - styled.length;
+      const base = hard === cuts ? 'Hard cuts' : 'Mostly hard cuts';
+      const beat = c.beats.length ? (onBeat >= cuts / 2 ? ` on the beat${c.bpm ? ` (${c.bpm} BPM)` : ''}` : ' (near the beat where one is close)') : '';
+      const paced = avgShotSec ? `, matching the template’s ${pace} pace (${avgShotSec.toFixed(1)} s a shot)` : `, at a ${pace} pace`;
+      const extra = styled.length ? `; ${styled.length} ${styled[0]}${styled.length > 1 ? 's' : ''} where the template’s style fits` : c.style ? '' : ' (the template’s look was not analysed, so no stylised transitions)';
+      said.push(`${base}${beat}${paced}${extra}`);
+    }
+  }
+
+  // ---- zooms: a slow push on the hook, punch-ins on beats or speech, pushes on long shots
+  const lively = pace !== 'slow';
+  const maxZooms = Math.ceil(n / 2);
+  let zooms = 0;
+  let punches = 0;
+  let pushes = 0;
+  let alt = 0;
+  const first = shots[0]!;
+  if (n > 1 && first.durationSec >= 1.2 && lively) {
+    first.zoom = { kind: 'push', amount: 1.08, atSec: 0 };
+    why[0]!.push('slow push-in on the hook');
+    zooms++;
+    pushes++;
+  }
+  for (let i = 1; i < n && zooms < maxZooms; i++) {
+    const s = shots[i]!;
+    if (s.durationSec < 1) continue;
+    let at: number | null = null;
+    let reason = '';
+    const inside = beatsIn(i, 0.35, 0.3);
+    if (inside.length && lively) {
+      at = inside[0]! - starts[i]!;
+      reason = 'punch-in on the beat';
+    } else if (!c.beats.length && lively) {
+      const word = c.clips.get(s.clipId)?.words?.find((w) => w.startSec >= s.inSec + 0.35 * s.speed && w.startSec < s.inSec + (s.durationSec - 0.3) * s.speed);
+      if (word) {
+        at = outputSeconds(s, word.startSec - s.inSec);
+        reason = 'punch-in on a spoken word';
+      }
+    }
+    if (at !== null && alt++ % 2 === 0) {
+      s.zoom = { kind: 'punch', amount: 1.15, atSec: round2(at) };
+      why[i]!.push(`${reason} at ${at.toFixed(1)} s`);
+      zooms++;
+      punches++;
+    } else if (s.durationSec >= 3) {
+      s.zoom = { kind: pushes % 2 === 0 ? 'push' : 'pull', amount: 1.06, atSec: 0 };
+      why[i]!.push(`slow ${pushes % 2 === 0 ? 'push-in' : 'pull-out'} keeps a long shot moving`);
+      zooms++;
+      pushes++;
+    }
+  }
+
+  // ---- one speed ramp: fast into the strongest moment, landing on the beat when there is one
+  let ramps = 0;
+  if (n >= 3 && (pace === 'fast' || c.beats.length)) {
+    const score = (s: ShotT) => c.clips.get(s.clipId)?.moments.find((m) => Math.abs(m.startSec - s.inSec) < 0.6)?.score ?? 0;
+    const pick = shots
+      .map((s, i) => ({ s, i }))
+      .filter(({ s, i }) => i > 0 && s.durationSec >= 1.6 && s.zoom?.kind !== 'punch' && s.speed === 1)
+      .sort((a, b) => score(b.s) - score(a.s))[0];
+    if (pick) {
+      const s = pick.s;
+      const clip = c.clips.get(s.clipId);
+      const beat = beatsIn(pick.i, s.durationSec * 0.3, s.durationSec * 0.3)[0];
+      const at = round2(beat !== undefined ? beat - starts[pick.i]! : s.durationSec * 0.35);
+      const need = at * 1.8 + (s.durationSec - at);
+      if (clip && clip.durationSec >= need) {
+        // Start earlier in the clip so the moment itself still lands after the ramp.
+        s.inSec = round2(Math.max(0, Math.min(s.inSec, clip.durationSec - need - 0.02)));
+        s.speed = 1.8;
+        s.ramp = { atSec: at, speed: 1 };
+        why[pick.i]!.push(`speed ramp 1.8× → 1×${beat !== undefined ? ' landing on the beat' : ' into the moment'}`);
+        ramps++;
+      }
+    }
+  }
+
+  // ---- J/L cuts where speech runs across a hard cut
+  let splits = 0;
+  for (let i = 1; i < n; i++) {
+    const s = shots[i]!;
+    const prev = shots[i - 1]!;
+    if ((s.transition?.kind ?? transition.kind) !== 'cut') continue;
+    const pc = c.clips.get(prev.clipId);
+    const sc = c.clips.get(s.clipId);
+    if (!pc?.hasAudio || !sc?.hasAudio) continue;
+    const prevEnd = prev.inSec + sourceSeconds(prev);
+    const lastSpeed = prev.ramp?.speed ?? prev.speed;
+    const carried = pc.words?.find((w) => w.startSec < prevEnd - 0.02 && w.endSec > prevEnd + 0.04);
+    if (carried) {
+      const sec = round2(Math.min(0.8, (carried.endSec - prevEnd) / lastSpeed + 0.05, s.durationSec * 0.6, (pc.durationSec - prevEnd) / lastSpeed));
+      if (sec >= 0.08) {
+        s.audio = { kind: 'l', seconds: sec };
+        why[i]!.push('L-cut: the speech carries over the cut');
+        splits++;
+        continue;
+      }
+    }
+    const early = sc.words?.find((w) => w.startSec < s.inSec - 0.02 && w.endSec > s.inSec && s.inSec - w.startSec <= 0.8 * s.speed);
+    if (early) {
+      const sec = round2(Math.min(0.8, (s.inSec - early.startSec) / s.speed + 0.05, prev.durationSec * 0.6, s.inSec / s.speed));
+      if (sec >= 0.08) {
+        s.audio = { kind: 'j', seconds: sec };
+        why[i]!.push('J-cut: the speech starts before its picture');
+        splits++;
+      }
+    }
+  }
+
+  const extras = [punches ? `${punches} punch-in${punches > 1 ? 's' : ''} for emphasis` : '', pushes ? `${pushes} slow push${pushes > 1 ? 'es' : ''}` : '', ramps ? 'a speed ramp into the strongest moment' : '', splits ? `${splits} J/L cut${splits > 1 ? 's' : ''} where speech crosses a cut` : ''].filter(Boolean);
+  if (extras.length) said.push(extras.join(', '));
+  shots.forEach((s, i) => {
+    if (why[i]!.length) s.why = why[i]!.join('; ').slice(0, 160);
+  });
+  const style = said.length ? `${said.join('. ')}.` : '';
+  return { shots, transition, style: style.slice(0, 400) };
 }
 
 /** Moves each cut to the nearest beat (within 40 % of the shorter neighbouring shot). */
@@ -344,9 +670,9 @@ export function captionCues(r: Recipe, clips: Map<string, ClipInfo>): Array<{ st
   const cues: Array<{ startSec: number; endSec: number; text: string }> = [];
   r.shots.forEach((s, i) => {
     const words = clips.get(s.clipId)?.words ?? [];
-    const srcEnd = s.inSec + s.durationSec * s.speed;
+    const srcEnd = s.inSec + sourceSeconds(s);
     const inShot = words.filter((w) => w.startSec >= s.inSec - 0.05 && w.startSec < srcEnd - 0.05);
-    const at = (src: number) => round2(starts[i]! + Math.max(0, src - s.inSec) / s.speed);
+    const at = (src: number) => round2(starts[i]! + outputSeconds(s, Math.max(0, src - s.inSec)));
     for (let k = 0; k < inShot.length; k += r.captions.maxWordsPerLine) {
       const group = inShot.slice(k, k + r.captions.maxWordsPerLine);
       const text = group.map((w) => w.text.trim()).filter(Boolean).join(' ');
@@ -413,7 +739,40 @@ export const DirectionOp = z.discriminatedUnion('op', [
     })
     .strict(),
   z.object({ op: z.literal('remove_text'), index: Index }).strict(),
-  z.object({ op: z.literal('transition'), kind: Transition, seconds: z.number().min(0.1).max(1.5).optional() }).strict(),
+  z
+    .object({
+      op: z.literal('transition'),
+      kind: Transition,
+      seconds: z.number().min(0.05).max(1.5).optional(),
+      index: Index.optional().describe('Only the cut into this shot (1 = between the first and second shot); omit to change every cut'),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal('zoom'),
+      index: Index.nullable().describe('null = every shot'),
+      kind: z.enum(['none', ...ZOOM_KINDS]).describe('punch = sudden punch-in at atSec; push / pull = slow zoom in / out; none = remove'),
+      amount: z.number().min(1.02).max(1.6).optional(),
+      atSec: z.number().min(0).max(120).optional().describe('For punch: seconds into the shot'),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal('speed_ramp'),
+      index: Index.nullable().describe('null = every shot (only to remove ramps)'),
+      speed: z.number().min(0.25).max(4).nullable().describe('Speed from atSec on (the shot keeps its own speed before); null removes the ramp'),
+      atSec: z.number().min(0.1).max(120).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal('audio_cut'),
+      index: Index.describe('The cut into this shot (1 or more)'),
+      kind: z.enum(['none', 'j', 'l']).describe('j = this shot’s sound starts early; l = the previous shot’s sound carries on; none = a straight cut'),
+      seconds: z.number().min(0.05).max(1.5).optional(),
+    })
+    .strict(),
+  z.object({ op: z.literal('beat_sync').describe('Move every cut onto the nearest music beat') }).strict(),
   z.object({ op: z.literal('music_volume'), volume: z.number().min(0).max(2) }).strict(),
   z.object({ op: z.literal('remove_music') }).strict(),
   z.object({ op: z.literal('clip_volume'), volume: z.number().min(0).max(2) }).strict(),
@@ -449,7 +808,21 @@ export function applyDirection(recipe: Recipe, ops: DirectionOpT[], clips: Map<s
   /** Longest the shot may be with the footage its clip has after its start. */
   const room = (s: ShotT) => {
     const c = clips.get(s.clipId);
-    return c ? Math.max(0.2, (c.durationSec - s.inSec) / s.speed) : s.durationSec;
+    return c ? Math.max(0.2, outputSeconds(s, c.durationSec - s.inSec)) : s.durationSec;
+  };
+  const cutIndex = (i: number) => {
+    shot(i);
+    if (i === 0) throw new RecipeError('no_cut', 'The first shot has no cut before it (cuts are numbered from 1). Nothing was changed.');
+    return r.shots[i]!;
+  };
+  /** Every cut onto the nearest music beat, within the footage each clip has. */
+  const resnap = () => {
+    const lengths = snapToBeats(
+      r.shots.map((s) => s.durationSec),
+      r.beats,
+      totalSeconds(r),
+    );
+    r.shots.forEach((s, i) => (s.durationSec = round2(clamp(lengths[i]!, 0.2, room(s)))));
   };
   for (const op of ops) {
     switch (op.op) {
@@ -457,6 +830,8 @@ export function applyDirection(recipe: Recipe, ops: DirectionOpT[], clips: Map<s
         const before = totalSeconds(r);
         const k = op.seconds / before;
         for (const s of r.shots) s.durationSec = round2(clamp(s.durationSec * k, 0.2, room(s)));
+        // The cuts stay on the music's beat.
+        if (r.beats.length >= 4) resnap();
         changes.push(`Length ${before.toFixed(1)} s → ${totalSeconds(r).toFixed(1)} s${Math.abs(totalSeconds(r) - op.seconds) > 0.5 ? ' (the clips are not long enough for more)' : ''}`);
         break;
       }
@@ -546,9 +921,67 @@ export function applyDirection(recipe: Recipe, ops: DirectionOpT[], clips: Map<s
         changes.push(`Removed text ${op.index + 1}`);
         break;
       }
-      case 'transition':
-        r.transition = { kind: op.kind, seconds: op.seconds ?? r.transition.seconds };
-        changes.push(op.kind === 'cut' ? 'Hard cuts' : `${op.kind} transitions`);
+      case 'transition': {
+        const seconds = op.seconds ?? defaultTransitionSeconds(op.kind);
+        if (op.index !== undefined) {
+          const s = cutIndex(op.index);
+          s.transition = op.kind === 'cut' ? { kind: 'cut' } : { kind: op.kind, seconds };
+          s.why = op.kind === 'cut' ? 'hard cut (your choice)' : `${op.kind} (your choice)`;
+          changes.push(op.kind === 'cut' ? `Hard cut into shot ${op.index + 1}` : `${op.kind} into shot ${op.index + 1}`);
+        } else {
+          // Every cut: the per-cut choices give way to this one look.
+          r.transition = { kind: op.kind, seconds: op.kind === 'cut' ? r.transition.seconds : seconds };
+          for (const s of r.shots) {
+            delete s.transition;
+            delete s.why;
+          }
+          r.style = op.kind === 'cut' ? 'Hard cuts throughout (your choice).' : `Every cut is a ${op.kind} (your choice).`;
+          changes.push(op.kind === 'cut' ? 'Hard cuts' : `${op.kind} transitions`);
+        }
+        break;
+      }
+      case 'zoom': {
+        const list = op.index === null ? r.shots : [shot(op.index)];
+        for (const s of list) {
+          if (op.kind === 'none') delete s.zoom;
+          else {
+            const at = op.kind === 'punch' ? Math.min(op.atSec ?? s.durationSec / 2, s.durationSec - 0.15) : 0;
+            s.zoom = Zoom.parse({ kind: op.kind, amount: op.amount ?? (op.kind === 'punch' ? 1.15 : 1.08), atSec: round2(Math.max(0, at)) });
+          }
+          delete s.why;
+        }
+        const what = op.kind === 'none' ? 'No zoom' : op.kind === 'punch' ? 'Punch-in' : op.kind === 'push' ? 'Slow push-in' : 'Slow pull-out';
+        changes.push(`${what} on ${op.index === null ? 'every shot' : `shot ${op.index + 1}`}`);
+        break;
+      }
+      case 'speed_ramp': {
+        if (op.index === null && op.speed !== null) throw new RecipeError('ramp_which', 'Say which shot gets the speed ramp. Nothing was changed.');
+        const list = op.index === null ? r.shots : [shot(op.index)];
+        for (const s of list) {
+          if (op.speed === null) delete s.ramp;
+          else {
+            if (s.durationSec < 0.4) throw new RecipeError('too_short', `Shot ${op.index! + 1} is too short for a speed ramp. Nothing was changed.`);
+            s.ramp = { atSec: round2(clamp(op.atSec ?? s.durationSec * 0.4, 0.1, s.durationSec - 0.15)), speed: op.speed };
+            s.durationSec = round2(Math.min(s.durationSec, room(s)));
+            if (s.ramp.atSec >= s.durationSec - 0.05) throw new RecipeError('no_footage', `Clip ${s.clipId} does not have enough footage for that ramp. Nothing was changed.`);
+          }
+          delete s.why;
+        }
+        changes.push(op.speed === null ? `No speed ramp on ${op.index === null ? 'any shot' : `shot ${op.index + 1}`}` : `Shot ${op.index! + 1} ramps to ${op.speed}×`);
+        break;
+      }
+      case 'audio_cut': {
+        const s = cutIndex(op.index);
+        if (op.kind === 'none') delete s.audio;
+        else s.audio = { kind: op.kind, seconds: op.seconds ?? 0.3 };
+        delete s.why;
+        changes.push(op.kind === 'none' ? `Straight sound cut into shot ${op.index + 1}` : `${op.kind.toUpperCase()}-cut into shot ${op.index + 1}`);
+        break;
+      }
+      case 'beat_sync':
+        if (r.beats.length < 4) throw new RecipeError('no_beats', 'There is no music beat to cut to (add a music file first). Nothing was changed.');
+        resnap();
+        changes.push('Cuts moved onto the beat');
         break;
       case 'music_volume':
         if (!r.music) throw new RecipeError('no_music', 'The video has no music. Nothing was changed.');
@@ -558,6 +991,7 @@ export function applyDirection(recipe: Recipe, ops: DirectionOpT[], clips: Map<s
       case 'remove_music':
         if (!r.music) throw new RecipeError('no_music', 'The video has no music. Nothing was changed.');
         r.music = null;
+        r.beats = [];
         r.clipVolume = Math.max(r.clipVolume, 1);
         changes.push('Music removed');
         break;
@@ -575,6 +1009,15 @@ export function applyDirection(recipe: Recipe, ops: DirectionOpT[], clips: Map<s
         break;
     }
   }
+  // Edits that no longer fit a shot after its length changed are dropped or moved, never left broken.
+  r.shots.forEach((s, i) => {
+    if (i === 0) {
+      delete s.transition;
+      delete s.audio;
+    }
+    if (s.ramp && s.ramp.atSec >= s.durationSec - 0.05) delete s.ramp;
+    if (s.zoom?.kind === 'punch' && s.zoom.atSec >= s.durationSec - 0.05) s.zoom = { ...s.zoom, atSec: round2(s.durationSec / 2) };
+  });
   // Texts never run past the end.
   const end = totalSeconds(r);
   r.texts = r.texts.filter((t) => t.startSec < end).map((t) => ({ ...t, endSec: Math.min(t.endSec, end) }));
@@ -637,6 +1080,11 @@ function parseClause(c: string, r: Recipe): DirectionOpT | null {
   if (/^(?:make it |)(?:horizontal|landscape|widescreen|16[:x/]9|for youtube)$/.test(c)) return { op: 'aspect', aspect: '16:9' };
   if (/^(?:make it |)(?:square|1[:x/]1)$/.test(c)) return { op: 'aspect', aspect: '1:1' };
   if (/^(?:use |add )?(?:cross ?fades?|fades?|fade transitions|smooth transitions)$/.test(c)) return { op: 'transition', kind: 'fade' };
-  if (/^(?:use )?(?:hard cuts|no transitions|just cuts|cuts only)$/.test(c)) return { op: 'transition', kind: 'cut' };
+  if (/^(?:use )?(?:hard cuts|no transitions|just cuts|cuts only|no fades?)$/.test(c)) return { op: 'transition', kind: 'cut' };
+  if (/^(?:use |add )?(?:whips?|whip pans?|whip transitions)$/.test(c)) return { op: 'transition', kind: 'whip' };
+  if (/^(?:use |add )?(?:flash(?:es)?|flash transitions|white flash(?:es)?)$/.test(c)) return { op: 'transition', kind: 'flash' };
+  if (/^(?:no|remove|without) (?:the )?(?:zooms?|punch[- ]?ins?|zoom effects)$/.test(c)) return { op: 'zoom', index: null, kind: 'none' };
+  if (/^(?:no|remove|without) (?:the )?(?:speed ramps?|ramps?)$/.test(c)) return { op: 'speed_ramp', index: null, speed: null };
+  if (/^(?:cut|cuts|sync(?: it| the cuts)?|snap(?: the cuts)?) (?:on|to) (?:the )?(?:beat|music|rhythm)$|^on the beat$/.test(c)) return r.beats.length >= 4 ? { op: 'beat_sync' } : null;
   return null;
 }

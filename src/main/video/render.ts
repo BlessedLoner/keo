@@ -1,10 +1,11 @@
-import { captionCues, dimensions, round2, totalSeconds, type ClipInfo, type Recipe, type TextOverlayT } from './recipe';
+import { captionCues, cutInto, dimensions, outputSeconds, round2, sourceSeconds, totalSeconds, type ClipInfo, type Recipe, type ShotT, type TextOverlayT, type TransitionKind } from './recipe';
 import { encoderArgs, type VideoEncoder } from './ffmpeg';
 
 /**
  * Turns a recipe into one ffmpeg run: every shot is cut from its clip, scaled to fill the frame,
- * joined (hard cuts or simple transitions), mixed with the music, and the captions and texts are
- * drawn from a subtitles file. User text never appears in the arguments; it lives only in that
+ * zoomed and sped up or ramped as planned, and joined (runs of hard cuts concatenated, a
+ * transition per cut with xfade). Each shot's sound is placed on the timeline (so J/L cuts work)
+ * and mixed with the music, and the captions and texts are drawn from a subtitles file. User text never appears in the arguments; it lives only in that
  * file, which ffmpeg reads from the render's own folder.
  */
 export interface RenderPlan {
@@ -19,70 +20,156 @@ export interface RenderPlan {
 
 export const ASS_NAME = 'keo-text.ass';
 
+/** The xfade transition behind each of Keo's cut looks (most have the same name). */
+export function xfadeName(kind: Exclude<TransitionKind, 'cut'>): string {
+  return kind === 'whip' ? 'slideleft' : kind === 'flash' ? 'fadewhite' : kind === 'punch' ? 'zoomin' : kind;
+}
+
+/** Tiny sound crossfade at hard cuts (no clicks). */
+const HARD_FADE = 0.02;
+const f3 = (v: number) => v.toFixed(3);
+
 export function buildRenderPlan(
   r: Recipe,
   clips: Map<string, ClipInfo>,
-  o: { preview: boolean; outFile: string; encoder: VideoEncoder; subtitlesFilter: boolean },
+  o: { preview: boolean; outFile: string; encoder: VideoEncoder; subtitlesFilter: boolean; blurFilter?: boolean },
 ): RenderPlan {
   const { width: W, height: H } = dimensions(r.aspect, o.preview);
   const fps = o.preview ? Math.min(r.fps, 30) : r.fps;
   const notes: string[] = [];
-  const xf = r.transition.kind !== 'cut' && r.shots.length > 1;
-  const t = xf ? r.transition.seconds : 0;
+  const n = r.shots.length;
   const args: string[] = ['-y', '-v', 'error'];
   const filters: string[] = [];
-
-  // Each shot's length in the output, including the overlap a transition needs.
-  const lens: number[] = r.shots.map((s, i) => {
+  const clipOf = r.shots.map((s) => {
     const c = clips.get(s.clipId);
     if (!c) throw new Error(`Clip ${s.clipId} is not in this project.`);
-    const want = s.durationSec + (xf && i < r.shots.length - 1 ? t : 0);
-    const available = Math.max(0.1, (c.durationSec - s.inSec) / s.speed);
-    return round2(Math.min(want, available));
+    return c;
   });
-  // A transition cannot be longer than the shorter of its two shots.
-  if (xf && lens.some((l) => l <= t + 0.05)) notes.push('Some shots are very short, so their transitions are shortened.');
 
+  // 1. The cut into each shot, and how long its transition overlaps the shot before (0 = hard cut).
+  const cuts = r.shots.map((_, i) => cutInto(r, i));
+  const d = cuts.map((c, i) => (i === 0 || c.kind === 'cut' ? 0 : Math.max(0.05, Math.min(c.seconds, r.shots[i - 1]!.durationSec * 0.5, r.shots[i]!.durationSec * 0.5))));
+  if (cuts.some((c, i) => c.kind !== 'cut' && d[i]! < c.seconds - 0.001)) notes.push('Some shots are very short, so their transitions are shortened.');
+
+  // 2. Each shot's length in the output, including the overlap the next transition needs.
+  const lens = r.shots.map((s, i) => {
+    const available = Math.max(0.1, outputSeconds(s, clipOf[i]!.durationSec - s.inSec));
+    return round2(Math.min(s.durationSec + (d[i + 1] ?? 0), available));
+  });
+  for (let i = 1; i < n; i++) if (d[i]! > 0) d[i] = Math.max(0.05, Math.min(d[i]!, lens[i - 1]! - 0.05, lens[i]! - 0.05));
+  const starts: number[] = [0];
+  for (let i = 1; i < n; i++) starts.push(starts[i - 1]! + lens[i - 1]! - d[i]!);
+  const total = round2(starts[n - 1]! + lens[n - 1]!);
+
+  // 3. Split sound edits (hard cuts only): J = the shot's sound starts `lead` early, L = the previous one runs `tail` on.
+  const lead = r.shots.map(() => 0);
+  const tail = r.shots.map(() => 0);
+  let splitDropped = false;
   r.shots.forEach((s, i) => {
-    const c = clips.get(s.clipId)!;
-    args.push('-ss', s.inSec.toFixed(3), '-t', (lens[i]! * s.speed + 0.1).toFixed(3), '-i', c.file);
-  });
-  const musicIndex = r.music ? r.shots.length : -1;
-  if (r.music) args.push(...(r.music.startSec > 0 ? ['-ss', r.music.startSec.toFixed(3)] : []), '-i', r.music.path);
-
-  r.shots.forEach((s, i) => {
-    const c = clips.get(s.clipId)!;
-    const L = lens[i]!.toFixed(3);
-    filters.push(
-      `[${i}:v]setpts=(PTS-STARTPTS)/${s.speed},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps},format=yuv420p,trim=duration=${L},setpts=PTS-STARTPTS[v${i}]`,
-    );
-    const norm = `aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=${L},asetpts=PTS-STARTPTS,apad=whole_dur=${L}`;
-    if (c.hasAudio) filters.push(`[${i}:a]${atempo(s.speed)}${norm}[a${i}]`);
-    else filters.push(`anullsrc=r=48000:cl=stereo,${norm}[a${i}]`);
-  });
-
-  let total: number;
-  if (!xf) {
-    filters.push(`${r.shots.map((_, i) => `[v${i}][a${i}]`).join('')}concat=n=${r.shots.length}:v=1:a=1[vj][aj]`);
-    total = lens.reduce((a, b) => a + b, 0);
-  } else {
-    let vPrev = 'v0';
-    let aPrev = 'a0';
-    let length = lens[0]!;
-    for (let i = 1; i < r.shots.length; i++) {
-      const d = Math.max(0.05, Math.min(t, lens[i - 1]! - 0.05, lens[i]! - 0.05));
-      const offset = Math.max(0, length - d);
-      const vOut = i === r.shots.length - 1 ? 'vj' : `vx${i}`;
-      const aOut = i === r.shots.length - 1 ? 'aj' : `ax${i}`;
-      filters.push(`[${vPrev}][v${i}]xfade=transition=${r.transition.kind}:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}[${vOut}]`);
-      filters.push(`[${aPrev}][a${i}]acrossfade=d=${d.toFixed(3)}[${aOut}]`);
-      length = length + lens[i]! - d;
-      vPrev = vOut;
-      aPrev = aOut;
+    if (i === 0 || !s.audio) return;
+    if (d[i]! > 0) {
+      splitDropped = true;
+      return;
     }
-    total = length;
+    if (s.audio.kind === 'j') {
+      // Needs footage before the in-point.
+      lead[i] = Math.max(0, Math.min(s.audio.seconds, s.inSec / s.speed, lens[i - 1]! * 0.8));
+    } else {
+      const p = r.shots[i - 1]!;
+      const pEnd = p.inSec + sourceSeconds(p, lens[i - 1]!);
+      const pSpeed = p.ramp?.speed ?? p.speed;
+      tail[i] = Math.max(0, Math.min(s.audio.seconds, (clipOf[i - 1]!.durationSec - pEnd) / pSpeed, lens[i]! * 0.8));
+    }
+  });
+  if (splitDropped) notes.push('J/L sound cuts work on hard cuts only, so they are left out where a cut has a transition.');
+  // Where the sound changes from shot i-1 to shot i, and how long it crossfades.
+  const bound = (i: number) => (d[i]! > 0 ? starts[i]! : starts[i]! + tail[i]! - lead[i]!);
+  const fade = (i: number) => (d[i]! > 0 ? d[i]! : HARD_FADE);
+  const aFrom = r.shots.map((_, i) => (i === 0 ? 0 : bound(i)));
+  const aTo = r.shots.map((_, i) => (i === n - 1 ? total : d[i + 1]! > 0 ? starts[i + 1]! + d[i + 1]! : bound(i + 1) + HARD_FADE));
+
+  // 4. Inputs: each shot's footage (long enough for its picture and its sound), then the music,
+  // then separate sound inputs for J-cuts (they need footage from before the in-point).
+  const pre = r.shots.map((s, i) => Math.max(0, starts[i]! - aFrom[i]!) * s.speed);
+  const srcFor = (s: ShotT, i: number, outEnd: number) => {
+    const after = outEnd - starts[i]!;
+    const inShot = sourceSeconds(s, Math.min(after, lens[i]!));
+    return inShot + Math.max(0, after - lens[i]!) * (s.ramp?.speed ?? s.speed);
+  };
+  r.shots.forEach((s, i) => {
+    const need = Math.max(sourceSeconds(s, lens[i]!), pre[i]! > 0 ? 0 : srcFor(s, i, aTo[i]!));
+    args.push('-ss', f3(s.inSec), '-t', f3(need + 0.1), '-i', clipOf[i]!.file);
+  });
+  const musicIndex = r.music ? n : -1;
+  if (r.music) args.push(...(r.music.startSec > 0 ? ['-ss', f3(r.music.startSec)] : []), '-i', r.music.path);
+  const soundInput = r.shots.map((_, i) => i);
+  let next = n + (r.music ? 1 : 0);
+  r.shots.forEach((s, i) => {
+    if (pre[i]! <= 0 || !clipOf[i]!.hasAudio) return;
+    args.push('-ss', f3(s.inSec - pre[i]!), '-t', f3(pre[i]! + srcFor(s, i, aTo[i]!) + 0.1), '-i', clipOf[i]!.file);
+    soundInput[i] = next++;
+  });
+
+  // 5. Pictures: speed (or ramp), fill the frame, zoom, length.
+  r.shots.forEach((s, i) => {
+    const L = lens[i]!;
+    filters.push(`[${i}:v]${speedFilter(s)},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps}${zoomFilter(s, W, H, L)},format=yuv420p,trim=duration=${f3(L)},setpts=PTS-STARTPTS,settb=AVTB[v${i}]`);
+  });
+
+  // 6. Runs of hard cuts are concatenated; transitions join the runs with xfade. (Every shot ends
+  // in the same time base as concat's output, or xfade refuses to join a run with a single shot.)
+  const groups: number[][] = [];
+  r.shots.forEach((_, i) => (i === 0 || d[i]! > 0 ? groups.push([i]) : groups[groups.length - 1]!.push(i)));
+  const groupLabel = groups.map((g, k) => {
+    if (g.length === 1) return `v${g[0]}`;
+    filters.push(`${g.map((i) => `[v${i}]`).join('')}concat=n=${g.length}:v=1:a=0[g${k}]`);
+    return `g${k}`;
+  });
+  let acc = groupLabel[0]!;
+  let accLen = groups[0]!.reduce((a, i) => a + lens[i]!, 0);
+  for (let k = 1; k < groups.length; k++) {
+    const i = groups[k]![0]!;
+    const kind = cuts[i]!.kind as Exclude<TransitionKind, 'cut'>;
+    const offset = Math.max(0, accLen - d[i]!);
+    const out = `x${k}`;
+    // A whip is a fast slide with directional blur while it moves (when this ffmpeg has dblur).
+    const blur = kind === 'whip' && o.blurFilter ? `,dblur=angle=0:radius=${Math.max(4, Math.round(W * 0.04))}:enable='between(t,${f3(offset)},${f3(offset + d[i]!)})'` : '';
+    filters.push(`[${acc}][${groupLabel[k]}]xfade=transition=${xfadeName(kind)}:duration=${f3(d[i]!)}:offset=${f3(offset)}${blur}[${out}]`);
+    acc = out;
+    accLen = accLen + groups[k]!.reduce((a, j) => a + lens[j]!, 0) - d[i]!;
   }
-  total = round2(total);
+  filters.push(`[${acc}]null[vj]`);
+
+  // 7. Sound: each shot's piece placed on the timeline and mixed (crossfades at transitions,
+  // 20 ms at hard cuts, shifted for J/L cuts). Every piece runs to the end of the video: amix can
+  // stop early when its inputs end at different times (seen with ffmpeg 9 on Windows).
+  const pieces: string[] = [];
+  r.shots.forEach((s, i) => {
+    if (!clipOf[i]!.hasAudio) return;
+    const from = aFrom[i]!;
+    const PL = Math.max(0.05, aTo[i]! - from);
+    const fi = i === 0 ? 0 : Math.min(fade(i), PL / 2);
+    const fo = i === n - 1 ? 0 : Math.min(fade(i + 1), PL / 2);
+    const src = soundInput[i]!;
+    const norm = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
+    const finish = `atrim=duration=${f3(PL)},asetpts=PTS-STARTPTS,apad=whole_dur=${f3(PL)}${fi > 0 ? `,afade=t=in:st=0:d=${f3(fi)}` : ''}${fo > 0 ? `,afade=t=out:st=${f3(PL - fo)}:d=${f3(fo)}` : ''}${from > 0.0005 ? `,adelay=delays=${Math.round(from * 1000)}:all=1` : ''},apad=whole_dur=${f3(total)}`;
+    // A ramp changes speed partway: the two parts are sped up separately and joined.
+    const rampAt = s.ramp ? starts[i]! + s.ramp.atSec : Infinity;
+    if (s.ramp && aTo[i]! > rampAt + 0.01) {
+      const split = pre[i]! + s.ramp.atSec * s.speed;
+      filters.push(`[${src}:a]asetpts=PTS-STARTPTS,asplit=2[s${i}a][s${i}b]`);
+      filters.push(`[s${i}a]atrim=end=${f3(split)},asetpts=PTS-STARTPTS,${atempo(s.speed)}${norm}[s${i}c]`);
+      filters.push(`[s${i}b]atrim=start=${f3(split)},asetpts=PTS-STARTPTS,${atempo(s.ramp.speed)}${norm}[s${i}d]`);
+      filters.push(`[s${i}c][s${i}d]concat=n=2:v=0:a=1,${finish}[p${i}]`);
+    } else {
+      filters.push(`[${src}:a]asetpts=PTS-STARTPTS,${atempo(s.speed)}${norm},${finish}[p${i}]`);
+    }
+    pieces.push(`[p${i}]`);
+  });
+  const whole = `apad=whole_dur=${f3(total)},atrim=duration=${f3(total)}`;
+  if (!pieces.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${f3(total)}[aj]`);
+  else if (pieces.length === 1) filters.push(`${pieces[0]}${whole}[aj]`);
+  else filters.push(`${pieces.join('')}amix=inputs=${pieces.length}:duration=longest:dropout_transition=0:normalize=0,${whole}[aj]`);
 
   // Sound: the clips' own sound at its volume, with the music under it.
   if (r.music) {
@@ -132,6 +219,30 @@ export function buildRenderPlan(
     o.outFile,
   );
   return { args, ass, durationSec: total, width: W, height: H, notes };
+}
+
+/** The shot's timing: one speed, or a ramp from its speed to the ramp's speed at ramp.atSec. */
+export function speedFilter(s: ShotT): string {
+  if (!s.ramp) return `setpts=(PTS-STARTPTS)/${s.speed}`;
+  const a = f3(s.ramp.atSec * s.speed); // source seconds where the speed changes
+  const T = '(PTS-STARTPTS)*TB';
+  return `setpts='if(lt(${T},${a}),(PTS-STARTPTS)/${s.speed},(${a}/${s.speed}+(${T}-${a})/${s.ramp.speed})/TB)'`;
+}
+
+/**
+ * Zoom keyframes as a per-frame scale (then a centre crop back to the frame): a punch-in snaps
+ * in over two frames at zoom.atSec; a push / pull eases in / out over the whole shot.
+ */
+export function zoomFilter(s: ShotT, W: number, H: number, L: number): string {
+  if (!s.zoom) return '';
+  const a = s.zoom.amount - 1;
+  const z =
+    s.zoom.kind === 'punch'
+      ? `1+${a.toFixed(4)}*clip((t-${f3(s.zoom.atSec)})/0.07,0,1)`
+      : s.zoom.kind === 'push'
+        ? `1+${a.toFixed(4)}*min(t/${f3(L)},1)`
+        : `${s.zoom.amount.toFixed(4)}-${a.toFixed(4)}*min(t/${f3(L)},1)`;
+  return `,scale=w='2*trunc(${W}*(${z})/2)':h='2*trunc(${H}*(${z})/2)':eval=frame,crop=${W}:${H},setsar=1`;
 }
 
 /** ffmpeg's atempo takes 0.5–2 per step; slower or faster speeds chain several. */
