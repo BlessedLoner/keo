@@ -383,6 +383,9 @@ app.whenReady().then(() => {
       clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
       documentsDir: app.getPath('documents'),
       videosDir: app.getPath('videos'),
+      homeDir: app.getPath('home'),
+      openPath: async (p) => (await shell.openPath(p)) === '',
+      showInFolder: (p) => shell.showItemInFolder(p),
       pickVideo: async (what) => {
         const opts: OpenDialogOptions =
           what === 'clips_folder'

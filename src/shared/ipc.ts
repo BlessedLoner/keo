@@ -68,6 +68,7 @@ export const invokeSchemas = {
   'video:status': empty,
   'video:pickFfmpeg': empty,
   'video:pickOutput': empty,
+  'files:pickFolder': z.object({ list: z.enum(['roots', 'excluded']) }).strict(),
   'video:setupState': empty,
   'video:setupStart': empty,
   'video:setupCancel': empty,
@@ -296,6 +297,7 @@ export interface InvokeOutputs {
   'video:status': { found: boolean; encoder: string | null; captions: boolean; message: string };
   'video:pickFfmpeg': { path: string | null; ok: boolean; message: string };
   'video:pickOutput': { path: string | null };
+  'files:pickFolder': { path: string | null };
   'video:setupState': VideoToolsSetup;
   'video:setupStart': VideoToolsSetup;
   'video:setupCancel': VideoToolsSetup;

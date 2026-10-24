@@ -6,6 +6,7 @@ Keo is a personal AI agent for Windows: a desktop app that talks with you, remem
 
 - **Conversation** — streaming replies, history, rename/delete/search, stop, retry, interruption recovery.
 - **Memory** — source-attributed, versioned memory. Keo learns durable facts you tell it in chat (your name, where you live, work, people, preferences) and saves them automatically **only when it can quote your own words**; anything else waits for your confirmation. You can correct, supersede or delete everything; conflicts are flagged, never silently resolved.
+- **Find any file instantly** — “open the photo of the orange table in Downloads”, “find my CV”, “videos from this week”: Keo answers from the Windows Search index in tens of milliseconds (names, and the words inside indexed documents), then opens the file, shows it in File Explorer, or reads a document’s text if you allow that. Settings → Files (opt-in); programs and scripts are never opened this way.
 - **Email & calendar** — your own mailbox over IMAP/SMTP with an app password (check new mail, search, summarise threads, drafts, replies, sending) and Google Calendar through *Sign in with Google* (free time, appointments, meetings with Meet links). Sending, inviting and deleting always ask you first (opt-in).
 - **Research** — web search (Brave Search with your key, or DuckDuckGo with no key) and reading of public web pages, with cited sources (opt-in).
 - **Projects** — objectives, decisions, blockers, open questions and progress, each marked with who stated it.

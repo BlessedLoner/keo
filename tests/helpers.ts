@@ -305,6 +305,9 @@ export function makeHarness(
     launchApp: async () => undefined,
     browsers: () => [],
     openTab: async () => undefined,
+    // Never the real Windows Search index or the user's own folders.
+    fileIndex: null,
+    homeDir: `${dir}-home`,
     ...(opts.deps ?? {}),
   });
   return {

@@ -107,6 +107,14 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### Next iteration (uncommitted): find any file instantly
+
+- **What**: `files.search` finds files and folders anywhere in the allowed folders (default: the user's own folder) by name words, contents (indexed documents), kind (folder, document, picture, video, audio, archive, code) and date; `files.open` (its usual app), `files.reveal` (File Explorer, selected), `files.peek` (text, code, .docx). Settings → Files: the switch, the reading switch, folders to search or skip.
+- **How**: `src/main/files/windowsSearch.ts` keeps one hidden PowerShell with an open ADO connection to the Windows Search index (`Search.CollatorDSO`), opened ahead of the first search; `src/main/files/fileSearch.ts` builds the query (prefix `CONTAINS` per word — a leading-wildcard `LIKE` took 6 s on this PC, `CONTAINS` 10–25 ms), filters every result by the allowed/excluded folders, ranks name matches first, then newest; a time-boxed name scan when the index is unavailable or has nothing there. Capabilities: `src/main/capabilities/findFiles.ts`.
+- **Measured on this PC** (`KEO_LIVE_FILES=<folder> npx vitest run tests/live-files.test.ts`, read-only, limited to `Documents\keo content`): first search 1.2 s including starting the helper; then 13–48 ms (“whatsapp” → 6 files, newest first; videos from the last 3 days; the *Keo edits* folder).
+- **Tests**: `tests/findFiles.test.ts` (12): query building and injection-proofing, off until enabled, index results filtered (AppData, Keo's data, outside folders) and ranked, scan fallback skipping caches/AppData, folders, open after approval, programs/scripts/shortcuts refused, reading off by default, text and .docx, secret files refused, index warmed when enabled.
+- **Not done yet**: finding photos by what is in them (“the orange table”) when the file name does not say — that needs Keo to look at pictures; PDF text.
+
 ### Next iteration (uncommitted): background jobs — several long tasks at once
 
 - **What**: a long request (research, video planning/rendering, reading many pages, anything with many tool calls) no longer blocks the conversation. The model hands it to `jobs.start_background` with a self-contained brief and answers at once ("On it — I'll tell you when it's done"). The job runs as an ordinary agent run in its own hidden conversation, through the same `AgentService` loop: same provider/model choice and smart routing, same tools, same admission and approval rules (no auto-approval; job approvals appear in Task Activity like any other, and in a voice conversation Keo asks for them by voice between turns). A job cannot start or stop other jobs.

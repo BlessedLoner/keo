@@ -262,6 +262,20 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Finding the user's files anywhere in the folders they allowed (Settings → Files). */
+    files: z
+      .object({
+        /** Let Keo find files and folders (names, dates; through the Windows Search index). */
+        searchEnabled: z.boolean().default(false),
+        /** Let Keo read the text inside files it found (that text goes to the AI provider). */
+        readContent: z.boolean().default(false),
+        /** Folders Keo may search; empty = the user's whole user folder. */
+        roots: z.array(z.string().trim().min(3).max(500)).max(20).default([]),
+        /** Folders never searched, besides Keo's built-in ones (AppData, Keo's own data). */
+        excluded: z.array(z.string().trim().min(3).max(500)).max(50).default([]),
+      })
+      .strict()
+      .prefault({}),
     /** Video editing with ffmpeg (Keo never installs or downloads ffmpeg itself). */
     video: z
       .object({

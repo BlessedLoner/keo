@@ -10,7 +10,7 @@ import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 import { EmailCalendarSettings } from './EmailCalendarSettings';
 
-type Section = 'providers' | 'web' | 'email' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
+type Section = 'providers' | 'web' | 'email' | 'files' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
 
 export function SettingsView() {
   const app = useApp();
@@ -33,6 +33,7 @@ export function SettingsView() {
               ['providers', 'Providers'],
               ['web', 'Web search'],
               ['email', 'Email & calendar'],
+              ['files', 'Files'],
               ['voice', 'Voice & shortcuts'],
               ['autonomy', 'Approvals & live chat'],
               ['agent', 'Agent'],
@@ -59,6 +60,8 @@ export function SettingsView() {
           <WebSearch s={s} patch={patch} />
         ) : section === 'email' ? (
           <EmailCalendarSettings s={s} patch={patch} />
+        ) : section === 'files' ? (
+          <Files s={s} patch={patch} />
         ) : section === 'voice' ? (
           <>
             <WakeAndShortcuts s={s} patch={patch} />
@@ -83,6 +86,60 @@ export function SettingsView() {
 }
 
 type Patch = (p: Record<string, unknown>) => Promise<void>;
+
+/** Finding files: the switch, what Keo may read, and which folders it searches or skips. */
+function Files({ s, patch }: { s: Settings; patch: Patch }) {
+  const ui = useUi();
+  const f = s.files;
+  const pick = (list: 'roots' | 'excluded') => void invoke('files:pickFolder', { list }).catch((e) => ui.error(errText(e)));
+  const remove = (list: 'roots' | 'excluded', dir: string) => void patch({ files: { [list]: f[list].filter((x) => x !== dir) } });
+  return (
+    <>
+      <section className="card" aria-label="Finding files">
+        <h2>Finding files</h2>
+        <p className="muted small">
+          Ask Keo for any file or folder — “open the photo of the orange table in Downloads”, “find my CV”, “videos from this week” — and it answers in well under a second from the Windows Search index (names, and the words inside indexed documents). When the index has nothing for a folder, Keo looks at names instead. The names and paths it finds go to your AI provider so it can answer you; files are never changed, moved or deleted, and programs or scripts are never opened.
+        </p>
+        <Toggle checked={f.searchEnabled} onChange={(v) => void patch({ files: { searchEnabled: v } })} label="Let Keo find my files and folders" />
+        <Toggle checked={f.readContent} onChange={(v) => void patch({ files: { readContent: v } })} label="Let Keo read the text of files it finds when I ask (text files and Word documents; that text goes to my AI provider)" />
+        <p className="muted small">Files that usually hold passwords or keys are never read.</p>
+      </section>
+      <section className="card" aria-label="Folders">
+        <h2>Folders</h2>
+        <p className="small">Keo searches {f.roots.length ? 'these folders:' : 'your whole user folder (Desktop, Documents, Downloads, Pictures, Videos, Music…).'}</p>
+        {f.roots.map((r) => (
+          <div className="row small" key={r}>
+            <code className="grow">{r}</code>
+            <button className="btn ghost sm" onClick={() => remove('roots', r)}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <div className="row">
+          <button className="btn sm" onClick={() => pick('roots')}>
+            {f.roots.length ? 'Add a folder' : 'Search only chosen folders…'}
+          </button>
+        </div>
+        <p className="small" style={{ marginTop: 14 }}>
+          Never searched: app data (AppData), Keo’s own data{f.excluded.length ? ', and:' : '.'}
+        </p>
+        {f.excluded.map((r) => (
+          <div className="row small" key={r}>
+            <code className="grow">{r}</code>
+            <button className="btn ghost sm" onClick={() => remove('excluded', r)}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <div className="row">
+          <button className="btn ghost sm" onClick={() => pick('excluded')}>
+            Add a folder to skip
+          </button>
+        </div>
+      </section>
+    </>
+  );
+}
 
 /** Video editing: which ffmpeg, where finished videos go, and whether clip sound may go to OpenAI. */
 function Video({ s, patch }: { s: Settings; patch: Patch }) {

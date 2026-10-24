@@ -172,6 +172,14 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'video:setupStart': () => s.ffmpegSetup.start(),
     'video:setupCancel': () => s.ffmpegSetup.cancel(),
     'video:setupRemove': () => s.ffmpegSetup.remove(),
+    'files:pickFolder': async ({ list }) => {
+      const dir = (await host.pickFolder?.(list === 'roots' ? 'Choose a folder Keo may search' : 'Choose a folder Keo should never search')) ?? null;
+      if (dir) {
+        const cur = s.settings.get().files[list];
+        if (!cur.some((x) => x.toLowerCase() === dir.toLowerCase())) s.settings.update({ files: { [list]: [...cur, dir] } });
+      }
+      return { path: dir };
+    },
     'video:pickOutput': async () => {
       const dir = (await host.pickFolder?.('Where should Keo save finished videos?')) ?? null;
       if (dir) s.settings.update({ video: { outputDir: dir } });

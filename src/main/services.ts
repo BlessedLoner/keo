@@ -1,3 +1,7 @@
+import os from 'node:os';
+import { FileSearch, type IndexBackend } from './files/fileSearch';
+import { WindowsSearchIndex } from './files/windowsSearch';
+import { findFileCapabilities } from './capabilities/findFiles';
 import { builtinGoogleClient, type GoogleClient } from './calendar/builtinClient';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -117,6 +121,13 @@ export interface ServiceDeps {
   mailSender?: MailSender;
   /** HTTP to Google (sign-in and Calendar); tests inject a fake Google. */
   googleFetch?: FetchLike;
+  /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
+  fileIndex?: IndexBackend | null;
+  /** The user's own folder (C:\Users\<name>): what "my files" means by default. */
+  homeDir?: string;
+  /** Opens a file with its app / shows it in File Explorer (the app uses Electron's shell). */
+  openPath?: (p: string) => Promise<boolean>;
+  showInFolder?: (p: string) => void;
   /** Keo's built-in Google client (tests inject one; by default the one baked into the build, if any). */
   googleClient?: GoogleClient | null;
   googleEndpoints?: typeof GOOGLE_ENDPOINTS;
@@ -406,6 +417,17 @@ export class Services {
       ...(d.googleEndpoints ? { endpoints: d.googleEndpoints } : {}),
       log: this.log,
     });
+    const home = d.homeDir ?? os.homedir();
+    this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
+    this.fileSearch = new FileSearch({
+      index: this.fileIndex,
+      roots: () => {
+        const r = getSettings().files.roots;
+        return r.length ? r : [home];
+      },
+      // Never: app data and caches, Keo's own data, plus the user's own exclusions.
+      excluded: () => [path.join(home, 'AppData'), d.profile.userData, ...getSettings().files.excluded],
+    });
     this.calendar = new GoogleCalendar(this.googleAuth, () => getSettings().calendar.calendarId, { ...(d.googleFetch ? { fetch: d.googleFetch } : {}), ...(d.calendarApi ? { base: d.calendarApi } : {}) });
     for (const cap of [
       ...builtinCapabilities(capDeps),
@@ -436,6 +458,14 @@ export class Services {
         workRoot: () => path.join(d.profile.userData, 'research'),
       }),
       ...fileCapabilities(capDeps),
+      ...findFileCapabilities({
+        search: this.fileSearch,
+        enabled: () => getSettings().files.searchEnabled,
+        readContent: () => getSettings().files.readContent,
+        destination: () => this.providers.active().destination(),
+        openPath: d.openPath ?? (async () => false),
+        showInFolder: d.showInFolder ?? (() => undefined),
+      }),
       ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
       ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => this.googleClientId(), timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
       ...videoCapabilities({
@@ -625,7 +655,12 @@ export class Services {
       },
     });
     let lastWake = JSON.stringify(this.settings.get().wake);
+    // The file index is opened ahead of the first search (it takes a few seconds cold).
+    if (this.settings.get().files.searchEnabled) this.fileIndex?.warm?.();
+    let filesOn = this.settings.get().files.searchEnabled;
     this.settings.onChange((st) => {
+      if (st.files.searchEnabled && !filesOn) this.fileIndex?.warm?.();
+      filesOn = st.files.searchEnabled;
       this.push('settings:changed', {});
       this.presence.setAutonomy(st.autonomy.level);
       const w = JSON.stringify(st.wake);
@@ -1232,6 +1267,9 @@ export class Services {
 
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
+  readonly fileSearch: FileSearch;
+  readonly fileIndex: IndexBackend | null;
+
   /** Keo's built-in Google client, if this build has one. */
   readonly builtinGoogle: GoogleClient | null;
 
@@ -1398,6 +1436,7 @@ export class Services {
     for (const id of this.agent.activeConversations()) this.agent.cancel(id);
     this.tasks.dispose();
     this.video.shutdown();
+    this.fileIndex?.close?.();
     this.desktop.backend.dispose();
     this.log.info('app.shutdown', {});
     this.db.close();

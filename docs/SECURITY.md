@@ -178,6 +178,14 @@ Execution (`TaskOrchestrator`):
 - **Audit**: connecting/removing the account and Google sign-in/out are recorded (`permission.setting`); capability audit views hold counts and lengths only (recipients, subject/body length), never addresses or text.
 - **Tests**: no test reaches a mail server or Google. `tests/email.test.ts` uses an in-memory IMAP stand-in and a recording SMTP sender (messages are composed by the real nodemailer composer); `tests/calendar.test.ts` uses a fake Google token endpoint and Calendar API, and drives the real loopback listener on 127.0.0.1.
 
+## 4n. Finding files
+
+- **Opt-in**: `files.search`, `files.open`, `files.reveal` are unavailable until *Settings → Files → Let Keo find my files*; `files.peek` (reading a file's text) needs a second switch, off by default, because that text goes to the AI provider. Names and paths of found items go to the provider as tool results, labelled untrusted.
+- **Scope**: only the allowed folders (default: the user's own folder), never `AppData`, Keo's own data folder, or the user's excluded folders — enforced on every result and on every path the model passes back (`allowed()`), not only in the query. The fallback scan also skips caches and version-control folders.
+- **Index access**: a resident PowerShell helper (no window) runs only `SELECT` statements Keo builds; the user's words are reduced to letters, digits, `.` and `-` and quotes are doubled, so typed text cannot change the query. Leading-wildcard `LIKE` is never used (it makes Windows Search scan everything).
+- **Opening**: with the file's default app after approval (routine tier); programs, scripts, shortcuts, installers and registry files are refused outright (`apps.open` is for apps), and Office files with macros always ask.
+- **Reading**: plain text, code and Word (`word/document.xml` through Keo's own zip reader); files and folders that usually hold secrets (`.ssh`, keys, `.env`, password vaults, names with "password", "secret", "recovery code"…) are never read. Nothing is changed, moved or deleted.
+
 ## 4h. Language
 
 - Replies are in English by default (system policy). Another language is used only for what the user explicitly asks for (translations, "reply to her in French"); web pages, WhatsApp messages and screen text never change the reply language.

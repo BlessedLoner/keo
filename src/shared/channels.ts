@@ -30,6 +30,7 @@ export const INVOKE_CHANNELS = [
   'video:status',
   'video:pickFfmpeg',
   'video:pickOutput',
+  'files:pickFolder',
   'video:setupState',
   'video:setupStart',
   'video:setupCancel',
