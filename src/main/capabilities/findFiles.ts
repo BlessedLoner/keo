@@ -30,6 +30,8 @@ const RUNS_CODE = /\.(exe|com|bat|cmd|msi|msix|msp|appx|appxbundle|ps1|psm1|vbs|
 const MACROS = /\.(docm|dotm|xlsm|xltm|xlsb|pptm|potm|ppsm)$/i;
 /** Beyond the project rule: places and names that usually hold secrets or keys. */
 const SECRETISH = /(^|[\\/])(\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker)([\\/]|$)|(^|[\\/])(id_rsa|id_ed25519|id_ecdsa)[^\\/]*$|\.(pem|key|pfx|p12|kdbx|kdb|keystore|jks|ovpn|asc|gpg|wallet)$|(^|[\\/])[^\\/]*(password|passwd|secret|credential|recovery[-_ ]?code|seed[-_ ]?phrase|private[-_ ]?key)[^\\/]*$/i;
+/** A file that usually holds passwords or keys (never read, never uploaded). */
+export const looksSecret = (p: string) => SECRETISH.test(p) || isSecretFile(path.basename(p));
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|log|json|xml|html?|ya?ml|toml|tex|rtf|srt|vtt|ts|tsx|js|jsx|py|java|c|cpp|h|cs|go|rs|rb|php|css|scss|sql|sh|ps1|ini|cfg|conf)$/i;
 
 const Hit = z.object({ path: z.string(), name: z.string(), folder: z.string(), kind: z.string(), size: z.number().nullable(), modified: z.string().nullable(), match: z.string() });
@@ -165,7 +167,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
     modelVisible: true,
     verificationPolicy: 'Reads the file without changing it; the text is labelled untrusted.',
     unavailableReason: () => off() ?? (d.readContent() ? null : 'Reading files is off. The user can turn on “Let Keo read the text of files it finds” in Settings → Files.'),
-    precheck: (i) => within(i.path) ?? (SECRETISH.test(i.path) || isSecretFile(path.basename(i.path)) ? 'That file usually holds passwords or keys; Keo does not read it.' : null),
+    precheck: (i) => within(i.path) ?? (looksSecret(i.path) ? 'That file usually holds passwords or keys; Keo does not read it.' : null),
     preview: (i) => ({ summary: `Read ${path.basename(i.path)}`, target: i.path, consequences: ['Reads the file; nothing is changed.'], dataExport: `Its text goes to ${d.destination()}.` }),
     auditView: (i) => ({ ext: path.extname(i.path).toLowerCase() }),
     async execute(i) {

@@ -680,7 +680,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const step = s.taskRepo.stepById(stepId);
       if (!step) throw new KeoError('not_found', 'Step not found.');
       if (!step.preview.grantable) throw new KeoError('not_grantable', 'This action cannot be covered by navigation permission; approve it on its own.');
-      const target = (step.input as { target?: { hwnd: string; pid: number; processName: string } }).target;
+      const target = (step.input as { target?: { hwnd: string; pid: number; processName: string } }).target ?? step.preview.grantTarget;
       if (!target) throw new KeoError('not_grantable', 'This action has no window target.');
       const task = s.tasks.approveStep(stepId, inputHash);
       s.grants.create(target, `Navigate in ${target.processName}`, minutes);
