@@ -132,6 +132,18 @@ export interface ToolActivity {
   choices?: string[];
 }
 
+/** One step of the working checklist Keo keeps for a multi-step request. */
+export interface PlanStep {
+  title: string;
+  status: 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped';
+  /** What was found or checked, or why it failed. */
+  note?: string;
+}
+
+export interface WorkPlan {
+  steps: PlanStep[];
+}
+
 export interface MessageMeta {
   providerId?: ProviderId;
   model?: string;
@@ -152,6 +164,12 @@ export interface MessageMeta {
   taskNote?: string;
   /** A background job's report (posted in the conversation that started it). */
   jobId?: string;
+  /** The working checklist for a multi-step request (shown with the reply). */
+  plan?: WorkPlan;
+  /** Smart routing moved this reply to the strong model part-way (a failure, a plan or a long run). */
+  escalated?: string;
+  /** Older tool results shortened during this reply to keep the context small. */
+  compactedResults?: number;
 }
 
 /** A long request Keo runs in the background in its own hidden conversation. */
@@ -579,6 +597,7 @@ export type AgentEvent =
   | { type: 'text_delta'; conversationId: string; messageId: string; delta: string }
   | { type: 'tool_activity'; conversationId: string; messageId: string; activity: ToolActivity }
   | { type: 'phase'; conversationId: string; messageId: string; phase: AgentPhase }
+  | { type: 'plan'; conversationId: string; messageId: string; plan: WorkPlan }
   | { type: 'turn_finished'; conversationId: string; message: Message };
 
 // ---------------------------------------------------------------------------

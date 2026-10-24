@@ -15,7 +15,8 @@ import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { SYSTEM_PROMPT } from './systemPrompt';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
-import { chooseRoute, type RouteDecision } from './routing';
+import { chooseRoute, needsPlan, type RouteDecision } from './routing';
+import { compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
 const UNTRUSTED_OUTPUT = new Set([
@@ -49,6 +50,10 @@ const NEEDS_CHOICE = new Set(['ambiguous_app', 'ambiguous_profile', 'profile_not
 
 const CONTEXT_CAPS = new Set(['web.search', 'web.fetch_page', 'browser.read_page', 'desktop.inspect_window', 'desktop.list_windows', 'whatsapp.read_chat', 'memory.search', 'project.list', 'project.get', 'vision.get_observation', 'system.datetime']);
 const MAX_TOOL_RESULT_CHARS = 20000;
+/** Rounds that only update the checklist do not use up the tool-round limit, up to this many. */
+const FREE_PLAN_ROUNDS = 3;
+/** Smart routing moves a fast-model reply to the strong model after this many tool rounds. */
+const ESCALATE_AFTER_ROUNDS = 3;
 
 interface ActiveTurn {
   controller: AbortController;
@@ -276,16 +281,22 @@ export class AgentService {
       return { provider, model: provider.selectedModel() };
     }
     const route = chooseRoute({ text: this.conversations.getMessage(sourceMessageId)?.content ?? '', voice, images: hasImages, openQuestion });
-    const target = settings.routing[route.route];
+    const side = this.routeSide(settings, route.route);
+    if (side) return { ...side, route };
+    this.log.warn('agent.route_unavailable', { route: route.route, providerId: settings.routing[route.route].provider }, correlationId);
+    const active = this.providers.active();
+    return { provider: active, model: active.selectedModel(), route };
+  }
+
+  /** The provider and model the user set for one side of smart routing; null when that provider is not ready. */
+  private routeSide(settings: Settings, side: 'fast' | 'strong'): { provider: ChatProvider; model: string } | null {
+    const target = settings.routing[side];
     if (target.provider) {
       const p = this.providers.has(target.provider) ? this.providers.get(target.provider) : null;
-      if (p?.status().kind === 'ready') return { provider: p, model: target.model || p.selectedModel(), route };
-      this.log.warn('agent.route_unavailable', { route: route.route, providerId: target.provider }, correlationId);
-      const active = this.providers.active();
-      return { provider: active, model: active.selectedModel(), route };
+      return p?.status().kind === 'ready' ? { provider: p, model: target.model || p.selectedModel() } : null;
     }
     const active = this.providers.active();
-    return { provider: active, model: target.model || active.selectedModel(), route };
+    return { provider: active, model: target.model || active.selectedModel() };
   }
 
   private async runTurn(conversationId: string, sourceMessageId: string): Promise<Message> {
@@ -321,9 +332,12 @@ export class AgentService {
       // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only.
       const pics = this.pictures.get(sourceMessageId);
       this.pictures.delete(sourceMessageId);
-      const { provider, model, route } = this.pickModel(settings, sourceMessageId, !!pics?.length, !!open, correlationId);
+      const picked = this.pickModel(settings, sourceMessageId, !!pics?.length, !!open, correlationId);
+      let { provider, model } = picked;
+      const { route } = picked;
       // A routed model id the provider does not list uses the capabilities declared for that provider.
-      const info = provider.models().find((m) => m.id === model) ?? (route ? provider.models()[0] : undefined);
+      const modelInfo = (p: ChatProvider, id: string, routed: boolean) => p.models().find((m) => m.id === id) ?? (routed ? p.models()[0] : undefined);
+      let info = modelInfo(provider, model, !!route);
       meta.providerId = provider.id;
       meta.model = model;
       if (route) meta.route = route.route;
@@ -339,31 +353,58 @@ export class AgentService {
         if (info?.capabilities.vision) lastUser.content.push(...pics.map((p) => ({ type: 'image' as const, mediaType: p.mediaType, dataBase64: p.dataBase64 })));
         else lastUser.content.push({ type: 'text', text: '(The user marked part of their screen, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)' });
       }
-      const tools = settings.agent.toolsEnabled && info?.capabilities.tools ? this.registry.toolSpecs() : [];
-      const maxOut = Math.min(
-        info?.capabilities.maxOutputTokens ?? 4096,
-        provider.id === 'anthropic' ? settings.providers.anthropic.maxOutputTokens : provider.id === 'test' ? 8192 : settings.providers[provider.id].maxOutputTokens,
-      );
+      // The checklist tool goes with the others (always, so the tool list and the provider's prompt cache stay stable).
+      const tools = settings.agent.toolsEnabled && info?.capabilities.tools ? [...this.registry.toolSpecs(), PLAN_TOOL_SPEC] : [];
+      const outputLimit = (p: ChatProvider, i: typeof info) =>
+        Math.min(i?.capabilities.maxOutputTokens ?? 4096, p.id === 'anthropic' ? settings.providers.anthropic.maxOutputTokens : p.id === 'test' ? 8192 : settings.providers[p.id].maxOutputTokens);
+      let maxOut = outputLimit(provider, info);
+      // Clearly multi-step requests get a working checklist; questions and single actions never do.
+      const planned = tools.length > 0 && needsPlan(this.conversations.getMessage(sourceMessageId)?.content ?? '');
       this.log.info(
         'agent.turn_started',
-        { conversationId, providerId: provider.id, model, route: route ? `${route.route} (${route.reason})` : null, tools: tools.length, history: built.stats.historyMessages, dropped: built.stats.droppedMessages, memories: built.memoryIds.length },
+        { conversationId, providerId: provider.id, model, route: route ? `${route.route} (${route.reason})` : null, planned, tools: tools.length, history: built.stats.historyMessages, dropped: built.stats.droppedMessages, memories: built.memoryIds.length },
         correlationId,
       );
       phase('thinking');
 
       let usageIn = 0;
       let claimNudged = false;
+      let finishNudged = false;
       const succeeded = () => new Set((meta.tools ?? []).filter((t) => t.outcome === 'executed').map((t) => t.capabilityId));
       let usageOut = 0;
+      // Long multi-step work: repeated calls, actions not shown to work, and where this turn's own messages begin.
+      const repeats = new RepeatGuard();
+      const problems = new Map<string, Problem>();
+      const turnStart = messages.length;
+      let freeRounds = 0;
+      let toolRounds = 0;
+      const note = (s: string) => {
+        text += s;
+        this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: s });
+      };
       for (let iteration = 0; ; iteration++) {
-        if (iteration >= settings.agent.maxToolIterations) {
+        const used = iteration - freeRounds;
+        if (used >= settings.agent.maxToolIterations) {
           text += `${text ? '\n\n' : ''}_Stopped after ${settings.agent.maxToolIterations} tool rounds (limit set in Settings)._`;
           break;
+        }
+        // On long runs, older tool results are shortened so the request, the plan and recent results stay in view.
+        const shortened = iteration > 0 ? compactTurn(messages, turnStart, settings.agent.contextCharBudget) : 0;
+        if (shortened) {
+          meta.compactedResults = (meta.compactedResults ?? 0) + shortened;
+          this.log.info('agent.context_compacted', { results: shortened }, correlationId);
         }
         const sep = text && !text.endsWith('\n') ? '\n\n' : '';
         let first = true;
         const result = await provider.stream(
-          { model, system: SYSTEM_PROMPT + this.systemExtra(conversationId) + this.pendingContext(conversationId), messages, tools, maxOutputTokens: maxOut, correlationId },
+          {
+            model,
+            system: SYSTEM_PROMPT + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
+            messages,
+            tools,
+            maxOutputTokens: maxOut,
+            correlationId,
+          },
           {
             onText: (delta) => {
               if (first && sep) {
@@ -404,7 +445,7 @@ export class AgentService {
           if (result.stopReason === 'max_tokens') text += '\n\n_Response reached the output limit and may be incomplete._';
           // Honesty guard: the reply claims an action that no capability performed.
           const claims = unsupportedClaims(result.text, succeeded());
-          if (claims.length && tools.length && !claimNudged && iteration + 1 < settings.agent.maxToolIterations) {
+          if (claims.length && tools.length && !claimNudged && used + 1 < settings.agent.maxToolIterations) {
             claimNudged = true;
             this.log.warn('agent.unsupported_claim', { claims, nudged: true }, correlationId);
             const note = `\n\n> ⚠ Keo: the text above says Keo ${claims.join(' and ')}, but no such action was run. Keo asked the model to actually do it or correct itself.\n\n`;
@@ -430,6 +471,21 @@ export class AgentService {
             this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: warn });
             meta.unsupportedClaims = claims;
           }
+          // Finishing properly: no open plan steps, and no "done" over an action that failed or was not verified.
+          const issue = claims.length || !tools.length ? null : finishIssues(result.text, meta.plan, [...problems.values()]);
+          if (issue && !finishNudged && used + 1 < settings.agent.maxToolIterations) {
+            finishNudged = true;
+            this.log.warn('agent.finish_checked', { openSteps: issue.open.length, problems: issue.problems.length }, correlationId);
+            if (issue.problems.length) note(`\n\n> Keo: not everything above worked — ${describeProblems(issue.problems)}. Keo asked the model to fix it or say so.\n\n`);
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(no text)' }], native: result.native });
+            messages.push({ role: 'user', content: [{ type: 'text', text: finishNote(issue) }] });
+            phase('thinking');
+            continue;
+          }
+          if (issue?.problems.length) {
+            this.log.warn('agent.unfinished_claim', { problems: issue.problems.length }, correlationId);
+            note(`\n\n> ⚠ Keo: this reply sounds finished, but these actions failed or could not be verified: ${describeProblems(issue.problems)}.`);
+          }
           break;
         }
         if (result.stopReason === 'max_tokens') {
@@ -445,8 +501,8 @@ export class AgentService {
           ],
           native: result.native,
         });
-        const names = result.toolCalls.map((c) => this.registry.resolveToolName(c.name) ?? '');
-        phase(names.includes('task.propose_plan') ? 'planning' : names.every((n) => CONTEXT_CAPS.has(n)) ? 'gathering_context' : 'tool');
+        const names = result.toolCalls.map((c) => (c.name === PLAN_TOOL ? PLAN_TOOL : (this.registry.resolveToolName(c.name) ?? '')));
+        phase(names.includes('task.propose_plan') || names.every((n) => n === PLAN_TOOL) ? 'planning' : names.every((n) => CONTEXT_CAPS.has(n)) ? 'gathering_context' : 'tool');
         const results: NeutralMessage['content'] = [];
         const upsert = (a: ToolActivity) => {
           const list = (meta.tools ??= []);
@@ -454,7 +510,31 @@ export class AgentService {
           if (i >= 0) list[i] = a;
           else list.push(a);
         };
+        let blockedNow = 0;
+        let failedNow = false;
         for (const call of result.toolCalls) {
+          if (call.name === PLAN_TOOL) {
+            const parsed = parsePlan(call.input);
+            if ('plan' in parsed) {
+              meta.plan = parsed.plan;
+              this.emit({ type: 'plan', conversationId, messageId: assistant.id, plan: parsed.plan });
+              flush(true);
+            }
+            results.push({ type: 'tool_result', callId: call.id, content: json('plan' in parsed ? { status: 'shown_to_user' } : { status: 'rejected', error: parsed.error }), isError: !('plan' in parsed) });
+            continue;
+          }
+          // Loops: the same call again after it failed, or over and over, is stopped before it runs.
+          const repeated = repeats.check(call, iteration);
+          if (repeated) {
+            blockedNow++;
+            repeats.blocked++;
+            this.log.warn('agent.repeat_blocked', { tool: call.name }, correlationId);
+            const activity: ToolActivity = { callId: call.id, capabilityId: this.registry.resolveToolName(call.name) ?? call.name, summary: 'Repeated request stopped by Keo', outcome: 'rejected', detail: repeated };
+            upsert(activity);
+            this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity });
+            results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'blocked_repeat', error: repeated }), isError: true });
+            continue;
+          }
           const r = await this.handleToolCall(call, {
             conversationId,
             sourceMessageId,
@@ -470,11 +550,39 @@ export class AgentService {
           });
           upsert(r.activity);
           this.notePending(conversationId, call, r);
+          repeats.record(call, iteration, r.activity.outcome);
+          failedNow ||= r.activity.outcome === 'failed' || r.activity.outcome === 'uncertain';
+          trackProblems(problems, r.activity, r.verification);
           this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity: r.activity });
           results.push({ type: 'tool_result', callId: call.id, content: r.content, isError: r.isError });
           flush(true);
         }
         messages.push({ role: 'user', content: results });
+        if (result.toolCalls.every((c) => c.name === PLAN_TOOL) && freeRounds < FREE_PLAN_ROUNDS) freeRounds++;
+        else toolRounds++;
+        // A loop the model does not leave: stop instead of using up the remaining rounds.
+        if (blockedNow === result.toolCalls.length && repeats.blocked >= 2) {
+          text += `${text ? '\n\n' : ''}_Keo stopped here: the same action kept being requested after it had already run or failed._`;
+          this.log.warn('agent.loop_stopped', { blocked: repeats.blocked }, correlationId);
+          break;
+        }
+        // Smart routing: a reply that turns out to be real work moves to the strong model for the rest of the turn.
+        if (route?.route === 'fast' && !meta.escalated) {
+          const why = failedNow ? 'a step failed' : meta.plan ? 'multi-step plan' : toolRounds >= ESCALATE_AFTER_ROUNDS ? 'long task' : null;
+          const strong = why ? this.routeSide(settings, 'strong') : null;
+          const strongInfo = strong ? modelInfo(strong.provider, strong.model, true) : undefined;
+          if (why && strong && strongInfo?.capabilities.tools && (strong.provider.id !== provider.id || strong.model !== model)) {
+            provider = strong.provider;
+            model = strong.model;
+            info = strongInfo;
+            maxOut = outputLimit(provider, info);
+            meta.providerId = provider.id;
+            meta.model = model;
+            meta.route = 'strong';
+            meta.escalated = why;
+            this.log.info('agent.route_escalated', { reason: why, providerId: provider.id, model }, correlationId);
+          }
+        }
         phase('thinking');
       }
       if (usageIn || usageOut) meta.usage = { inputTokens: usageIn, outputTokens: usageOut };
@@ -532,7 +640,7 @@ export class AgentService {
       messageId: string;
       onPending: (a: ToolActivity) => void;
     },
-  ): Promise<{ activity: ToolActivity; content: string; isError: boolean }> {
+  ): Promise<ToolOutcome> {
     const capabilityId =this.registry.resolveToolName(call.name) ?? call.name;
     const base = { callId: call.id, capabilityId };
     if (call.parseError) {
@@ -572,7 +680,7 @@ export class AgentService {
     ctx: { conversationId: string; sourceMessageId: string; correlationId: string; signal: AbortSignal; turn: ActiveTurn; messageId: string; onPending: (a: ToolActivity) => void },
     base: { callId: string; capabilityId: string },
     summary: string,
-  ): Promise<{ activity: ToolActivity; content: string; isError: boolean }> {
+  ): Promise<ToolOutcome> {
     const settings = this.getSettings();
     const cap = admission.capability;
 
@@ -598,7 +706,7 @@ export class AgentService {
       } catch (err) {
         if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
         const msg = errorMessage(err);
-        return { activity: { ...base, summary, outcome: 'failed', detail: msg }, content: json({ status: 'failed', error: msg }), isError: true };
+        return { activity: { ...base, summary, outcome: 'failed', detail: msg }, content: json({ status: 'failed', error: msg, next: RECOVER }), isError: true };
       }
     }
 
@@ -624,18 +732,29 @@ export class AgentService {
     return this.taskOutcome(settled, base, summary, cap.id);
   }
 
-  private taskOutcome(t: Task, base: { callId: string; capabilityId: string }, summary: string, capId: string): { activity: ToolActivity; content: string; isError: boolean } {
+  private taskOutcome(t: Task, base: { callId: string; capabilityId: string }, summary: string, capId: string): ToolOutcome {
     const step = t.steps[0];
     const a = (outcome: ToolActivity['outcome'], detail: string): ToolActivity => ({ ...base, summary, outcome, detail, taskId: t.id });
     switch (t.state) {
       case 'completed':
         return {
           activity: a('executed', step?.verificationDetail ?? 'Completed.'),
-          content: wrap(capId, { status: 'succeeded', verification: step?.verification, verificationDetail: step?.verificationDetail, result: step?.result }),
+          content: wrap(capId, {
+            status: 'succeeded',
+            verification: step?.verification,
+            verificationDetail: step?.verificationDetail,
+            ...(step?.verification === 'unverified' ? { check: 'Keo could not confirm this worked. Re-read the result (inspect the window, read the page or file) before reporting it as done.' } : {}),
+            result: step?.result,
+          }),
           isError: false,
+          verification: step?.verification,
         };
       case 'failed':
-        return { activity: a('failed', step?.error ?? 'Failed.'), content: json({ status: 'failed', error: step?.error, code: step?.errorCode }), isError: true };
+        return {
+          activity: a('failed', step?.error ?? 'Failed.'),
+          content: json({ status: 'failed', error: step?.error, code: step?.errorCode, ...(step?.errorCode && NEEDS_CHOICE.has(step.errorCode) ? {} : { next: RECOVER }) }),
+          isError: true,
+        };
       case 'cancelled':
         if (step?.state === 'denied') return { activity: a('denied', 'You denied this action.'), content: json({ status: 'denied_by_user', note: 'The user denied this action. Do not retry it unless they ask.' }), isError: true };
         return { activity: a('failed', 'Cancelled.'), content: json({ status: 'cancelled' }), isError: true };
@@ -653,6 +772,26 @@ export class AgentService {
         };
     }
   }
+}
+
+type ToolOutcome = { activity: ToolActivity; content: string; isError: boolean; verification?: Task['steps'][number]['verification'] };
+
+/** Told to the model with every failed step. */
+const RECOVER = 'Do not repeat this exact call. Try a different tool or different input, re-check the current state, or ask the user.';
+
+/**
+ * Consequential actions (those that ran as authorized tasks) that have not been
+ * shown to work. A failure is made up for by a later consequential action that
+ * succeeds; an unverified result by any later successful call (a re-check).
+ */
+function trackProblems(problems: Map<string, Problem>, a: ToolActivity, verification: ToolOutcome['verification']): void {
+  if (a.outcome === 'executed') {
+    for (const [id, p] of problems) if (p.why === 'unverified' || (a.taskId && p.why === 'failed')) problems.delete(id);
+  }
+  if (!a.taskId) return;
+  if (a.outcome === 'failed') problems.set(a.callId, { activity: a, why: 'failed' });
+  else if (a.outcome === 'uncertain') problems.set(a.callId, { activity: a, why: 'uncertain' });
+  else if (a.outcome === 'executed' && verification === 'unverified') problems.set(a.callId, { activity: a, why: 'unverified' });
 }
 
 function json(v: unknown): string {

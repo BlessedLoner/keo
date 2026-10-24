@@ -34,6 +34,24 @@ const SEQUENCE = /\b(and then|then|after that|afterwards|once (that|it'?s|you'?r
 
 const LONG_TYPED = 280;
 
+/** Work that always takes several tool calls (searching and reading, comparing, investigating). */
+const MANY_CALLS = /\b(research|investigate|compare|comparison|deep dive|step[- ]by[- ]step)\b/i;
+
+/**
+ * Does this request need a working plan (a checklist the user sees)? Only for
+ * clearly multi-step work: several actions chained together, a list of things
+ * to do, or research and comparisons. Questions and single actions never do.
+ */
+export function needsPlan(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 12) return false;
+  const actions = new Set((t.match(ACTION) ?? []).map((v) => v.toLowerCase()));
+  if (actions.size >= 2 && SEQUENCE.test(t)) return true;
+  if (actions.size >= 3) return true;
+  if ((t.match(/^\s*(\d+[.)]|[-*•])\s+\S/gm) ?? []).length >= 2 && actions.size >= 1) return true;
+  return MANY_CALLS.test(t) && (actions.size >= 1 || t.length > 40);
+}
+
 export function chooseRoute(input: RouteInput): RouteDecision {
   const text = input.text.trim();
   if (input.openQuestion) return { route: 'strong', reason: 'continues a task' };

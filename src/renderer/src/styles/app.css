@@ -727,3 +727,13 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 @keyframes mk-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes mk-out { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .mk-line, .mk-halo { animation-duration: 1ms; } .mk-label-box { animation-duration: 1ms; } }
+
+.plan-checklist { border: 1px solid var(--line); background: var(--bg-elev); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.plan-checklist .plan-head { margin-bottom: 2px; }
+.plan-step { display: flex; gap: 8px; align-items: baseline; }
+.plan-step .plan-mark { width: 14px; text-align: center; color: var(--text-3); }
+.plan-step.in_progress .plan-mark { color: #ffd38a; }
+.plan-step.done .plan-mark { color: var(--ok, #4fd18b); }
+.plan-step.done .grow { color: var(--text-2); }
+.plan-step.failed .plan-mark { color: var(--danger, #ff5d6c); }
+.plan-step.skipped .grow { color: var(--text-3); text-decoration: line-through; }

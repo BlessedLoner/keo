@@ -4,6 +4,7 @@ import type { ConversationRepo } from '../repos/conversations';
 import type { MemoryRepo } from '../repos/memory';
 import type { ProjectRepo } from '../repos/projects';
 import type { NeutralMessage } from '../providers/types';
+import { renderPlan } from './workPlan';
 
 export interface BuiltContext {
   messages: NeutralMessage[];
@@ -28,6 +29,8 @@ function renderAssistant(m: Message): string {
     const lines = tools.map((t) => `- ${t.capabilityId}: ${t.summary} → ${OUTCOME_LABEL[t.outcome] ?? t.outcome}`);
     text += `${text ? '\n\n' : ''}[Actions in this reply]\n${lines.join('\n')}`;
   }
+  // The checklist, so a later "carry on" or "what's left?" knows which steps are still open.
+  if (m.meta.plan?.steps.length) text += `${text ? '\n\n' : ''}[Plan in this reply]\n${renderPlan(m.meta.plan)}`;
   if (m.status === 'interrupted') text += '\n[This reply was interrupted before completion.]';
   if (m.status === 'cancelled') text += '\n[The user stopped this reply.]';
   return text;
