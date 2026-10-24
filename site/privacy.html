@@ -24,7 +24,8 @@
     <li>Conversations, memories, projects, tasks, the audit log and settings — in your Windows profile (<code>%APPDATA%\Keo</code>).</li>
     <li>Your email app password and your Google sign-in — encrypted the same way. Keo has no server: they are only ever sent to your own mail server and to Google.</li>
     <li>API keys — encrypted with Windows' own data protection; Keo never shows them again.</li>
-    <li>Finding files (only if you turn it on): Keo looks file names up in Windows’ own search index on your PC. The names and paths it finds — and the text of a file, only if you also allow reading — go to your AI provider to answer you.</li>
+    <li>Finding files (only if you turn it on): Keo looks file names up in Windows’ own search index on your PC. The names and paths it finds — and the text of a file (including PDFs), only if you also allow reading — go to your AI provider to answer you.</li>
+    <li>Photo descriptions (only if you turn on “Let Keo look at my photos”): a one-sentence description of each picture Keo looked at, kept in Keo’s database on your PC so you can find photos by what is in them. You can delete them in Settings → Files.</li>
     <li>Screen captures you take in Keo — kept for 24 hours by default (adjustable), then deleted.</li>
     <li>Wake-word audio (“Hey Keo”) — processed by Windows speech recognition on your PC and discarded.</li>
   </ul>
@@ -32,6 +33,7 @@
   <h2>What leaves your PC, and only when you use it</h2>
   <ul>
     <li><strong>Your AI provider</strong> (OpenRouter, OpenAI, Anthropic, or none for a local model): your messages, the relevant context Keo includes (recent conversation, confirmed memories), and content Keo read for a task you approved — for example the text of a web page or the visible messages of a WhatsApp chat during a live chat. Their own privacy policies apply.</li>
+    <li><strong>Your pictures, to your AI provider</strong> — only if you turn on “Let Keo look at my photos” and allow your provider to see pictures: each picture Keo describes is made smaller and sent to the provider once, after you click <em>Describe</em> in Settings → Files or approve “look at these pictures” in a conversation. Tiny pictures and ones whose names suggest passwords, banking or IDs are never sent.</li>
     <li><strong>Brave Search</strong>, if you add a key: your search queries.</li>
     <li><strong>OpenAI speech-to-text</strong>, only if you turn it on and consent: recorded voice commands.</li>
     <li><strong>GitHub</strong>: once a day Keo asks GitHub for the latest version and, when there is one, downloads the new installer from GitHub in the background. No personal data is sent; you can turn this off in Settings → Privacy &amp; data.</li>

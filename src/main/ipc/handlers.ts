@@ -173,13 +173,20 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'video:setupCancel': () => s.ffmpegSetup.cancel(),
     'video:setupRemove': () => s.ffmpegSetup.remove(),
     'files:pickFolder': async ({ list }) => {
-      const dir = (await host.pickFolder?.(list === 'roots' ? 'Choose a folder Keo may search' : 'Choose a folder Keo should never search')) ?? null;
+      const title = list === 'roots' ? 'Choose a folder Keo may search' : list === 'photoFolders' ? 'Choose a folder whose pictures Keo may describe' : 'Choose a folder Keo should never search';
+      const dir = (await host.pickFolder?.(title)) ?? null;
       if (dir) {
         const cur = s.settings.get().files[list];
         if (!cur.some((x) => x.toLowerCase() === dir.toLowerCase())) s.settings.update({ files: { [list]: [...cur, dir] } });
       }
       return { path: dir };
     },
+    // Pictures are sent only after the user's click here (and with the switch and consent on).
+    'files:photosState': () => s.photos.state(),
+    'files:photosEstimate': () => s.photos.estimate(),
+    'files:photosStart': () => s.photos.start(),
+    'files:photosPause': () => s.photos.pause(),
+    'files:photosClear': () => s.photos.clear(),
     'video:pickOutput': async () => {
       const dir = (await host.pickFolder?.('Where should Keo save finished videos?')) ?? null;
       if (dir) s.settings.update({ video: { outputDir: dir } });

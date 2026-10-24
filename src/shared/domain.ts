@@ -635,3 +635,24 @@ export interface VideoView {
   canUndo: boolean;
 }
 
+
+/** Describing the user's pictures so they can be found by what is in them (Settings → Files). */
+export interface PhotoIndexState {
+  phase: 'idle' | 'counting' | 'ready' | 'running' | 'paused' | 'done' | 'blocked' | 'failed';
+  /** Pictures Keo could describe in the chosen folders (tiny ones and sensitive names left out). */
+  found: number;
+  /** Of those, already described (and unchanged since). */
+  described: number;
+  /** Planned for this run: the undescribed ones, newest first, up to the cap. */
+  toDescribe: number;
+  /** Done in this run so far (described, or set aside by the model as sensitive). */
+  done: number;
+  failed: number;
+  cap: number;
+  /** A rough token count for this run (pictures are downscaled first). */
+  approxTokens: number;
+  /** Where the pictures go, e.g. "OpenRouter (openrouter.ai)". */
+  destination: string;
+  folders: string[];
+  message: string;
+}
