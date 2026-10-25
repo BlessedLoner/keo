@@ -28,7 +28,8 @@ function launch(run) {
   const app = process.env.KEO_SMOKE_APP;
   const r = spawnSync(app ?? electron, app ? [] : [root], {
     env,
-    timeout: process.env.KEO_LIVE_RESULTS_SEND ? 400_000 : 90_000,
+    // Screenshot runs capture many windows and take longer.
+    timeout: process.env.KEO_LIVE_RESULTS_SEND ? 400_000 : process.env.KEO_SMOKE_SHOTS ? 300_000 : 90_000,
     encoding: 'utf8',
   });
   if (!fs.existsSync(out)) {

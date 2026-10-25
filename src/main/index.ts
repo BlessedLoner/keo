@@ -635,7 +635,9 @@ app.on('before-quit', (e) => {
  */
 async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   fs.mkdirSync(dir, { recursive: true });
-  win.setSize(1360, 860);
+  // KEO_SMOKE_SIZE=1366x700 reviews a smaller (laptop) window.
+  const [sw, sh] = (process.env.KEO_SMOKE_SIZE ?? '1360x860').split('x').map(Number);
+  win.setSize(sw || 1360, sh || 860);
   // Hidden windows are not repainted reliably; show it (without stealing focus) while capturing.
   win.showInactive();
   win.webContents.setBackgroundThrottling(false);
