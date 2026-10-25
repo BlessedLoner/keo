@@ -163,74 +163,61 @@ export function PencilApp() {
           </div>
         </div>
       )}
-      <div className="pencil-bar" role="toolbar" aria-label="Keo pencil">
-        <div className="pd-head">
-          <span className="pd-brand">
-            <span className="pencil-orb" aria-hidden="true" /> Keo pencil
-          </span>
-          <ol className="pd-steps" aria-label="Steps">
-            <li className={strokes.length ? 'done' : 'now'}>
-              <b>1</b> Mark
-            </li>
-            <li className={heard || typed ? 'done' : strokes.length ? 'now' : ''}>
-              <b>2</b> Ask
-            </li>
-            <li className={busy ? 'now' : ''}>
-              <b>3</b> Send
-            </li>
-          </ol>
-          <button className="pencil-x" title="Close (Esc)" aria-label="Close" onClick={() => void invoke('pencil:cancel', {})}>
-            <Icon name="x" size={14} />
+      <div className="pencil-bar" role="toolbar" aria-label="Keo pencil" onPointerDown={(e) => e.stopPropagation()}>
+        <button className={`pencil-mic ${listening ? 'live' : ''}`} title={listening ? 'Listening…' : 'Speak'} aria-label={listening ? 'Listening' : 'Speak'} onClick={() => !listening && void invoke('pencil:listen', {})}>
+          <Icon name="mic" size={15} />
+        </button>
+        <span className="pd-sep" aria-hidden="true" />
+        <div className="pd-group" aria-label="Tool">
+          <button className={tool === 'pen' ? 'on' : ''} title="Pen" aria-label="Pen" onClick={() => setTool('pen')}>
+            <Icon name="edit" size={14} />
+          </button>
+          <button className={tool === 'marker' ? 'on' : ''} title="Highlighter" aria-label="Highlighter" onClick={() => setTool('marker')}>
+            <span className="pencil-hl" />
           </button>
         </div>
-        <div className="pd-row pd-tools">
-          <div className="pd-group" aria-label="Tool">
-            <button className={tool === 'pen' ? 'on' : ''} title="Pen" aria-label="Pen" onClick={() => setTool('pen')}>
-              <Icon name="edit" size={15} />
-            </button>
-            <button className={tool === 'marker' ? 'on' : ''} title="Highlighter" aria-label="Highlighter" onClick={() => setTool('marker')}>
-              <span className="pencil-hl" />
-            </button>
-          </div>
-          <span className="pd-sep" aria-hidden="true" />
-          <div className="pd-group" aria-label="Colour">
-            {COLORS.map((c) => (
-              <button key={c} className={`swatch ${color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => setColor(c)} />
-            ))}
-          </div>
-          <span className="pd-sep" aria-hidden="true" />
-          <div className="pd-group">
-            <button title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!strokes.length} onClick={() => setStrokes((st) => st.slice(0, -1))}>
-              <Icon name="retry" size={14} />
-            </button>
-            <button title="Clear" aria-label="Clear" disabled={!strokes.length} onClick={() => setStrokes([])}>
-              <Icon name="trash" size={14} />
-            </button>
-          </div>
-          <span className="pd-hint">{hint}</span>
+        <div className="pd-group" aria-label="Colour">
+          {COLORS.map((c) => (
+            <button key={c} className={`swatch ${color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => setColor(c)} />
+          ))}
         </div>
-        <div className="pd-row pd-ask">
-          <button className={`pencil-mic ${listening ? 'live' : ''}`} title={listening ? 'Listening…' : 'Speak'} aria-label={listening ? 'Listening' : 'Speak'} onClick={() => !listening && void invoke('pencil:listen', {})}>
-            <Icon name="mic" size={16} />
+        <div className="pd-group">
+          <button title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!strokes.length} onClick={() => setStrokes((st) => st.slice(0, -1))}>
+            <Icon name="retry" size={13} />
           </button>
-          <div className="pencil-talk">
-            {heard ? <span className="heard">“{heard}”</span> : <span className="hint">{listenNote ?? (listening ? 'Listening… say what you want' : 'Say or type what you want')}</span>}
-            <input
-              className="pencil-input"
-              placeholder="…or type it here"
-              value={typed}
-              maxLength={2000}
-              onChange={(e) => setTyped(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void send();
-              }}
-            />
-          </div>
-          <button className="btn primary pencil-send" disabled={busy || !ready || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()}>
-            <Icon name="send" size={14} /> {busy ? 'Sending…' : !ready ? 'Preparing…' : 'Send'}
+          <button title="Clear" aria-label="Clear" disabled={!strokes.length} onClick={() => setStrokes([])}>
+            <Icon name="trash" size={13} />
           </button>
         </div>
+        <span className="pd-sep" aria-hidden="true" />
+        <input
+          className="pencil-input"
+          placeholder={listening ? 'Listening… say what you want' : strokes.length ? 'Say or type what you want' : 'Circle what you mean…'}
+          aria-label="What do you want?"
+          value={typed}
+          maxLength={2000}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void send();
+          }}
+        />
+        <button className="pencil-send" disabled={busy || !ready || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()} title={!strokes.length ? 'Mark something first' : 'Send to Keo'}>
+          <Icon name="send" size={13} /> {busy ? 'Sending…' : !ready ? 'Preparing…' : 'Send'}
+        </button>
+        <button className="pencil-x" title="Close (Esc)" aria-label="Close" onClick={() => void invoke('pencil:cancel', {})}>
+          <Icon name="x" size={14} />
+        </button>
+        <span className="pd-progress" aria-hidden="true">
+          <i className={strokes.length ? 'done' : 'now'} />
+          <i className={heard || typed ? 'done' : strokes.length ? 'now' : ''} />
+          <i className={busy ? 'now' : ''} />
+        </span>
       </div>
+      {(heard || listenNote || strokes.length > 0) && (
+        <div className={`pencil-heard ${heard ? 'said' : ''}`} key={heard ?? listenNote ?? hint}>
+          {heard ? `“${heard}”` : listenNote ?? hint}
+        </div>
+      )}
       {(error || (ctx && !ctx.visionModel)) && <div className="pencil-error">{error ?? 'The current AI model cannot see pictures. Choose a model with vision in Settings → Providers.'}</div>}
     </div>
   );

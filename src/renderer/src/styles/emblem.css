@@ -1,124 +1,98 @@
 /* ---------------------------------------------------------------------------
-   Keo emblem — state-driven animation. All motion is disabled under
-   prefers-reduced-motion or the in-app "reduce motion" setting.
+   Keo emblem — the robot head. Its eyes carry the state; the aura carries the
+   colour. All motion is disabled under prefers-reduced-motion or the in-app
+   "reduce motion" setting.
 --------------------------------------------------------------------------- */
 .keo-emblem {
-  --keo-a1: #3dd6ff;
-  --keo-a2: #8b6bff;
-  --keo-eye: #bff3ff;
+  --eye: #f1eeff;
+  --aura: #b9c6ff;
   --lvl: 0;
   overflow: visible;
   flex: none;
   display: block;
 }
 
-.keo-emblem .ke-aura { opacity: 0.12; transition: opacity 400ms ease, fill 400ms ease; }
-.keo-emblem .ke-spin-a,
-.keo-emblem .ke-spin-b,
-.keo-emblem .ke-pulse,
-.keo-emblem .ke-scan,
+.keo-emblem .ke-aura { fill: var(--aura); opacity: 0.1; transition: opacity 400ms ease, fill 400ms ease; }
+.keo-emblem .ke-shadow { fill: #000; opacity: 0.55; }
+.keo-emblem .ke-rim { stroke: #ffffff; stroke-opacity: 0.09; stroke-width: 1.4; transition: stroke-opacity 300ms; }
+.keo-emblem .ke-scanline { fill: var(--eye); opacity: 0; }
+.keo-emblem .ke-eye { fill: var(--eye); transition: fill 300ms ease; transform-box: fill-box; transform-origin: center; }
 .keo-emblem .ke-eyes,
-.keo-emblem .ke-core,
-.keo-emblem .ke-circuit { transform-box: view-box; transform-origin: 100px 98px; }
-.keo-emblem .ke-core { transform-origin: 100px 176px; }
-.keo-emblem .ke-eyes { transform-origin: 100px 90px; }
-.keo-emblem .ke-pulse { opacity: 0; }
-.keo-emblem .ke-scan { opacity: 0; }
-.keo-emblem .ke-voice { opacity: 0; transition: opacity 200ms; }
-.keo-emblem .ke-mouth { transition: opacity 200ms; }
-.keo-emblem .ke-eye { transition: fill 300ms; }
+.keo-emblem .ke-look,
+.keo-emblem .ke-head { transform-box: view-box; transform-origin: 102px 98px; }
 
-/* idle: slow halo drift, breathing glow, occasional blink */
-.keo-emblem .ke-spin-a { animation: ke-rot 48s linear infinite; }
-.keo-emblem .ke-spin-b { animation: ke-rot 72s linear infinite reverse; }
+/* idle: the head floats, the eyes wander and blink now and then */
+.keo-emblem:not(.compact) .ke-head { animation: ke-float 6s ease-in-out infinite; }
 .keo-emblem.state-idle .ke-aura { animation: ke-breathe 5s ease-in-out infinite; }
-.keo-emblem.state-idle .ke-eyes { animation: ke-blink 7s infinite; }
+.keo-emblem.state-idle .ke-look { animation: ke-wander 11s ease-in-out infinite; }
+.keo-emblem.state-idle .ke-eye,
+.keo-emblem.state-cancelled .ke-eye { animation: ke-blink 6.5s infinite; }
 
-/* listening: bright cyan; halo + aura respond to the real microphone level */
-.keo-emblem.state-listening { --keo-a1: #42e2ff; --keo-a2: #4aa8ff; --keo-eye: #e4fbff; }
-.keo-emblem.state-listening .ke-aura { opacity: calc(0.16 + var(--lvl) * 0.5); }
-.keo-emblem.state-listening .ke-pulse { opacity: calc(0.25 + var(--lvl) * 0.75); transform: scale(calc(1 + var(--lvl) * 0.06)); }
-.keo-emblem.state-listening .ke-spin-a { animation-duration: 14s; }
+/* listening: cyan; the eyes grow with the real microphone level */
+.keo-emblem.state-listening { --eye: #9fe9ff; --aura: #42d8ff; }
+.keo-emblem.state-listening .ke-aura { opacity: calc(0.18 + var(--lvl) * 0.5); }
+.keo-emblem.state-listening .ke-eye { transform: scale(calc(1 + var(--lvl) * 0.28)); }
 
-/* thinking: violet, faster counter-rotation, eyes pulse */
-.keo-emblem.state-thinking { --keo-a1: #a48bff; --keo-a2: #3dd6ff; --keo-eye: #e6dcff; }
-.keo-emblem.state-thinking .ke-spin-a { animation-duration: 3.2s; }
-.keo-emblem.state-thinking .ke-spin-b { animation-duration: 4.8s; }
-.keo-emblem.state-thinking .ke-eyes { animation: ke-eyepulse 1.6s ease-in-out infinite; }
-.keo-emblem.state-thinking .ke-aura { opacity: 0.2; animation: ke-breathe 1.6s ease-in-out infinite; }
-.keo-emblem.state-thinking .ke-circuit { animation: ke-flicker 1.6s ease-in-out infinite; }
+/* speaking: the eyes bounce with the real playback level */
+.keo-emblem.state-speaking { --eye: #ffffff; --aura: #c9d4ff; }
+.keo-emblem.state-speaking .ke-aura { opacity: calc(0.16 + var(--lvl) * 0.45); }
+.keo-emblem.state-speaking .ke-eye { transform: scaleY(calc(1 - var(--lvl) * 0.55)) scaleX(calc(1 + var(--lvl) * 0.12)); }
 
-/* speaking: voice bars driven by the playback level */
-.keo-emblem.state-speaking { --keo-a1: #3dd6ff; --keo-a2: #9b7dff; --keo-eye: #ffffff; }
-.keo-emblem.state-speaking .ke-voice { opacity: 1; }
-.keo-emblem.state-speaking .ke-mouth { opacity: 0; }
-.keo-emblem.state-speaking .ke-aura { opacity: calc(0.14 + var(--lvl) * 0.45); }
-.keo-emblem.state-speaking .ke-bar { transform-box: fill-box; transform-origin: center; }
-.keo-emblem.state-speaking .ke-bar.b0, .keo-emblem.state-speaking .ke-bar.b4 { transform: scaleY(calc(0.2 + var(--lvl) * 0.6)); }
-.keo-emblem.state-speaking .ke-bar.b1, .keo-emblem.state-speaking .ke-bar.b3 { transform: scaleY(calc(0.25 + var(--lvl) * 0.95)); }
-.keo-emblem.state-speaking .ke-bar.b2 { transform: scaleY(calc(0.3 + var(--lvl) * 1.3)); }
+/* thinking / understanding / planning: narrowed eyes and a scan line */
+.keo-emblem.state-thinking,
+.keo-emblem.state-understanding,
+.keo-emblem.state-planning,
+.keo-emblem.state-verifying { --eye: #d6dcff; --aura: #8f9dff; }
+.keo-emblem.state-thinking .ke-eye,
+.keo-emblem.state-understanding .ke-eye,
+.keo-emblem.state-planning .ke-eye,
+.keo-emblem.state-verifying .ke-eye { transform: scaleY(0.32); }
+.keo-emblem.state-thinking .ke-look,
+.keo-emblem.state-understanding .ke-look,
+.keo-emblem.state-planning .ke-look { animation: ke-scanx 1.6s ease-in-out infinite; }
+.keo-emblem.state-thinking .ke-scanline,
+.keo-emblem.state-planning .ke-scanline,
+.keo-emblem.state-verifying .ke-scanline { opacity: 0.08; animation: ke-scan 2.2s ease-in-out infinite; }
+.keo-emblem.state-thinking .ke-aura,
+.keo-emblem.state-planning .ke-aura { animation: ke-breathe 1.8s ease-in-out infinite; }
 
-/* working: teal, scanning sweep, core pulse */
-.keo-emblem.state-working { --keo-a1: #2ee6c5; --keo-a2: #3dd6ff; --keo-eye: #d8fff6; }
-.keo-emblem.state-working .ke-scan { opacity: 1; animation: ke-scan 2.2s ease-in-out infinite; }
-.keo-emblem.state-working .ke-core { animation: ke-core 1.1s ease-in-out infinite; }
-.keo-emblem.state-working .ke-spin-a { animation-duration: 6s; }
+/* acting / working: eyes look left and right at what Keo is doing */
+.keo-emblem.state-acting,
+.keo-emblem.state-working { --eye: #bfe7ff; --aura: #6fc8ff; }
+.keo-emblem.state-acting .ke-look,
+.keo-emblem.state-working .ke-look { animation: ke-glance 2.4s ease-in-out infinite; }
+.keo-emblem.state-acting .ke-aura,
+.keo-emblem.state-working .ke-aura { opacity: 0.2; }
 
-/* attention (permission required): amber pulse */
-.keo-emblem.state-attention { --keo-a1: #ffbf47; --keo-a2: #ff8a3d; --keo-eye: #fff1cf; }
-.keo-emblem.state-attention .ke-pulse { animation: ke-ring 1.4s ease-out infinite; }
-.keo-emblem.state-attention .ke-aura { opacity: 0.22; }
+/* needs the user: warm amber, steady pulse */
+.keo-emblem.state-awaiting_approval,
+.keo-emblem.state-attention { --eye: #ffd27a; --aura: #ffb547; }
+.keo-emblem.state-awaiting_approval .ke-eye,
+.keo-emblem.state-attention .ke-eye { animation: ke-pulse 1.3s ease-in-out infinite; }
+.keo-emblem.state-awaiting_approval .ke-aura,
+.keo-emblem.state-attention .ke-aura { opacity: 0.24; }
 
-/* error: red, motion stops */
-.keo-emblem.state-error { --keo-a1: #ff5d6c; --keo-a2: #b23a48; --keo-eye: #ffc7cd; }
-.keo-emblem.state-error .ke-spin-a,
-.keo-emblem.state-error .ke-spin-b { animation-play-state: paused; }
-.keo-emblem.state-error .ke-eyes { opacity: 0.75; }
+/* error / stopped */
+.keo-emblem.state-error { --eye: #ff7b88; --aura: #ff4d5e; }
+.keo-emblem.state-error .ke-eye { transform: scaleY(0.45); }
+.keo-emblem.state-cancelled { --eye: #8d909a; --aura: #50535c; }
 
-/* understanding: like thinking, calmer */
-.keo-emblem.state-understanding { --keo-a1: #a48bff; --keo-a2: #3dd6ff; --keo-eye: #e6dcff; }
-.keo-emblem.state-understanding .ke-spin-a { animation-duration: 5s; }
-.keo-emblem.state-understanding .ke-spin-b { animation-duration: 7s; }
-.keo-emblem.state-understanding .ke-eyes { animation: ke-eyepulse 2.2s ease-in-out infinite; }
-.keo-emblem.state-understanding .ke-aura { opacity: 0.18; animation: ke-breathe 2.2s ease-in-out infinite; }
+.keo-emblem.compact .ke-rim { stroke-opacity: 0.16; }
 
-/* planning: violet, fast counter-rotation and flickering circuits */
-.keo-emblem.state-planning { --keo-a1: #b98bff; --keo-a2: #6f7dff; --keo-eye: #efe4ff; }
-.keo-emblem.state-planning .ke-spin-a { animation-duration: 2.4s; }
-.keo-emblem.state-planning .ke-spin-b { animation-duration: 3.2s; }
-.keo-emblem.state-planning .ke-circuit { animation: ke-flicker 0.9s ease-in-out infinite; }
-.keo-emblem.state-planning .ke-aura { opacity: 0.2; }
-
-/* acting: teal scan + core pulse (same family as working) */
-.keo-emblem.state-acting { --keo-a1: #2ee6c5; --keo-a2: #3dd6ff; --keo-eye: #d8fff6; }
-.keo-emblem.state-acting .ke-scan { opacity: 1; animation: ke-scan 2.2s ease-in-out infinite; }
-.keo-emblem.state-acting .ke-core { animation: ke-core 1.1s ease-in-out infinite; }
-.keo-emblem.state-acting .ke-spin-a { animation-duration: 6s; }
-
-/* verifying: green, quick scan, steady eyes */
-.keo-emblem.state-verifying { --keo-a1: #5ff2a0; --keo-a2: #2ee6c5; --keo-eye: #e3ffee; }
-.keo-emblem.state-verifying .ke-scan { opacity: 1; animation: ke-scan 1.1s ease-in-out infinite; }
-.keo-emblem.state-verifying .ke-pulse { animation: ke-ring 1.1s ease-out infinite; }
-
-/* awaiting approval: amber pulse (same as attention) */
-.keo-emblem.state-awaiting_approval { --keo-a1: #ffbf47; --keo-a2: #ff8a3d; --keo-eye: #fff1cf; }
-.keo-emblem.state-awaiting_approval .ke-pulse { animation: ke-ring 1.4s ease-out infinite; }
-.keo-emblem.state-awaiting_approval .ke-aura { opacity: 0.22; }
-
-/* cancelled: desaturated and still */
-.keo-emblem.state-cancelled { --keo-a1: #8a93a6; --keo-a2: #5c6475; --keo-eye: #c9cfdb; }
-.keo-emblem.state-cancelled .ke-spin-a,
-.keo-emblem.state-cancelled .ke-spin-b { animation-play-state: paused; }
-.keo-emblem.state-cancelled .ke-aura { opacity: 0.05; }
-
-@keyframes ke-rot { to { transform: rotate(360deg); } }
-@keyframes ke-breathe { 0%, 100% { opacity: 0.09; } 50% { opacity: 0.2; } }
-@keyframes ke-blink { 0%, 95.5%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.1); } }
-@keyframes ke-eyepulse { 0%, 100% { opacity: 0.65; } 50% { opacity: 1; } }
-@keyframes ke-flicker { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-@keyframes ke-scan { 0% { transform: translateY(0); } 50% { transform: translateY(150px); } 100% { transform: translateY(0); } }
-@keyframes ke-core { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
-@keyframes ke-ring { 0% { opacity: 0.9; transform: scale(0.94); } 100% { opacity: 0; transform: scale(1.1); } }
+@keyframes ke-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3.5px); } }
+@keyframes ke-breathe { 0%, 100% { opacity: 0.08; } 50% { opacity: 0.2; } }
+@keyframes ke-blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } 97% { transform: scaleY(1); } }
+@keyframes ke-wander {
+  0%, 18% { transform: translate(0, 0); }
+  24%, 40% { transform: translate(-7px, -2px); }
+  46%, 62% { transform: translate(6px, 1px); }
+  68%, 82% { transform: translate(2px, 4px); }
+  88%, 100% { transform: translate(0, 0); }
+}
+@keyframes ke-scanx { 0%, 100% { transform: translateX(-8px); } 50% { transform: translateX(8px); } }
+@keyframes ke-glance { 0%, 40% { transform: translateX(-6px); } 50%, 90% { transform: translateX(6px); } 100% { transform: translateX(-6px); } }
+@keyframes ke-scan { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(82px); } }
+@keyframes ke-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
   html:not(.motion-full) .keo-emblem *,
@@ -126,12 +100,3 @@
 }
 html.motion-reduce .keo-emblem *,
 html.motion-reduce .keo-emblem { animation: none !important; transition: none !important; }
-
-/* Noir (default): ice white and silver instead of cyan and violet when idle. */
-html:not([data-theme='classic']) .keo-emblem.state-idle,
-html:not([data-theme='classic']) .keo-emblem.state-cancelled { --keo-a1: #eaf3ff; --keo-a2: #a9c2e6; --keo-eye: #ffffff; }
-.keo-emblem .ke-portrait { transition: filter 400ms ease; }
-.keo-emblem.state-error .ke-portrait { filter: grayscale(1) brightness(0.8); }
-.keo-emblem.state-cancelled .ke-portrait { filter: grayscale(0.6) brightness(0.85); }
-.keo-emblem.state-speaking .ke-rim,
-.keo-emblem.state-listening .ke-rim { stroke-opacity: calc(0.45 + var(--lvl) * 0.55); stroke-width: calc(1.4px + var(--lvl) * 2.2px); }

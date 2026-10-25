@@ -19,6 +19,8 @@ export interface PushPayloads {
   'video:setupChanged': VideoToolsSetup;
   'files:photosChanged': PhotoIndexState;
   'jobs:changed': Record<string, never>;
+  /** The real voice level (microphone or playback), relayed from the main window to Keo's bar and Keo mode. */
+  'presence:level': { level: number; source: 'mic' | 'playback' | null };
 }
 
 /** Instructions from the main process to a window (never from page content). */

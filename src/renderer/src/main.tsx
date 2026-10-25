@@ -13,6 +13,7 @@ import { invoke, subscribe } from './lib/api';
 import { AppStateProvider } from './state/AppState';
 import './styles/app.css';
 import './styles/emblem.css';
+import './styles/presence.css';
 
 // One renderer bundle, four windows: the main app, the floating companion, the command bar and research results.
 const route = window.location.hash;

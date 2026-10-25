@@ -379,8 +379,12 @@ export const SettingsSchema = z
       .object({
         enabled: z.boolean().default(true),
         alwaysOnTop: z.boolean().default(true),
+        /** Earlier floating orb's position (no longer used; kept so old settings files still load). */
         x: z.number().int().nullable().default(null),
         y: z.number().int().nullable().default(null),
+        /** The Keo bar's screen edge, and where along it (0 = left/top end, 1 = right/bottom end). */
+        dock: z.enum(['top', 'bottom', 'left', 'right']).default('top'),
+        along: z.number().min(0).max(1).default(0.5),
       })
       .strict()
       .prefault({}),

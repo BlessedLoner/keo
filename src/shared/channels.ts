@@ -31,6 +31,7 @@ export const INVOKE_CHANNELS = [
   'video:pickFfmpeg',
   'video:pickOutput',
   'files:pickFolder',
+  'voice:level',
   'files:photosState',
   'files:photosEstimate',
   'files:photosStart',
@@ -182,6 +183,7 @@ export const pushChannels = [
   'video:setupChanged',
   'files:photosChanged',
   'jobs:changed',
+  'presence:level',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

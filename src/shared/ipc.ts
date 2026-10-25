@@ -216,6 +216,7 @@ export const invokeSchemas = {
 
   'app:quit': empty,
   'presence:get': empty,
+  'voice:level': z.object({ level: z.number().min(0).max(1), source: z.enum(['mic', 'playback']).nullable() }).strict(),
   'presence:report': z.object({ speaking: z.boolean(), recording: z.boolean(), transcribing: z.boolean() }).strict(),
   'presence:stopAll': empty,
   'presence:openMain': z.object({ view: z.enum(['chat', 'tasks', 'settings']).optional() }).strict(),
@@ -389,6 +390,7 @@ export interface InvokeOutputs {
   'app:quit': { ok: true };
   'presence:get': Presence;
   'presence:report': { ok: true };
+  'voice:level': { ok: true };
   'presence:stopAll': { cancelledTurns: number; cancelledTasks: number; revokedGrants: number };
   'presence:openMain': { ok: true };
   'companion:setInteractive': { ok: true };

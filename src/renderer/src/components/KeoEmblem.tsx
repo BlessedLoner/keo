@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef } from 'react';
 import { levelBus } from '../lib/levelBus';
-import keoArt from '../assets/keo-portrait.jpg';
 
 export type EmblemState =
   | 'idle'
@@ -23,15 +22,19 @@ interface Props {
   size?: number;
   /** Subscribe to live audio level (0..1) for listening/speaking states. */
   live?: boolean;
+  /** Where the live level comes from (default: this window's own microphone/playback analysers). */
+  level?: () => number;
   title?: string;
 }
 
 /**
- * Keo's animated identity: Keo's character portrait inside a segmented halo. Visual state is driven by real application events
- * (passed in as `state`); audio-reactive motion reads the shared level bus,
- * which is only fed by a real microphone analyser or real playback analyser.
+ * Keo's identity: a small glossy robot head with a dark visor and two glowing pixel eyes.
+ * The eyes are Keo's state — they wander and blink when idle, turn cyan and grow with the real
+ * microphone level while listening, bounce with the real playback level while speaking, narrow
+ * and scan while thinking or acting, and turn amber when Keo needs the user. Drawn as vectors so
+ * it stays sharp from a 16 px badge to the welcome screen.
  */
-export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
+export function KeoEmblem({ state, size = 160, live = true, level = levelBus.get, title }: Props) {
   const uid = useId().replace(/:/g, '');
   const ref = useRef<SVGSVGElement>(null);
 
@@ -42,107 +45,87 @@ export function KeoEmblem({ state, size = 160, live = true, title }: Props) {
     let smoothed = 0;
     let raf = 0;
     const tick = () => {
-      const target = state === 'listening' || state === 'speaking' ? levelBus.get() : 0;
+      const target = state === 'listening' || state === 'speaking' ? level() : 0;
       smoothed += (target - smoothed) * 0.35;
       el.style.setProperty('--lvl', smoothed.toFixed(3));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [state, live]);
+  }, [state, live, level]);
 
   const compact = size < 56;
   const id = (n: string) => `${n}-${uid}`;
   const label = title ?? `Keo — ${STATE_LABEL[state]}`;
 
   return (
-    <svg
-      ref={ref}
-      className={`keo-emblem state-${state}${compact ? ' compact' : ''}`}
-      width={size}
-      height={size}
-      viewBox="0 0 200 200"
-      role="img"
-      aria-label={label}
-    >
+    <svg ref={ref} className={`keo-emblem state-${state}${compact ? ' compact' : ''}`} width={size} height={size} viewBox="0 0 200 200" role="img" aria-label={label}>
       <defs>
-        <radialGradient id={id('bg')} cx="50%" cy="45%" r="55%">
-          <stop offset="0%" stopColor="#141a26" />
-          <stop offset="70%" stopColor="#0b0e15" />
-          <stop offset="100%" stopColor="#07090d" />
+        <linearGradient id={id('shell')} x1="0.25" y1="0" x2="0.65" y2="1">
+          <stop offset="0%" stopColor="#4a4d55" />
+          <stop offset="22%" stopColor="#24262b" />
+          <stop offset="60%" stopColor="#111215" />
+          <stop offset="100%" stopColor="#060607" />
+        </linearGradient>
+        <radialGradient id={id('sheen')} cx="30%" cy="18%" r="55%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.22" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id={id('skin')} x1="0.2" y1="0" x2="0.8" y2="1">
-          <stop offset="0%" stopColor="#5b6577" />
-          <stop offset="28%" stopColor="#2a303c" />
-          <stop offset="70%" stopColor="#141820" />
-          <stop offset="100%" stopColor="#0b0d12" />
+        <radialGradient id={id('screen')} cx="45%" cy="40%" r="75%">
+          <stop offset="0%" stopColor="#15161b" />
+          <stop offset="100%" stopColor="#040405" />
+        </radialGradient>
+        <linearGradient id={id('ear')} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#2e3036" />
+          <stop offset="100%" stopColor="#09090a" />
         </linearGradient>
-        <linearGradient id={id('rim')} x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="var(--keo-a2)" stopOpacity="0.9" />
-          <stop offset="50%" stopColor="var(--keo-a1)" stopOpacity="0.15" />
-          <stop offset="100%" stopColor="var(--keo-a1)" stopOpacity="0.9" />
-        </linearGradient>
-        <linearGradient id={id('collar')} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3a4150" />
-          <stop offset="100%" stopColor="#0d1016" />
-        </linearGradient>
-        <filter id={id('glow')} x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="2.2" result="b" />
+        <pattern id={id('grid')} width="11" height="11" patternUnits="userSpaceOnUse">
+          <path d="M11 0H0V11" fill="none" stroke="#ffffff" strokeOpacity="0.045" strokeWidth="0.8" />
+        </pattern>
+        <clipPath id={id('visor')}>
+          <rect x="47" y="55" width="110" height="92" rx="27" />
+        </clipPath>
+        <filter id={id('glow')} x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="4" result="b" />
           <feMerge>
+            <feMergeNode in="b" />
             <feMergeNode in="b" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
         <filter id={id('soft')} x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="5" />
+          <feGaussianBlur stdDeviation="9" />
         </filter>
-        <radialGradient id={id('vignette')} cx="50%" cy="45%" r="55%">
-          <stop offset="70%" stopColor="#000" stopOpacity="0" />
-          <stop offset="100%" stopColor="#000" stopOpacity="0.55" />
-        </radialGradient>
-        <clipPath id={id('disc')}>
-          <circle cx="100" cy="98" r="72" />
-        </clipPath>
       </defs>
 
-      {/* Ambient glow behind everything */}
-      <circle className="ke-aura" cx="100" cy="98" r="80" fill="var(--keo-a1)" filter={`url(#${id('soft')})`} />
+      {/* The light around Keo (state colour) and its shadow */}
+      <ellipse className="ke-aura" cx="102" cy="100" rx="82" ry="74" filter={`url(#${id('soft')})`} />
+      {!compact && <ellipse className="ke-shadow" cx="102" cy="184" rx="56" ry="6" filter={`url(#${id('soft')})`} />}
 
-      {/* Halo: ticks + rotating segmented arcs */}
-      <g className="ke-halo">
-        {!compact && <circle className="ke-ticks" cx="100" cy="98" r="91" fill="none" stroke="var(--keo-a1)" strokeWidth="2.5" strokeDasharray="1 5.1" />}
-        <g className="ke-spin-a">
-          <circle cx="100" cy="98" r="84" fill="none" stroke={`url(#${id('rim')})`} strokeWidth="3" strokeDasharray="120 40 60 308" strokeLinecap="round" />
+      <g className="ke-head">
+        {/* Side "ear" */}
+        <rect x="15" y="84" width="17" height="32" rx="5" fill={`url(#${id('ear')})`} />
+        {/* Glossy shell */}
+        <rect x="25" y="32" width="154" height="136" rx="46" fill={`url(#${id('shell')})`} />
+        <rect x="25" y="32" width="154" height="136" rx="46" fill={`url(#${id('sheen')})`} />
+        <rect className="ke-rim" x="25.8" y="32.8" width="152.4" height="134.4" rx="45.2" fill="none" />
+        {/* Visor */}
+        <rect x="40" y="48" width="124" height="106" rx="33" fill="#08080a" stroke="#2c2e33" strokeWidth="2.4" />
+        <rect x="47" y="55" width="110" height="92" rx="27" fill={`url(#${id('screen')})`} />
+        <g clipPath={`url(#${id('visor')})`}>
+          <rect x="47" y="55" width="110" height="92" fill={`url(#${id('grid')})`} />
+          <rect className="ke-scanline" x="47" y="55" width="110" height="10" />
+          {/* Eyes: two glowing pixels */}
+          <g className="ke-eyes" filter={`url(#${id('glow')})`}>
+            <g className="ke-look">
+              <rect className="ke-eye l" x="73" y="86" width="20" height="23" rx="3" />
+              <rect className="ke-eye r" x="111" y="86" width="20" height="23" rx="3" />
+            </g>
+          </g>
+          {/* Glass glare */}
+          <path d="M60 55 L96 55 L64 147 L47 147 Z" fill="#ffffff" opacity="0.035" />
         </g>
-        <g className="ke-spin-b">
-          <circle cx="100" cy="98" r="78" fill="none" stroke="var(--keo-a2)" strokeOpacity="0.85" strokeWidth="1.6" strokeDasharray="70 420" strokeLinecap="round" filter={`url(#${id('glow')})`} />
-          <circle cx="100" cy="98" r="78" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.85" strokeWidth="1.6" strokeDasharray="40 450" strokeDashoffset="-245" strokeLinecap="round" filter={`url(#${id('glow')})`} />
-        </g>
-        <circle className="ke-pulse" cx="100" cy="98" r="86" fill="none" stroke="var(--keo-a1)" strokeWidth="1.5" />
       </g>
-
-      {/* Keo's portrait in the inner disc (the character art), with a soft rim for depth */}
-      <circle cx="100" cy="98" r="72" fill="#0a0a0c" />
-      <image className="ke-portrait" href={keoArt} x="-10" y="-5" width="226" height="300" preserveAspectRatio="none" clipPath={`url(#${id('disc')})`} />
-      <circle cx="100" cy="98" r="72" fill={`url(#${id('vignette')})`} />
-      <circle className="ke-rim" cx="100" cy="98" r="72" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.55" strokeWidth="1.4" />
-      <g className="ke-scan" clipPath={`url(#${id('disc')})`}>
-        <rect x="28" y="20" width="144" height="10" fill="var(--keo-a1)" opacity="0.18" />
-      </g>
-
-      {/* Chest core: glows with the real voice level while listening/speaking */}
-      <g className="ke-core">
-        <circle cx="100" cy="176" r="5.5" fill="#0b0b0e" stroke="var(--keo-a1)" strokeWidth="1.5" filter={`url(#${id('glow')})`} />
-        <circle cx="100" cy="176" r="2.3" fill="var(--keo-a1)" />
-      </g>
-      <g className="ke-voice" fill="var(--keo-a1)">
-        {[-22, -16, 16, 22].map((dx, i) => (
-          <rect key={dx} className={`ke-bar b${i}`} x={99 + dx} y="171" width="2" height="10" rx="1" />
-        ))}
-      </g>
-
-      {/* Base ring */}
-      {!compact && <ellipse cx="100" cy="182" rx="56" ry="6" fill="none" stroke="var(--keo-a1)" strokeOpacity="0.35" strokeWidth="1" />}
     </svg>
   );
 }

@@ -26,6 +26,8 @@ const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'livechat:sendNow',
   'livechat:discardDraft',
   'settings:get',
+  'jobs:list',
+  'jobs:cancel',
 ]);
 
 const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([

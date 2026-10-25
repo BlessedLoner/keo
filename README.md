@@ -112,7 +112,7 @@ With observation and control on, Keo works **observe → act → verify**:
 - `desktop.invoke_element` (click/select/toggle/expand), `desktop.set_text` (replace a field's text, read back to verify) and `desktop.scroll` act on an element from a **recent** observation (≤ 2 minutes). Right before acting, Keo re-reads that element and refuses — sending nothing — if it vanished, changed its name/role, or became disabled.
 - After each action Keo reports what it saw (state changed, control gone, new dialog/window) and stops at any new dialog to ask you.
 
-**Navigation grants.** Approving every click while browsing an app's menus is tedious, so an approval card for a safe navigation step also offers **Approve + allow navigation (10 min)**. That lets Keo inspect, click, scroll and switch sections *in that one window* for up to 10 minutes / 40 actions. Grants live in memory only, show in **Tasks**, are revoked by **Stop** (title bar or companion) and never cover sensitive controls (send, delete, submit, pay, buy, save, upload, sign in, …) or typing — those always ask.
+**Navigation grants.** Approving every click while browsing an app's menus is tedious, so an approval card for a safe navigation step also offers **Approve + allow navigation (10 min)**. That lets Keo inspect, click, scroll and switch sections *in that one window* for up to 10 minutes / 40 actions. Grants live in memory only, show in **Tasks**, are revoked by **Stop** (title bar or Keo bar) and never cover sensitive controls (send, delete, submit, pay, buy, save, upload, sign in, …) or typing — those always ask.
 
 ## Browser and screen context
 
@@ -149,14 +149,14 @@ There is no background or ongoing auto-replying: every message is drafted, shown
 ## Research, projects and workflows
 
 - **Product research cards**: after reading product pages, Keo can show comparison cards (image, price, merchant, specs, pros/cons, source). Price, merchant and image come from the pages Keo actually fetched — never from the model alone; images are downloaded and shrunk by Keo.
-- **Keo mode**: say or type “open Keo mode” (or use the floating Keo) for a full-screen, animated Keo you can just talk to; “close Keo mode” or Esc leaves. Settings → Appearance can also open it with the wake word.
+- **Keo mode**: say or type “open Keo mode” (or the sparkle on the Keo bar) for a full-screen Keo — a living sphere of light that ripples with your voice and Keo's; “close Keo mode” or Esc leaves. Settings → Appearance can also open it with the wake word.
 - **Looks**: Noir (black and white, the default) or Classic (dark blue) in Settings → Appearance.
-- **Keo's pencil**: press the pencil on the floating icon (or Ctrl+Alt+P), circle or mark anything on your screen and say or type what you want (“what is this?”, “make this bold”, “explain this chart”). Keo sees exactly what you marked and answers — aloud if you spoke, continuing the voice conversation.
+- **Keo's pencil**: press the pencil on the Keo bar (or Ctrl+Alt+P), circle or mark anything on your screen and say or type what you want (“what is this?”, “make this bold”, “explain this chart”). Keo sees exactly what you marked and answers — aloud if you spoke, continuing the voice conversation.
 - **Research results window**: when a comparison is ready Keo opens a small animated window beside your work with the pictures, prices, sellers and specs (Settings key `research.showWindow`). From there — or by saying “save it as a PDF” / “send it to Mum” — you can **save** it to `Documents\Keo Research\<date> <title>\` (report page, plus a PDF or a picture, plus the product pictures full size) or **send** it on WhatsApp as a picture of the comparison with the prices and links as text. Sending checks the recipient in the chat header and verifies the picture appears; clicking Send in the window is your approval for that one message. The report is rendered in a hidden window with JavaScript off and no network (pictures are embedded).
 - **Parallel research**: for multi-part questions Keo runs up to four research sub-agents at once. They can only search and read the web, and only findings tied to pages they read are kept.
 - **Project workspaces** (*Projects → Workspace folder*): Keo lists and reads files in the folder you choose, edits files only with your approval (diff shown, backup in `.keo-backups`, atomic write, refused if the file changed meanwhile) and runs only the project's own `package.json` scripts, with a click each time.
 - **Workflows**: save a finished task (*Tasks → Save as workflow*) and ask Keo to run it again later; Keo re-plans against the current screen and asks for approval as usual. *Settings → Privacy & data → Export/Import* moves projects and workflows between PCs (no keys, settings or chats).
-- **Task chips** above the companion show unfinished tasks with their real state (working, queued, needs you, check result) and a cancel button. Choose which task events notify you in *Settings → Approvals & live chat*.
+- **The Keo bar** sits at the top of the screen (or bottom, left, right — drag it, or choose in *Settings → Voice & shortcuts*). Each running task or background job is a blinking dot in its own colour (amber when it needs you); hover the bar for the microphone, pencil, mini chat and Keo mode, and the list of tasks with their real state and a stop button. Choose which task events notify you in *Settings → Approvals & live chat*.
 
 ## Videos (phase 1: local editing with ffmpeg)
 
@@ -193,15 +193,15 @@ At every level these still ask: payments and purchases, deleting, buttons like S
 Ask e.g. *“chat with Ma Glo on WhatsApp until I say stop, and tell me if she needs me”* or *“reply to John’s message and keep the conversation going”*. You approve once (contact, goal, limits); Keo then:
 
 - watches that chat and replies in your voice, using only what you told it;
-- **pauses and asks you** about money and prices, payments, meetings and times, calls and files, personal or urgent matters, “are you a bot?” (Keo never denies being an assistant), your own extra topics, or whenever it is unsure — you get a Windows notification, the companion shows it, and Keo says it out loud if spoken replies are on;
+- **pauses and asks you** about money and prices, payments, meetings and times, calls and files, personal or urgent matters, “are you a bot?” (Keo never denies being an assistant), your own extra topics, or whenever it is unsure — you get a Windows notification, the Keo bar shows it, and Keo says it out loud if spoken replies are on;
 - continues when you answer by typing or voice (*“tell her it’s $50 each, I can give a discount”*) — or in **Tasks → Live chats**, which also shows the conversation and has Pause / Resume / Stop;
-- reads the chat in the background while you keep working (no screen takeover); to *send* it needs the screen for a moment, so when a reply is ready and you are busy it follows **Settings → When a reply is ready**: **Ask me** (default — shows the reply with *Send now* in a notification, the companion and Tasks, and sends it as soon as you pause), **Wait until I pause**, or **Send immediately**; afterwards it gives your previous window back;
+- reads the chat in the background while you keep working (no screen takeover); to *send* it needs the screen for a moment, so when a reply is ready and you are busy it follows **Settings → When a reply is ready**: **Ask me** (default — shows the reply with *Send now* in a notification, the Keo bar and Tasks, and sends it as soon as you pause), **Wait until I pause**, or **Send immediately**; afterwards it gives your previous window back;
 - finds the WhatsApp window itself (WhatsApp Web with its tab in front, or the WhatsApp app) — it never needs a window handle from the model;
-- ends on **stop** (say it, the title-bar/companion *Stop*, or Tasks), after the time limit (default 2 h), the reply limit (default 40), or 30 quiet minutes.
+- ends on **stop** (say it, the title-bar/Keo bar *Stop*, or Tasks), after the time limit (default 2 h), the reply limit (default 40), or 30 quiet minutes.
 
 The contact's messages are untrusted: they can only ever lead to a reply in that chat or a question for you — never to any other action, and an “answer” is accepted only in your own words. Keep WhatsApp visible and not minimised (a second monitor is ideal): a browser stops updating a covered or minimised tab, so Keo can only refresh it while you pause. Up to 3 live chats can run at once.
 
-## Voice, wake word, command bar and companion
+## Voice, wake word, mini chat and the Keo bar
 
 **Settings → Voice & shortcuts**
 

@@ -1,13 +1,13 @@
 // Renders Keo's app icon (build/icon.png, 512x512) and the download page's icon (site/icon.png)
-// from Keo's portrait (src/renderer/src/assets/keo-portrait.jpg) with Electron's own renderer:
-// the head and scarf on the portrait's studio background, in a rounded square with a soft rim.
+// from Keo's robot (src/renderer/src/assets/keo-robot.jpg) with Electron's own renderer: the robot
+// in its studio light, in a rounded square with a soft rim.
 // Usage: npx electron scripts/render-icon.cjs
 const { app, BrowserWindow } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const art = fs.readFileSync(path.join(root, 'src', 'renderer', 'src', 'assets', 'keo-portrait.jpg')).toString('base64');
+const art = fs.readFileSync(path.join(root, 'src', 'renderer', 'src', 'assets', 'keo-robot.jpg')).toString('base64');
 
 const page = `<!doctype html><meta charset="utf-8"><body style="margin:0"><script>
 window.icon = async () => {
@@ -22,19 +22,21 @@ window.icon = async () => {
   round(8, 8, S - 16, S - 16, R);
   g.save();
   g.clip();
-  // Head and scarf: art region centred on the face (eyes about x 426, y 428 of 880x1168).
-  const side = 560, cx = 428, cy = 400;
+  g.fillStyle = '#0b0b0c';
+  g.fillRect(0, 0, S, S);
+  // The robot fills most of the square (it stands at about x 230-780, y 205-870 of the 1080 photo).
+  const side = 720, cx = 506, cy = 528;
   g.drawImage(img, cx - side / 2, cy - side / 2, side, side, 8, 8, S - 16, S - 16);
   // A gentle vignette for depth.
-  const v = g.createRadialGradient(S / 2, S / 2 - 20, S * 0.25, S / 2, S / 2, S * 0.62);
+  const v = g.createRadialGradient(S / 2, S / 2 - 30, S * 0.22, S / 2, S / 2, S * 0.66);
   v.addColorStop(0, 'rgba(0,0,0,0)');
-  v.addColorStop(1, 'rgba(0,0,0,0.22)');
+  v.addColorStop(1, 'rgba(0,0,0,0.38)');
   g.fillStyle = v;
   g.fillRect(0, 0, S, S);
   g.restore();
   round(9, 9, S - 18, S - 18, R - 1);
-  g.lineWidth = 6;
-  g.strokeStyle = 'rgba(10,10,12,0.85)';
+  g.lineWidth = 5;
+  g.strokeStyle = 'rgba(255,255,255,0.07)';
   g.stroke();
   return c.toDataURL('image/png').split(',')[1];
 };

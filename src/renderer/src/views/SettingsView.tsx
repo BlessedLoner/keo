@@ -1026,13 +1026,30 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
       />
 
       <section className="card">
-        <h2>Floating companion</h2>
-        <p className="muted small">A small Keo emblem that stays on screen and shows what Keo is really doing. It never takes keyboard focus. Drag it to move; hover for controls.</p>
-        <Toggle checked={s.companion.enabled} onChange={(v) => void patch({ companion: { enabled: v } })} label="Show the companion" />
+        <h2>Keo bar</h2>
+        <p className="muted small">A small bar at the edge of your screen that shows what Keo is really doing, with one blinking dot per running task. Hover it for the microphone, pencil, mini chat and Keo mode. It never takes keyboard focus. Drag it along its edge, or to another edge.</p>
+        <Toggle checked={s.companion.enabled} onChange={(v) => void patch({ companion: { enabled: v } })} label="Show the Keo bar" />
         <div style={{ height: 8 }} />
         <Toggle checked={s.companion.alwaysOnTop} onChange={(v) => void patch({ companion: { alwaysOnTop: v } })} label="Keep it above other windows" />
+        <div className="field" style={{ marginTop: 12 }}>
+          <label>Screen edge</label>
+          <div className="seg" role="radiogroup" aria-label="Screen edge">
+            {(
+              [
+                ['top', 'Top'],
+                ['bottom', 'Bottom'],
+                ['left', 'Left'],
+                ['right', 'Right'],
+              ] as const
+            ).map(([k, l]) => (
+              <button key={k} role="radio" aria-checked={s.companion.dock === k} className={s.companion.dock === k ? 'on' : ''} onClick={() => void patch({ companion: { dock: k, along: 0.5 } })}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn ghost sm" onClick={() => void patch({ companion: { x: null, y: null, enabled: false } }).then(() => patch({ companion: { enabled: true } }))}>
+          <button className="btn ghost sm" onClick={() => void patch({ companion: { dock: 'top', along: 0.5 } })}>
             Reset position
           </button>
         </div>

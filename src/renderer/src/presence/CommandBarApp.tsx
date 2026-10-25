@@ -13,6 +13,9 @@ import { voice } from '../lib/voice';
  * conversation through the normal agent pipeline; approvals for its actions
  * appear inline. Nothing here bypasses the main process's checks.
  */
+/** Starting points shown in an empty mini chat (tap one to put it in the box). */
+const SUGGESTIONS = ['Summarize this page', 'Find my latest downloads', 'Make a presentation about…', 'Research the best value laptop', 'What’s on my calendar today?'];
+
 export function CommandBarApp() {
   const p = usePresence();
   useVoiceReporting();
@@ -152,9 +155,24 @@ export function CommandBarApp() {
         <button className="btn ghost icon sm" aria-label="Close command bar" onClick={() => void invoke('commandBar:hide')}>
           <Icon name="x" size={14} />
         </button>
+        {busy && <span className="command-shimmer" aria-hidden="true" />}
       </div>
       <div className="command-thread" ref={scroller}>
-        {messages.length === 0 && <div className="muted small" style={{ padding: 10 }}>Try: “Summarize this page”, “Research this microphone and find the best value”, or “Open Notepad and write a note”.</div>}
+        {messages.length === 0 && (
+          <div className="command-empty">
+            <div className="ce-title">What can I do for you?</div>
+            <div className="ce-chips">
+              {SUGGESTIONS.map((t, i) => (
+                <button key={t} className="ce-chip" style={{ animationDelay: `${120 + i * 60}ms` }} onClick={() => {
+                  setText(t);
+                  inputRef.current?.focus();
+                }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {messages.map((m) =>
           m.role === 'user' ? (
             <div key={m.id} className="cmd-user">

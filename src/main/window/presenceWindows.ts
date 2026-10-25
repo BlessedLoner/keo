@@ -4,8 +4,11 @@ import path from 'node:path';
 import type { Logger } from '../logging/logger';
 import type { Services } from '../services';
 
-const COMPANION_W = 300;
-const COMPANION_H = 270;
+/** The Keo bar's window: long side along the screen edge, short side into the screen. */
+const BAR_LONG = 560;
+const BAR_DEEP = 250;
+const BAR_GAP = 6;
+type Dock = 'top' | 'bottom' | 'left' | 'right';
 const RESULTS_W = 560;
 const RESULTS_H = 700;
 const VIDEO_W = 460;
@@ -57,7 +60,13 @@ export class PresenceWindows {
     private readonly showMain: (view?: string) => void,
   ) {}
 
-  // ---------------------------------------------------------------- companion
+  // ---------------------------------------------------------------- the Keo bar
+  /**
+   * The Keo bar: a small island docked to one edge of the screen (top by default), movable along
+   * it or to another edge by dragging. Its window is a click-through strip a little larger than
+   * the island, so the island can expand and show its task list without the window resizing; only
+   * the island itself takes the mouse.
+   */
   syncCompanion(): void {
     const s = this.services.settings.get().companion;
     if (!s.enabled) {
@@ -66,32 +75,36 @@ export class PresenceWindows {
       return;
     }
     if (!this.companion || this.companion.isDestroyed()) this.createCompanion();
-    this.companion?.setAlwaysOnTop(s.alwaysOnTop, 'floating');
+    this.companion?.setAlwaysOnTop(s.alwaysOnTop, 'screen-saver');
   }
 
-  private defaultPosition(): { x: number; y: number } {
-    const wa = screen.getPrimaryDisplay().workArea;
-    return { x: wa.x + wa.width - COMPANION_W - 16, y: wa.y + wa.height - COMPANION_H - 16 };
+  private barDisplay: Electron.Display | null = null;
+
+  /** Where the bar's window goes for a dock and position along that edge. */
+  private barBounds(dock: Dock, along: number, wa: Rectangle): Rectangle {
+    const horizontal = dock === 'top' || dock === 'bottom';
+    const width = horizontal ? BAR_LONG : BAR_DEEP;
+    const height = horizontal ? BAR_DEEP : BAR_LONG;
+    const a = Math.min(1, Math.max(0, along));
+    if (horizontal) {
+      const x = Math.round(wa.x + a * Math.max(0, wa.width - width));
+      return { x, y: dock === 'top' ? wa.y + BAR_GAP : wa.y + wa.height - height - BAR_GAP, width, height };
+    }
+    const y = Math.round(wa.y + a * Math.max(0, wa.height - height));
+    return { x: dock === 'left' ? wa.x + BAR_GAP : wa.x + wa.width - width - BAR_GAP, y, width, height };
   }
 
-  /** Keeps the companion fully visible on some display (monitors change, DPI changes). */
-  private clamp(p: { x: number; y: number }): { x: number; y: number } {
-    const rect: Rectangle = { x: p.x, y: p.y, width: COMPANION_W, height: COMPANION_H };
-    const wa = screen.getDisplayMatching(rect).workArea;
-    return {
-      x: Math.min(Math.max(p.x, wa.x), wa.x + wa.width - COMPANION_W),
-      y: Math.min(Math.max(p.y, wa.y), wa.y + wa.height - COMPANION_H),
-    };
+  private placeBar(win: BrowserWindow): void {
+    const s = this.services.settings.get().companion;
+    const display = this.barDisplay && screen.getAllDisplays().some((d) => d.id === this.barDisplay!.id) ? this.barDisplay : screen.getPrimaryDisplay();
+    win.setBounds(this.barBounds(s.dock, s.along, display.workArea));
   }
 
   private createCompanion(): void {
     const s = this.services.settings.get().companion;
-    const pos = this.clamp(s.x !== null && s.y !== null ? { x: s.x, y: s.y } : this.defaultPosition());
     const win = new BrowserWindow({
-      x: pos.x,
-      y: pos.y,
-      width: COMPANION_W,
-      height: COMPANION_H,
+      width: BAR_LONG,
+      height: BAR_DEEP,
       frame: false,
       transparent: true,
       resizable: false,
@@ -103,12 +116,13 @@ export class PresenceWindows {
       show: false,
       hasShadow: false,
       alwaysOnTop: s.alwaysOnTop,
-      title: 'Keo companion',
+      title: 'Keo bar',
       backgroundColor: '#00000000',
       webPreferences: webPreferences(this.preload),
     });
-    win.setAlwaysOnTop(s.alwaysOnTop, 'floating');
+    win.setAlwaysOnTop(s.alwaysOnTop, 'screen-saver');
     win.setIgnoreMouseEvents(true, { forward: true });
+    this.placeBar(win);
     win.once('ready-to-show', () => win.showInactive());
     win.on('closed', () => {
       if (this.companion === win) this.companion = null;
@@ -121,7 +135,10 @@ export class PresenceWindows {
     this.companion?.setIgnoreMouseEvents(!interactive, { forward: true });
   }
 
-  /** Manual drag (non-focusable windows cannot use native drag regions). */
+  /**
+   * Manual drag (non-focusable windows cannot use native drag regions): the bar follows the mouse,
+   * then glides to the nearest screen edge and stays at that point along it.
+   */
   companionDrag(phase: 'start' | 'end'): void {
     const win = this.companion;
     if (!win) return;
@@ -133,23 +150,60 @@ export class PresenceWindows {
       this.dragTimer = setInterval(() => {
         if (win.isDestroyed()) return;
         const p = screen.getCursorScreenPoint();
-        const next = this.clamp({ x: p.x - this.dragOffset.x, y: p.y - this.dragOffset.y });
-        win.setPosition(next.x, next.y);
+        win.setPosition(p.x - this.dragOffset.x, p.y - this.dragOffset.y);
       }, 16);
-    } else {
-      if (this.dragTimer) clearInterval(this.dragTimer);
-      this.dragTimer = null;
-      const [x, y] = win.getPosition() as [number, number];
-      this.services.settings.update({ companion: { x, y } });
+      return;
     }
+    if (this.dragTimer) clearInterval(this.dragTimer);
+    this.dragTimer = null;
+    const p = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(p);
+    const wa = display.workArea;
+    // The nearest edge to where the mouse let go.
+    const dist: Array<[Dock, number]> = [
+      ['top', p.y - wa.y],
+      ['bottom', wa.y + wa.height - p.y],
+      ['left', p.x - wa.x],
+      ['right', wa.x + wa.width - p.x],
+    ];
+    const dock = dist.sort((a, b) => a[1] - b[1])[0]![0];
+    const horizontal = dock === 'top' || dock === 'bottom';
+    const long = horizontal ? wa.width : wa.height;
+    const pos = horizontal ? p.x - wa.x : p.y - wa.y;
+    const along = Math.min(1, Math.max(0, (pos - BAR_LONG / 2) / Math.max(1, long - BAR_LONG)));
+    this.barDisplay = display;
+    this.gliding = true;
+    this.glide(win, this.barBounds(dock, along, wa));
+    this.services.settings.update({ companion: { dock, along: Math.round(along * 1000) / 1000 } });
   }
+
+  /** Moves the bar to its place in a few short steps (Windows has no animated setBounds). */
+  private glide(win: BrowserWindow, to: Rectangle): void {
+    const from = win.getBounds();
+    // A change of edge also changes the window's shape: resize at once, then glide into place.
+    if (from.width !== to.width || from.height !== to.height) win.setBounds({ x: from.x, y: from.y, width: to.width, height: to.height });
+    const start = win.getBounds();
+    const steps = 9;
+    let i = 0;
+    const t = setInterval(() => {
+      if (win.isDestroyed()) return clearInterval(t);
+      i++;
+      const k = 1 - Math.pow(1 - i / steps, 3);
+      win.setPosition(Math.round(start.x + (to.x - start.x) * k), Math.round(start.y + (to.y - start.y) * k));
+      if (i >= steps) {
+        clearInterval(t);
+        win.setBounds(to);
+        this.gliding = false;
+      }
+    }, 16);
+  }
+
+  private gliding = false;
 
   onDisplaysChanged(): void {
     const win = this.companion;
-    if (!win || win.isDestroyed()) return;
-    const [x, y] = win.getPosition() as [number, number];
-    const next = this.clamp({ x, y });
-    if (next.x !== x || next.y !== y) win.setPosition(next.x, next.y);
+    if (!win || win.isDestroyed() || this.gliding) return;
+    this.placeBar(win);
   }
 
   // ---------------------------------------------------------------- command bar

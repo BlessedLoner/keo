@@ -17,6 +17,8 @@ export type Handler<C extends InvokeChannel> = (input: ParsedInput<C>) => Promis
 export type HandlerMap = { [C in InvokeChannel]: Handler<C> };
 
 export interface HostHooks {
+  /** Sends to Keo's presence windows only (the bar, Keo mode). */
+  broadcastPresence?(channel: 'presence:level', payload: unknown): void;
   appInfo(): Omit<AppInfo, 'schemaVersion' | 'secretStorage' | 'userDataPath' | 'profile'>;
   openPath(p: string): Promise<boolean>;
   /** Opens one of Keo's allow-listed web pages in the default browser. */
@@ -564,6 +566,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'voice:speak': async ({ text }) => ({ audio: await s.voice.speak(text, abortAfter(120000)), mimeType: 'audio/mpeg' }),
 
     'presence:get': () => s.presence.get(),
+    'voice:level': (v) => {
+      host.broadcastPresence?.('presence:level', v);
+      return { ok: true as const };
+    },
     'presence:report': (v) => {
       s.reportVoice(v);
       return { ok: true as const };

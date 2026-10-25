@@ -480,6 +480,7 @@ app.whenReady().then(() => {
       showCommandBar: () => presenceWindows?.showCommandBar(),
       hideCommandBar: () => presenceWindows?.hideCommandBar(),
       hideCompanion: () => presenceWindows?.syncCompanion(),
+      broadcastPresence: (channel, payload) => presenceWindows?.broadcast(channel, payload),
       setCompanionInteractive: (b) => presenceWindows?.setCompanionInteractive(b),
       companionDrag: (phase) => presenceWindows?.companionDrag(phase),
       shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
@@ -537,6 +538,7 @@ app.whenReady().then(() => {
       void svc.wake.apply();
       let lastShortcut = JSON.stringify(svc.settings.get().shortcuts);
       let lastCompanion = JSON.stringify({ e: svc.settings.get().companion.enabled, t: svc.settings.get().companion.alwaysOnTop });
+      let lastDock = svc.settings.get().companion.dock;
       svc.settings.onChange((st) => {
         const sc = JSON.stringify(st.shortcuts);
         if (sc !== lastShortcut) {
@@ -547,6 +549,11 @@ app.whenReady().then(() => {
         if (cp !== lastCompanion) {
           lastCompanion = cp;
           presenceWindows?.syncCompanion();
+        }
+        // A new edge chosen in Settings (a drag places the bar itself).
+        if (st.companion.dock !== lastDock) {
+          lastDock = st.companion.dock;
+          presenceWindows?.onDisplaysChanged();
         }
       });
       screen.on('display-removed', () => presenceWindows?.onDisplaysChanged());
@@ -684,7 +691,7 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     const b = comp.getBounds();
     return b.x >= d.bounds.x && b.y >= d.bounds.y && b.x + b.width <= d.bounds.x + d.bounds.width && b.y + b.height <= d.bounds.y + d.bounds.height;
   });
-  r.companionRendered = await comp.webContents.executeJavaScript(`!!document.querySelector('.companion')`);
+  r.companionRendered = await comp.webContents.executeJavaScript(`!!document.querySelector('.island')`);
   r.companionPresenceGet = await tryCall(comp, 'presence:get');
   r.companionMemoryList = await tryCall(comp, 'memory:list', {});
   r.companionChatSend = await tryCall(comp, 'chat:send', { conversationId: 'x', text: 'x' });
@@ -701,6 +708,26 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
   if (shots && !app.isPackaged) {
     fs.mkdirSync(shots, { recursive: true });
     fs.writeFileSync(path.join(shots, 'companion.png'), (await comp.webContents.capturePage()).toPNG());
+    // The bar opened, as on hover (React listens for pointerover).
+    await comp.webContents.executeJavaScript(`document.querySelector('.island')?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))`);
+    await new Promise((res) => setTimeout(res, 700));
+    fs.writeFileSync(path.join(shots, 'companion-open.png'), (await comp.webContents.capturePage()).toPNG());
+    // Visual review only: how three running tasks look as dots (sample markup, closed bar).
+    await comp.webContents.executeJavaScript(`(() => { const i = document.querySelector('.island'); i.dispatchEvent(new PointerEvent('pointerout', { bubbles: true })); })()`);
+    await new Promise((res) => setTimeout(res, 500));
+    await comp.webContents.executeJavaScript(`(() => { const i = document.querySelector('.island'); const d = document.createElement('span'); d.className = 'island-dots'; d.innerHTML = ['#5aa9ff','#a98bff','#38e0c2'].map((c, k) => '<span class="idot s-running" style="--c:' + c + ';animation-delay:' + (k * 0.35) + 's"></span>').join(''); i.appendChild(d); i.querySelector('.island-label').textContent = 'Researching laptops'; i.classList.remove('state-idle'); i.classList.add('state-acting'); })()`);
+    await new Promise((res) => setTimeout(res, 400));
+    fs.writeFileSync(path.join(shots, 'companion-tasks.png'), (await comp.webContents.capturePage()).toPNG());
+    // Docked to the left edge.
+    r.dotColors = await comp.webContents.executeJavaScript(`[...document.querySelectorAll('.island .idot')].map((d) => getComputedStyle(d).backgroundColor)`);
+    svc.settings.update({ companion: { dock: 'left' } });
+    pw.onDisplaysChanged();
+    await new Promise((res) => setTimeout(res, 900));
+    await comp.webContents.executeJavaScript(`document.querySelector('.island')?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))`);
+    await new Promise((res) => setTimeout(res, 700));
+    fs.writeFileSync(path.join(shots, 'companion-left.png'), (await comp.webContents.capturePage()).toPNG());
+    svc.settings.update({ companion: { dock: 'top' } });
+    pw.onDisplaysChanged();
     fs.writeFileSync(path.join(shots, 'command-bar.png'), (await cmd.webContents.capturePage()).toPNG());
   }
   pw.hideCommandBar();
@@ -839,7 +866,7 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
     const km = pw.keoMode;
     if (km) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      r.keoModeRendered = await km.webContents.executeJavaScript(`!!document.querySelector('.km-figure img.km-img') && document.querySelector('.km-img').complete && document.querySelector('.km-img').naturalWidth > 0`);
+      r.keoModeRendered = await km.webContents.executeJavaScript(`(() => { const c = document.querySelector('canvas.km-sphere'); return !!c && c.width > 100 && c.height > 100; })()`);
       r.keoModePresence = await tryCall(km, 'presence:get');
       r.keoModeChatSend = await tryCall(km, 'chat:send', { conversationId: 'x', text: 'x' });
       if (shots && !app.isPackaged) {
