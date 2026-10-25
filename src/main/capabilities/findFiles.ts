@@ -216,7 +216,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
           throw new CapabilityError('unsupported', /password/i.test((e as Error).message) ? 'That PDF is protected with a password; Keo cannot read it.' : 'That PDF could not be read (it may be damaged).', { dispatched: 'no' });
         }
         // Scanned pages are pictures: there is no text to read, and Keo says so rather than guessing.
-        if (r.text.replace(/\s+/g, '').length < 20)
+        if (r.text.replace(/\s+/g, '').length < 3)
           throw new CapabilityError('no_text', `That PDF has no text Keo can read in its first ${r.pagesRead} page${r.pagesRead === 1 ? '' : 's'}: it is probably scanned (pictures of pages). Keo can open it for the user instead (files__open).`, { dispatched: 'no' });
         text = r.text;
         pdf = { pages: r.pages, pagesRead: r.pagesRead };
