@@ -166,6 +166,10 @@ export const INVOKE_CHANNELS = [
   'schedule:list',
   'schedule:pause',
   'schedule:delete',
+
+  'briefing:openEvent',
+  'briefing:openFile',
+  'briefing:morningDue',
   'diagnostics:logs',
   'diagnostics:audit',
   'data:backup',

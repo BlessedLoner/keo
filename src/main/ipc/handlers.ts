@@ -14,6 +14,8 @@ import { locateFfmpeg } from '../video/ffmpeg';
 import type { Services } from '../services';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isCalendarLink } from '../briefing/briefing';
+import { plainToOpen } from '../capabilities/findFiles';
 
 export type Handler<C extends InvokeChannel> = (input: ParsedInput<C>) => Promise<InvokeOutputs[C]> | InvokeOutputs[C];
 export type HandlerMap = { [C in InvokeChannel]: Handler<C> };
@@ -735,6 +737,18 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'schedule:list': () => s.schedule.list(),
     'schedule:pause': ({ id, paused }) => s.schedule.setPaused(id, paused),
     'schedule:delete': ({ id }) => ({ deleted: s.schedule.delete(id) }),
+
+    'briefing:openEvent': async ({ url }) => {
+      if (!isCalendarLink(url) || !host.openExternal) return { opened: false };
+      await host.openExternal(url);
+      return { opened: true };
+    },
+    // The click is the approval; files.open still checks the allowed folders. Programs and macro files are only shown in their folder.
+    'briefing:openFile': async ({ path: p }) => {
+      const r = await s.runUserAction(plainToOpen(p) ? 'files.open' : 'files.reveal', { path: p });
+      return { opened: r.ok, error: r.error };
+    },
+    'briefing:morningDue': () => ({ due: s.briefingMorningDue() }),
     'grants:list': () => s.grants.list(),
     'grants:revoke': ({ id }) => ({ revoked: s.grants.revoke(id) }),
     'grants:revokeAll': () => ({ revoked: s.grants.revokeAll() }),

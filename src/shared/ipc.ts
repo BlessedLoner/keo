@@ -277,6 +277,12 @@ export const invokeSchemas = {
   'schedule:list': empty,
   'schedule:pause': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/), paused: z.boolean() }).strict(),
   'schedule:delete': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/) }).strict(),
+
+  /** The morning briefing card: open an event's Google Calendar page, or a file it listed. */
+  'briefing:openEvent': z.object({ url: z.string().min(8).max(2000) }).strict(),
+  'briefing:openFile': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
+  /** True once each morning when "show it when I first open Keo" is on (and records that it was shown). */
+  'briefing:morningDue': empty,
   'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
@@ -452,6 +458,10 @@ export interface InvokeOutputs {
   'schedule:list': ScheduledItem[];
   'schedule:pause': ScheduledItem | null;
   'schedule:delete': { deleted: boolean };
+
+  'briefing:openEvent': { opened: boolean };
+  'briefing:openFile': { opened: boolean; error: string | null };
+  'briefing:morningDue': { due: boolean };
   'diagnostics:logs': LogEvent[];
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };

@@ -277,6 +277,16 @@ a { color: var(--accent); }
 .product-card .link { align-self: flex-start; padding-left: 0; text-decoration: underline; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiny { font-size: 11px; }
 
+.briefing { border: 1px solid var(--line); background: var(--bg-elev); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.briefing header { display: flex; align-items: center; gap: 6px; }
+.briefing-part h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
+.briefing-part ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.briefing-part li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.briefing-part li .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.briefing-part .when { flex: none; min-width: 84px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.briefing-gaps { margin-top: -6px; }
+.danger-text { color: var(--danger, #ff5d6c); }
+
 .approval { border: 1px solid rgba(255, 191, 71, 0.5); background: rgba(255, 191, 71, 0.05); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .approval h4 { margin: 0; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
 .approval dl { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; margin: 0; font-size: 12.5px; }

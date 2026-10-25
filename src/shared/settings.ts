@@ -343,6 +343,23 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** The morning briefing: which of the user's own sources it reads. Weather and news only with web search on. */
+    briefing: z
+      .object({
+        calendar: z.boolean().default(true),
+        email: z.boolean().default(true),
+        jobs: z.boolean().default(true),
+        files: z.boolean().default(true),
+        weather: z.boolean().default(false),
+        /** Town or city for the weather search (sent to the web search engine). */
+        weatherPlace: z.string().trim().max(100).regex(/^[^\r\n]*$/).default(''),
+        news: z.boolean().default(false),
+        newsTopic: z.string().trim().max(100).regex(/^[^\r\n]*$/).default(''),
+        /** Start the briefing when Keo is first opened each morning. */
+        showOnFirstOpen: z.boolean().default(false),
+      })
+      .strict()
+      .prefault({}),
     /** Which task events show a Windows notification (only while Keo's window is not in front). */
     notifications: z
       .object({

@@ -130,6 +130,27 @@ export interface ToolActivity {
   cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }>; resultId?: string; title?: string };
   /** Choices to offer as buttons when the action needs the user to pick (app, profile, window). */
   choices?: string[];
+  /** The morning briefing card (briefing.today). */
+  briefing?: Briefing;
+}
+
+/** What briefing.today gathered from the user's own sources. Text from email, events, file names and the web is untrusted. */
+export interface Briefing {
+  /** The user's local date, YYYY-MM-DD. */
+  date: string;
+  generatedAt: ISODate;
+  calendar: BriefingSection<{ id: string; title: string; start: string; end: string; allDay: boolean; location: string | null; link: string | null; meetLink: string | null }> & { gaps: Array<{ start: string; end: string; minutes: number }> };
+  email: BriefingSection<{ ref: string; from: string; fromName: string; subject: string; date: string | null; snippet: string }> & { account: string };
+  jobs: BriefingSection<{ id: string; kind: 'job' | 'task'; title: string; state: string; needsYou: boolean; finishedAt: string | null; detail: string | null }>;
+  files: BriefingSection<{ path: string; name: string; folder: string; kind: string; modified: string | null }>;
+  web: BriefingSection<{ topic: 'weather' | 'news'; title: string; url: string; snippet: string }>;
+}
+
+/** One source: 'skipped' = not set up or turned off (note says how to include it), 'failed' = it could not be read. */
+export interface BriefingSection<T> {
+  status: 'ok' | 'skipped' | 'failed';
+  note: string | null;
+  items: T[];
 }
 
 /** One step of the working checklist Keo keeps for a multi-step request. */

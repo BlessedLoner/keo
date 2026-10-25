@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentEvent, Conversation, Message, MessageAttachment, ToolActivity, WorkPlan } from '@shared/domain';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { AgentEvent, Briefing, BriefingSection, Conversation, Message, MessageAttachment, ToolActivity, WorkPlan } from '@shared/domain';
 import type { AttachmentView } from '@shared/ipc';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
@@ -11,6 +11,10 @@ import { clock, humanize, timeAgo } from '../lib/format';
 import { useInvoke } from '../lib/hooks';
 import { voice } from '../lib/voice';
 import { useApp } from '../state/AppState';
+
+/** What the briefing button sends (the same as saying it). */
+const BRIEFING_PROMPT = 'Good morning, Keo — what matters today?';
+let morningChecked = false;
 
 export function ChatView() {
   const app = useApp();
@@ -45,6 +49,19 @@ export function ChatView() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [newConversation]);
+
+  // "Show it when I first open Keo each morning": checked once per app start; main remembers the day.
+  const providerReady = app.activeProvider?.status.kind === 'ready';
+  useEffect(() => {
+    if (!providerReady || morningChecked) return;
+    morningChecked = true;
+    void (async () => {
+      if (!(await invoke('briefing:morningDue', {})).due) return;
+      const c = await invoke('conversations:create', { projectId: null });
+      setConversationId(c.id);
+      await invoke('chat:send', { conversationId: c.id, text: BRIEFING_PROMPT });
+    })().catch((e) => ui.error(errText(e)));
+  }, [providerReady, setConversationId, ui]);
 
   const current = convs.data?.find((c) => c.id === conversationId) ?? null;
 
@@ -247,6 +264,9 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
             </option>
           ))}
         </select>
+        <button className="btn ghost sm" title="Today’s calendar, new email, finished work and recent files" disabled={!!turn} onClick={() => void send(BRIEFING_PROMPT).catch(() => undefined)}>
+          <Icon name="sparkle" size={14} /> Briefing
+        </button>
         <button className="btn ghost icon" aria-label="Rename conversation" title="Rename" onClick={() => void rename()}>
           <Icon name="edit" size={16} />
         </button>
@@ -301,7 +321,7 @@ function phaseLabel(p: string): string {
 function Welcome({ onPick }: { onPick: (t: string) => void }) {
   const app = useApp();
   const ready = app.activeProvider?.status.kind === 'ready';
-  const ideas = ['What can you do on this computer, and what needs my permission?', 'Remember that I prefer short, direct answers.', 'Help me plan the next steps for one of my projects.', 'What do you currently remember about me?'];
+  const ideas = [BRIEFING_PROMPT, 'What can you do on this computer, and what needs my permission?', 'Remember that I prefer short, direct answers.', 'Help me plan the next steps for one of my projects.', 'What do you currently remember about me?'];
   return (
     <div className="hero">
       <KeoEmblem state={app.emblem} size={170} />
@@ -518,6 +538,7 @@ function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: stri
     } else if (task.state === 'cancelled') o = step?.state === 'denied' ? OUTCOME.denied : { label: 'Cancelled', cls: 'danger' };
   }
   if (t.cards) return <ProductCards data={t.cards} />;
+  if (t.briefing) return <BriefingCard data={t.briefing} conversationId={conversationId} />;
   return (
     <div className={`tool-card ${t.outcome}`}>
       <Icon name={task?.state === 'running' ? 'pulse' : 'shield'} size={15} />
@@ -592,6 +613,109 @@ function ProductCards({ data }: { data: NonNullable<ToolActivity['cards']> }) {
       {data.dropped.length > 0 && (
         <div className="muted small">Not shown (could not be traced to a page Keo read): {data.dropped.map((x) => x.name).join(', ')}</div>
       )}
+    </section>
+  );
+}
+
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+/** One briefing section: its items, or the one-line reason it was skipped or failed. */
+function BriefingPart<T>({ title, part, children }: { title: string; part: BriefingSection<T>; children: (items: T[]) => ReactNode }) {
+  return (
+    <div className="briefing-part">
+      <h4>{title}</h4>
+      {part.items.length > 0 && <ul>{children(part.items)}</ul>}
+      {part.note && <div className={`small ${part.status === 'failed' ? 'danger-text' : 'muted'}`}>{part.status === 'failed' ? `Could not read it: ${part.note}` : part.note}</div>}
+    </div>
+  );
+}
+
+/** The morning briefing card. Everything in it was only read; each button starts a separate action that asks as usual. */
+function BriefingCard({ data, conversationId }: { data: Briefing; conversationId: string }) {
+  const ui = useUi();
+  const ask = (text: string) => void invoke('chat:send', { conversationId, text }).catch((e) => ui.error(errText(e)));
+  const openEvent = (url: string) => void invoke('briefing:openEvent', { url }).then((r) => !r.opened && ui.error('Keo could not open that event.'), (e) => ui.error(errText(e)));
+  const openFile = (p: string) => void invoke('briefing:openFile', { path: p }).then((r) => !r.opened && ui.error(r.error ?? 'Keo could not open that file.'), (e) => ui.error(errText(e)));
+  const day = new Date(`${data.date}T12:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+  return (
+    <section className="briefing" aria-label="Morning briefing">
+      <header>
+        <Icon name="sparkle" size={15} /> <strong>Your briefing</strong> <span className="muted small">· {day}</span>
+      </header>
+      <BriefingPart title="Today" part={data.calendar}>
+        {(items) =>
+          items.map((e) => (
+            <li key={e.id}>
+              <span className="when">{e.allDay ? 'All day' : `${hhmm(e.start)}–${hhmm(e.end)}`}</span>
+              <span className="grow">
+                {e.title}
+                {e.location && <span className="muted"> · {e.location}</span>}
+              </span>
+              {e.link && (
+                <button className="btn ghost sm" onClick={() => openEvent(e.link!)}>
+                  Open event
+                </button>
+              )}
+            </li>
+          ))
+        }
+      </BriefingPart>
+      {data.calendar.gaps.length > 0 && <div className="muted small briefing-gaps">Free: {data.calendar.gaps.map((g) => `${hhmm(g.start)}–${hhmm(g.end)}`).join(', ')}</div>}
+      <BriefingPart title={`New email${data.email.account ? ` · ${data.email.account}` : ''}`} part={data.email}>
+        {(items) =>
+          items.map((m) => (
+            <li key={m.ref}>
+              <span className="grow">
+                <strong>{m.fromName || m.from}</strong> — {m.subject}
+              </span>
+              <button className="btn ghost sm" onClick={() => ask(`Help me reply to the email ${m.ref} from my briefing.`)}>
+                Reply
+              </button>
+            </li>
+          ))
+        }
+      </BriefingPart>
+      <BriefingPart title="Background work" part={data.jobs}>
+        {(items) =>
+          items.map((j) => (
+            <li key={j.id}>
+              <span className={`chip ${j.needsYou ? 'warn' : j.state === 'completed' ? 'ok' : ''}`}>{j.needsYou ? 'Needs you' : humanize(j.state)}</span>
+              <span className="grow">{j.title}</span>
+            </li>
+          ))
+        }
+      </BriefingPart>
+      <BriefingPart title="Recently changed files" part={data.files}>
+        {(items) =>
+          items.map((f) => (
+            <li key={f.path}>
+              <span className="grow" title={f.path}>
+                {f.name}
+                {f.modified && <span className="muted"> · {timeAgo(f.modified)}</span>}
+              </span>
+              <button className="btn ghost sm" onClick={() => openFile(f.path)}>
+                Open file
+              </button>
+            </li>
+          ))
+        }
+      </BriefingPart>
+      {(data.web.status !== 'skipped' || data.web.items.length > 0) && (
+        <BriefingPart title="Weather and news" part={data.web}>
+          {(items) =>
+            items.map((w) => (
+              <li key={`${w.topic}:${w.url}`}>
+                <span className="when">{w.topic === 'weather' ? 'Weather' : 'News'}</span>
+                <span className="grow">
+                  {w.title}
+                  {w.snippet && <span className="muted"> — {w.snippet}</span>}
+                </span>
+              </li>
+            ))
+          }
+        </BriefingPart>
+      )}
+      <div className="muted tiny">Only read from your own connected sources; nothing was sent or changed. Email and event text comes from other people.</div>
     </section>
   );
 }

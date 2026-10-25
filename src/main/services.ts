@@ -52,6 +52,8 @@ import { builtinCapabilities, type CapabilityDeps, type PlanInput } from './capa
 import { SnapshotStore } from './desktop/uia';
 import { GrantService } from './tasks/grants';
 import { CapabilityRegistry } from './capabilities/registry';
+import { briefingCapabilities } from './capabilities/briefing';
+import { localDate, morningDue } from './briefing/briefing';
 import type { PlannedStep } from './tasks/orchestrator';
 import { openDatabase, type Database } from './db/database';
 import type { DesktopBackend } from './desktop/backend';
@@ -552,6 +554,19 @@ export class Services {
       }),
       ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
       ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => this.googleClientId(), timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
+      ...briefingCapabilities({
+        sources: {
+          calendar: { unavailable: () => (!this.googleClientId() ? 'not set up' : this.googleAuth.signedIn() ? null : 'signed out'), list: (o, signal) => this.calendar.list(o, signal) },
+          email: { unavailable: () => this.email.unavailable(), address: () => this.email.address(), listNew: (o, signal) => this.email.listNew(o, signal) },
+          work: { jobs: () => this.jobs.list(), tasksNeedingUser: () => this.taskRepo.listByStates(['awaiting_authorization', 'awaiting_clarification', 'outcome_uncertain']) },
+          files: { enabled: () => getSettings().files.searchEnabled, search: (q, signal) => this.fileSearch.search(q, signal) },
+          web: {
+            unavailable: (st) => (!st.permissions.webSearchEnabled ? 'Web search is off.' : this.web.sourceFor(st.web.engine) ? null : 'No search engine is set up.'),
+            search: async (query, st, signal) => (await this.web.find(query, { count: 3, freshness: 'pd', safesearch: st.web.safesearch, engine: st.web.engine }, signal)).results,
+          },
+        },
+        destination: () => capDeps.activeProviderDestination(),
+      }),
       ...videoCapabilities({
         ...capDeps,
         studio: this.video,
@@ -1381,6 +1396,20 @@ export class Services {
     return this.documentsDir ? path.join(this.documentsDir, 'Keo Research') : path.join(this.profile.userData, 'saved-research');
   }
 
+  /** "Show the briefing when I first open Keo each morning": true once a day (then remembered in the profile). */
+  briefingMorningDue(now = new Date()): boolean {
+    const file = path.join(this.profile.userData, 'briefing-state.json');
+    let lastShown: string | null = null;
+    try {
+      lastShown = (JSON.parse(fs.readFileSync(file, 'utf8')) as { lastShown?: string }).lastShown ?? null;
+    } catch {
+      // First time, or an unreadable file: treat as never shown.
+    }
+    if (!morningDue({ on: this.settings.get().briefing.showOnFirstOpen, now, lastShown })) return false;
+    fs.writeFileSync(file, JSON.stringify({ lastShown: localDate(now) }));
+    return true;
+  }
+
   /**
    * Runs one capability because the user clicked it in Keo's own window (e.g. Save / Send in the
    * results window). It goes through the same admission, task and verification path; the click is
@@ -1651,6 +1680,7 @@ export class Services {
     this.db.db.exec('VACUUM');
     this.secrets.clear();
     this.email.reset();
+    fs.rmSync(path.join(this.profile.userData, 'briefing-state.json'), { force: true });
     // Sign-ins made in Keo's browser window live in its profile folder.
     this.webBrowser.kill();
     try {
