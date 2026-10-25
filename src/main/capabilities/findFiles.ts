@@ -41,6 +41,8 @@ export interface FindFilesDeps {
 const RUNS_CODE = /\.(exe|com|bat|cmd|msi|msix|msp|appx|appxbundle|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|scr|pif|cpl|msc|jar|lnk|url|reg|application|appref-ms|gadget|inf|scf|sys|dll|ocx|py|pyw|sh)$/i;
 /** Office files with macros: opening them may run code, so Keo always asks. */
 const MACROS = /\.(docm|dotm|xlsm|xltm|xlsb|pptm|potm|ppsm)$/i;
+/** A file files.open opens without a special warning (not a program, script, shortcut or macro file). */
+export const plainToOpen = (p: string) => !RUNS_CODE.test(p) && !MACROS.test(p);
 /** Beyond the project rule: places and names that usually hold secrets or keys. */
 const SECRETISH = /(^|[\\/])(\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker)([\\/]|$)|(^|[\\/])(id_rsa|id_ed25519|id_ecdsa)[^\\/]*$|\.(pem|key|pfx|p12|kdbx|kdb|keystore|jks|ovpn|asc|gpg|wallet)$|(^|[\\/])[^\\/]*(password|passwd|secret|credential|recovery[-_ ]?code|seed[-_ ]?phrase|private[-_ ]?key)[^\\/]*$/i;
 /** A file that usually holds passwords or keys (never read, never uploaded). */

@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentPhase, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
+import type { AgentEvent, AgentPhase, Briefing, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { Admission, CapabilityRegistry } from '../capabilities/registry';
 import { CapabilityError } from '../capabilities/types';
@@ -24,6 +24,7 @@ const UNTRUSTED_OUTPUT = new Set([
   'email.search',
   'email.read_thread',
   'calendar.list_events',
+  'briefing.today',
   'desktop.list_windows',
   'desktop.inspect_window',
   'browser.read_page',
@@ -702,7 +703,8 @@ export class AgentService {
         const cards = cap.id === 'research.show_products' ? (out as ToolActivity['cards']) : undefined;
         // The model gets the cards without the image bytes.
         const forModel = cards ? { ...cards, cards: cards.cards.map((c) => ({ ...c, image: c.image ? '(image shown to the user)' : null })) } : out;
-        return { activity: { ...base, summary, outcome, detail: brief(forModel), ...(cards ? { cards } : {}) }, content: wrap(cap.id, { status: 'succeeded', result: forModel }), isError: false };
+        const briefing = cap.id === 'briefing.today' ? briefingCard(out) : undefined;
+        return { activity: { ...base, summary, outcome, detail: brief(forModel), ...(cards ? { cards } : {}), ...(briefing ? { briefing } : {}) }, content: wrap(cap.id, { status: 'succeeded', result: forModel }), isError: false };
       } catch (err) {
         if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
         const msg = errorMessage(err);
@@ -811,6 +813,7 @@ function brief(out: unknown): string {
     const o = out as Record<string, unknown>;
     if (Array.isArray(o.results)) return `${o.results.length} result(s)${typeof o.source === 'string' ? ` from ${o.source}` : ''}`;
     if (typeof o.finalUrl === 'string' && typeof o.text === 'string') return `Read ${o.text.length.toLocaleString('en-US')} characters from ${hostOf(o.finalUrl)}${o.truncated ? ' (truncated)' : ''}`;
+    if (typeof o.date === 'string' && o.calendar && o.email) return `Briefing for ${o.date}`;
     if (o.status === 'saved') return 'Remembered from your words — edit or delete it in Memory.';
     if (o.status === 'already_known') return 'Already in memory.';
     if (Array.isArray(o.windows)) return `${o.windows.length} window(s)`;
@@ -820,6 +823,12 @@ function brief(out: unknown): string {
     if (typeof o.itemId === 'string') return 'Project item proposed.';
   }
   return 'Done.';
+}
+
+/** The briefing card for the chat (the model's copy keeps its trust label). */
+function briefingCard(out: unknown): Briefing {
+  const { trust: _trust, ...card } = out as Briefing & { trust?: string };
+  return card;
 }
 
 function hostOf(u: string): string {

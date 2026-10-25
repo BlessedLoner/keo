@@ -1305,7 +1305,40 @@ function Agent({ s, patch }: { s: Settings; patch: Patch }) {
         {num('approvalWaitSeconds', 'Wait for approval (seconds)', 'After this the reply continues and the task stays pending.', 10, 1800)}
         {num('maxBackgroundJobs', 'Background jobs at once', 'Long requests (research, video) run in the background; more wait in a queue. Only one at a time uses the mouse and keyboard.', 1, 6)}
       </div>
+      <MorningBriefing s={s} patch={patch} />
     </section>
+  );
+}
+
+function MorningBriefing({ s, patch }: { s: Settings; patch: Patch }) {
+  const b = s.briefing;
+  const webOn = s.permissions.webSearchEnabled;
+  return (
+    <>
+      <h3 style={{ marginTop: 18 }}>Morning briefing</h3>
+      <p className="muted small">Say “good morning, Keo” or press Briefing in a chat. Keo only reads these, and only the ones you have connected; it never sends or changes anything for the briefing.</p>
+      <Toggle checked={b.calendar} onChange={(v) => void patch({ briefing: { calendar: v } })} label="Today’s calendar and free time (Google Calendar)" />
+      <Toggle checked={b.email} onChange={(v) => void patch({ briefing: { email: v } })} label="New email: senders and subjects" />
+      <Toggle checked={b.jobs} onChange={(v) => void patch({ briefing: { jobs: v } })} label="Background jobs and tasks that finished or need me" />
+      <Toggle checked={b.files} onChange={(v) => void patch({ briefing: { files: v } })} label="Files changed since yesterday in my allowed folders" />
+      <Toggle checked={b.weather} disabled={!webOn} onChange={(v) => void patch({ briefing: { weather: v } })} label="Weather (uses web search)" />
+      {b.weather && (
+        <div className="field" style={{ maxWidth: 320 }}>
+          <label htmlFor="br-place">Town or city for the weather</label>
+          <input id="br-place" className="input" maxLength={100} defaultValue={b.weatherPlace} onBlur={(e) => void patch({ briefing: { weatherPlace: e.target.value } })} />
+        </div>
+      )}
+      <Toggle checked={b.news} disabled={!webOn} onChange={(v) => void patch({ briefing: { news: v } })} label="News headlines (uses web search)" />
+      {b.news && (
+        <div className="field" style={{ maxWidth: 320 }}>
+          <label htmlFor="br-topic">News topic (optional)</label>
+          <input id="br-topic" className="input" maxLength={100} defaultValue={b.newsTopic} placeholder="e.g. technology, Lagos" onBlur={(e) => void patch({ briefing: { newsTopic: e.target.value } })} />
+        </div>
+      )}
+      {!webOn && <span className="hint">Weather and news need web search (Settings → Web search).</span>}
+      <div style={{ height: 10 }} />
+      <Toggle checked={b.showOnFirstOpen} onChange={(v) => void patch({ briefing: { showOnFirstOpen: v } })} label="Show it when I first open Keo each morning" />
+    </>
   );
 }
 
