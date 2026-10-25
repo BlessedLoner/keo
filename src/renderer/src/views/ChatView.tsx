@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentEvent, Conversation, Message, ToolActivity } from '@shared/domain';
+import type { AgentEvent, Conversation, Message, ToolActivity, WorkPlan } from '@shared/domain';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
 import { Markdown } from '../components/Markdown';
@@ -109,6 +109,7 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
   const [loadError, setLoadError] = useState<string | null>(null);
   const [live, setLive] = useState<Record<string, string>>({});
   const [liveTools, setLiveTools] = useState<Record<string, ToolActivity[]>>({});
+  const [livePlans, setLivePlans] = useState<Record<string, WorkPlan>>({});
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const turn = app.turns[conversation.id];
@@ -148,6 +149,8 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
             else list.push(e.activity);
             return { ...t, [e.messageId]: list };
           });
+        } else if (e.type === 'plan') {
+          setLivePlans((p) => ({ ...p, [e.messageId]: e.plan }));
         } else if (e.type === 'turn_finished') {
           setMessages((ms) => {
             const i = ms.findIndex((m) => m.id === e.message.id);
@@ -163,6 +166,11 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
           });
           setLiveTools((t) => {
             const n = { ...t };
+            delete n[e.message.id];
+            return n;
+          });
+          setLivePlans((p) => {
+            const n = { ...p };
             delete n[e.message.id];
             return n;
           });
@@ -258,7 +266,7 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
           {loadError && <div className="banner danger">{loadError}</div>}
           {messages.length === 0 && !loadError && <Welcome onPick={(t) => void send(t).catch(() => undefined)} />}
           {messages.map((m) => (
-            <MessageView key={m.id} m={m} liveText={live[m.id]} liveTools={liveTools[m.id]} streaming={turn?.messageId === m.id} />
+            <MessageView key={m.id} m={m} liveText={live[m.id]} liveTools={liveTools[m.id]} livePlan={livePlans[m.id]} streaming={turn?.messageId === m.id} />
           ))}
           {canRetry && (
             <div className="row">
@@ -319,11 +327,12 @@ function Welcome({ onPick }: { onPick: (t: string) => void }) {
   );
 }
 
-function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveText?: string; liveTools?: ToolActivity[]; streaming: boolean }) {
+function MessageView({ m, liveText, liveTools, livePlan, streaming }: { m: Message; liveText?: string; liveTools?: ToolActivity[]; livePlan?: WorkPlan; streaming: boolean }) {
   const ui = useUi();
   const app = useApp();
   const text = liveText !== undefined && (m.status === 'streaming' || streaming) ? liveText : m.content;
   const tools = mergeTools(m.meta.tools ?? [], liveTools ?? []);
+  const plan = livePlan ?? m.meta.plan;
   const copy = () => invoke('app:copyText', { text: m.content }).then((r) => (r.copied ? ui.toast('Copied') : ui.error('Copy failed')), () => ui.error('Copy failed'));
 
   if (m.role === 'note') {
@@ -368,6 +377,7 @@ function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveTe
         <span>Keo</span>
         {m.meta.model && <span className="muted small">· {m.meta.providerId === 'test' ? 'test provider' : m.meta.model}{m.meta.route && ` (${m.meta.route})`}</span>}
       </div>
+      {plan && plan.steps.length > 0 && <PlanChecklist plan={plan} />}
       {tools.length > 0 && (
         <div className="tool-list">
           {tools.map((t) => (
@@ -431,6 +441,37 @@ function MessageView({ m, liveText, liveTools, streaming }: { m: Message; liveTe
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+const STEP_MARK: Record<WorkPlan['steps'][number]['status'], { mark: string; label: string }> = {
+  pending: { mark: '○', label: 'To do' },
+  in_progress: { mark: '◐', label: 'In progress' },
+  done: { mark: '✓', label: 'Done' },
+  failed: { mark: '✗', label: 'Failed' },
+  skipped: { mark: '–', label: 'Skipped' },
+};
+
+/** Keo's working checklist for a multi-step request, updated as the reply runs. */
+function PlanChecklist({ plan }: { plan: WorkPlan }) {
+  const done = plan.steps.filter((s) => s.status === 'done').length;
+  return (
+    <div className="plan-checklist" role="list" aria-label={`Plan: ${done} of ${plan.steps.length} steps done`}>
+      <div className="plan-head muted small">
+        Plan · {done}/{plan.steps.length} done
+      </div>
+      {plan.steps.map((s, i) => (
+        <div key={i} role="listitem" className={`plan-step ${s.status}`} title={STEP_MARK[s.status].label}>
+          <span className="plan-mark" aria-label={STEP_MARK[s.status].label}>
+            {STEP_MARK[s.status].mark}
+          </span>
+          <span className="grow">
+            {s.title}
+            {s.note && <span className="muted small"> — {s.note}</span>}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
