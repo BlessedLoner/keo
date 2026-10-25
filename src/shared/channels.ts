@@ -163,6 +163,9 @@ export const INVOKE_CHANNELS = [
   'livechat:discardDraft',
   'jobs:list',
   'jobs:cancel',
+  'schedule:list',
+  'schedule:pause',
+  'schedule:delete',
   'diagnostics:logs',
   'diagnostics:audit',
   'data:backup',
@@ -188,6 +191,7 @@ export const pushChannels = [
   'video:setupChanged',
   'files:photosChanged',
   'jobs:changed',
+  'schedule:changed',
   'presence:level',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];

@@ -79,6 +79,8 @@ export interface StartJob {
   brief: string;
   kind: BackgroundJob['kind'];
   parentConversationId: string;
+  /** The scheduled routine that started this job (its consequential actions are never pre-approved). */
+  scheduleId?: string | null;
 }
 
 /**
@@ -175,6 +177,7 @@ export class BackgroundJobs {
       finishedAt: null,
       result: null,
       error: null,
+      scheduleId: i.scheduleId ?? null,
     };
     const conv = this.d.conversations.create(`Background job: ${job.title}`, this.d.conversations.get(i.parentConversationId)?.projectId ?? null);
     job.conversationId = conv.id;
@@ -330,6 +333,11 @@ export class BackgroundJobs {
     return () => this.lease.release(owner);
   }
 
+  /** True when this conversation belongs to a job started by a scheduled routine. */
+  isRoutineConversation(conversationId: string | null | undefined): boolean {
+    return !!conversationId && !!this.byConversation(conversationId)?.scheduleId;
+  }
+
   /** Startup: jobs that were running or queued when Keo closed are reported as interrupted, never replayed. */
   recover(): number {
     this.load();
@@ -353,6 +361,8 @@ export class BackgroundJobs {
   jobContext(conversationId: string): string {
     const job = this.byConversation(conversationId);
     if (!job) return '';
+    if (job.scheduleId)
+      return `\n\n# Background job\nYou are running the scheduled routine “${job.title}” for the user, at the time they set. The user is not watching this conversation and cannot answer questions here; the request below is the instruction they scheduled. Do it with your tools, then reply with a short report of the result. Anything that sends, buys, deletes or changes something for the user still asks them for approval now, as usual — it was not approved in advance; if it is denied or not answered, say so in the report. If something essential is missing, say so in the report instead of guessing. Do not start other background jobs or schedule anything.`;
     return `\n\n# Background job\nYou are running the background job “${job.title}” for the user. The user is not watching this conversation and cannot answer questions here; the request below was written by Keo from the user's words. Do the whole job with your tools (actions still ask the user for approval as usual), then reply with a short report of the result: what you found or made, where it is saved, and anything that did not work. Keo posts that reply to the user. If something essential is missing, say so in the report instead of guessing. Do not start other background jobs.`;
   }
 

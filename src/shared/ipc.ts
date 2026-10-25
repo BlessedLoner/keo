@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type {
   MessageAttachment,
   BackgroundJob,
+  ScheduledItem,
   UpdateInfo,
   SelfTestResult,
   ResearchResultView,
@@ -273,6 +274,9 @@ export const invokeSchemas = {
   'livechat:discardDraft': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'jobs:list': empty,
   'jobs:cancel': z.object({ id: z.string().regex(/^job_[A-Za-z0-9]{6,64}$/) }).strict(),
+  'schedule:list': empty,
+  'schedule:pause': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/), paused: z.boolean() }).strict(),
+  'schedule:delete': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/) }).strict(),
   'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
@@ -445,6 +449,9 @@ export interface InvokeOutputs {
   'livechat:discardDraft': LiveChatSession;
   'jobs:list': BackgroundJob[];
   'jobs:cancel': { cancelled: boolean };
+  'schedule:list': ScheduledItem[];
+  'schedule:pause': ScheduledItem | null;
+  'schedule:delete': { deleted: boolean };
   'diagnostics:logs': LogEvent[];
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };

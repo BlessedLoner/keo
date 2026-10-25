@@ -198,6 +198,45 @@ function BackgroundJobs() {
   );
 }
 
+/** "Mon 26 Oct, 9:00" in the user's local time. */
+const shortWhen = (iso: string) => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** Reminders and routines Keo runs at their time, with pause and delete. */
+function Scheduled() {
+  const q = useInvoke('schedule:list', {}, { refreshOn: ['schedule:changed'], pollMs: 60000 });
+  const list = q.data ?? [];
+  if (!list.length) return null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <h3 style={{ margin: '0 0 6px' }}>Scheduled</h3>
+      {list.map((s) => (
+        <div key={s.id} className="card">
+          <div className="row">
+            <Icon name={s.kind === 'reminder' ? 'clock' : 'retry'} size={16} />
+            <strong className="grow" title={s.text}>
+              {s.title}
+            </strong>
+            <span className={`chip ${s.state === 'active' ? 'accent' : s.state === 'paused' ? 'warn' : ''}`}>{s.state === 'active' ? (s.kind === 'reminder' ? 'Reminder' : 'Routine') : s.state === 'paused' ? 'Paused' : 'Done'}</span>
+            {s.state !== 'done' && (
+              <button className="btn sm" onClick={() => void invoke('schedule:pause', { id: s.id, paused: s.state === 'active' })}>
+                {s.state === 'active' ? 'Pause' : 'Resume'}
+              </button>
+            )}
+            <button className="btn sm danger" aria-label={`Delete ${s.title}`} onClick={() => void invoke('schedule:delete', { id: s.id })}>
+              Delete
+            </button>
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            {s.repeatText === 'once' ? 'Once' : s.repeatText.charAt(0).toUpperCase() + s.repeatText.slice(1)}
+            {s.state === 'active' && s.nextRunAt ? ` · next ${shortWhen(s.nextRunAt)}` : ''}
+            {s.lastRunAt ? ` · last ${shortWhen(s.lastRunAt)}${s.lastStatus === 'late' ? ' (late)' : s.lastStatus?.startsWith('failed') ? ` (${s.lastStatus})` : ''}` : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type Filter = 'attention' | 'active' | 'done' | 'all';
 
 const ATTENTION = new Set(['proposed', 'awaiting_authorization', 'awaiting_clarification', 'outcome_uncertain']);
@@ -233,6 +272,7 @@ export function TasksView() {
       <div className="view-body">
         <ErrorBanner error={app.tasks.error} onRetry={() => void app.tasks.refresh()} />
         <BackgroundJobs />
+        <Scheduled />
         <LiveChats />
         <GrantsBanner />
         {shown.length === 0 ? (

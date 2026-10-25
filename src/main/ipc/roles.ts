@@ -28,6 +28,7 @@ const COMPANION: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
   'settings:get',
   'jobs:list',
   'jobs:cancel',
+  'schedule:list',
 ]);
 
 const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
