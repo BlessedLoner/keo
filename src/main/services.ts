@@ -2,6 +2,8 @@ import os from 'node:os';
 import { FileSearch, type IndexBackend } from './files/fileSearch';
 import { WindowsSearchIndex } from './files/windowsSearch';
 import { findFileCapabilities } from './capabilities/findFiles';
+import { createCapabilities } from './capabilities/create';
+import { CreatedFiles } from './create/output';
 import { builtinGoogleClient, type GoogleClient } from './calendar/builtinClient';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -476,6 +478,14 @@ export class Services {
         outputRoot: () => this.videoOutputRoot(),
         visionDestination: () => this.providers.active().destination(),
         userTexts: (conversationId) => this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user').map((m) => m.content),
+      }),
+      ...createCapabilities({
+        outputRoot: () => (this.documentsDir ? path.join(this.documentsDir, 'Keo') : path.join(d.profile.userData, 'created')),
+        allowed: (p) => this.fileSearch.allowed(p),
+        userTexts: (conversationId) => this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user').map((m) => m.content),
+        openPath: d.openPath ?? (async () => false),
+        created: new CreatedFiles(path.join(d.profile.userData, 'created-files.json')),
+        backupRoot: () => path.join(d.profile.userData, 'created-backups'),
       }),
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
