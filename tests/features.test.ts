@@ -2,7 +2,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findQuote } from '../src/main/agent/quotes';
 import { Database } from '../src/main/db/database';
-import { MIGRATIONS } from '../src/main/db/migrations';
+import { LATEST_SCHEMA_VERSION, MIGRATIONS } from '../src/main/db/migrations';
 import { Logger } from '../src/main/logging/logger';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { htmlToText, isPrivateAddress, WebService } from '../src/main/web/webService';
@@ -232,7 +232,7 @@ describe('schema migration v2', () => {
     v1.close();
 
     const db = new Database(file);
-    expect(db.migrate()).toEqual({ from: 1, to: 2 });
+    expect(db.migrate()).toEqual({ from: 1, to: LATEST_SCHEMA_VERSION });
     expect(db.get<{ content: string }>("SELECT content FROM memory_items WHERE id = 'mem0000001'")?.content).toBe('Likes tea');
     expect(db.get<{ n: number }>('SELECT count(*) AS n FROM memory_revisions')?.n).toBe(1);
     db.run("INSERT INTO memory_items (id, kind, content, status, provenance, version, created_at, updated_at) VALUES ('mem0000002', 'fact', 'x', 'confirmed', 'user_stated', 1, 'x', 'x')");

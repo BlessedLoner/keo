@@ -6,6 +6,7 @@ import type {
   ResearchResultView,
   VideoView,
   VideoToolsSetup,
+  PhotoIndexState,
   LiveChatSession,
   AppInfo,
   AuditRecord,
@@ -68,7 +69,12 @@ export const invokeSchemas = {
   'video:status': empty,
   'video:pickFfmpeg': empty,
   'video:pickOutput': empty,
-  'files:pickFolder': z.object({ list: z.enum(['roots', 'excluded']) }).strict(),
+  'files:pickFolder': z.object({ list: z.enum(['roots', 'excluded', 'photoFolders']) }).strict(),
+  'files:photosState': empty,
+  'files:photosEstimate': empty,
+  'files:photosStart': empty,
+  'files:photosPause': empty,
+  'files:photosClear': empty,
   'video:setupState': empty,
   'video:setupStart': empty,
   'video:setupCancel': empty,
@@ -298,6 +304,11 @@ export interface InvokeOutputs {
   'video:pickFfmpeg': { path: string | null; ok: boolean; message: string };
   'video:pickOutput': { path: string | null };
   'files:pickFolder': { path: string | null };
+  'files:photosState': PhotoIndexState;
+  'files:photosEstimate': PhotoIndexState;
+  'files:photosStart': PhotoIndexState;
+  'files:photosPause': PhotoIndexState;
+  'files:photosClear': PhotoIndexState;
   'video:setupState': VideoToolsSetup;
   'video:setupStart': VideoToolsSetup;
   'video:setupCancel': VideoToolsSetup;

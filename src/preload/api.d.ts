@@ -1,4 +1,4 @@
-import type { AgentEvent, LiveChatSession, NavigationGrant, Presence, UpdateDownload, VideoToolsSetup } from '../shared/domain';
+import type { AgentEvent, LiveChatSession, NavigationGrant, PhotoIndexState, Presence, UpdateDownload, VideoToolsSetup } from '../shared/domain';
 import type { InvokeChannel, InvokeInput, InvokeOutputs, IpcResult, PushChannel } from '../shared/ipc';
 
 export interface PushPayloads {
@@ -17,6 +17,7 @@ export interface PushPayloads {
   'results:changed': { id: string };
   'video:changed': { id: string };
   'video:setupChanged': VideoToolsSetup;
+  'files:photosChanged': PhotoIndexState;
   'jobs:changed': Record<string, never>;
 }
 

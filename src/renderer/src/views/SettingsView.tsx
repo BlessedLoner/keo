@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ProviderDiagnostic, ProviderInfo, SelfTestResult, VideoToolsSetup } from '@shared/domain';
+import type { PhotoIndexState, ProviderDiagnostic, ProviderInfo, SelfTestResult, VideoToolsSetup } from '@shared/domain';
 import type { WakeStatusInfo, WebStatus } from '@shared/ipc';
 import { subscribe } from '../lib/api';
 import type { Settings } from '@shared/settings';
@@ -90,6 +90,88 @@ export function SettingsView() {
 
 type Patch = (p: Record<string, unknown>) => Promise<void>;
 
+/** Finding pictures by what is in them: the switch, the folders, a count before anything is sent, progress. */
+function Photos({ s, patch }: { s: Settings; patch: Patch }) {
+  const ui = useUi();
+  const f = s.files;
+  const [st, setSt] = useState<PhotoIndexState | null>(null);
+  useEffect(() => {
+    void invoke('files:photosState', {})
+      .then(setSt)
+      .catch(() => undefined);
+    return subscribe('files:photosChanged', setSt);
+  }, []);
+  const act = (ch: 'files:photosEstimate' | 'files:photosStart' | 'files:photosPause' | 'files:photosClear') => void invoke(ch, {}).then(setSt).catch((e) => ui.error(errText(e)));
+  const running = st?.phase === 'running';
+  const counted = !!st && ['ready', 'paused', 'done', 'failed'].includes(st.phase);
+  const folders = f.photoFolders.length ? f.photoFolders : null;
+  return (
+    <section className="card" aria-label="Finding photos">
+      <h2>Finding photos by what’s in them</h2>
+      <p className="muted small">
+        So that “the photo of the orange table in my Downloads” is found even when it is called IMG_2041.jpg, Keo can look at your pictures once and keep a one-sentence description of each on this PC. Each picture is made smaller and <strong>sent to your AI provider</strong> to be described (also allow your provider under Access → Screen-content export). Pictures are never changed. Tiny pictures and ones whose names suggest passwords, banking or IDs are never sent, and the model is told to set aside pictures of private documents.
+      </p>
+      <Toggle checked={f.describePhotos} onChange={(v) => void patch({ files: { describePhotos: v } })} label="Let Keo look at my photos to find them by what’s in them" />
+      {f.describePhotos && (
+        <>
+          <p className="small" style={{ marginTop: 10 }}>
+            Pictures in {folders ? 'these folders:' : 'Pictures, Downloads and Desktop.'}
+          </p>
+          {folders?.map((r) => (
+            <div className="row small" key={r}>
+              <code className="grow">{r}</code>
+              <button className="btn ghost sm" onClick={() => void patch({ files: { photoFolders: f.photoFolders.filter((x) => x !== r) } })}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <div className="row">
+            <button className="btn ghost sm" onClick={() => void invoke('files:pickFolder', { list: 'photoFolders' }).catch((e) => ui.error(errText(e)))}>
+              {folders ? 'Add a folder' : 'Choose folders…'}
+            </button>
+            <label className="small row" style={{ gap: 6 }}>
+              At most
+              <input type="number" min={10} max={5000} step={10} value={f.photoCap} style={{ width: 80 }} onChange={(e) => void patch({ files: { photoCap: Math.max(10, Math.min(5000, Number(e.target.value) || 10)) } })} aria-label="Pictures described at most per run" />
+              pictures per run
+            </label>
+          </div>
+          {st?.message && (
+            <p className="small">
+              {(st.phase === 'blocked' || st.phase === 'failed') && <Icon name="warn" size={13} />} {st.message}
+              {counted && st.phase !== 'done' && st.toDescribe > 0 && (
+                <span className="muted">
+                  {' '}
+                  {st.found} pictures found, {st.described} already described. Describing {st.toDescribe} takes roughly {Math.round(st.approxTokens / 1000)}k tokens with {st.destination}; what that costs depends on your provider and model.
+                </span>
+              )}
+            </p>
+          )}
+          {(running || st?.phase === 'paused') && st.toDescribe > 0 && <progress max={st.toDescribe} value={st.done + st.failed} style={{ width: '100%' }} aria-label="Pictures described" />}
+          <div className="row">
+            {running ? (
+              <button className="btn sm" onClick={() => act('files:photosPause')}>
+                Pause
+              </button>
+            ) : counted && st.toDescribe > st.done + st.failed && st.phase !== 'done' ? (
+              <button className="btn sm" onClick={() => act('files:photosStart')}>
+                {st.phase === 'paused' ? 'Resume' : `Describe ${st.toDescribe - st.done - st.failed} pictures`}
+              </button>
+            ) : (
+              <button className="btn sm" disabled={st?.phase === 'counting'} onClick={() => act('files:photosEstimate')}>
+                {st?.phase === 'counting' ? 'Counting…' : 'Count my pictures'}
+              </button>
+            )}
+            <button className="btn ghost sm" disabled={running} onClick={() => act('files:photosClear')}>
+              Delete descriptions
+            </button>
+          </div>
+          <p className="muted small">Nothing is sent until you click Describe. Keo works slowly in the background, newest pictures first; new or changed pictures are described the next time you run it. When Keo can’t find a picture, it can also offer to look at a few right away (you approve each time).</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Finding files: the switch, what Keo may read, and which folders it searches or skips. */
 function Files({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
@@ -104,9 +186,10 @@ function Files({ s, patch }: { s: Settings; patch: Patch }) {
           Ask Keo for any file or folder — “open the photo of the orange table in Downloads”, “find my CV”, “videos from this week” — and it answers in well under a second from the Windows Search index (names, and the words inside indexed documents). When the index has nothing for a folder, Keo looks at names instead. The names and paths it finds go to your AI provider so it can answer you; files are never changed, moved or deleted, and programs or scripts are never opened.
         </p>
         <Toggle checked={f.searchEnabled} onChange={(v) => void patch({ files: { searchEnabled: v } })} label="Let Keo find my files and folders" />
-        <Toggle checked={f.readContent} onChange={(v) => void patch({ files: { readContent: v } })} label="Let Keo read the text of files it finds when I ask (text files and Word documents; that text goes to my AI provider)" />
+        <Toggle checked={f.readContent} onChange={(v) => void patch({ files: { readContent: v } })} label="Let Keo read the text of files it finds when I ask (text files, Word documents and PDFs; that text goes to my AI provider)" />
         <p className="muted small">Files that usually hold passwords or keys are never read.</p>
       </section>
+      {f.searchEnabled && <Photos s={s} patch={patch} />}
       <section className="card" aria-label="Folders">
         <h2>Folders</h2>
         <p className="small">Keo searches {f.roots.length ? 'these folders:' : 'your whole user folder (Desktop, Documents, Downloads, Pictures, Videos, Music…).'}</p>

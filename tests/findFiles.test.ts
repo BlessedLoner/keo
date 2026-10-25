@@ -184,6 +184,28 @@ describe('reading a found file', () => {
     expect(d.text).toBe('Licence & terms\nClause 2');
   });
 
+  it('reads the text of a PDF, page by page, and says so honestly when a PDF is scanned', async () => {
+    const { home } = setup({ read: true });
+    fs.mkdirSync(path.join(home, 'Documents'), { recursive: true });
+    const invoice = path.join(home, 'Documents', 'invoice.pdf');
+    fs.writeFileSync(invoice, makePdf(['BT /F1 18 Tf 72 720 Td (Invoice total 42 euros) Tj ET', 'BT /F1 12 Tf 72 720 Td (Page two: paid in March) Tj ET']));
+    const r = ok<{ text: string; pages: number; pagesRead: number; truncated: boolean; trust: string }>(await run('files.peek', { path: invoice }));
+    expect(r.text).toContain('Invoice total 42 euros');
+    expect(r.text).toContain('Page two: paid in March');
+    expect(r).toMatchObject({ pages: 2, pagesRead: 2, truncated: false });
+    expect(r.trust).toMatch(/untrusted/);
+    // The page limit: only the first page.
+    const one = ok<{ text: string; pagesRead: number; truncated: boolean }>(await run('files.peek', { path: invoice, maxPages: 1 }));
+    expect(one).toMatchObject({ pagesRead: 1, truncated: true });
+    expect(one.text).not.toContain('Page two');
+    // A "scanned" PDF: only a drawing, no text layer.
+    const scan = path.join(home, 'Documents', 'scan.pdf');
+    fs.writeFileSync(scan, makePdf(['0 0 1 rg 72 72 300 300 re f']));
+    const s = await run('files.peek', { path: scan });
+    expect('step' in s && s.step?.state).toBe('failed');
+    expect('step' in s && s.step?.error).toMatch(/no text.*scanned/);
+  });
+
   it('never reads files that usually hold passwords or keys', async () => {
     const { put } = setup({ read: true });
     for (const f of ['Documents/passwords.txt', 'Documents/.env', '.ssh/id_rsa', 'Documents/vault.kdbx', 'Documents/server.pem', 'Desktop/recovery codes.txt']) {
@@ -243,3 +265,28 @@ function makeZip(files: Record<string, string>): Buffer {
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...parts, cd, end]);
 }
+
+/** A minimal PDF: one page per content stream, Helvetica, with a correct cross-reference table. */
+function makePdf(pages: string[]): Buffer {
+  const objs: string[] = [];
+  const pageIds = pages.map((_, i) => 4 + i * 2);
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`;
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  pages.forEach((content, i) => {
+    objs[4 + i * 2] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`;
+    objs[5 + i * 2] = `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`;
+  });
+  let out = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  for (let id = 1; id < objs.length; id++) {
+    offsets[id] = Buffer.byteLength(out);
+    out += `${id} 0 obj\n${objs[id]}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(out);
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let id = 1; id < objs.length; id++) out += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+

@@ -283,6 +283,15 @@ export const SettingsSchema = z
         roots: z.array(z.string().trim().min(3).max(500)).max(20).default([]),
         /** Folders never searched, besides Keo's built-in ones (AppData, Keo's own data). */
         excluded: z.array(z.string().trim().min(3).max(500)).max(50).default([]),
+        /**
+         * Let Keo look at the user's pictures (sent to the AI provider) and keep a short description of
+         * each, so they can be found by what is in them. Off by default; also needs vision-export consent.
+         */
+        describePhotos: z.boolean().default(false),
+        /** Folders whose pictures are described; empty = Pictures, Downloads and Desktop. */
+        photoFolders: z.array(z.string().trim().min(3).max(500)).max(20).default([]),
+        /** At most this many pictures are described in one run. */
+        photoCap: z.number().int().min(10).max(5000).default(300),
       })
       .strict()
       .prefault({}),

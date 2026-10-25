@@ -219,6 +219,24 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_memory_subject ON memory_items(subject);
     `,
   },
+  {
+    version: 3,
+    name: 'photo_descriptions',
+    sql: `
+      CREATE TABLE photo_descriptions (
+        path_key TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime_ms INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('described','skipped')),
+        description TEXT NOT NULL,
+        keywords TEXT NOT NULL,
+        provider TEXT,
+        model TEXT,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

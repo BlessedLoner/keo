@@ -49,8 +49,18 @@ export interface FileHit {
   size: number | null;
   /** ISO time of the last change. */
   modified: string | null;
-  /** Where the words matched: the name, or only inside the file (index). */
-  match: 'name' | 'content' | 'listing';
+  /** Where the words matched: the name, only inside the file (index), or a picture's description. */
+  match: 'name' | 'content' | 'listing' | 'described';
+  /** For a picture Keo described earlier: what is in it (made by the AI model; untrusted). */
+  description?: string | undefined;
+}
+
+/** A picture described earlier (see photoIndex.ts). */
+export interface DescribedPicture {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  description: string;
 }
 
 export interface IndexRow {
@@ -114,7 +124,7 @@ export function isInside(child: string, parent: string): boolean {
 }
 
 /** Folder names a scan never enters (tool caches, version control, system folders). */
-const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '$recycle.bin', 'system volume information', 'appdata', '.cache', '__pycache__', '.venv', 'venv', '.gradle', '.nuget', '.vs', '.idea', 'dist', 'build', 'out', '.next', 'target']);
+export const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '$recycle.bin', 'system volume information', 'appdata', '.cache', '__pycache__', '.venv', 'venv', '.gradle', '.nuget', '.vs', '.idea', 'dist', 'build', 'out', '.next', 'target']);
 
 export interface FileSearchDeps {
   index: IndexBackend | null;
@@ -123,6 +133,8 @@ export interface FileSearchDeps {
   /** Folders never searched: Keo's built-ins plus the user's own. */
   excluded: () => string[];
   scanBudgetMs?: number;
+  /** Pictures whose description holds the words (none when describing pictures is off). */
+  described?: (text: string) => DescribedPicture[];
 }
 
 export class FileSearch {
@@ -155,6 +167,7 @@ export class FileSearch {
       via = 'scan';
       hits = await this.scan(q, words, signal);
     }
+    if (words.length && (q.kind === 'any' || q.kind === 'picture')) hits = await this.withDescribed(hits, q);
     hits = hits.filter((h) => q.kind === 'any' || h.kind === q.kind);
     hits.sort((a, b) => rank(b, words) - rank(a, words) || (b.modified ?? '').localeCompare(a.modified ?? ''));
     return { hits: hits.slice(0, q.limit), via, ms: Date.now() - t0, total: hits.length };
@@ -165,6 +178,35 @@ export class FileSearch {
     const lower = name.toLowerCase();
     const match = !words.length ? 'listing' : words.every((w) => lower.includes(w)) ? 'name' : 'content';
     return { path: p, name, folder: path.dirname(p), kind: kindOf(p, isFolder), size: isFolder ? null : size, modified, match };
+  }
+
+  /** Adds pictures whose description matches; a picture found by its name keeps that match. */
+  private async withDescribed(hits: FileHit[], q: FileQuery): Promise<FileHit[]> {
+    const found = this.d.described?.(q.text) ?? [];
+    if (!found.length) return hits;
+    const since = q.modifiedWithinDays ? Date.now() - q.modifiedWithinDays * 86400_000 : 0;
+    const byPath = new Map(hits.map((h) => [h.path.toLowerCase(), h]));
+    for (const p of found) {
+      if (!this.allowed(p.path) || (q.folder && !isInside(p.path, q.folder)) || (since && p.mtimeMs < since)) continue;
+      const known = byPath.get(p.path.toLowerCase());
+      if (known) {
+        known.description = p.description;
+        if (known.match !== 'name') known.match = 'described';
+        continue;
+      }
+      // Only while the picture is still the one that was described.
+      let st: fs.Stats;
+      try {
+        st = await fs.promises.stat(p.path);
+      } catch {
+        continue;
+      }
+      if (st.size !== p.size || Math.floor(st.mtimeMs) !== p.mtimeMs) continue;
+      const h: FileHit = { path: p.path, name: path.basename(p.path), folder: path.dirname(p.path), kind: kindOf(p.path, false), size: st.size, modified: st.mtime.toISOString(), match: 'described', description: p.description };
+      hits.push(h);
+      byPath.set(p.path.toLowerCase(), h);
+    }
+    return hits;
   }
 
   /** Breadth-first over the allowed folders, names only, within a time budget. */
@@ -209,11 +251,11 @@ export class FileSearch {
   }
 }
 
-/** Whole-name matches first, then names that start with the words, then content-only matches. */
+/** Whole-name matches first, then names that start with the words, then described pictures, then content-only matches. */
 function rank(h: FileHit, words: string[]): number {
   if (!words.length) return 0;
   const base = path.parse(h.name).name.toLowerCase();
-  let s = h.match === 'name' ? 10 : 0;
+  let s = h.match === 'name' ? 10 : h.match === 'described' ? 6 : 0;
   if (base === words.join(' ')) s += 5;
   if (base.startsWith(words[0]!)) s += 2;
   return s;
