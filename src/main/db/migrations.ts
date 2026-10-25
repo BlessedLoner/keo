@@ -237,6 +237,29 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 4,
+    name: 'schedules',
+    sql: `
+      CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('reminder','routine')),
+        title TEXT NOT NULL,
+        text TEXT NOT NULL,
+        conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        at TEXT NOT NULL,
+        recurrence TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('active','paused','done')),
+        next_run_at TEXT,
+        last_run_at TEXT,
+        last_status TEXT,
+        runs INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_schedules_next ON schedules(state, next_run_at);
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

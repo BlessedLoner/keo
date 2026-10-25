@@ -164,6 +164,8 @@ export interface MessageMeta {
   taskNote?: string;
   /** A background job's report (posted in the conversation that started it). */
   jobId?: string;
+  /** A due reminder posted by Keo's scheduler. */
+  scheduleId?: string;
   /** The working checklist for a multi-step request (shown with the reply). */
   plan?: WorkPlan;
   /** Smart routing moved this reply to the strong model part-way (a failure, a plan or a long run). */
@@ -190,6 +192,36 @@ export interface BackgroundJob {
   /** The job's final reply (completed) or what went wrong. */
   result: string | null;
   error: string | null;
+  /** Set when a scheduled routine started this job. */
+  scheduleId?: string | null;
+}
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+/** When a scheduled item repeats; day and week repeats keep the local time of day of `at`. */
+export type Recurrence = { every: 'once' } | { every: 'day' } | { every: 'week'; days: Weekday[] } | { every: 'hours'; hours: number };
+
+/** A reminder (a notification at a time) or a routine (an instruction run as a background job). */
+export interface ScheduledItem {
+  id: string;
+  kind: 'reminder' | 'routine';
+  title: string;
+  /** The reminder's text, or the routine's instruction. */
+  text: string;
+  /** The conversation that created it (where reminders and routine reports go). */
+  conversationId: string | null;
+  /** First run (anchor for the time of day and for "every N hours"). */
+  at: ISODate;
+  recurrence: Recurrence;
+  /** "every Monday at 9:00", "once". */
+  repeatText: string;
+  state: 'active' | 'paused' | 'done';
+  nextRunAt: ISODate | null;
+  lastRunAt: ISODate | null;
+  /** 'on_time', 'late' (missed while Keo was closed), or what went wrong. */
+  lastStatus: string | null;
+  runs: number;
+  createdAt: ISODate;
 }
 
 export interface Message {

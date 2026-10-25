@@ -40,6 +40,8 @@ import { editLabel, parseDirection, type Word } from './video/recipe';
 import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
 import { BackgroundJobs, backgroundJobCapabilities } from './agent/backgroundJobs';
+import { reminderCapabilities } from './capabilities/reminders';
+import { Scheduler, whenText } from './schedule/scheduler';
 import { fileCapabilities } from './capabilities/files';
 import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
 import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
@@ -74,7 +76,7 @@ import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote, nameMentioned } from './agent/quotes';
-import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence } from '../shared/domain';
+import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 
 export interface ServiceDeps {
@@ -150,6 +152,8 @@ export interface ServiceDeps {
   webBrowser?: { headless?: boolean; pick?: () => BrowserChoice | null };
   /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
   liveChatTiming?: { pollMs?: number; debounceMs?: number; minGapMs?: number; sleep?: (ms: number) => Promise<void> };
+  /** Epoch ms now for reminders and routines (tests use a fake clock). */
+  clock?: () => number;
 }
 
 export type Push = (channel: string, payload: unknown) => void;
@@ -191,6 +195,8 @@ export class Services {
   readonly live: LiveChatService;
   /** Long requests running in the background, each in its own hidden conversation. */
   readonly jobs: BackgroundJobs;
+  /** Reminders and scheduled routines (kept in the database). */
+  readonly schedule: Scheduler;
   /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
   readonly capDeps: CapabilityDeps;
   readonly apps: AppDiscovery;
@@ -385,6 +391,15 @@ export class Services {
       finished: (job, report) => this.jobFinished(job, report),
       changed: () => this.push('jobs:changed', {}),
     });
+    this.schedule = new Scheduler({
+      db: this.db,
+      audit: this.audit,
+      log: this.log,
+      ...(d.clock ? { now: d.clock } : {}),
+      remind: (item, late) => this.remind(item, late),
+      runRoutine: (item, late) => this.runRoutine(item, late),
+      changed: () => this.push('schedule:changed', {}),
+    });
     this.live = new LiveChatService({
       cap: capDeps,
       providers: this.providers,
@@ -549,6 +564,7 @@ export class Services {
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
       ...backgroundJobCapabilities(() => this.jobs),
+      ...reminderCapabilities({ scheduler: this.schedule, isJobConversation: (id) => this.jobs.isJobConversation(id) }),
       ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
@@ -562,8 +578,11 @@ export class Services {
     ]) {
       this.registry.register(cap);
     }
-    this.tasks.grantMatcher = (step) => this.grants.match(step);
+    // A scheduled routine's consequential actions always ask the user when it runs: no grant or approval level pre-approves them.
+    const routineGuard = (capabilityId: string, conversationId: string | null) => !!conversationId && this.jobs.isRoutineConversation(conversationId) && (this.registry.get(capabilityId)?.consequential ?? true);
+    this.tasks.grantMatcher = (step) => (routineGuard(step.capabilityId, this.tasks.get(step.taskId)?.conversationId ?? null) ? null : this.grants.match(step));
     this.tasks.policyMatcher = (step, task) => {
+      if (routineGuard(step.capabilityId, task.conversationId)) return null;
       const level = getSettings().autonomy.level;
       const tier = step.preview.autoTier ?? 'important';
       // Hands-free approves everything except critical actions (pay, buy, delete, sign in, run code).
@@ -625,6 +644,7 @@ export class Services {
       this.researchContext() +
       this.videoContext() +
       this.jobs.statusContext() +
+      this.schedule.statusContext() +
       this.activeWindowContext() +
       (this.voiceMode?.isActive()
         ? '\n\n# Voice conversation\nThe user is talking to you by voice and hears your reply spoken aloud. Sound like a warm, upbeat friend who is great at their job: natural spoken English with contractions, flowing sentences, a little light humour when it fits (never at the user’s expense), and genuine enthusiasm when something works. Keep it short — one to three sentences — with no lists, Markdown, tables or code unless asked (those stay on screen). Act with tools as usual; Keo asks the user for approvals by voice.'
@@ -766,6 +786,40 @@ export class Services {
       const said = ok ? `The ${job.title} job is done. ${spokenVersion(job.result ?? '', 260)}` : `The ${job.title} job ${job.state}. The details are on screen.`;
       this.voiceMode.announce(said);
     }
+  }
+
+  /** A reminder is due: Windows notification, a note in the conversation that set it, and spoken in a voice conversation. */
+  private remind(item: ScheduledItem, late: boolean): void {
+    const due = item.nextRunAt ? whenText(new Date(item.nextRunAt)) : '';
+    this.ui.notify(late ? 'Reminder (late)' : 'Reminder', item.text, 'chat');
+    if (item.conversationId && this.conversations.get(item.conversationId)) {
+      try {
+        this.conversations.addMessage({
+          conversationId: item.conversationId,
+          role: 'assistant',
+          content: `⏰ **Reminder:** ${item.text}${late ? `\n\n_Late: this was due ${due}, while Keo was closed or the computer was asleep._` : ''}`,
+          status: 'complete',
+          meta: { scheduleId: item.id },
+        });
+        this.push('conversations:changed', { conversationId: item.conversationId });
+      } catch {
+        /* the conversation was deleted meanwhile */
+      }
+    }
+    this.voiceMode.announce(`Reminder${late ? ', a little late' : ''}: ${spokenVersion(item.text, 260)}`);
+  }
+
+  /** A routine is due: its instruction runs as a background job with the usual approvals; the report goes to the conversation that set it. */
+  private runRoutine(item: ScheduledItem, late: boolean): void {
+    const parent = item.conversationId && this.conversations.get(item.conversationId) ? item.conversationId : this.commandConversation();
+    const due = item.nextRunAt ? whenText(new Date(item.nextRunAt)) : '';
+    this.jobs.start({
+      title: item.title,
+      kind: 'other',
+      parentConversationId: parent,
+      scheduleId: item.id,
+      brief: `Scheduled routine (${item.repeatText})${late ? `, running late: it was due ${due} while Keo was closed or the computer was asleep` : ''}. The user's instruction: “${item.text}”`,
+    });
   }
 
   /** Task events already notified (step/task id + event), so each shows at most once. */
@@ -1473,6 +1527,8 @@ export class Services {
     const recovery = this.tasks.recover();
     const interruptedJobs = this.jobs.recover();
     if (interruptedJobs) this.log.info('jobs.interrupted_on_start', { jobs: interruptedJobs });
+    // Reminders and routines that came due while Keo was closed run once now, marked late.
+    this.schedule.start();
     this.tasks.pump();
     // Warm Windows' app list in the background (it takes a few seconds), only if launching is on.
     setTimeout(() => {
@@ -1558,7 +1614,7 @@ export class Services {
     this.tasks.dispose();
     for (const o of this.observations.list(100000)) this.vision.delete(o.id);
     this.db.tx(() => {
-      for (const table of ['observation_analyses', 'observations', 'execution_receipts', 'task_steps', 'tasks', 'memory_revisions', 'memory_items', 'project_items', 'messages', 'conversations', 'projects', 'audit_log', 'usage_log', 'photo_descriptions']) {
+      for (const table of ['observation_analyses', 'observations', 'execution_receipts', 'task_steps', 'tasks', 'memory_revisions', 'memory_items', 'project_items', 'messages', 'conversations', 'projects', 'audit_log', 'usage_log', 'photo_descriptions', 'schedules']) {
         this.db.run(`DELETE FROM ${table}`);
       }
     });
@@ -1577,6 +1633,7 @@ export class Services {
 
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.schedule.stop();
     this.email.stopWatcher();
     this.googleAuth.cancelSignIn();
     this.voiceMode.stop('closing');

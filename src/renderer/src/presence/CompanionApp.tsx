@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BackgroundJob } from '@shared/domain';
+import type { BackgroundJob, ScheduledItem } from '@shared/domain';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
 import { invoke, subscribe } from '../lib/api';
@@ -33,6 +33,7 @@ export function CompanionApp() {
   const [dock, setDock] = useState<Dock>('top');
   const [open, setOpen] = useState(false);
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
+  const [scheduled, setScheduled] = useState<ScheduledItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const island = useRef<HTMLDivElement>(null);
   const over = useRef(0);
@@ -53,9 +54,13 @@ export function CompanionApp() {
     const loadJobs = () => void invoke('jobs:list', {}).then(setJobs, () => undefined);
     loadJobs();
     const offJ = subscribe('jobs:changed', loadJobs);
+    const loadScheduled = () => void invoke('schedule:list', {}).then(setScheduled, () => undefined);
+    loadScheduled();
+    const offR = subscribe('schedule:changed', loadScheduled);
     return () => {
       offS();
       offJ();
+      offR();
     };
   }, []);
 
@@ -142,6 +147,12 @@ export function CompanionApp() {
           : 'Thinking…';
   const status = voiceLine ?? (p?.pendingApprovals ? 'Needs your approval' : p?.activity ?? (busy ? STATE_LABEL[state] : null));
   const horizontal = dock === 'top' || dock === 'bottom';
+  // Waiting reminders: a small clock, titled with the next one.
+  const reminders = scheduled.filter((s) => s.kind === 'reminder' && s.state === 'active' && s.nextRunAt);
+  const nextReminder = reminders[0];
+  const clockTitle = nextReminder
+    ? `${reminders.length} reminder${reminders.length > 1 ? 's' : ''} — next: ${nextReminder.title}, ${new Date(nextReminder.nextRunAt!).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
+    : '';
 
   const btn = (label: string, icon: Parameters<typeof Icon>[0]['name'], onClick: () => void, cls = '') => (
     <button key={label} className={`ib ${cls}`} aria-label={label} title={label} onClick={onClick}>
@@ -201,6 +212,12 @@ export function CompanionApp() {
             {items.slice(0, 6).map((it, i) => (
               <span key={it.id} className={`idot s-${it.state}`} style={{ '--c': dotColor(it), animationDelay: `${i * 0.35}s` } as React.CSSProperties} />
             ))}
+          </span>
+        )}
+        {!!reminders.length && (
+          <span className="island-clock" title={clockTitle} aria-label={clockTitle}>
+            <Icon name="clock" size={12} />
+            {reminders.length > 1 && <span>{reminders.length}</span>}
           </span>
         )}
         {!items.length && !open && wake?.enabled && !wake.muted && wake.status === 'listening' && <span className="island-ear" title={`Listening for “${wake.phrase ?? 'Hey Keo'}”`} />}
