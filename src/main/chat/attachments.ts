@@ -48,13 +48,16 @@ export class AttachmentStaging {
     fs.mkdirSync(this.d.tempDir, { recursive: true });
     const file = path.join(this.d.tempDir, `${crypto.randomBytes(6).toString('hex')}-${safe}`);
     fs.writeFileSync(file, bytes);
-    return this.prepare(file, name, null, signal);
+    return this.prepare(file, name, null, signal, file);
   }
 
   /** A picture Keo took (a screenshot of the user's screen). */
   async fromPicture(name: string, png: Buffer): Promise<PreparedAttachment> {
     const { jpeg, thumb } = await this.d.images.prepare(png, 'image/png', 1600);
-    return this.keep({ id: newId(), name, kind: 'image', size: png.length, path: null, thumb: dataUrl(thumb), image: { mediaType: 'image/jpeg', dataBase64: jpeg.toString('base64') } });
+    fs.mkdirSync(this.d.tempDir, { recursive: true });
+    const copy = path.join(this.d.tempDir, `${crypto.randomBytes(6).toString('hex')}-screenshot.png`);
+    fs.writeFileSync(copy, png);
+    return this.keep({ id: newId(), name, kind: 'image', size: png.length, path: null, copy, thumb: dataUrl(thumb), image: { mediaType: 'image/jpeg', dataBase64: jpeg.toString('base64') } });
   }
 
   /** Takes the attachments for a message being sent (unknown or expired ids are skipped). */
@@ -72,6 +75,11 @@ export class AttachmentStaging {
     this.staged.delete(id);
   }
 
+  /** Where Keo keeps dropped, pasted and screenshot files. */
+  dir(): string {
+    return this.d.tempDir;
+  }
+
   private keep(a: PreparedAttachment): PreparedAttachment {
     // Forgotten attachments (never sent) do not pile up.
     const old = Date.now() - 6 * 3600_000;
@@ -80,7 +88,7 @@ export class AttachmentStaging {
     return a;
   }
 
-  private async prepare(file: string, name: string, shownPath: string | null, signal: AbortSignal): Promise<PreparedAttachment> {
+  private async prepare(file: string, name: string, shownPath: string | null, signal: AbortSignal, copy?: string): Promise<PreparedAttachment> {
     if (looksSecret(file) || looksSecret(name)) throw new Error(`${name} looks like a file that holds passwords or keys, so Keo does not read it.`);
     let st: fs.Stats;
     try {
@@ -90,7 +98,7 @@ export class AttachmentStaging {
     }
     if (st.isDirectory()) throw new Error(`${name} is a folder. Attach files, or ask Keo to look in the folder.`);
     if (st.size > MAX_BYTES) throw new Error(`${name} is larger than 25 MB.`);
-    const base = { id: newId(), name, size: st.size, path: shownPath };
+    const base = { id: newId(), name, size: st.size, path: shownPath, ...(copy ? { copy } : {}) };
     const ext = path.extname(name || file).toLowerCase();
     if (IMAGE.test(name) || IMAGE.test(file)) {
       const bytes = fs.readFileSync(file);
@@ -156,7 +164,7 @@ const dataUrl = (jpeg: Buffer) => `data:image/jpeg;base64,${jpeg.toString('base6
 export function attachmentsForModel(list: MessageAttachment[], full: boolean): string {
   const parts: string[] = [];
   for (const a of list) {
-    const where = a.path ? ` — on the user's PC at ${a.path}` : ' — dropped or pasted into the chat';
+    const where = a.path ? ` — on the user's PC at ${a.path}` : a.copy ? ` — dropped, pasted or a screenshot; Keo's copy for editing: ${a.copy}` : ' — dropped or pasted into the chat';
     if (a.kind === 'image') parts.push(`[Attached picture: ${a.name}${where}]${full ? '' : ' (shown when it was sent; ask the user to attach it again if you need to look at it again)'}`);
     else if (a.kind === 'document' && a.text !== undefined) {
       const body = full ? a.text : a.text.slice(0, 1500) + (a.text.length > 1500 ? '\n…(cut; the full text was shown earlier)' : '');
@@ -164,7 +172,7 @@ export function attachmentsForModel(list: MessageAttachment[], full: boolean): s
     } else parts.push(`[Attached file: ${a.name}${where}. ${a.note ?? ''}]`);
   }
   parts.push(
-    'To change an attached file, make an edited copy with Keo’s create tools (create__document, create__presentation, create__spreadsheet…) next to it or in Documents\\Keo, and say where it is; never claim the original was edited.',
+    'To change an attached file, make an edited copy — pictures with picture__edit / picture__animate (or picture__ai_edit), documents with Keo’s create tools — and say where it is; never claim the original was edited.',
   );
   return parts.join('\n\n');
 }

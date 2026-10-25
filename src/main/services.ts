@@ -1,6 +1,8 @@
+import { pictureCapabilities } from './capabilities/pictures';
+import { PictureStudio, type PictureAi } from './pictures/studio';
 import { AttachmentStaging, type AttachmentImages } from './chat/attachments';
 import os from 'node:os';
-import { FileSearch, type IndexBackend } from './files/fileSearch';
+import { FileSearch, isInside, type IndexBackend } from './files/fileSearch';
 import { WindowsSearchIndex } from './files/windowsSearch';
 import { findFileCapabilities, looksSecret } from './capabilities/findFiles';
 import { createCapabilities } from './capabilities/create';
@@ -136,6 +138,10 @@ export interface ServiceDeps {
   googleFetch?: FetchLike;
   /** Pictures attached to chat messages, resized (the app uses Electron's image tools; tests a fake). */
   attachmentImages?: AttachmentImages;
+  /** AI pictures (tests inject a fake; the app uses the OpenAI provider when a key is saved). */
+  pictureAi?: PictureAi | null;
+  /** C:\\Windows\\Fonts (tests may point elsewhere). */
+  fontsDir?: string;
   /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
   fileIndex?: IndexBackend | null;
   /** The user's own folder (C:\Users\<name>): what "my files" means by default. */
@@ -456,6 +462,25 @@ export class Services {
       images: d.attachmentImages ?? { prepare: async (bytes) => ({ jpeg: bytes, thumb: bytes }) },
       tempDir: path.join(d.profile.userData, 'attachments'),
     });
+    this.pictures = new PictureStudio({
+      runner: () => {
+        if (d.videoRunner) return d.videoRunner(getSettings())?.runner ?? null;
+        const t = locateFfmpeg(getSettings().video.ffmpegPath, process.env.PATH, undefined, this.ffmpegSetup.installed()?.dir ?? null);
+        return t ? new ProcessRunner(t) : null;
+      },
+      outputRoot: () => this.keoOutputRoot(d),
+      fontsDir: d.fontsDir ?? path.join(process.env.WINDIR ?? 'C:\\Windows', 'Fonts'),
+      workRoot: path.join(d.profile.userData, 'pictures-work'),
+      ai: () => {
+        if (d.pictureAi !== undefined) return d.pictureAi;
+        if (!this.secrets.has('openai')) return null;
+        const model = () => getSettings().pictures.aiModel;
+        return {
+          generate: (o, signal) => this.providers.openai.generateImage({ ...o, model: model() }, signal),
+          edit: (o, signal) => this.providers.openai.editImage({ ...o, model: model() }, signal),
+        };
+      },
+    });
     const home = d.homeDir ?? os.homedir();
     this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
     this.fileSearch = new FileSearch({
@@ -583,6 +608,14 @@ export class Services {
         openPath: d.openPath ?? (async () => false),
         created: new CreatedFiles(path.join(d.profile.userData, 'created-files.json')),
         backupRoot: () => path.join(d.profile.userData, 'created-backups'),
+      }),
+      ...pictureCapabilities({
+        studio: this.pictures,
+        // The user's allowed folders, Keo's own output (Documents\\Keo) and Keo's copies of attached pictures.
+        allowed: (p) => this.fileSearch.allowed(p) || isInside(p, this.keoOutputRoot(d)) || isInside(p, this.attachments.dir()),
+        openPath: d.openPath ?? (async () => false),
+        aiModel: () => getSettings().pictures.aiModel,
+        aiQuality: () => getSettings().pictures.aiQuality,
       }),
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
@@ -1518,6 +1551,13 @@ export class Services {
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
   readonly fileSearch: FileSearch;
+  /** Picture edits, animations and AI pictures. */
+  readonly pictures: PictureStudio;
+
+  /** Documents\\Keo, where Keo saves what it makes. */
+  private keoOutputRoot(d: ServiceDeps): string {
+    return this.documentsDir ? path.join(this.documentsDir, 'Keo') : path.join(d.profile.userData, 'created');
+  }
   /** Files and pictures attached in the chat, waiting to be sent. */
   readonly attachments: AttachmentStaging;
   readonly fileIndex: IndexBackend | null;

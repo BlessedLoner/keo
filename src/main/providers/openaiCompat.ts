@@ -290,6 +290,43 @@ export class OpenAICompatProvider implements ChatProvider {
     }
   }
 
+  /** A new picture from a description (PNG). */
+  async generateImage(o: { model: string; prompt: string; size: string; quality: string; background: 'auto' | 'transparent' | 'opaque' }, signal: AbortSignal): Promise<Buffer> {
+    if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Making pictures is only available through the OpenAI provider.');
+    try {
+      const r = await this.client().images.generate(
+        { model: o.model, prompt: o.prompt, n: 1, size: o.size as never, quality: o.quality as never, ...(o.background !== 'auto' ? { background: o.background } : {}), output_format: 'png' } as never,
+        { signal },
+      );
+      const b64 = (r as { data?: Array<{ b64_json?: string }> }).data?.[0]?.b64_json;
+      if (!b64) throw new ProviderError('unknown', 'OpenAI returned no picture.');
+      return Buffer.from(b64, 'base64');
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      throw mapOpenAIError(err, signal, this.label);
+    }
+  }
+
+  /** A changed copy of a picture, as described (PNG). */
+  async editImage(o: { model: string; image: Buffer; name: string; prompt: string; size: string; quality: string; background: 'auto' | 'transparent' | 'opaque' }, signal: AbortSignal): Promise<Buffer> {
+    if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Changing pictures with AI is only available through the OpenAI provider.');
+    try {
+      const ext = (o.name.split('.').pop() ?? 'png').toLowerCase();
+      const type = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+      const file = await toFile(o.image, o.name, { type });
+      const r = await this.client().images.edit(
+        { model: o.model, image: file, prompt: o.prompt, n: 1, size: o.size as never, quality: o.quality as never, ...(o.background !== 'auto' ? { background: o.background } : {}), output_format: 'png' } as never,
+        { signal },
+      );
+      const b64 = (r as { data?: Array<{ b64_json?: string }> }).data?.[0]?.b64_json;
+      if (!b64) throw new ProviderError('unknown', 'OpenAI returned no picture.');
+      return Buffer.from(b64, 'base64');
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      throw mapOpenAIError(err, signal, this.label);
+    }
+  }
+
   async speak(text: string, model: string, voice: string, signal: AbortSignal): Promise<Uint8Array> {
     if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Cloud text-to-speech is only available through the OpenAI provider.');
     try {

@@ -272,6 +272,16 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Pictures Keo makes or changes with AI (through the user's OpenAI account; each one asks first). */
+    pictures: z
+      .object({
+        /** The OpenAI image model. */
+        aiModel: z.string().trim().min(3).max(80).regex(/^[A-Za-z0-9._-]+$/).default('gpt-image-1'),
+        /** Higher quality costs more per picture. */
+        aiQuality: z.enum(['low', 'medium', 'high']).default('medium'),
+      })
+      .strict()
+      .prefault({}),
     /** Finding the user's files anywhere in the folders they allowed (Settings → Files). */
     files: z
       .object({

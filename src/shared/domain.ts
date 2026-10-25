@@ -173,6 +173,8 @@ export interface MessageAttachment {
   size: number;
   /** Where it is on the user's PC (chosen in the file picker); null when dropped, pasted or a screenshot. */
   path: string | null;
+  /** Keo's own copy of a dropped, pasted or screenshot file (in Keo's data folder), so it can be edited. */
+  copy?: string;
   /** A small JPEG preview (pictures only). */
   thumb: string | null;
   /** The document's text as read (at most 60,000 characters). */

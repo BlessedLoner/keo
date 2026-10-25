@@ -37,7 +37,7 @@ export function SettingsView() {
               ['voice', 'Voice & shortcuts'],
               ['autonomy', 'Approvals & live chat'],
               ['agent', 'Agent'],
-              ['video', 'Video'],
+              ['video', 'Video & pictures'],
               ['appearance', 'Appearance'],
               ['data', 'Privacy & data'],
               ['help', 'Check & help'],
@@ -75,7 +75,10 @@ export function SettingsView() {
         ) : section === 'agent' ? (
           <Agent s={s} patch={patch} />
         ) : section === 'video' ? (
-          <Video s={s} patch={patch} />
+          <>
+            <Video s={s} patch={patch} />
+            <Pictures s={s} patch={patch} />
+          </>
         ) : section === 'appearance' ? (
           <Appearance s={s} patch={patch} />
         ) : section === 'help' ? (
@@ -224,6 +227,50 @@ function Files({ s, patch }: { s: Settings; patch: Patch }) {
         </div>
       </section>
     </>
+  );
+}
+
+/** Pictures: local edits need nothing; AI pictures use the user's OpenAI key and ask before each one. */
+function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
+  const [model, setModel] = useState(s.pictures.aiModel);
+  return (
+    <section className="card" aria-label="Pictures">
+      <h2>Pictures</h2>
+      <p className="muted small">
+        Keo edits pictures on this PC for free with the video tools (ffmpeg): text in any Windows font, crop, colours, a logo on a photo, rounded corners — and short animations (zoom, float, pulse, spin, text that slides in) as MP4 or GIF. Results are new files in Documents\Keo; your originals are never changed.
+      </p>
+      <p className="muted small">
+        Making a new picture from a description, an AI redesign or removing a background uses your OpenAI account (Settings → Providers → OpenAI). Each one costs money and Keo asks you first, showing what is sent.
+      </p>
+      <div className="grid-2">
+        <div className="field">
+          <label htmlFor="pic-model">OpenAI image model</label>
+          <input
+            id="pic-model"
+            className="input"
+            list="pic-models"
+            value={model}
+            spellCheck={false}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => model.trim() && model.trim() !== s.pictures.aiModel && void patch({ pictures: { aiModel: model.trim() } })}
+          />
+          <datalist id="pic-models">
+            <option value="gpt-image-1" />
+            <option value="gpt-image-1-mini" />
+            <option value="gpt-image-1.5" />
+            <option value="gpt-image-2" />
+          </datalist>
+        </div>
+        <div className="field">
+          <label htmlFor="pic-quality">Quality</label>
+          <select id="pic-quality" className="input" value={s.pictures.aiQuality} onChange={(e) => void patch({ pictures: { aiQuality: e.target.value } })}>
+            <option value="low">Low (cheapest)</option>
+            <option value="medium">Medium</option>
+            <option value="high">High (costs most)</option>
+          </select>
+        </div>
+      </div>
+    </section>
   );
 }
 
