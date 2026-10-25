@@ -262,6 +262,16 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** Working inside websites in Keo's own browser window (Chrome or Edge with Keo's own profile; Settings → Web). */
+    webApps: z
+      .object({
+        /** Let Keo open and work in sites in its own browser window (every change still asks or follows the approval level). */
+        enabled: z.boolean().default(true),
+        /** Which browser runs Keo's window; auto = Chrome if installed, else Edge. */
+        browser: z.enum(['auto', 'chrome', 'edge']).default('auto'),
+      })
+      .strict()
+      .prefault({}),
     /** Finding the user's files anywhere in the folders they allowed (Settings → Files). */
     files: z
       .object({

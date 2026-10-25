@@ -356,6 +356,8 @@ export interface ApprovalPreview {
   dataExport: string | null;
   /** Eligible for a time-boxed navigation grant (never for send/delete/submit-like actions). */
   grantable?: boolean;
+  /** What a navigation grant from this card is bound to, when the step has no window target (a site in Keo's browser window). */
+  grantTarget?: { hwnd: string; pid: number; processName: string } | null;
   /**
    * Approval-level tier: 'routine' runs without asking under "Ask only for
    * important things", 'important' only under "Hands-free", 'always_ask'

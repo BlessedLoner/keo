@@ -13,6 +13,13 @@ export const GRANTABLE_CAPABILITIES = [
   'browser.read_page',
   'whatsapp.open_chat',
   'whatsapp.read_chat',
+  // In Keo's browser window, bound to one site (never submit, send, buy, pay, delete or upload).
+  'web.open',
+  'web.click',
+  'web.fill',
+  'web.type',
+  'web.select',
+  'web.press',
 ] as const;
 
 const MAX_MINUTES = 30;
@@ -89,7 +96,7 @@ export class GrantService {
   match(step: TaskStep): string | null {
     this.expire();
     if (!step.preview.grantable) return null;
-    const target = (step.input as { target?: { hwnd?: unknown; pid?: unknown } } | null)?.target;
+    const target = (step.input as { target?: { hwnd?: unknown; pid?: unknown } } | null)?.target ?? step.preview.grantTarget;
     if (!target || typeof target.hwnd !== 'string' || typeof target.pid !== 'number') return null;
     for (const g of this.grants.values()) {
       if (g.target.hwnd !== target.hwnd || g.target.pid !== target.pid) continue;

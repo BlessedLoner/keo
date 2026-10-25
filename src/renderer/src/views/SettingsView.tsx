@@ -31,7 +31,7 @@ export function SettingsView() {
           {(
             [
               ['providers', 'Providers'],
-              ['web', 'Web search'],
+              ['web', 'Web'],
               ['email', 'Email & calendar'],
               ['files', 'Files'],
               ['voice', 'Voice & shortcuts'],
@@ -57,7 +57,10 @@ export function SettingsView() {
         ) : section === 'providers' ? (
           <Providers s={s} patch={patch} />
         ) : section === 'web' ? (
-          <WebSearch s={s} patch={patch} />
+          <>
+            <WebSearch s={s} patch={patch} />
+            <WebApps s={s} patch={patch} />
+          </>
         ) : section === 'email' ? (
           <EmailCalendarSettings s={s} patch={patch} />
         ) : section === 'files' ? (
@@ -1032,6 +1035,29 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
         <Toggle checked={v.speakResponses} onChange={(c) => void patch({ voice: { speakResponses: c } })} label="Read replies aloud automatically" />
       </section>
     </>
+  );
+}
+
+/** Keo's own browser window for working inside websites (Google Docs, eBay, web forms). */
+function WebApps({ s, patch }: { s: Settings; patch: Patch }) {
+  const w = s.webApps;
+  return (
+    <section className="card" aria-label="Web apps">
+      <h2>Web apps</h2>
+      <p className="muted small">
+        Keo can work inside websites — Google Docs and Slides, eBay listings, web forms — in its own browser window: Chrome or Edge with a separate Keo profile, so your normal browser, its cookies and saved passwords are never touched. Keo reads each page’s structure (fields, buttons, values) instead of guessing from the screen. You sign in to sites in that window yourself; Keo never types passwords, codes or card details. Reading and scrolling are routine; typing follows your approval level; submitting, sending, buying, paying, deleting, accepting and uploading always ask. Page text goes to your AI provider and is treated as untrusted.
+      </p>
+      <Toggle checked={w.enabled} onChange={(v) => void patch({ webApps: { enabled: v } })} label="Let Keo work in websites in its own browser window" />
+      <div className="field">
+        <label htmlFor="webapps-browser">Browser for Keo’s window</label>
+        <select id="webapps-browser" className="select" value={w.browser} onChange={(e) => void patch({ webApps: { browser: e.target.value as Settings['webApps']['browser'] } })}>
+          <option value="auto">Automatic (Chrome, else Edge)</option>
+          <option value="chrome">Google Chrome</option>
+          <option value="edge">Microsoft Edge</option>
+        </select>
+      </div>
+      <p className="muted small">Sign-ins you make there stay in Keo’s data folder (removed with “Delete all data”).</p>
+    </section>
   );
 }
 
