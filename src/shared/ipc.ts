@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  MessageAttachment,
   BackgroundJob,
   UpdateInfo,
   SelfTestResult,
@@ -104,7 +105,14 @@ export const invokeSchemas = {
   'conversations:delete': z.object({ id }).strict(),
   'conversations:messages': z.object({ id }).strict(),
 
-  'chat:send': z.object({ conversationId: id, text: z.string().trim().min(1).max(32000) }).strict(),
+  'chat:send': z
+    .object({ conversationId: id, text: z.string().trim().max(32000), attachments: z.array(z.string().regex(/^att_[A-Za-z0-9]{8,40}$/)).max(8).optional() })
+    .strict()
+    .refine((x) => x.text.length > 0 || (x.attachments?.length ?? 0) > 0, 'Write a message or attach something.'),
+  'chat:pickAttachments': empty,
+  'chat:attachBytes': z.object({ name: z.string().trim().min(1).max(200), dataBase64: z.string().max(36_000_000) }).strict(),
+  'chat:attachScreenshot': empty,
+  'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
   'chat:retry': z.object({ conversationId: id }).strict(),
   'chat:cancel': z.object({ conversationId: id }).strict(),
   'chat:active': empty,
@@ -216,10 +224,11 @@ export const invokeSchemas = {
 
   'app:quit': empty,
   'presence:get': empty,
+  'call:fullscreen': empty,
   'voice:level': z.object({ level: z.number().min(0).max(1), source: z.enum(['mic', 'playback']).nullable() }).strict(),
   'presence:report': z.object({ speaking: z.boolean(), recording: z.boolean(), transcribing: z.boolean() }).strict(),
   'presence:stopAll': empty,
-  'presence:openMain': z.object({ view: z.enum(['chat', 'tasks', 'settings']).optional() }).strict(),
+  'presence:openMain': z.object({ view: z.enum(['chat', 'tasks', 'settings', 'call']).optional() }).strict(),
   'companion:setInteractive': z.object({ interactive: z.boolean() }).strict(),
   'companion:drag': z.object({ phase: z.enum(['start', 'end']) }).strict(),
   'companion:hide': empty,
@@ -335,6 +344,10 @@ export interface InvokeOutputs {
   'conversations:delete': { deleted: boolean };
   'conversations:messages': Message[];
   'chat:send': { accepted: true; userMessageId: string };
+  'chat:pickAttachments': AttachmentView[];
+  'chat:attachBytes': AttachmentView;
+  'chat:attachScreenshot': AttachmentView;
+  'chat:discardAttachment': { ok: true };
   'chat:retry': { accepted: true };
   'chat:cancel': { cancelled: boolean };
   'chat:active': string[];
@@ -391,6 +404,7 @@ export interface InvokeOutputs {
   'presence:get': Presence;
   'presence:report': { ok: true };
   'voice:level': { ok: true };
+  'call:fullscreen': { ok: true };
   'presence:stopAll': { cancelledTurns: number; cancelledTasks: number; revokedGrants: number };
   'presence:openMain': { ok: true };
   'companion:setInteractive': { ok: true };
@@ -467,6 +481,9 @@ export interface WebStatus {
   fetchEnabled: boolean;
   secretStorage: boolean;
 }
+
+/** An attachment as the chat shows it before sending (its text and picture stay in the main process). */
+export type AttachmentView = Omit<MessageAttachment, 'text'>;
 
 /** The email account, without its password (only whether one is stored). */
 export interface EmailStatus {

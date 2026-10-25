@@ -187,7 +187,7 @@ export function CompanionApp() {
             {vm?.active ? btn('End voice conversation', 'stop', () => void invoke('voice:modeStop'), 'danger') : btn('Talk to Keo', 'mic', () => void invoke('voice:modeStart'), 'primary')}
             {btn('Pencil: mark the screen and ask', 'edit', () => void invoke('pencil:start'))}
             {btn('Mini chat', 'chat', () => void invoke('commandBar:show'))}
-            {btn('Keo mode', 'sparkle', () => void invoke('keomode:open'))}
+            {!vm?.active && btn('Call Keo', 'phone', () => void invoke('keomode:open'))}
             {p?.liveChats.firstReady && btn(`Send the reply to ${p.liveChats.firstReady.contact} now`, 'send', () => void invoke('livechat:sendNow', { id: p.liveChats.firstReady!.id }), 'primary')}
             {busy && btn('Stop everything', 'stop', () => void invoke('presence:stopAll'), 'danger')}
             {wake?.enabled && btn(wake.muted ? 'Unmute the wake word' : 'Mute the wake word', 'mic', () => void invoke('wake:setMuted', { muted: !wake.muted }), wake.muted ? 'muted' : '')}

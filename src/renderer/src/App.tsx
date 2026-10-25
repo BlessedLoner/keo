@@ -6,6 +6,7 @@ import { Icon } from './components/Icon';
 import { KeoEmblem, STATE_LABEL } from './components/KeoEmblem';
 import { useApp, type ViewId } from './state/AppState';
 import { CapabilitiesView } from './views/CapabilitiesView';
+import { CallView } from './views/CallView';
 import { ChatView } from './views/ChatView';
 import { DiagnosticsView } from './views/DiagnosticsView';
 import { MemoryView } from './views/MemoryView';
@@ -16,6 +17,7 @@ import { VisionView } from './views/VisionView';
 
 const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', key: '1' },
+  { id: 'call', label: 'Call', icon: 'phone', key: '0' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks', key: '2' },
   { id: 'memory', label: 'Memory', icon: 'memory', key: '3' },
   { id: 'projects', label: 'Projects', icon: 'projects', key: '4' },
@@ -26,7 +28,7 @@ const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
 export function App() {
   const app = useApp();
 
-  // Ctrl+1..8 navigation.
+  // Ctrl+0..8 navigation.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -86,15 +88,19 @@ export function App() {
         {providerChip}
       </div>
       <nav className="rail" aria-label="Main">
-        {NAV.map((n) => (
-          <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={`Ctrl+${n.key}`} badge={badgeFor(n.id, app)} />
-        ))}
-        <div className="grow" />
-        <RailButton id="diagnostics" label="Diagnose" icon="pulse" shortcut="Ctrl+8" />
-        <RailButton id="settings" label="Settings" icon="settings" shortcut="Ctrl+7" />
+        <div className="rail-group" role="group" aria-label="Views">
+          {NAV.map((n) => (
+            <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={`Ctrl+${n.key}`} badge={badgeFor(n.id, app)} live={n.id === 'call' && !!app.presence?.voiceMode.active} />
+          ))}
+        </div>
+        <div className="rail-group rail-foot" role="group" aria-label="Diagnose and settings">
+          <RailButton id="diagnostics" label="Diagnose" icon="pulse" shortcut="Ctrl+8" />
+          <RailButton id="settings" label="Settings" icon="settings" shortcut="Ctrl+7" />
+        </div>
       </nav>
       <main className="main">
         {app.view === 'chat' && <ChatView />}
+        {app.view === 'call' && <CallView />}
         {app.view === 'tasks' && <TasksView />}
         {app.view === 'memory' && <MemoryView />}
         {app.view === 'projects' && <ProjectsView />}
@@ -196,12 +202,14 @@ function badgeFor(id: ViewId, app: ReturnType<typeof useApp>): { n: number; tone
   return null;
 }
 
-function RailButton({ id, label, icon, shortcut, badge }: { id: ViewId; label: string; icon: string; shortcut: string; badge?: { n: number; tone: 'warn' | 'info' } | null }) {
+function RailButton({ id, label, icon, shortcut, badge, live }: { id: ViewId; label: string; icon: string; shortcut: string; badge?: { n: number; tone: 'warn' | 'info' } | null; live?: boolean }) {
   const app = useApp();
   return (
-    <button aria-current={app.view === id ? 'page' : undefined} onClick={() => app.setView(id)} title={`${label} (${shortcut})`}>
-      <Icon name={icon} size={20} />
-      {label}
+    <button aria-current={app.view === id ? 'page' : undefined} className={live ? 'live' : undefined} onClick={() => app.setView(id)} title={`${label} (${shortcut})`}>
+      <span className="rail-ico">
+        <Icon name={icon} size={19} />
+      </span>
+      <span className="rail-label">{label}</span>
       {badge && (
         <span className={`badge ${badge.tone === 'info' ? 'info' : ''}`} aria-label={`${badge.n} pending`}>
           {badge.n > 99 ? '99+' : badge.n}

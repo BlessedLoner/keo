@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentEvent, Conversation, Message, ToolActivity, WorkPlan } from '@shared/domain';
+import type { AgentEvent, Conversation, Message, MessageAttachment, ToolActivity, WorkPlan } from '@shared/domain';
+import type { AttachmentView } from '@shared/ipc';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
 import { Markdown } from '../components/Markdown';
@@ -190,10 +191,10 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
   }, [messages, live, liveTools]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: string[]) => {
       stick.current = true;
       try {
-        await invoke('chat:send', { conversationId: conversation.id, text });
+        await invoke('chat:send', { conversationId: conversation.id, text, ...(attachments?.length ? { attachments } : {}) });
         await load();
       } catch (e) {
         ui.error(errText(e));
@@ -347,7 +348,8 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming }: { m: Messa
   if (m.role === 'user') {
     return (
       <div className="msg user">
-        <div className="bubble">{m.content}</div>
+        {!!m.meta.attachments?.length && <SentAttachments list={m.meta.attachments} />}
+        {m.content.trim() && <div className="bubble">{m.content}</div>}
         <div className="meta">
           <span className="acts">
             <button className="btn ghost icon sm" aria-label="Copy message" title="Copy" onClick={() => void copy()}>
@@ -594,11 +596,127 @@ function ProductCards({ data }: { data: NonNullable<ToolActivity['cards']> }) {
   );
 }
 
-function Composer({ conversationId, busy, onSend }: { conversationId: string; busy: boolean; onSend: (t: string) => Promise<void> }) {
+/** What the user attached to a sent message: picture thumbnails and file chips. */
+function SentAttachments({ list }: { list: MessageAttachment[] }) {
+  return (
+    <div className="sent-atts">
+      {list.map((a) =>
+        a.kind === 'image' && a.thumb ? (
+          <img key={a.id} className="sent-thumb" src={a.thumb} alt={a.name} title={a.path ?? a.name} />
+        ) : (
+          <span key={a.id} className="att-chip sent" title={a.note ?? a.path ?? a.name}>
+            <Icon name="file" size={14} />
+            <span className="att-name">{a.name}</span>
+            <span className="att-size">{fileSize(a.size)}</span>
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
+/** One file's bytes as base64 (in chunks, so large files do not overflow the call stack). */
+async function toBase64(f: File): Promise<string> {
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** Things to ask about attachments when nothing is typed yet. */
+const QUICK = ['Summarize this', 'Explain this', 'Pull out the key points', 'Translate it to English', 'What do you see?'];
+
+function Composer({ conversationId, busy, onSend }: { conversationId: string; busy: boolean; onSend: (t: string, attachments?: string[]) => Promise<void> }) {
   const app = useApp();
   const ui = useUi();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [atts, setAtts] = useState<AttachmentView[]>([]);
+  const [adding, setAdding] = useState(0);
+  const [menu, setMenu] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      const list = files.slice(0, 8);
+      setAdding((n) => n + list.length);
+      for (const f of list) {
+        try {
+          if (f.size > 25 * 1024 * 1024) throw new Error(`${f.name} is larger than 25 MB.`);
+          const a = await invoke('chat:attachBytes', { name: f.name || 'Pasted picture.png', dataBase64: await toBase64(f) });
+          setAtts((cur) => [...cur, a].slice(0, 8));
+        } catch (e) {
+          ui.error(errText(e));
+        } finally {
+          setAdding((n) => n - 1);
+        }
+      }
+    },
+    [ui],
+  );
+  const pick = async () => {
+    setMenu(false);
+    try {
+      const got = await invoke('chat:pickAttachments', {});
+      setAtts((cur) => [...cur, ...got].slice(0, 8));
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  const screenshot = async () => {
+    setMenu(false);
+    setAdding((n) => n + 1);
+    try {
+      const a = await invoke('chat:attachScreenshot', {});
+      setAtts((cur) => [...cur, a].slice(0, 8));
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setAdding((n) => n - 1);
+    }
+  };
+  const removeAtt = (id: string) => {
+    setAtts((cur) => cur.filter((a) => a.id !== id));
+    void invoke('chat:discardAttachment', { id }).catch(() => undefined);
+  };
+
+  // Files dropped anywhere on the chat are attached.
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth++;
+      setDragOver(true);
+    };
+    const over = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const leave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDragOver(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragOver(false);
+      void addFiles([...(e.dataTransfer?.files ?? [])]);
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
+    };
+  }, [addFiles]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const pressStart = useRef(0);
   const v = app.voice;
@@ -618,13 +736,14 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
     if (v.error) ui.error(v.error);
   }, [v.error, ui]);
 
-  const submit = async () => {
-    const t = text.trim();
-    if (!t || busy || sending) return;
+  const submit = async (override?: string) => {
+    const t = (override ?? text).trim();
+    if ((!t && !atts.length) || busy || sending || adding > 0) return;
     setSending(true);
     try {
-      await onSend(t);
+      await onSend(t, atts.map((a) => a.id));
       setText('');
+      setAtts([]);
     } catch {
       /* error already shown; keep the draft */
     } finally {
@@ -656,7 +775,59 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
 
   return (
     <div className="composer-wrap">
+      {dragOver && (
+        <div className="drop-veil" aria-hidden="true">
+          <div className="drop-card">
+            <Icon name="attach" size={22} />
+            Drop to attach
+          </div>
+        </div>
+      )}
+      {(atts.length > 0 || adding > 0) && (
+        <div className="att-tray" aria-label="Attachments">
+          {atts.map((a) => (
+            <span key={a.id} className={`att-chip ${a.kind}`} title={a.note ?? a.path ?? a.name}>
+              {a.kind === 'image' && a.thumb ? <img src={a.thumb} alt="" /> : <Icon name={a.kind === 'document' ? 'file' : 'attach'} size={14} />}
+              <span className="att-name">{a.name}</span>
+              <span className="att-size">{a.note && a.kind === 'file' ? 'name only' : fileSize(a.size)}</span>
+              <button className="att-x" aria-label={`Remove ${a.name}`} onClick={() => removeAtt(a.id)}>
+                <Icon name="x" size={11} />
+              </button>
+            </span>
+          ))}
+          {adding > 0 && (
+            <span className="att-chip loading">
+              <span className="spinner" /> Reading…
+            </span>
+          )}
+        </div>
+      )}
+      {atts.length > 0 && !text.trim() && !busy && (
+        <div className="quick-row" aria-label="Quick actions">
+          {QUICK.filter((q) => q !== 'What do you see?' || atts.some((a) => a.kind === 'image')).map((q, i) => (
+            <button key={q} className="quick-chip" style={{ animationDelay: `${i * 40}ms` }} onClick={() => void submit(q)}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="composer">
+        <div className="attach-wrap">
+          <button className={`btn icon attach ${menu ? 'on' : ''}`} aria-label="Attach photos or files" aria-expanded={menu} title="Attach photos or files (or drop them here, or paste)" onClick={() => setMenu((m) => !m)}>
+            <Icon name="plus" size={18} />
+          </button>
+          {menu && (
+            <div className="attach-menu" role="menu" onMouseLeave={() => setMenu(false)}>
+              <button role="menuitem" onClick={() => void pick()}>
+                <Icon name="image" size={15} /> Photos or files…
+              </button>
+              <button role="menuitem" onClick={() => void screenshot()}>
+                <Icon name="window" size={15} /> Screenshot of my screen
+              </button>
+              <div className="attach-hint">Drop files on the chat, or paste a picture (Ctrl+V)</div>
+            </div>
+          )}
+        </div>
         <label htmlFor="composer-input" className="sr-only">
           Message Keo
         </label>
@@ -668,6 +839,13 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
           value={text}
           maxLength={32000}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (files.length) {
+              e.preventDefault();
+              void addFiles(files);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -699,7 +877,7 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
             <Icon name="stop" size={16} />
           </button>
         ) : (
-          <button className="btn icon primary" aria-label="Send message" title="Send (Enter)" disabled={!text.trim() || sending} onClick={() => void submit()}>
+          <button className="btn icon primary" aria-label="Send message" title="Send (Enter)" disabled={(!text.trim() && !atts.length) || sending || adding > 0} onClick={() => void submit()}>
             <Icon name="send" size={16} />
           </button>
         )}

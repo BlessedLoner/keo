@@ -1,3 +1,5 @@
+import type { AttachmentView } from '../../shared/ipc';
+import type { PreparedAttachment } from '../chat/attachments';
 import type { AppInfo } from '../../shared/domain';
 import { LINKS } from '../../shared/release';
 import type { UpdateInfo } from '../../shared/domain';
@@ -17,6 +19,10 @@ export type Handler<C extends InvokeChannel> = (input: ParsedInput<C>) => Promis
 export type HandlerMap = { [C in InvokeChannel]: Handler<C> };
 
 export interface HostHooks {
+  /** Windows' file picker for chat attachments (several files). */
+  pickFiles?(): Promise<string[]>;
+  /** A picture of the screen with Keo's own window out of the way. */
+  screenshotBehindKeo?(): Promise<Buffer | null>;
   /** Sends to Keo's presence windows only (the bar, Keo mode). */
   broadcastPresence?(channel: 'presence:level', payload: unknown): void;
   appInfo(): Omit<AppInfo, 'schemaVersion' | 'secretStorage' | 'userDataPath' | 'profile'>;
@@ -39,7 +45,7 @@ export interface HostHooks {
   pickOpenFile?(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
-  openMain?(view?: 'chat' | 'tasks' | 'settings'): void;
+  openMain?(view?: 'chat' | 'tasks' | 'settings' | 'call'): void;
   showCommandBar?(): void;
   hideCommandBar?(): void;
   hideCompanion?(): void;
@@ -63,6 +69,12 @@ export interface HostHooks {
  * Application-service handlers behind every IPC channel. Inputs arrive here
  * already validated against the channel schema by the router.
  */
+/** An attachment without its text and picture (those stay in the main process until sent). */
+const view = (a: PreparedAttachment): AttachmentView => {
+  const { text: _text, image: _image, ...rest } = a;
+  return rest;
+};
+
 export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const changed = (channel: string, payload: unknown) => s.emit(channel, payload);
   const abortAfter = (ms: number) => AbortSignal.timeout(ms);
@@ -336,11 +348,41 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return s.conversations.messages(id);
     },
 
-    'chat:send': ({ conversationId, text }) => {
-      const r = s.agent.send(conversationId, text);
+    'chat:send': ({ conversationId, text, attachments }) => {
+      const attached = attachments?.length ? s.attachments.take(attachments) : [];
+      if (attachments?.length && !attached.length && !text) throw new KeoError('attachments_expired', 'The attachments are no longer ready. Attach them again.');
+      const r = s.agent.send(conversationId, text, attached.length ? { attachments: attached } : {});
       r.done.catch((e) => s.log.error('agent.unhandled', { error: String(e) }));
       changed('conversations:changed', { conversationId });
       return { accepted: true as const, userMessageId: r.userMessageId };
+    },
+    'chat:pickAttachments': async () => {
+      const files = (await host.pickFiles?.()) ?? [];
+      const out = [];
+      for (const f of files.slice(0, 8)) {
+        try {
+          out.push(view(await s.attachments.fromPath(f, abortAfter(120000))));
+        } catch (e) {
+          throw new KeoError('attach_failed', (e as Error).message);
+        }
+      }
+      return out;
+    },
+    'chat:attachBytes': async ({ name, dataBase64 }) => {
+      try {
+        return view(await s.attachments.fromBytes(name, Buffer.from(dataBase64, 'base64'), abortAfter(120000)));
+      } catch (e) {
+        throw new KeoError('attach_failed', (e as Error).message);
+      }
+    },
+    'chat:attachScreenshot': async () => {
+      const png = await host.screenshotBehindKeo?.();
+      if (!png) throw new KeoError('unavailable', 'Taking a screenshot is not available in this build.');
+      return view(await s.attachments.fromPicture(`Screenshot ${new Date().toLocaleTimeString()}.png`, png));
+    },
+    'chat:discardAttachment': ({ id }) => {
+      s.attachments.discard(id);
+      return { ok: true as const };
     },
     'chat:retry': ({ conversationId }) => {
       s.agent.retry(conversationId).catch((e) => s.log.error('agent.unhandled', { error: String(e) }));
@@ -570,8 +612,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       host.broadcastPresence?.('presence:level', v);
       return { ok: true as const };
     },
-    'presence:report': (v) => {
-      s.reportVoice(v);
+    'presence:report': (v, from?: { role: string }) => {
+      s.reportVoice(v, from?.role ?? 'main');
       return { ok: true as const };
     },
     'presence:stopAll': () => s.stopAll(),
@@ -602,6 +644,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'pencil:start': () => s.startPencil(),
     'marks:get': () => host.currentMarks?.() ?? null,
+    'call:fullscreen': () => {
+      s.openFullScreenCall();
+      return { ok: true as const };
+    },
     'keomode:open': () => {
       s.openKeoMode();
       return { ok: true as const };

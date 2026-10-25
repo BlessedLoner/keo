@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeImage, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
 import { realPorcupine } from './voice/porcupineEngine';
@@ -358,7 +358,11 @@ function showMain(view?: string): void {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-  if (view) mainWindow.webContents.send('presence:command', { type: 'navigate', view });
+  if (!view) return;
+  // A window that is still loading would miss the message: send it once the page is there.
+  const wc = mainWindow.webContents;
+  if (wc.isLoading()) wc.once('did-finish-load', () => !wc.isDestroyed() && wc.send('presence:command', { type: 'navigate', view }));
+  else wc.send('presence:command', { type: 'navigate', view });
 }
 
 const rendererUrl = (hash: string) => `${DEV_URL ?? 'app://keo/index.html'}${hash}`;
@@ -400,6 +404,19 @@ app.whenReady().then(() => {
       convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
       windowsSpeak: (text) => windowsSpeak(text),
       captureScreen: () => captureScreen(),
+      attachmentImages: {
+        // Any picture as a JPEG the model can see (at most maxSide) and a small thumbnail.
+        prepare: async (bytes, mime, maxSide) => {
+          let img = /^image\/(webp|avif|gif)$/.test(mime) ? nativeImage.createFromBuffer(await convertImage(bytes, mime, maxSide)) : nativeImage.createFromBuffer(bytes);
+          if (img.isEmpty()) throw new Error('unreadable picture');
+          const { width, height } = img.getSize();
+          const k = Math.min(1, maxSide / Math.max(width, height));
+          if (k < 1) img = img.resize({ width: Math.round(width * k), height: Math.round(height * k), quality: 'good' });
+          const t = Math.min(1, 240 / Math.max(width, height));
+          const thumb = img.resize({ width: Math.max(1, Math.round(width * t)), height: Math.max(1, Math.round(height * t)), quality: 'good' });
+          return { jpeg: img.toJPEG(86), thumb: thumb.toJPEG(76) };
+        },
+      },
       testProvider: TEST_PROVIDER ? new TestProvider() : null,
       logger: log,
       // "Sign in with Google" opens Google's own page in the user's browser (https only).
@@ -467,6 +484,28 @@ app.whenReady().then(() => {
       pickFolder: async (title) => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title, properties: ['openDirectory', 'createDirectory'] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
+      },
+      pickFiles: async () => {
+        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, {
+          title: 'Attach photos or files',
+          properties: ['openFile', 'multiSelections'],
+          filters: [
+            { name: 'Photos and documents', extensions: ['png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'bmp', 'avif', 'pdf', 'docx', 'pptx', 'txt', 'md', 'csv', 'json', 'html', 'xml', 'log', 'js', 'ts', 'tsx', 'py', 'java', 'cs', 'cpp', 'c', 'go', 'rs', 'sql', 'css', 'yaml', 'yml'] },
+            { name: 'All files', extensions: ['*'] },
+          ],
+        });
+        return r.canceled ? [] : r.filePaths;
+      },
+      // The screen as the user sees it, with Keo's main window out of the way for a moment.
+      screenshotBehindKeo: async () => {
+        const w = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;
+        w?.setOpacity(0);
+        try {
+          await new Promise((res) => setTimeout(res, 260));
+          return (await captureScreen()).png;
+        } finally {
+          w?.setOpacity(1);
+        }
       },
       pickExecutable: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
@@ -627,6 +666,7 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   await wait(1500);
   const views: Array<[string, string]> = [
     ['chat', 'Chat'],
+    ['call', 'Call'],
     ['tasks', 'Tasks'],
     ['memory', 'Memory'],
     ['projects', 'Projects'],

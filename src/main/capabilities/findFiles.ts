@@ -306,7 +306,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
 }
 
 /** The paragraphs of a Word document (word/document.xml), without formatting. */
-async function docxText(file: string): Promise<string> {
+export async function docxText(file: string): Promise<string> {
   const entries = await listZip(file).catch(() => {
     throw new CapabilityError('unsupported', 'That Word file could not be read (it may be damaged or protected).', { dispatched: 'no' });
   });

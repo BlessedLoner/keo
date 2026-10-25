@@ -1,3 +1,4 @@
+import { attachmentsForModel } from '../chat/attachments';
 import type { Message, Task } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { ConversationRepo } from '../repos/conversations';
@@ -84,8 +85,14 @@ export class ContextBuilder {
         out.push({ role, content: [{ type: 'text', text }] });
       }
     };
+    // Attached files: in full with the newest two user messages, shortened before that.
+    const userIds = kept.filter((m) => m.role === 'user').map((m) => m.id);
+    const fullFrom = userIds.length - 2;
     for (const m of kept) {
-      if (m.role === 'user') push('user', m.content);
+      if (m.role === 'user' && m.meta.attachments?.length) {
+        const full = userIds.indexOf(m.id) >= fullFrom;
+        push('user', `${m.content.trim() || '(The user sent these attachments without a message.)'}\n\n${attachmentsForModel(m.meta.attachments, full)}`);
+      } else if (m.role === 'user') push('user', m.content);
       else if (m.role === 'assistant') push('assistant', renderAssistant(m));
       else push('user', `[Keo application note — not typed by the user]\n${m.content}`);
     }

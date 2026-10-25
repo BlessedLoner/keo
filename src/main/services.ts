@@ -1,3 +1,4 @@
+import { AttachmentStaging, type AttachmentImages } from './chat/attachments';
 import os from 'node:os';
 import { FileSearch, type IndexBackend } from './files/fileSearch';
 import { WindowsSearchIndex } from './files/windowsSearch';
@@ -129,6 +130,8 @@ export interface ServiceDeps {
   mailSender?: MailSender;
   /** HTTP to Google (sign-in and Calendar); tests inject a fake Google. */
   googleFetch?: FetchLike;
+  /** Pictures attached to chat messages, resized (the app uses Electron's image tools; tests a fake). */
+  attachmentImages?: AttachmentImages;
   /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
   fileIndex?: IndexBackend | null;
   /** The user's own folder (C:\Users\<name>): what "my files" means by default. */
@@ -165,9 +168,10 @@ export function memoryClipboard(initial = ''): { readText(): Promise<string>; wr
 }
 
 /** Composition root shared by the Electron app and the integration tests. */
-/** "Open Keo mode", "start keo mode please", … and the matching close. */
-const KEO_MODE_OPEN = /^\s*(?:(?:hey|ok|okay)\s+keo[,.!\s]*)?(?:please\s+)?(?:open|start|show|enter|launch|activate|turn\s+on|go\s+(?:in)?to)\s+(?:the\s+)?keo\s*mode\b/i;
-const KEO_MODE_CLOSE = /^\s*(?:please\s+)?(?:close|exit|leave|stop|hide|end|turn\s+off|quit)\s+(?:the\s+)?keo\s*mode\b/i;
+/** "Open Keo mode", "call Keo", "start a call" (on their own, not "start a call with Mom"), … and the matching close. */
+const KEO_MODE_OPEN =
+  /^\s*(?:(?:hey|ok|okay)\s+keo[,.!\s]*)?(?:please\s+)?(?:open|start|show|enter|launch|activate|turn\s+on|go\s+(?:in)?to)\s+(?:the\s+)?keo\s*mode\b|^\s*(?:(?:hey|ok|okay)\s+keo[,.!\s]*)?(?:please\s+)?(?:call\s+keo|start\s+(?:a\s+)?call|(?:open|start)\s+(?:the\s+)?call\s+(?:mode|tab))\s*[.!]*$/i;
+const KEO_MODE_CLOSE = /^\s*(?:please\s+)?(?:close|exit|leave|stop|hide|end|turn\s+off|quit)\s+(?:the\s+)?keo\s*mode\b|^\s*(?:please\s+)?(?:(?:end|stop|close)\s+(?:the\s+)?call|hang\s+up)\s*[.!]*$/i;
 
 export class Services {
   readonly log: Logger;
@@ -215,7 +219,7 @@ export class Services {
   ui: {
     showCommandBar(): void;
     notify(title: string, body: string, view?: 'chat' | 'tasks'): void;
-    showMain?(view: 'chat' | 'tasks' | 'settings'): void;
+    showMain?(view: 'chat' | 'tasks' | 'settings' | 'call'): void;
     ensureVoiceWindow?(): Promise<void>;
     mainFocused?(): boolean;
     showResults?(): void;
@@ -431,6 +435,10 @@ export class Services {
       ...(d.googleEndpoints ? { endpoints: d.googleEndpoints } : {}),
       log: this.log,
     });
+    this.attachments = new AttachmentStaging({
+      images: d.attachmentImages ?? { prepare: async (bytes) => ({ jpeg: bytes, thumb: bytes }) },
+      tempDir: path.join(d.profile.userData, 'attachments'),
+    });
     const home = d.homeDir ?? os.homedir();
     this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
     this.fileSearch = new FileSearch({
@@ -635,11 +643,11 @@ export class Services {
       // "Open Keo mode" / "close Keo mode" (typed or spoken) are handled by Keo itself.
       if (KEO_MODE_OPEN.test(text)) {
         this.openKeoMode();
-        return this.ui.showKeoMode ? 'Keo mode is on. Talk to me any time — say “close Keo mode” to leave.' : 'Keo mode is not available in this build.';
+        return this.ui.showMain || this.ui.showKeoMode ? 'I’m on the call — talk to me any time. Say “end call” or “close Keo mode” to stop.' : 'Calls are not available in this build.';
       }
       if (KEO_MODE_CLOSE.test(text)) {
         this.closeKeoMode();
-        return 'Keo mode is off.';
+        return 'Call ended.';
       }
       const reply = this.live.routeUserMessage(conversationId, text, { anyConversation: conversationId === getSettings().commandBar.conversationId });
       if (reply !== null) setTimeout(() => this.push('conversations:changed', { conversationId }), 0);
@@ -818,9 +826,18 @@ export class Services {
   }
 
   /** Renderer windows report real audio activity (playback, recording). */
-  reportVoice(v: VoiceReport): void {
-    this.presence.reportVoice(v);
-    this.wake.setSpeaking(v.speaking);
+  /**
+   * Audio activity, per window that reported it (the main window speaks and records for voice
+   * mode; the mini chat records its own commands): Keo is speaking if any window is, so one
+   * window's "silent" never hides another one's speech.
+   */
+  private voiceBy = new Map<string, VoiceReport>();
+  reportVoice(v: VoiceReport, source = 'main'): void {
+    this.voiceBy.set(source, v);
+    const all = [...this.voiceBy.values()];
+    const merged: VoiceReport = { speaking: all.some((x) => x.speaking), recording: all.some((x) => x.recording), transcribing: all.some((x) => x.transcribing) };
+    this.presence.reportVoice(merged);
+    this.wake.setSpeaking(merged.speaking);
   }
 
   /** Stops everything eligible: replies, queued/waiting actions, grants, listening, speech. */
@@ -881,7 +898,7 @@ export class Services {
 
   private async handleWake(rest = ''): Promise<void> {
     await this.noteActiveWindow();
-    if (this.settings.get().ui.keoModeOnWake && !KEO_MODE_OPEN.test(rest)) this.ui.showKeoMode?.();
+    if (this.settings.get().ui.keoModeOnWake && !KEO_MODE_OPEN.test(rest)) this.ui.showMain?.('call');
     // Hands-free: talk with Keo by voice (no command bar); "stop" ends it.
     this.voiceMode.start(rest);
   }
@@ -1148,16 +1165,27 @@ export class Services {
 
   // ------------------------------------------------------------------ Keo mode
 
-  /** The full-screen Keo; a voice conversation starts with it so the user can just talk. */
+  /**
+   * A call with Keo: the main window's Call view (the voice sphere), where the microphone and the
+   * speaker live, and a voice conversation starts so the user can just talk.
+   */
   openKeoMode(): void {
-    if (!this.ui.showKeoMode) return;
-    this.ui.showKeoMode();
+    if (!this.ui.showMain && !this.ui.showKeoMode) return;
+    if (this.ui.showMain) this.ui.showMain('call');
+    else this.ui.showKeoMode?.();
     this.audit.record({ kind: 'keomode', decision: 'opened' });
     if (!this.voiceMode.isActive()) void this.noteActiveWindow().finally(() => this.voiceMode.start());
   }
 
+  /** The optional full-screen version of the call (from the Call view). */
+  openFullScreenCall(): void {
+    this.ui.showKeoMode?.();
+  }
+
+  /** Ends the call: the full-screen view closes and the voice conversation stops. */
   closeKeoMode(): void {
     this.ui.hideKeoMode?.();
+    if (this.voiceMode.isActive()) this.voiceMode.stop('call ended');
   }
 
   // ------------------------------------------------------------------ Keo's pencil
@@ -1407,6 +1435,8 @@ export class Services {
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
   readonly fileSearch: FileSearch;
+  /** Files and pictures attached in the chat, waiting to be sent. */
+  readonly attachments: AttachmentStaging;
   readonly fileIndex: IndexBackend | null;
   /** Keo's own browser window for working inside websites (Settings → Web). */
   readonly webBrowser: KeoBrowser;

@@ -7,7 +7,7 @@ import { invoke, subscribe } from '../lib/api';
 import { useInvoke, type Query } from '../lib/hooks';
 import { voice, type VoiceState } from '../lib/voice';
 
-export type ViewId = 'chat' | 'tasks' | 'memory' | 'projects' | 'vision' | 'capabilities' | 'settings' | 'diagnostics';
+export type ViewId = 'chat' | 'call' | 'tasks' | 'memory' | 'projects' | 'vision' | 'capabilities' | 'settings' | 'diagnostics';
 
 export interface TurnInfo {
   messageId: string;
@@ -55,7 +55,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       subscribe('presence:command', (c) => {
-        if (c.type === 'navigate' && (c.view === 'chat' || c.view === 'tasks' || c.view === 'settings')) setView(c.view);
+        if (c.type === 'navigate' && (c.view === 'chat' || c.view === 'tasks' || c.view === 'settings' || c.view === 'call')) setView(c.view);
       }),
     [],
   );

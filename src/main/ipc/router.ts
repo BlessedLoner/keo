@@ -78,8 +78,9 @@ export async function dispatch(
     return { ok: false, error: { code: 'invalid_input', message: formatZodError(parsed.error) } };
   }
   try {
-    const handler = handlers[ch] as (i: unknown) => unknown;
-    const value = await handler(parsed.data);
+    // The calling window's role goes along for the few handlers that need to tell windows apart.
+    const handler = handlers[ch] as (i: unknown, from: { role: WindowRole }) => unknown;
+    const value = await handler(parsed.data, { role: allowed.role as WindowRole });
     return { ok: true, value };
   } catch (err) {
     const code = err instanceof KeoError ? err.code : errorCode(err);

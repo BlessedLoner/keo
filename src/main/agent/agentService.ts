@@ -1,3 +1,4 @@
+import type { PreparedAttachment } from '../chat/attachments';
 import type { AgentEvent, AgentPhase, Message, MessageMeta, Task, ToolActivity } from '../../shared/domain';
 import type { Settings } from '../../shared/settings';
 import type { Admission, CapabilityRegistry } from '../capabilities/registry';
@@ -160,6 +161,36 @@ export class AgentService {
 
   /** Pictures that go with one user message (Keo's pencil): shown to the model in that turn only. */
   private readonly pictures = new Map<string, Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>>();
+  /**
+   * Pictures the user attached, per conversation (newest last, in memory only): the model sees them
+   * with the message they came with and the next few, so "now make it brighter" still works.
+   */
+  private readonly attachedPictures = new Map<string, Array<{ messageId: string; images: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }> }>>();
+
+  private rememberAttachedPictures(conversationId: string, messageId: string, images: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>): void {
+    const list = this.attachedPictures.get(conversationId) ?? [];
+    list.push({ messageId, images });
+    while (list.length > 3) list.shift();
+    this.attachedPictures.delete(conversationId);
+    this.attachedPictures.set(conversationId, list);
+    // Not every conversation forever: the 20 most recent ones.
+    while (this.attachedPictures.size > 20) this.attachedPictures.delete(this.attachedPictures.keys().next().value!);
+  }
+
+  /** Pictures attached to the last few user messages of this conversation (still in the context). */
+  private recentPictures(conversationId: string): Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }> {
+    const list = this.attachedPictures.get(conversationId);
+    if (!list?.length) return [];
+    const users = this.conversations
+      .recentMessages(conversationId, 12)
+      .filter((m) => m.role === 'user')
+      .slice(-3)
+      .map((m) => m.id);
+    return list
+      .filter((x) => users.includes(x.messageId))
+      .flatMap((x) => x.images)
+      .slice(-6);
+  }
 
   /** User messages that were spoken (voice conversation, wake command): smart routing prefers the fast model. */
   private readonly spoken = new Set<string>();
@@ -168,11 +199,11 @@ export class AgentService {
   send(
     conversationId: string,
     text: string,
-    opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>; voice?: boolean; background?: boolean } = {},
+    opts: { images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>; voice?: boolean; background?: boolean; attachments?: PreparedAttachment[] } = {},
   ): { userMessageId: string; done: Promise<Message> } {
     if (this.active.has(conversationId)) {
       // A new request (not a picture, not a one-word "yes"/"stop") can go to a background job.
-      if (!opts.background && !opts.images?.length && this.whenBusy && isNewRequest(text)) {
+      if (!opts.background && !opts.images?.length && !opts.attachments?.length && this.whenBusy && isNewRequest(text)) {
         this.conversations.require(conversationId);
         const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
         let handed: string | null;
@@ -191,11 +222,21 @@ export class AgentService {
       throw new KeoError('busy', 'Keo is still responding in this conversation. Stop it or wait.');
     }
     const conv = this.conversations.require(conversationId);
-    const user = this.conversations.addMessage({ conversationId, role: 'user', content: text, status: 'complete' });
+    const attached = opts.attachments ?? [];
+    const user = this.conversations.addMessage({
+      conversationId,
+      role: 'user',
+      content: text,
+      status: 'complete',
+      // What was attached (the pictures themselves are kept in memory only, for a few turns).
+      ...(attached.length ? { meta: { attachments: attached.map(({ image: _image, ...a }) => a) } } : {}),
+    });
     if (opts.images?.length) this.pictures.set(user.id, opts.images);
+    const attachedImages = attached.flatMap((a) => (a.image ? [a.image] : []));
+    if (attachedImages.length) this.rememberAttachedPictures(conversationId, user.id, attachedImages);
     if (opts.voice) this.spoken.add(user.id);
     if (conv.messageCount === 0 && (conv.title === 'New conversation' || !conv.title.trim())) {
-      this.conversations.rename(conversationId, deriveTitle(text));
+      this.conversations.rename(conversationId, deriveTitle(text.trim() || attached[0]?.name || 'Attachment'));
     }
     let handled: string | null;
     try {
@@ -329,9 +370,11 @@ export class AgentService {
 
     let finalStatus: Message['status'] = 'complete';
     try {
-      // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only.
-      const pics = this.pictures.get(sourceMessageId);
+      // Pictures sent with this message (Keo's pencil) go next to its text, for this turn only;
+      // pictures the user attached stay visible for a few messages.
+      const pencil = this.pictures.get(sourceMessageId) ?? [];
       this.pictures.delete(sourceMessageId);
+      const pics = [...pencil, ...this.recentPictures(conversationId)];
       const picked = this.pickModel(settings, sourceMessageId, !!pics?.length, !!open, correlationId);
       let { provider, model } = picked;
       const { route } = picked;
@@ -351,7 +394,13 @@ export class AgentService {
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       if (pics?.length && lastUser) {
         if (info?.capabilities.vision) lastUser.content.push(...pics.map((p) => ({ type: 'image' as const, mediaType: p.mediaType, dataBase64: p.dataBase64 })));
-        else lastUser.content.push({ type: 'text', text: '(The user marked part of their screen, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)' });
+        else
+          lastUser.content.push({
+            type: 'text',
+            text: pencil.length
+              ? '(The user marked part of their screen, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)'
+              : '(The user attached a picture, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)',
+          });
       }
       // The checklist tool goes with the others (always, so the tool list and the provider's prompt cache stay stable).
       const tools = settings.agent.toolsEnabled && info?.capabilities.tools ? [...this.registry.toolSpecs(), PLAN_TOOL_SPEC] : [];

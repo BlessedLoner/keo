@@ -144,6 +144,24 @@ export interface WorkPlan {
   steps: PlanStep[];
 }
 
+/** A file or picture the user attached to a message ("+", drag and drop, paste, a screenshot). */
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  kind: 'image' | 'document' | 'file';
+  size: number;
+  /** Where it is on the user's PC (chosen in the file picker); null when dropped, pasted or a screenshot. */
+  path: string | null;
+  /** A small JPEG preview (pictures only). */
+  thumb: string | null;
+  /** The document's text as read (at most 60,000 characters). */
+  text?: string;
+  /** How many characters the file had. */
+  chars?: number;
+  /** What Keo could not read, or that it read only part. */
+  note?: string;
+}
+
 export interface MessageMeta {
   providerId?: ProviderId;
   model?: string;
@@ -170,6 +188,8 @@ export interface MessageMeta {
   escalated?: string;
   /** Older tool results shortened during this reply to keep the context small. */
   compactedResults?: number;
+  /** Files and pictures the user attached to this message. */
+  attachments?: MessageAttachment[];
 }
 
 /** A long request Keo runs in the background in its own hidden conversation. */
