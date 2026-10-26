@@ -37,7 +37,7 @@ export async function pdfText(file: string, maxPages: number, signal: AbortSigna
   const data = new Uint8Array(await fs.promises.readFile(file));
   const pdfjs = await load();
   const task = pdfjs.getDocument({ data, isEvalSupported: false, disableFontFace: true, useSystemFonts: false, stopAtErrors: false, verbosity: 0 });
-  const onAbort = () => void task.destroy();
+  const onAbort = () => void task.destroy().catch(() => undefined);
   signal.addEventListener('abort', onAbort);
   try {
     const doc = await task.promise;
@@ -54,11 +54,13 @@ export async function pdfText(file: string, maxPages: number, signal: AbortSigna
           .replace(/[ \t]+\n/g, '\n')
           .trim(),
       );
-      page.cleanup();
     }
     return { text: out.filter(Boolean).join('\n\n'), pages: doc.numPages, pagesRead };
   } finally {
     signal.removeEventListener('abort', onAbort);
+    // Let pdf.js finish closing its text streams first: destroying mid-close throws ERR_INVALID_STATE
+    // from inside the library, outside any promise Keo could catch.
+    await new Promise((r) => setImmediate(r));
     await task.destroy().catch(() => undefined);
   }
 }

@@ -7,6 +7,7 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     environment: 'node',
     pool: 'forks',
-    testTimeout: 20000,
+    // Generous: the release build machine is slower than a desktop (PowerPoint, PDF and mail tests come close to 20 s there).
+    testTimeout: 60000,
   },
 });
