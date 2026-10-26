@@ -14,7 +14,8 @@ import { errorMessage, KeoError } from '../util/errors';
 import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
-import { SYSTEM_PROMPT } from './systemPrompt';
+import { GROUP_PROMPTS, SYSTEM_PROMPT } from './systemPrompt';
+import { chooseGroups, groupOf, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUPS, type ToolGroup } from './toolGroups';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
 import { compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
@@ -162,6 +163,26 @@ export class AgentService {
 
   /** Pictures that go with one user message (Keo's pencil): shown to the model in that turn only. */
   private readonly pictures = new Map<string, Array<{ mediaType: 'image/png' | 'image/jpeg'; dataBase64: string }>>();
+  /** Tool groups used in the last few turns of each conversation (newest last; in memory only). */
+  private readonly toolGroupTurns = new Map<string, Array<Set<ToolGroup>>>();
+
+  /** Groups whose tools were used in the last three turns (so a follow-up keeps them). */
+  private recentToolGroups(conversationId: string): Set<ToolGroup> {
+    const out = new Set<ToolGroup>();
+    for (const s of (this.toolGroupTurns.get(conversationId) ?? []).slice(-3)) for (const g of s) out.add(g);
+    return out;
+  }
+
+  private startToolGroupTurn(conversationId: string): Set<ToolGroup> {
+    const list = this.toolGroupTurns.get(conversationId) ?? [];
+    const s = new Set<ToolGroup>();
+    list.push(s);
+    while (list.length > 3) list.shift();
+    this.toolGroupTurns.delete(conversationId);
+    this.toolGroupTurns.set(conversationId, list);
+    while (this.toolGroupTurns.size > 50) this.toolGroupTurns.delete(this.toolGroupTurns.keys().next().value!);
+    return s;
+  }
   /**
    * Pictures the user attached, per conversation (newest last, in memory only): the model sees them
    * with the message they came with and the next few, so "now make it brighter" still works.
@@ -403,8 +424,41 @@ export class AgentService {
               : '(The user attached a picture, but the current model cannot see pictures. Say so briefly and suggest choosing a model with vision in Settings → Providers.)',
           });
       }
-      // The checklist tool goes with the others (always, so the tool list and the provider's prompt cache stay stable).
-      const tools = settings.agent.toolsEnabled && info?.capabilities.tools ? [...this.registry.toolSpecs(), PLAN_TOOL_SPEC] : [];
+      // Focused tools: only the groups this request likely needs (toolGroups.ts) — the newest messages'
+      // words, attachments, the pencil, tools used in the last few turns, an open question — plus
+      // tools__load for any other group. "all" (Settings) sends every tool. The checklist tool always goes.
+      const latest = this.conversations.getMessage(sourceMessageId);
+      const attached = latest?.meta.attachments ?? [];
+      const recentGroups = this.recentToolGroups(conversationId);
+      const turnGroups = this.startToolGroupTurn(conversationId);
+      const groups: Set<ToolGroup> =
+        settings.agent.toolSelection === 'all'
+          ? new Set<ToolGroup>(['core', ...TOOL_GROUPS])
+          : chooseGroups({
+              texts: this.conversations
+                .recentMessages(conversationId, 8)
+                .filter((m) => m.role === 'user')
+                .slice(-2)
+                .map((m) => `${m.content} ${(m.meta.attachments ?? []).map((a) => a.name).join(' ')}`),
+              pictures: pics.length > 0 || attached.some((a) => a.kind === 'image'),
+              documents: attached.some((a) => a.kind !== 'image'),
+              pencil: pencil.length > 0,
+              recent: recentGroups,
+              pendingTool: this.pending.get(conversationId)?.toolName ?? null,
+            });
+      const toolsOn = settings.agent.toolsEnabled && !!info?.capabilities.tools;
+      const buildTools = () => {
+        if (!toolsOn) return [];
+        const missing = TOOL_GROUPS.filter((g) => !groups.has(g));
+        return [...this.registry.toolSpecs().filter((t) => groups.has(groupOf(t.name))), PLAN_TOOL_SPEC, ...(missing.length ? [loadToolsSpec(missing)] : [])];
+      };
+      let tools = buildTools();
+      const groupPrompts = () =>
+        TOOL_GROUPS.filter((g) => groups.has(g))
+          .map((g) => GROUP_PROMPTS[g])
+          .filter(Boolean)
+          .map((t) => `\n\n${t}`)
+          .join('');
       const outputLimit = (p: ChatProvider, i: typeof info) =>
         Math.min(i?.capabilities.maxOutputTokens ?? 4096, p.id === 'anthropic' ? settings.providers.anthropic.maxOutputTokens : p.id === 'test' ? 8192 : settings.providers[p.id].maxOutputTokens);
       let maxOut = outputLimit(provider, info);
@@ -449,7 +503,7 @@ export class AgentService {
         const result = await provider.stream(
           {
             model,
-            system: SYSTEM_PROMPT + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
+            system: SYSTEM_PROMPT + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
             messages,
             tools,
             maxOutputTokens: maxOut,
@@ -563,6 +617,24 @@ export class AgentService {
         let blockedNow = 0;
         let failedNow = false;
         for (const call of result.toolCalls) {
+          if (call.name === LOAD_TOOLS) {
+            const want = parseLoad(call.input);
+            for (const g of want) groups.add(g);
+            tools = buildTools();
+            const now = tools.filter((t) => (want as string[]).includes(groupOf(t.name))).map((t) => t.name);
+            this.log.info('agent.tools_loaded', { groups: want, tools: now.length }, correlationId);
+            results.push({
+              type: 'tool_result',
+              callId: call.id,
+              content: json(
+                want.length
+                  ? { status: 'loaded', groups: want, tools: now, ...(now.length ? {} : { note: 'No tools in these groups are available now (not connected, or turned off in Settings).' }) }
+                  : { status: 'rejected', error: 'Name one or more groups.' },
+              ),
+              isError: !want.length,
+            });
+            continue;
+          }
           if (call.name === PLAN_TOOL) {
             const parsed = parsePlan(call.input);
             if ('plan' in parsed) {
@@ -585,6 +657,7 @@ export class AgentService {
             results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'blocked_repeat', error: repeated }), isError: true });
             continue;
           }
+          turnGroups.add(groupOf(call.name));
           const r = await this.handleToolCall(call, {
             conversationId,
             sourceMessageId,
@@ -608,7 +681,7 @@ export class AgentService {
           flush(true);
         }
         messages.push({ role: 'user', content: results });
-        if (result.toolCalls.every((c) => c.name === PLAN_TOOL) && freeRounds < FREE_PLAN_ROUNDS) freeRounds++;
+        if (result.toolCalls.every((c) => c.name === PLAN_TOOL || c.name === LOAD_TOOLS) && freeRounds < FREE_PLAN_ROUNDS) freeRounds++;
         else toolRounds++;
         // A loop the model does not leave: stop instead of using up the remaining rounds.
         if (blockedNow === result.toolCalls.length && repeats.blocked >= 2) {

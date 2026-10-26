@@ -125,6 +125,8 @@ export const SettingsSchema = z
     agent: z
       .object({
         toolsEnabled: z.boolean().default(true),
+        /** "focused": send the model only the tool groups a request likely needs (much cheaper); "all": every tool, every time. */
+        toolSelection: z.enum(['focused', 'all']).default('focused'),
         maxToolIterations: z.number().int().min(1).max(20).default(8),
         contextMessageLimit: z.number().int().min(2).max(200).default(30),
         contextCharBudget: z.number().int().min(2000).max(400000).default(60000),

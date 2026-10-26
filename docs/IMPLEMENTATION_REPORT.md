@@ -107,6 +107,15 @@ Bug found by the real e2e and fixed: a message arriving while Keo was verifying 
 
 Not verified end-to-end: an installed copy actually updating itself (needs a published release newer than the installed one), and the other laptop's original WhatsApp/Notepad failure (the ALT/menu bug above is a likely cause; *Check this computer* on that laptop will tell).
 
+### Next iteration (uncommitted): focused tools — far fewer tokens per message
+
+- **Why**: one plain message sent ~23,000 tokens before the user's words (system prompt ~5,000, all 65 tool descriptions ~18,000), again at every step of a task — the user saw 60,000–118,000 input tokens per message. Before Keo pays for its users' AI, that had to come down.
+- **How** (`src/main/agent/toolGroups.ts`): tools are grouped (desktop, screen, WhatsApp, email, calendar, websites, research, files, making files, pictures, video, projects; a small core — memory, jobs, reminders, briefing, time, planning, web search and page reading, finding files — always goes). Each request gets the core plus the groups its newest two user messages mention, its attachments or the pencil call for, the groups used in the last three turns and an open question's tool; the model can add any group in the same turn with `tools__load` (a free step, like the checklist). Feature instructions moved out of the system prompt into `GROUP_PROMPTS`, sent with their group. Any registered tool still runs if called by name. Settings `agent.toolSelection: 'all'` restores sending everything.
+- **Measured** (scripted provider, `KEO_MEASURE=1 npx vitest run tests/measure-context.test.ts`): “hi” or a plain question ~5,500 tokens (was ~23,000); “check my email” ~5,600; “open notepad and type hello” ~6,500; “send Ana a WhatsApp message” ~6,400; “make a presentation” ~11,000. Provider prompt caching (OpenAI automatic, Anthropic `cache_control`) still applies within a task, because the groups stay the same for the whole turn.
+- **Also**: Google's token errors are specific (“Google needs the client secret too…” instead of “refused the sign-in”); the release workflow now checks that `KEO_GOOGLE_CLIENT_ID` really is a client ID (a wrong value silently meant no built-in client).
+- **Tests**: `tests/toolGroups.test.ts` (5): group mapping, triggers, `tools__load` giving the tools at the next step, follow-ups keeping used groups, “all” as before; a sign-in error test.
+- **Not verified**: how often a real model needs `tools__load` (checked only with the scripted provider).
+
 ### Next iteration (uncommitted): editing, animating and making pictures
 
 - **Why**: asked to add “KEO AI” beside its logo and make it move, Keo found the picture and looked at it, then said (correctly) that it had no tool to change pixels.

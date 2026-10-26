@@ -52,7 +52,12 @@ jobs:
             echo "$name passed" >> "$GITHUB_STEP_SUMMARY"
           }
           # Whether this build carries Keo's built-in Google client (never the values).
-          if [ -n "$KEO_GOOGLE_CLIENT_ID" ] && [ -n "$KEO_GOOGLE_CLIENT_SECRET" ]; then
+          # The ID must be exactly a Google client ID (Keo ignores anything else); the values are never printed.
+          gid="$(printf '%s' "$KEO_GOOGLE_CLIENT_ID" | tr -d '[:space:]')"
+          if [ -n "$gid" ] && ! [[ "$gid" =~ ^[A-Za-z0-9-]+\.apps\.googleusercontent\.com$ ]]; then
+            echo "::warning title=Google sign-in::KEO_GOOGLE_CLIENT_ID is set but is not a Google client ID (it must end in .apps.googleusercontent.com, nothing else). The build has no built-in Google client."
+            echo "Built-in Google client: secret has the wrong format" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$gid" ] && [ -n "$KEO_GOOGLE_CLIENT_SECRET" ]; then
             echo "::notice title=Google sign-in::Built-in Google client included"
             echo "Built-in Google client: included" >> "$GITHUB_STEP_SUMMARY"
           else

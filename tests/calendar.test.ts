@@ -347,3 +347,12 @@ describe('free slots', () => {
     ]);
   });
 });
+
+describe('sign-in errors', () => {
+  it('says plainly when Google wants the client secret too', async () => {
+    const { tokenError } = await import('../src/main/calendar/googleAuth');
+    expect(tokenError({ error: 'invalid_request', error_description: 'client_secret is missing.' })).toMatch(/needs the client secret too/);
+    expect(tokenError({ error: 'invalid_client' })).toMatch(/client ID/);
+    expect(tokenError({ error: 'access_denied', error_description: 'The user denied access' })).toBe('Google refused the sign-in: The user denied access.');
+  });
+});

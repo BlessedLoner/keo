@@ -203,11 +203,14 @@ function tokensFrom(j: Record<string, unknown>, prev: GoogleTokens | null, now: 
   };
 }
 
-function tokenError(j: Record<string, unknown>): string {
+export function tokenError(j: Record<string, unknown>): string {
   const e = typeof j.error === 'string' ? j.error : '';
   if (e === 'invalid_client') return 'Google did not accept the client ID (or client secret). Check them in the setup steps.';
   if (e === 'invalid_grant') return 'Google refused the sign-in code. Please try again.';
-  return 'Google refused the sign-in.';
+  const d = typeof j.error_description === 'string' ? j.error_description : '';
+  // Google wants the client secret even with PKCE for "Desktop app" clients.
+  if (/client_secret/i.test(d) || (e === 'invalid_request' && /secret/i.test(d))) return 'Google needs the client secret too: paste it next to the client ID (Google shows it with the client), then sign in again.';
+  return `Google refused the sign-in${d ? `: ${d.slice(0, 160)}` : e ? ` (${e})` : ''}.`;
 }
 
 const PAGE = (title: string, text: string) =>
