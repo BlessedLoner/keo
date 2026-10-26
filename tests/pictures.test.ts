@@ -108,12 +108,23 @@ describe('the edit graph', () => {
   });
 });
 
+describe('crops', () => {
+  it('always fit inside the picture, even near the edges', async () => {
+    const { cropBox } = await import('../src/main/pictures/edit');
+    expect(cropBox({ width: 1024, height: 823 }, { x: 0.45, y: 0.5, width: 0.55, height: 0.5 })).toEqual({ x: 461, y: 412, w: 562, h: 410 });
+    const c = cropBox({ width: 101, height: 77 }, { x: 0.99, y: 0.99, width: 1, height: 1 });
+    expect(c.x + c.w).toBeLessThanOrEqual(101);
+    expect(c.y + c.h).toBeLessThanOrEqual(77);
+    expect(c.w).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe('picture capabilities', () => {
   it('makes an edited copy in Documents\\Keo after approval, writes the text for ffmpeg, and opens it', async () => {
     const { ff, docs, pic, opened } = setup();
     const r = await run('picture.edit', { source: pic, operations: [{ op: 'extend', right: 1 }, { op: 'text', text: 'KEO AI', x: 0.75 }] }, false);
     expect('needed' in r && r.needed).toBe(true);
-    const out = ok<{ path: string; width: number }>(await run('picture.edit', { source: pic, operations: [{ op: 'extend', right: 1 }, { op: 'text', text: 'KEO AI', x: 0.75 }] }));
+    const out = ok<{ path: string; width: number }>(await run('picture.edit', { source: pic, operations: [{ op: 'extend', right: 1 }, { op: 'text', text: 'KEO AI', x: 0.75 }], open: true }));
     expect(out.path).toBe(path.join(docs, 'Keo', 'Keo new logo edited.png'));
     expect(out.width).toBe(800);
     expect(fs.readFileSync(out.path, 'utf8')).toBe('rendered');
@@ -163,5 +174,48 @@ describe('picture capabilities', () => {
     const e = ok<{ path: string }>(await run('picture.ai_edit', { source: pic, instruction: 'remove the background', background: 'transparent' }));
     expect(e.path).toBe(path.join(docs, 'Keo', 'Keo new logo no background.png'));
     expect(calls).toEqual(['gen:a futuristic robot logo:medium', 'edit:Keo new logo.jpeg:transparent']);
+  });
+
+  it('picks an image model the account has, replaces one OpenAI no longer has, and reports a refusal as not done', async () => {
+    const { pic } = setup();
+    await h.close();
+    const ff = new FakeFfmpeg();
+    const docs = fs.mkdtempSync(path.join(os.tmpdir(), 'keo-docs-'));
+    dirs.push(docs);
+    h = makeHarness({ deps: { videoRunner: () => ({ runner: ff, key: 'fake' }), documentsDir: docs, homeDir: path.dirname(pic), openPath: async () => true } });
+    h.services.secrets.set('openai', 'sk-test-not-real');
+    const { ProviderError } = await import('../src/main/providers/types');
+    const used: string[] = [];
+    const openai = h.services.providers.openai as unknown as Record<string, unknown>;
+    openai.imageModels = async () => ['dall-e-3', 'gpt-image-1.5', 'whisper-1'];
+    openai.generateImage = async (o: { model: string }) => {
+      used.push(o.model);
+      if (o.model === 'gpt-image-1') throw new ProviderError('bad_request', "OpenAI rejected the request: 400 The model 'gpt-image-1' does not exist.", { status: 400 });
+      return Buffer.from('png');
+    };
+    // "auto" (the default) picks the newest the account has.
+    ok(await run('picture.generate', { prompt: 'a robot logo' }));
+    expect(used).toEqual(['gpt-image-1.5']);
+    // A saved model OpenAI no longer has is replaced once.
+    h.services.settings.update({ pictures: { aiModel: 'gpt-image-1' } });
+    ok(await run('picture.generate', { prompt: 'a robot logo' }));
+    expect(used.slice(1)).toEqual(['gpt-image-1', 'gpt-image-1.5']);
+    // A refusal before anything happened is "failed — nothing made", never "uncertain".
+    openai.generateImage = async () => {
+      throw new ProviderError('quota', 'OpenAI: insufficient quota.', { status: 429 });
+    };
+    const r = await run('picture.generate', { prompt: 'a robot logo' });
+    expect('step' in r && r.step?.state).toBe('failed');
+    expect('step' in r ? r.step?.error : '').toMatch(/Nothing was made/);
+  });
+
+  it('shows only pictures and animations from Documents\\Keo or the allowed folders in the chat', () => {
+    const { docs, pic } = setup();
+    expect(h.services.viewablePicture(path.join(docs, 'Keo', 'x.png'))).toEqual({ mimeType: 'image/png' });
+    expect(h.services.viewablePicture(path.join(docs, 'Keo', 'x.mp4'))).toEqual({ mimeType: 'video/mp4' });
+    expect(h.services.viewablePicture(pic)).toEqual({ mimeType: 'image/jpeg' });
+    expect(h.services.viewablePicture(path.join(h.dir, 'keo.db'))).toBeNull();
+    expect(h.services.viewablePicture(path.join(docs, 'Keo', 'notes.txt'))).toBeNull();
+    expect(h.services.viewablePicture(path.join('C:\\', 'Windows', 'System32', 'x.png'))).toBeNull();
   });
 });

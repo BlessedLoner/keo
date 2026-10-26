@@ -275,8 +275,8 @@ export const SettingsSchema = z
     /** Pictures Keo makes or changes with AI (through the user's OpenAI account; each one asks first). */
     pictures: z
       .object({
-        /** The OpenAI image model. */
-        aiModel: z.string().trim().min(3).max(80).regex(/^[A-Za-z0-9._-]+$/).default('gpt-image-1'),
+        /** The OpenAI image model; "auto" = the newest one the account can use. */
+        aiModel: z.string().trim().min(3).max(80).regex(/^[A-Za-z0-9._-]+$/).default('auto'),
         /** Higher quality costs more per picture. */
         aiQuality: z.enum(['low', 'medium', 'high']).default('medium'),
       })

@@ -404,6 +404,10 @@ app.whenReady().then(() => {
       convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
       windowsSpeak: (text) => windowsSpeak(text),
       captureScreen: () => captureScreen(),
+      pictureNormalize: async (file) => {
+        const img = nativeImage.createFromPath(file);
+        return img.isEmpty() ? null : img.toPNG();
+      },
       attachmentImages: {
         // Any picture as a JPEG the model can see (at most maxSide) and a small thumbnail.
         prepare: async (bytes, mime, maxSide) => {
@@ -485,6 +489,7 @@ app.whenReady().then(() => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title, properties: ['openDirectory', 'createDirectory'] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
+      showInFolder: (p) => shell.showItemInFolder(p),
       pickFiles: async () => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, {
           title: 'Attach photos or files',

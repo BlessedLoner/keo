@@ -37,6 +37,8 @@ export const INVOKE_CHANNELS = [
   'chat:attachBytes',
   'chat:attachScreenshot',
   'chat:discardAttachment',
+  'picture:view',
+  'picture:open',
   'files:photosState',
   'files:photosEstimate',
   'files:photosStart',

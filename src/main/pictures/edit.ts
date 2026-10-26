@@ -125,8 +125,10 @@ export interface Size {
 /** The size after each operation (the filter graph needs real numbers for text and corners). */
 export function sizeAfter(s: Size, op: EditOp): Size {
   switch (op.op) {
-    case 'crop':
-      return { width: even(s.width * Math.min(op.width, 1 - op.x)), height: even(s.height * Math.min(op.height, 1 - op.y)) };
+    case 'crop': {
+      const c = cropBox(s, op);
+      return { width: c.w, height: c.h };
+    }
     case 'resize': {
       const w = op.width ?? (op.height ? Math.round((s.width * op.height) / s.height) : s.width);
       const h = op.height ?? (op.width ? Math.round((s.height * op.width) / s.width) : s.height);
@@ -152,6 +154,14 @@ export function sizeAfter(s: Size, op: EditOp): Size {
   }
 }
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+const floorEven = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
+
+/** A crop in pixels that always fits inside the picture (even sizes, rounded down). */
+export function cropBox(s: Size, op: { x: number; y: number; width: number; height: number }): { x: number; y: number; w: number; h: number } {
+  const x = Math.min(Math.max(0, Math.round(op.x * s.width)), s.width - 2);
+  const y = Math.min(Math.max(0, Math.round(op.y * s.height)), s.height - 2);
+  return { x, y, w: Math.min(floorEven(op.width * s.width), floorEven(s.width - x)), h: Math.min(floorEven(op.height * s.height), floorEven(s.height - y)) };
+}
 
 export interface TextAsset {
   /** The file that holds this text (ffmpeg reads it; the words never go into the filter string). */
@@ -221,9 +231,11 @@ export function buildEditGraph(ops: EditOp[], start: Size, opts: { fontsDir: str
   step('format=rgba');
   for (const op of ops) {
     switch (op.op) {
-      case 'crop':
-        step(`crop=${sizeAfter(s, op).width}:${sizeAfter(s, op).height}:${Math.round(op.x * s.width)}:${Math.round(op.y * s.height)}`);
+      case 'crop': {
+        const c = cropBox(s, op);
+        step(`crop=${c.w}:${c.h}:${c.x}:${c.y}`);
         break;
+      }
       case 'resize': {
         const t = sizeAfter(s, op);
         step(`scale=${t.width}:${t.height}:flags=lanczos`);

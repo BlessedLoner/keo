@@ -539,6 +539,9 @@ function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: stri
   }
   if (t.cards) return <ProductCards data={t.cards} />;
   if (t.briefing) return <BriefingCard data={t.briefing} conversationId={conversationId} />;
+  // A picture or animation Keo made: shown right here, like a reply.
+  const made = t.capabilityId.startsWith('picture.') && task?.state === 'completed' ? (step?.result as { path?: string } | undefined)?.path : undefined;
+  if (made) return <PictureResult path={made} summary={t.summary} />;
   return (
     <div className={`tool-card ${t.outcome}`}>
       <Icon name={task?.state === 'running' ? 'pulse' : 'shield'} size={15} />
@@ -717,6 +720,62 @@ function BriefingCard({ data, conversationId }: { data: Briefing; conversationId
       )}
       <div className="muted tiny">Only read from your own connected sources; nothing was sent or changed. Email and event text comes from other people.</div>
     </section>
+  );
+}
+
+/** A picture or animation Keo made, shown in the chat (from the file itself, through Keo). */
+function PictureResult({ path: file, summary }: { path: string; summary: string }) {
+  const ui = useUi();
+  const [media, setMedia] = useState<{ url: string; video: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [big, setBig] = useState(false);
+  useEffect(() => {
+    let url: string | null = null;
+    let live = true;
+    invoke('picture:view', { path: file })
+      .then((r) => {
+        const bin = atob(r.dataBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([bytes], { type: r.mimeType }));
+        if (live) setMedia({ url, video: r.mimeType.startsWith('video/') });
+      })
+      .catch((e) => live && setError(errText(e)));
+    return () => {
+      live = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [file]);
+  const name = file.split(/[\\/]/).pop() ?? file;
+  const open = (reveal: boolean) => void invoke('picture:open', { path: file, reveal }).catch((e) => ui.error(errText(e)));
+  return (
+    <figure className="pic-result">
+      {media ? (
+        media.video ? (
+          <video src={media.url} autoPlay loop muted playsInline controls className="pic-media" />
+        ) : (
+          <img src={media.url} alt={summary} className="pic-media" onClick={() => setBig(true)} />
+        )
+      ) : (
+        <div className="pic-media pic-wait">{error ? <span className="small">{error}</span> : <span className="spinner" />}</div>
+      )}
+      <figcaption>
+        <span className="pic-name" title={file}>
+          {name}
+        </span>
+        <button className="btn ghost sm" onClick={() => open(false)}>
+          Open
+        </button>
+        <button className="btn ghost sm" onClick={() => open(true)}>
+          Show in folder
+        </button>
+      </figcaption>
+      {big && media && !media.video && (
+        <div className="pic-lightbox" role="dialog" aria-label={name} onClick={() => setBig(false)}>
+          <img src={media.url} alt={summary} />
+        </div>
+      )}
+    </figure>
   );
 }
 

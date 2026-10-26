@@ -56,7 +56,8 @@ async function run(capabilityId: string, input: unknown, approve = true) {
   if (needed && !approve) return { needed, preview: a.preview, step } as const;
   if (needed) h.services.tasks.approveStep(step.id, step.inputHash);
   else h.services.tasks.pump();
-  for (let i = 0; i < 200 && !['completed', 'failed', 'cancelled'].includes(h.services.tasks.get(t.id)!.state); i++) await new Promise((r) => setTimeout(r, 20));
+  // Up to 20 s: the first email test also loads the mail libraries, slow when the whole suite runs at once.
+  for (let i = 0; i < 1000 && !['completed', 'failed', 'cancelled'].includes(h.services.tasks.get(t.id)!.state); i++) await new Promise((r) => setTimeout(r, 20));
   return { needed, preview: a.preview, step: h.services.tasks.get(t.id)!.steps[0]! } as const;
 }
 

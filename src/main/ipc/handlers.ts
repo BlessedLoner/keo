@@ -21,6 +21,8 @@ export type Handler<C extends InvokeChannel> = (input: ParsedInput<C>) => Promis
 export type HandlerMap = { [C in InvokeChannel]: Handler<C> };
 
 export interface HostHooks {
+  /** File Explorer with the item selected. */
+  showInFolder?(p: string): void;
   /** Windows' file picker for chat attachments (several files). */
   pickFiles?(): Promise<string[]>;
   /** A picture of the screen with Keo's own window out of the way. */
@@ -381,6 +383,26 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const png = await host.screenshotBehindKeo?.();
       if (!png) throw new KeoError('unavailable', 'Taking a screenshot is not available in this build.');
       return view(await s.attachments.fromPicture(`Screenshot ${new Date().toLocaleTimeString()}.png`, png));
+    },
+    'picture:view': ({ path: p }) => {
+      const v = s.viewablePicture(p);
+      if (!v) throw new KeoError('forbidden', 'Keo shows only pictures and animations from Documents\\Keo or your allowed folders.');
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(p);
+      } catch {
+        throw new KeoError('not_found', 'That file is no longer there.');
+      }
+      if (st.size > 60 * 1024 * 1024) throw new KeoError('too_large', 'That file is too large to show here; open it instead.');
+      return { mimeType: v.mimeType, dataBase64: fs.readFileSync(p).toString('base64') };
+    },
+    'picture:open': async ({ path: p, reveal }) => {
+      if (!s.viewablePicture(p) || !fs.existsSync(p)) throw new KeoError('forbidden', 'Keo opens only pictures and animations from Documents\\Keo or your allowed folders.');
+      if (reveal) {
+        host.showInFolder?.(p);
+        return { opened: true };
+      }
+      return { opened: await host.openPath(p) };
     },
     'chat:discardAttachment': ({ id }) => {
       s.attachments.discard(id);

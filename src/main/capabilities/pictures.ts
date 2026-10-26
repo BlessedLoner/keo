@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AnimateSpec } from '../pictures/animate';
 import { EditOp } from '../pictures/edit';
 import { PictureError, type PictureStudio } from '../pictures/studio';
+import { ProviderError } from '../providers/types';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
 /**
@@ -26,6 +27,9 @@ const Folder = z.string().trim().min(3).max(500).optional().describe('Full path 
 
 const fail = (e: unknown): never => {
   if (e instanceof PictureError) throw new CapabilityError(e.code, e.message, { dispatched: e.code === 'render_failed' ? 'unknown' : 'no' });
+  // OpenAI refused before doing anything (no key, no access, a bad request, no credit): nothing was made.
+  if (e instanceof ProviderError && ['unconfigured', 'auth', 'bad_request', 'quota', 'rate_limit', 'refusal'].includes(e.kind))
+    throw new CapabilityError(`openai_${e.kind}`, `${e.message} Nothing was made or charged for this request.`, { dispatched: 'no' });
   throw e;
 };
 
@@ -51,7 +55,7 @@ export function pictureCapabilities(d: PictureDeps): AnyCapability[] {
         name: Name,
         format: z.enum(['png', 'jpg']).default('png'),
         folder: Folder,
-        open: z.boolean().default(true),
+        open: z.boolean().default(false).describe('Also open it in its usual app (it is shown in the chat either way)'),
       })
       .strict(),
     output: z.object({ path: z.string(), width: z.number(), height: z.number(), opened: z.boolean() }),
@@ -90,7 +94,7 @@ export function pictureCapabilities(d: PictureDeps): AnyCapability[] {
     title: 'Animate a picture',
     description:
       'Turn a picture into a short looping animation on this PC (free): a motion for the picture (zoom = slow push in, float = gentle up and down, pulse = breathing brightness, spin, none), optional text that slides, fades or pulses in (with glow), and a fade from black. MP4 (plays everywhere) or GIF. These are motion effects, not frame-by-frame animation of parts of the picture — say so if the user expects that. Tip: for “text beside a logo that moves”, first picture__edit with extend right, then animate that result with the text here (so the text moves), or animate the edited picture with motion only.',
-    input: AnimateSpec.extend({ source: Source, name: Name, folder: Folder, open: z.boolean().default(true) }).strict(),
+    input: AnimateSpec.extend({ source: Source, name: Name, folder: Folder, open: z.boolean().default(false).describe('Also open it in its usual app (it is shown in the chat either way)') }).strict(),
     output: z.object({ path: z.string(), width: z.number(), height: z.number(), seconds: z.number(), format: z.enum(['mp4', 'gif']), opened: z.boolean() }),
     risk: 'low',
     approval: 'always',
@@ -132,7 +136,7 @@ export function pictureCapabilities(d: PictureDeps): AnyCapability[] {
     title: 'Make a new picture with AI',
     description:
       'Create a brand-new picture from a description with the user’s OpenAI image model (a logo, an illustration, a product shot…). It costs money on their OpenAI account and always asks first. Write a vivid, specific prompt (subject, style, colours, composition, text to include). For changes to an existing picture use picture__edit (free) or picture__ai_edit.',
-    input: z.object({ prompt: z.string().trim().min(5).max(4000), size: Size, background: z.enum(['auto', 'transparent', 'opaque']).default('auto'), name: Name, folder: Folder, open: z.boolean().default(true) }).strict(),
+    input: z.object({ prompt: z.string().trim().min(5).max(4000), size: Size, background: z.enum(['auto', 'transparent', 'opaque']).default('auto'), name: Name, folder: Folder, open: z.boolean().default(false).describe('Also open it in its usual app (it is shown in the chat either way)') }).strict(),
     output: z.object({ path: z.string(), opened: z.boolean() }),
     risk: 'medium',
     approval: 'always',
@@ -165,7 +169,7 @@ export function pictureCapabilities(d: PictureDeps): AnyCapability[] {
     title: 'Change a picture with AI',
     description:
       'Change an existing picture with the user’s OpenAI image model when local edits cannot do it: redesign or restyle it, change colours of objects, add or remove objects, remove the background (background: transparent, instruction “remove the background”), extend the scene. The picture is sent to OpenAI, it costs money, and it always asks first. The result is a new PNG; the original is not changed.',
-    input: z.object({ source: Source, instruction: z.string().trim().min(3).max(4000), size: Size, background: z.enum(['auto', 'transparent', 'opaque']).default('auto'), name: Name, folder: Folder, open: z.boolean().default(true) }).strict(),
+    input: z.object({ source: Source, instruction: z.string().trim().min(3).max(4000), size: Size, background: z.enum(['auto', 'transparent', 'opaque']).default('auto'), name: Name, folder: Folder, open: z.boolean().default(false).describe('Also open it in its usual app (it is shown in the chat either way)') }).strict(),
     output: z.object({ path: z.string(), opened: z.boolean() }),
     risk: 'medium',
     approval: 'always',

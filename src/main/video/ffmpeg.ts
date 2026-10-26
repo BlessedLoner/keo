@@ -155,7 +155,11 @@ function run(file: string, args: string[], o: RunOptions): Promise<RunResult> {
 /** The last meaningful ffmpeg error line (for messages to the user). */
 export function lastError(stderr: string): string {
   const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^(frame=|size=|progress=|out_time|speed=)/.test(l));
-  return (lines.reverse().find((l) => /error|invalid|no such|not found|unable|failed|cannot|could not/i.test(l)) ?? lines[0] ?? 'unknown error').slice(0, 300);
+  const hits = lines.reverse().filter((l) => /error|invalid|no such|not found|unable|failed|cannot|could not/i.test(l));
+  // "Conversion failed!" and friends only summarise; the line before says what went wrong.
+  const generic = /^(conversion failed!?|error while (filtering|processing)|nothing was written|error opening output files?)/i;
+  const specific = hits.find((l) => !generic.test(l.replace(/^\[[^\]]*\]\s*/, '')));
+  return (specific ?? hits[0] ?? lines[0] ?? 'unknown error').slice(0, 300);
 }
 
 // ------------------------------------------------------------------ probe

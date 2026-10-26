@@ -1,3 +1,4 @@
+import { ProviderError } from './providers/types';
 import { pictureCapabilities } from './capabilities/pictures';
 import { PictureStudio, type PictureAi } from './pictures/studio';
 import { AttachmentStaging, type AttachmentImages } from './chat/attachments';
@@ -140,6 +141,8 @@ export interface ServiceDeps {
   attachmentImages?: AttachmentImages;
   /** AI pictures (tests inject a fake; the app uses the OpenAI provider when a key is saved). */
   pictureAi?: PictureAi | null;
+  /** A picture as PNG through Chromium's decoder (pictures ffmpeg cannot read). */
+  pictureNormalize?: (file: string) => Promise<Buffer | null>;
   /** C:\\Windows\\Fonts (tests may point elsewhere). */
   fontsDir?: string;
   /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
@@ -458,6 +461,7 @@ export class Services {
       ...(d.googleEndpoints ? { endpoints: d.googleEndpoints } : {}),
       log: this.log,
     });
+    this.deps = d;
     this.attachments = new AttachmentStaging({
       images: d.attachmentImages ?? { prepare: async (bytes) => ({ jpeg: bytes, thumb: bytes }) },
       tempDir: path.join(d.profile.userData, 'attachments'),
@@ -474,12 +478,12 @@ export class Services {
       ai: () => {
         if (d.pictureAi !== undefined) return d.pictureAi;
         if (!this.secrets.has('openai')) return null;
-        const model = () => getSettings().pictures.aiModel;
         return {
-          generate: (o, signal) => this.providers.openai.generateImage({ ...o, model: model() }, signal),
-          edit: (o, signal) => this.providers.openai.editImage({ ...o, model: model() }, signal),
+          generate: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.generateImage({ ...o, model }, signal)),
+          edit: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.editImage({ ...o, model }, signal)),
         };
       },
+      ...(d.pictureNormalize ? { normalize: d.pictureNormalize } : {}),
     });
     const home = d.homeDir ?? os.homedir();
     this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
@@ -1550,9 +1554,52 @@ export class Services {
 
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
+  private readonly deps: ServiceDeps;
   readonly fileSearch: FileSearch;
   /** Picture edits, animations and AI pictures. */
   readonly pictures: PictureStudio;
+
+  /**
+   * A picture or animation Keo may show in the chat: in Documents\\Keo, the user's allowed folders
+   * or Keo's attachment copies, and a picture or video file.
+   */
+  viewablePicture(p: string): { mimeType: string } | null {
+    const ext = path.extname(p).toLowerCase();
+    const mime: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.mp4': 'video/mp4', '.webm': 'video/webm' };
+    if (!mime[ext] || !path.isAbsolute(p)) return null;
+    const ok = isInside(p, this.keoOutputRoot(this.deps)) || this.fileSearch.allowed(p) || isInside(p, this.attachments.dir());
+    return ok ? { mimeType: mime[ext]! } : null;
+  }
+
+  /** The image model found for "auto" (once per run). */
+  private autoImageModel: string | null = null;
+
+  /**
+   * Runs an OpenAI picture call with the chosen image model ("auto": the newest the account can
+   * use). A model OpenAI no longer has is replaced once by the best available one.
+   */
+  private async withImageModel(signal: AbortSignal, call: (model: string) => Promise<Buffer>): Promise<Buffer> {
+    const PREFER = ['gpt-image-2', 'gpt-image-1.5', 'chatgpt-image-latest', 'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3'];
+    const best = async () => {
+      const ids = await this.providers.openai.imageModels(signal);
+      return PREFER.find((p) => ids.includes(p)) ?? ids.find((id) => /^gpt-image/i.test(id)) ?? ids[0] ?? null;
+    };
+    const chosen = this.settings.get().pictures.aiModel;
+    let model = chosen === 'auto' ? (this.autoImageModel ??= await best()) : chosen;
+    if (!model) throw new Error('This OpenAI account has no image model available.');
+    try {
+      return await call(model);
+    } catch (e) {
+      const missing = e instanceof ProviderError && (e.status === 404 || (e.kind === 'bad_request' && /model.*(does not exist|not found|unavailable)|does not exist/i.test(e.message)));
+      if (!missing) throw e;
+      const alt = await best();
+      if (!alt || alt === model) throw e;
+      this.log.info('pictures.model_replaced', { from: model, to: alt });
+      model = alt;
+      if (chosen === 'auto') this.autoImageModel = alt;
+      return call(model);
+    }
+  }
 
   /** Documents\\Keo, where Keo saves what it makes. */
   private keoOutputRoot(d: ServiceDeps): string {

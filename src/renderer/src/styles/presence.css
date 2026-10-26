@@ -471,3 +471,13 @@ html.keomode-root, html.keomode-root body { background: #000 !important; overflo
 
 .drop-veil { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(3px); pointer-events: none; animation: km-in 160ms ease-out both; }
 .drop-card { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 40px; border-radius: 20px; border: 1.5px dashed rgba(200, 212, 255, 0.55); background: rgba(14, 14, 16, 0.9); color: #eef1ff; font-size: 14px; font-weight: 600; box-shadow: 0 0 40px rgba(200, 212, 255, 0.15); }
+
+/* ---------------------------------------------------------------- pictures Keo made, in the chat */
+.pic-result { margin: 4px 0 8px; display: inline-flex; flex-direction: column; gap: 6px; max-width: min(560px, 100%); animation: cmd-msg 300ms ease-out both; }
+.pic-media { display: block; max-width: 100%; max-height: 460px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); background: #050506; cursor: zoom-in; object-fit: contain; }
+video.pic-media { cursor: default; }
+.pic-wait { width: 320px; height: 200px; display: grid; place-items: center; color: var(--text-3); cursor: default; }
+.pic-result figcaption { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+.pic-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pic-lightbox { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgba(0, 0, 0, 0.85); cursor: zoom-out; animation: km-in 160ms ease-out both; }
+.pic-lightbox img { max-width: 92vw; max-height: 90vh; border-radius: 12px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7); }

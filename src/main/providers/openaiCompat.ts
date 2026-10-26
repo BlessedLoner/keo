@@ -290,6 +290,18 @@ export class OpenAICompatProvider implements ChatProvider {
     }
   }
 
+  /** The image models this OpenAI account can use (ids containing "image" or "dall-e"). */
+  async imageModels(signal: AbortSignal): Promise<string[]> {
+    if (this.kind !== 'openai') return [];
+    try {
+      const ids: string[] = [];
+      for await (const m of this.client().models.list({ signal })) if (/image|dall-e/i.test(m.id)) ids.push(m.id);
+      return ids;
+    } catch (err) {
+      throw mapOpenAIError(err, signal, this.label);
+    }
+  }
+
   /** A new picture from a description (PNG). */
   async generateImage(o: { model: string; prompt: string; size: string; quality: string; background: 'auto' | 'transparent' | 'opaque' }, signal: AbortSignal): Promise<Buffer> {
     if (this.kind !== 'openai') throw new ProviderError('unconfigured', 'Making pictures is only available through the OpenAI provider.');

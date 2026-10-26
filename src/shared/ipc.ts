@@ -113,6 +113,8 @@ export const invokeSchemas = {
   'chat:pickAttachments': empty,
   'chat:attachBytes': z.object({ name: z.string().trim().min(1).max(200), dataBase64: z.string().max(36_000_000) }).strict(),
   'chat:attachScreenshot': empty,
+  'picture:view': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
+  'picture:open': z.object({ path: z.string().trim().min(3).max(1000), reveal: z.boolean().default(false) }).strict(),
   'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
   'chat:retry': z.object({ conversationId: id }).strict(),
   'chat:cancel': z.object({ conversationId: id }).strict(),
@@ -358,6 +360,8 @@ export interface InvokeOutputs {
   'chat:attachBytes': AttachmentView;
   'chat:attachScreenshot': AttachmentView;
   'chat:discardAttachment': { ok: true };
+  'picture:view': { mimeType: string; dataBase64: string };
+  'picture:open': { opened: boolean };
   'chat:retry': { accepted: true };
   'chat:cancel': { cancelled: boolean };
   'chat:active': string[];

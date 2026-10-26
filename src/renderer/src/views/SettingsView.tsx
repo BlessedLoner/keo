@@ -244,7 +244,7 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
       </p>
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="pic-model">OpenAI image model</label>
+          <label htmlFor="pic-model">OpenAI image model (“auto” picks the newest your account has)</label>
           <input
             id="pic-model"
             className="input"
@@ -255,6 +255,7 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
             onBlur={() => model.trim() && model.trim() !== s.pictures.aiModel && void patch({ pictures: { aiModel: model.trim() } })}
           />
           <datalist id="pic-models">
+            <option value="auto" />
             <option value="gpt-image-1" />
             <option value="gpt-image-1-mini" />
             <option value="gpt-image-1.5" />
