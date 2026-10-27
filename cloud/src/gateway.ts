@@ -9,6 +9,7 @@
 
 import { handleBilling, readTicket } from './billing';
 import { accountPage } from './pages';
+import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
 
 export interface Env {
@@ -22,6 +23,8 @@ export interface Env {
   /** Secret: Paystack's secret key (test or live). Without it, payments are off. */
   PAYSTACK_SECRET_KEY?: string;
   PAYSTACK_URL?: string;
+  /** Shown on the Terms, Privacy and Refund pages (optional until the address exists). */
+  KEO_SUPPORT_EMAIL?: string;
   /** Which OpenRouter models do web search, pictures and voice (wrangler.toml [vars]; change any time). */
   KEO_SEARCH_MODEL?: string;
   KEO_SEARCH_ENGINE?: string;
@@ -318,6 +321,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     if (req.method === 'GET' && route === '/account') return accountPage(env);
     // Keo's plans and payment page.
     if (req.method === 'GET' && route === '/upgrade') return upgradePage();
+    if (req.method === 'GET' && (route === '/terms' || route === '/privacy' || route === '/refunds')) return legalPage(route.slice(1) as 'terms' | 'privacy' | 'refunds', env);
 
     // Payments: prices, checkout, the Paystack webhook. Billing accepts the user's sign-in or an
     // Upgrade-page ticket.

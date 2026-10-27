@@ -34,7 +34,7 @@ export function CapabilitiesView() {
 
             <div className="section-title">Web research</div>
             <div className="card stack">
-              <Toggle checked={s.permissions.webSearchEnabled} onChange={(v) => void enableWithConfirm('webSearchEnabled', v, 'web search')} label={<PermLabel title="Web search (Brave)" text="Keo may send search queries to Brave Search with your key, without asking each time. Needs a key in Settings → Web search." />} />
+              <Toggle checked={s.permissions.webSearchEnabled} onChange={(v) => void enableWithConfirm('webSearchEnabled', v, 'web search')} label={<PermLabel title="Web search" text="Keo may search the web without asking each time: with Keo Search (your Keo account), your own Brave key, or DuckDuckGo — see Settings → Web." />} />
               <Toggle checked={s.permissions.webFetchEnabled} onChange={(v) => void enableWithConfirm('webFetchEnabled', v, 'web page reading')} label={<PermLabel title="Read web pages" text="Keo may download public web pages as text to research an answer. Pages on this computer or your local network are always refused." />} />
             </div>
 
@@ -71,7 +71,7 @@ const PERMISSION_TEXT = {
   observationEnabled: 'Keo will be able to list windows of applications you allow-list and, with your approval, capture them. Captures are stored locally under the retention policy.',
   desktopControlEnabled: 'Keo will be able to propose keyboard, mouse and window actions in allow-listed applications. Each action shows a preview and runs only after you approve it.',
   launchEnabled: 'Keo will be able to propose starting applications from your launch list. Each launch requires approval.',
-  webSearchEnabled: 'Keo will be able to send search queries to Brave Search (using your API key and quota) whenever it decides a search helps, without asking each time. Results are treated as untrusted.',
+  webSearchEnabled: 'Keo will be able to send search queries to its search engine (Keo Search with your Keo account, your own Brave key, or DuckDuckGo — Settings → Web) whenever it decides a search helps, without asking each time. Results are treated as untrusted.',
   webFetchEnabled: 'Keo will be able to download public web pages to read them. Websites see requests from your computer. Local and private-network addresses are always refused.',
 } as const;
 

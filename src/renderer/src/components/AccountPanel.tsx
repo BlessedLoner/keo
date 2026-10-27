@@ -180,6 +180,17 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
       {a.pendingEmail && !note && <p className="small muted">Check {a.pendingEmail} for the confirmation link, then sign in.</p>}
       {note && <p className={`small ${note.ok ? 'muted' : ''}`} style={note.ok ? undefined : { color: 'var(--danger, #ff5d6c)' }}>{note.text}</p>}
       <p className="muted small">The Free plan is included. Your messages go through Keo Cloud to the AI model; Keo Cloud does not keep them.</p>
+      <p className="muted small">
+        By creating an account you agree to Keo’s{' '}
+        <button type="button" className="link-btn small" onClick={() => void invoke('app:openLink', { id: 'terms' })}>
+          Terms
+        </button>{' '}
+        and{' '}
+        <button type="button" className="link-btn small" onClick={() => void invoke('app:openLink', { id: 'privacy' })}>
+          Privacy Policy
+        </button>
+        .
+      </p>
     </div>
   );
 }

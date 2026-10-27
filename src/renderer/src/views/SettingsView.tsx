@@ -1638,7 +1638,13 @@ function Data({ s, patch }: { s: Settings; patch: Patch }) {
             Check now
           </button>
           <button className="btn sm ghost" onClick={() => void invoke('app:openLink', { id: 'privacy' })}>
-            Privacy note
+            Privacy Policy
+          </button>
+          <button className="btn sm ghost" onClick={() => void invoke('app:openLink', { id: 'terms' })}>
+            Terms
+          </button>
+          <button className="btn sm ghost" onClick={() => void invoke('app:openLink', { id: 'refunds' })}>
+            Refunds
           </button>
         </div>
       </section>

@@ -55,6 +55,7 @@ export function accountPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: stri
     <h1>Keo account</h1>
     <p>This page opens from the links in Keo’s emails. To sign in or create an account, open the Keo app.</p>
   </section>
+  <p style="margin-top:18px;font-size:13px"><a href="/terms" style="color:#9a9a9a">Terms</a> · <a href="/privacy" style="color:#9a9a9a">Privacy</a> · <a href="/refunds" style="color:#9a9a9a">Refunds</a></p>
 </main>
 <script>
 (function () {

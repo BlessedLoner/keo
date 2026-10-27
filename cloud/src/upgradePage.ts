@@ -49,6 +49,7 @@ export function upgradePage(): Response {
   .note { margin: 18px 0 0; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); }
   .note.ok { border-color: #2f6b4b; color: var(--ok); } .note.bad { border-color: #6b2f2f; color: var(--bad); } .note.warn { border-color: #6b5a2f; color: var(--warn); }
   .fine { margin-top: 26px; color: var(--muted); font-size: 13px; }
+  .fine a { color: var(--text); }
   .lock { display: inline-block; width: 10px; height: 8px; border: 2px solid var(--muted); border-radius: 2px; margin-right: 6px; position: relative; top: 1px; }
   [hidden] { display: none !important; }
 </style>
@@ -70,7 +71,7 @@ export function upgradePage(): Response {
     <button class="btn" id="cancel">Cancel renewal</button>
   </div>
   <p class="note" id="note" hidden></p>
-  <p class="fine"><span class="lock"></span>Payments are made securely with Paystack. Keo never sees or stores your card details. Plans renew every month; cancel any time and keep your plan until the end of the month you paid for. Daily allowances reset at midnight UTC.</p>
+  <p class="fine"><span class="lock"></span>Payments are made securely with Paystack. Keo never sees or stores your card details. Plans renew every month; cancel any time and keep your plan until the end of the month you paid for. Daily allowances reset at midnight UTC. Payments are not refunded. By upgrading you agree to Keo’s <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refunds">Refund Policy</a>.</p>
 </div>
 <script>
 (function () {

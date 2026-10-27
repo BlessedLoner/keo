@@ -5,6 +5,8 @@
 export const RELEASE = { owner: 'BlessedLoner', repo: 'keo' } as const;
 
 const PAGE = `https://${RELEASE.owner.toLowerCase()}.github.io/${RELEASE.repo}/`;
+/** Keo Cloud's own pages (plans, terms, privacy, refunds). */
+const CLOUD = 'https://keo-cloud.blessednoble90.workers.dev';
 
 /**
  * The only web pages Keo's windows may ask the main process to open (no
@@ -12,7 +14,9 @@ const PAGE = `https://${RELEASE.owner.toLowerCase()}.github.io/${RELEASE.repo}/`
  */
 export const LINKS = {
   download: PAGE,
-  privacy: `${PAGE}privacy.html`,
+  privacy: `${CLOUD}/privacy`,
+  terms: `${CLOUD}/terms`,
+  refunds: `${CLOUD}/refunds`,
   releases: `https://github.com/${RELEASE.owner}/${RELEASE.repo}/releases/latest`,
   openrouterKeys: 'https://openrouter.ai/keys',
   openaiKeys: 'https://platform.openai.com/api-keys',

@@ -236,6 +236,18 @@ describe('Keo Cloud payments', () => {
     expect(html).not.toMatch(/sk_test|service-secret|or-secret/);
   });
 
+  it('serves the Terms, Privacy and Refund pages, with the support email once it is set', async () => {
+    for (const p of ['/terms', '/privacy', '/refunds']) {
+      const r = await w.call(p);
+      expect(r.status).toBe(200);
+      expect(await r.text()).toMatch(/coming soon/);
+    }
+    const req = new Request('https://keo-cloud.example.workers.dev/refunds');
+    const html = await (await handle(req, { ...env, KEO_SUPPORT_EMAIL: 'help@keo.test' }, { fetch: w.fetch, waitUntil: () => undefined, now: () => NOW })).text();
+    expect(html).toContain('mailto:help@keo.test');
+    expect(html).toMatch(/Payments are not refunded/);
+  });
+
   it('keeps payments off until a Paystack key is set', async () => {
     const off = { ...env, PAYSTACK_SECRET_KEY: undefined };
     const req = new Request('https://keo-cloud.example.workers.dev/v1/billing/checkout', { method: 'POST', headers: { authorization: 'Bearer tok-ana' }, body: '{"plan":"pro","currency":"USD"}' });

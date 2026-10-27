@@ -80,6 +80,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   );
   const [brave, setBrave] = useState("");
   const [braveNote, setBraveNote] = useState<string | null>(null);
+  // With a Keo account, web search is part of the plan: suggested on, applied only on "Next".
+  const [webOn, setWebOn] = useState(true);
   // Signed in to Keo (the sign-in screen comes first): no provider step to show.
   const signedIn = !!useAccount()?.signedIn;
   const steps = signedIn ? [0, 2, 3] : [0, 1, 2, 3];
@@ -314,7 +316,29 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           </>
         )}
 
-        {step === 2 && (
+        {step === 2 && signedIn && (
+          <>
+            <p>
+              <strong>Web search:</strong> Keo can look things up on the web for
+              research and current information. It uses Keo Search, part of your
+              plan (on Free: 3 a day, then DuckDuckGo).
+            </p>
+            <label className="row small" style={{ gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={webOn}
+                onChange={(e) => setWebOn(e.target.checked)}
+              />
+              Let Keo search and read web pages without asking each time
+            </label>
+            <p className="muted small">
+              Search words and pages Keo reads go through Keo Cloud; results are
+              treated as untrusted. You can change this any time in Access.
+            </p>
+          </>
+        )}
+
+        {step === 2 && !signedIn && (
           <>
             <p>
               <strong>Optional:</strong> let Keo search the web for research and
@@ -383,7 +407,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           )}
           <span className="grow" />
           {step < 3 ? (
-            <button className="btn primary" onClick={() => setStep(steps[at + 1] ?? 3)}>
+            <button
+              className="btn primary"
+              onClick={() => {
+                if (step === 2 && signedIn)
+                  void invoke("settings:update", {
+                    patch: {
+                      permissions: {
+                        webSearchEnabled: webOn,
+                        webFetchEnabled: webOn,
+                      },
+                    },
+                  }).catch(() => undefined);
+                setStep(steps[at + 1] ?? 3);
+              }}
+            >
               {step === 1 && !result?.ok ? "Skip for now" : "Next"}
             </button>
           ) : (
