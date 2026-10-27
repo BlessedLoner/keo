@@ -34,7 +34,8 @@ export function accountPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: stri
   <div class="logo"><span class="eyes"><i></i><i></i></span>KEO</div>
   <section id="done" hidden>
     <h1 class="ok">Your email is confirmed</h1>
-    <p>Go back to Keo and sign in with your email and password. You can close this page.</p>
+    <p>Go back to Keo — it signs you in by itself within a few seconds. You can close this page.</p>
+    <p>If Keo was closed in the meantime, open it and sign in with your email and password.</p>
   </section>
   <section id="expired" hidden>
     <h1 class="bad">This link has expired</h1>

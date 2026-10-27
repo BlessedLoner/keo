@@ -54,7 +54,7 @@ class FakeCloud {
   }
   tokens() {
     this.n++;
-    return { access_token: `access-${this.n}`, refresh_token: `refresh-${this.n}`, expires_in: 3600 };
+    return { access_token: `access-${this.n}`, refresh_token: `refresh-${this.n}`, expires_in: 3600, user: { id: '11111111-1111-4111-8111-111111111111' } };
   }
 }
 
@@ -65,9 +65,11 @@ afterEach(async () => {
   await h?.close();
 });
 
-function setup(opts: { web?: WebService } = {}) {
+const changes: Array<string | null> = [];
+function setup(opts: { web?: WebService; confirmPollMs?: number } = {}) {
   const cloud = new FakeCloud();
-  h = makeHarness({ deps: { cloudFetch: cloud.fetch }, ...(opts.web ? { web: opts.web } : {}) });
+  changes.length = 0;
+  h = makeHarness({ deps: { cloudFetch: cloud.fetch, onAccountChange: (id) => void changes.push(id), ...(opts.confirmPollMs ? { confirmPollMs: opts.confirmPollMs } : {}) }, ...(opts.web ? { web: opts.web } : {}) });
   return cloud;
 }
 
@@ -219,6 +221,32 @@ describe('Keo account', () => {
     expect(st.signedIn).toBe(false);
     expect(h.services.settings.get().ui.ownKeys).toBe(false);
     expect(h.services.settings.get().activeProvider).toBeNull();
+  });
+
+  it('tells the app when the signed-in account changes (so it opens that account’s own data)', async () => {
+    await signedIn();
+    expect(changes).toEqual(['11111111-1111-4111-8111-111111111111']);
+    await h.services.account.fresh(); // token renewals are not a change
+    await h.services.account.signOut();
+    expect(changes).toEqual(['11111111-1111-4111-8111-111111111111', null]);
+  });
+
+  it('signs in by itself once the new account’s email is confirmed, without storing the password', async () => {
+    const cloud = setup({ confirmPollMs: 20 });
+    await h.services.account.signUp('ana@example.test', 'longpassword1');
+    expect(h.services.account.status()).toMatchObject({ signedIn: false, waitingForConfirmation: true });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(h.services.account.signedIn()).toBe(false); // not confirmed yet
+    cloud.users.get('ana@example.test')!.confirmed = true; // the user clicks the email link
+    const until = Date.now() + 3000;
+    while (!h.services.account.signedIn() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    expect(h.services.account.status()).toMatchObject({ signedIn: true, waitingForConfirmation: false, email: 'ana@example.test' });
+    expect(changes).toEqual(['11111111-1111-4111-8111-111111111111']);
+    expect(h.services.secrets.get('keo_account')).not.toContain('longpassword1');
+    // It stops checking once signed in.
+    const n = cloud.calls.filter((c) => c.includes('grant_type=password')).length;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cloud.calls.filter((c) => c.includes('grant_type=password')).length).toBe(n);
   });
 
   it('signing out forgets the session', async () => {

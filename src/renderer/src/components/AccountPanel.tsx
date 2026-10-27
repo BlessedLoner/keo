@@ -34,7 +34,8 @@ export function useAuthForm(onSignedIn?: () => void) {
       if (mode === 'signup') {
         const r = await invoke('account:signUp', { email, password });
         if (r.needsConfirmation) {
-          setNote({ ok: true, text: `Almost there: open the link we sent to ${email.trim()}, then come back and sign in.` });
+          // Keo signs in by itself once the email is confirmed (the screen says so).
+          setNote(null);
           setMode('signin');
         } else onSignedIn?.();
       } else {

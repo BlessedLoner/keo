@@ -121,6 +121,7 @@ export const invokeSchemas = {
   'account:resetPassword': z.object({ email: z.string().trim().email().max(254) }).strict(),
   'account:refresh': empty,
   'account:upgrade': empty,
+  'account:useLocal': empty,
   'picture:view': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
   'picture:open': z.object({ path: z.string().trim().min(3).max(1000), reveal: z.boolean().default(false) }).strict(),
   'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
@@ -376,6 +377,7 @@ export interface InvokeOutputs {
   'account:resetPassword': { ok: true };
   'account:refresh': AccountStatus;
   'account:upgrade': { opened: boolean };
+  'account:useLocal': { ok: true };
   'picture:open': { opened: boolean };
   'chat:retry': { accepted: true };
   'chat:cancel': { cancelled: boolean };

@@ -140,6 +140,12 @@ export interface ServiceDeps {
   googleFetch?: FetchLike;
   /** Pictures attached to chat messages, resized (the app uses Electron's image tools; tests a fake). */
   attachmentImages?: AttachmentImages;
+  /** Where the Keo sign-in is kept (shared by all account folders); defaults to this folder's secrets. */
+  sessionSecrets?: SecretStore;
+  /** The signed-in Keo account changed (null: signed out): the app reopens on that account's data. */
+  onAccountChange?: (userId: string | null) => void;
+  /** Tests: check for a confirmed email this often (ms). */
+  confirmPollMs?: number;
   /** HTTP to Keo Cloud and Supabase (tests inject a fake; nothing reaches the network in tests). */
   cloudFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** AI pictures (tests inject a fake; the app uses the OpenAI provider when a key is saved). */
@@ -299,7 +305,15 @@ export class Services {
       this.log.info('settings.shortcuts_migrated', { movedCommandBar: sc.commandBar.toLowerCase() === 'control+k' });
     }
     if (d.testProvider && getSettings().activeProvider === null) this.settings.update({ activeProvider: 'test' });
-    this.account = new KeoAccount({ secrets: this.secrets, log: this.log, ...(d.cloudFetch ? { fetch: d.cloudFetch } : {}), changed: () => this.push('account:changed', this.account.status()) });
+    this.account = new KeoAccount({
+      // The Keo sign-in lives outside the account folders: it decides which folder Keo opens.
+      secrets: d.sessionSecrets ?? this.secrets,
+      log: this.log,
+      ...(d.cloudFetch ? { fetch: d.cloudFetch } : {}),
+      ...(d.confirmPollMs ? { confirmPollMs: d.confirmPollMs } : {}),
+      changed: () => this.push('account:changed', this.account.status()),
+      accountChanged: (userId) => d.onAccountChange?.(userId),
+    });
     this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null, keoAccount: this.account });
     this.account.start();
     this.registry = new CapabilityRegistry(getSettings, this.audit, this.log);

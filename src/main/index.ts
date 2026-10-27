@@ -1,3 +1,4 @@
+import { accountProfile, folderFor, openFolder, readState, sessionDir, setAsideLegacy, userIdOfToken, writeState, type AccountState } from './env/accounts';
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeImage, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
@@ -9,12 +10,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { pushChannels } from '../shared/ipc';
 import { Win32Backend } from './desktop/backend';
-import { APP_ID, resolveProfile } from './env/profile';
+import { APP_ID, resolveProfile, type ProfileInfo } from './env/profile';
 import { createHandlers } from './ipc/handlers';
 import { originOf, registerIpc } from './ipc/router';
 import { Logger } from './logging/logger';
 import { TestProvider } from './providers/testProvider';
-import type { SecretCipher } from './secrets/secretStore';
+import { SecretStore, type SecretCipher } from './secrets/secretStore';
 import { Services } from './services';
 import { errorMessage } from './util/errors';
 import { electronImageTools, ElectronWindowCapture } from './vision/electronCapture';
@@ -378,13 +379,60 @@ app.on('second-instance', () => {
   showMain();
 });
 
+/** Which account folder this run of Keo uses (see env/accounts.ts). */
+let accountState: AccountState = { mode: 'signed-out', userId: null };
+
+/**
+ * Picks the data folder for whoever is signed in: each Keo account has its own. Data from before
+ * accounts is set aside once and goes to the first account (or local use) that opens.
+ */
+function openAccountFolder(): { profile: ProfileInfo; sessionSecrets: SecretStore } {
+  const root = profile.userData;
+  const sessionSecrets = new SecretStore(sessionDir(root), cipher);
+  if (setAsideLegacy(root)) log.info('app.data_set_aside', {});
+  // The stored sign-in decides; the saved mode only matters without one.
+  let signedInAs: string | null = null;
+  try {
+    const raw = sessionSecrets.get('keo_account');
+    const s = raw ? (JSON.parse(raw) as { access?: string; userId?: string }) : null;
+    signedInAs = s?.access ? (s.userId ?? userIdOfToken(s.access)) : null;
+  } catch {
+    signedInAs = null;
+  }
+  const saved = readState(root);
+  accountState = signedInAs ? { mode: 'account', userId: signedInAs } : saved.mode === 'local' ? saved : { mode: 'signed-out', userId: null };
+  writeState(root, accountState);
+  const folder = openFolder(root, accountState);
+  // A Keo sign-in that came along with old data belongs to the shared store, not to the folder.
+  if (folder.claimed) new SecretStore(folder.dir, cipher).delete('keo_account');
+  log.info('app.account_folder', { mode: accountState.mode, claimedOldData: folder.claimed });
+  return { profile: accountProfile(profile, folder.dir, accountState), sessionSecrets };
+}
+
+/** Saves the new mode and, if its folder is another one, starts Keo again on it. */
+function switchAccountFolder(next: AccountState): void {
+  const same = folderFor(next) === folderFor(accountState);
+  writeState(profile.userData, next);
+  accountState = next;
+  if (same) return;
+  log.info('app.switch_account_folder', { mode: next.mode });
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 400);
+}
+
 app.whenReady().then(() => {
   try {
     registerAppProtocol();
     hardenSession();
+    const opened = openAccountFolder();
     services = new Services({
-      profile,
+      profile: opened.profile,
       cipher,
+      sessionSecrets: opened.sessionSecrets,
+      // Another account signed in, or signed out: start again on that account's own data.
+      onAccountChange: (userId) => switchAccountFolder(userId ? { mode: 'account', userId } : { mode: 'signed-out', userId: null }),
       desktopBackend: new Win32Backend(profile.runtimeDir, log),
       captureSource: new ElectronWindowCapture(),
       imageTools: electronImageTools,
@@ -524,6 +572,7 @@ app.whenReady().then(() => {
         app.relaunch();
         app.exit(0);
       },
+      useLocal: () => switchAccountFolder({ mode: 'local', userId: null }),
       openMain: (view) => showMain(view),
       showCommandBar: () => presenceWindows?.showCommandBar(),
       hideCommandBar: () => presenceWindows?.hideCommandBar(),
@@ -569,6 +618,8 @@ app.whenReady().then(() => {
       },
       log,
     );
+    // Keo without a Keo account (own API keys): no sign-in screen in this folder.
+    if (accountState.mode === 'local' && !services.settings.get().ui.ownKeys) services.settings.update({ ui: { ownKeys: true } });
     const recovered = services.start();
     log.info('app.ready', { profile: profile.profile, ...recovered.recovery, interruptedMessages: recovered.interruptedMessages, secretStorage: cipher.isAvailable() });
     mainWindow = createWindow();

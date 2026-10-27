@@ -20,6 +20,8 @@ export interface AccountStatus {
   email: string | null;
   /** Waiting for the user to confirm their email (after sign-up). */
   pendingEmail: string | null;
+  /** Keo signs in by itself as soon as that email is confirmed. */
+  waitingForConfirmation: boolean;
   plan: { id: string; name: string; dailyRequests: number; dailyTokens: number; features: Record<string, unknown> } | null;
   usage: { day: string; requests: number; inputTokens: number; outputTokens: number; webSearches: number; images: number; voiceSeconds: number } | null;
   /** A paid plan: paid until when, and whether it renews ('active', 'non-renewing', 'attention', 'cancelled'). */

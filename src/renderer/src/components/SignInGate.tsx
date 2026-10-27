@@ -59,9 +59,11 @@ export function SignInGate() {
     introSeen = true;
     setPhase('form');
   };
+  // Keo without a Keo account has its own data (not this sign-in screen's): Keo starts again on it.
   const ownKey = async () => {
     await invoke('settings:update', { patch: { ui: { ownKeys: true } } }).catch(() => undefined);
     app.setView('settings');
+    await invoke('account:useLocal', {}).catch(() => undefined);
   };
   const signup = f.mode === 'signup';
 
@@ -140,7 +142,12 @@ export function SignInGate() {
           </button>
         </form>
 
-        {account?.pendingEmail && !f.note && <p className="signin-note ok">Check {account.pendingEmail} for the confirmation link, then sign in.</p>}
+        {account?.pendingEmail && account.waitingForConfirmation && (
+          <p className="signin-note ok">
+            <span className="spinner" /> Open the link we sent to {account.pendingEmail}. Keo signs you in by itself as soon as you confirm.
+          </p>
+        )}
+        {account?.pendingEmail && !account.waitingForConfirmation && !f.note && <p className="signin-note ok">Check {account.pendingEmail} for the confirmation link, then sign in.</p>}
         {f.note && <p className={`signin-note ${f.note.ok ? 'ok' : 'bad'}`}>{f.note.text}</p>}
 
         <p className="signin-fine">

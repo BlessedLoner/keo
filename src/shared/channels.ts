@@ -45,6 +45,7 @@ export const INVOKE_CHANNELS = [
   'account:resetPassword',
   'account:refresh',
   'account:upgrade',
+  'account:useLocal',
   'picture:open',
   'files:photosState',
   'files:photosEstimate',

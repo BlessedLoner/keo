@@ -1,3 +1,4 @@
+import { userIdOfToken } from '../env/accounts';
 import type { AccountStatus } from '../../shared/cloud';
 import { KEO_CLOUD } from '../../shared/cloud';
 import type { Logger } from '../logging/logger';
@@ -17,7 +18,13 @@ interface Session {
   /** ms since epoch. */
   expiresAt: number;
   email: string;
+  /** The Keo account's id (each account has its own data folder on this PC). */
+  userId?: string;
 }
+
+/** After sign-up: Keo signs in by itself once the email is confirmed (password kept in memory only). */
+const CONFIRM_POLL_MS = 15_000;
+const CONFIRM_WAIT_MS = 30 * 60_000;
 
 export interface CloudModel {
   id: string;
@@ -56,10 +63,29 @@ export class KeoAccount {
   private lastError: string | null = null;
   private timer: NodeJS.Timeout | null = null;
 
+  private waiting: { email: string; password: string; until: number; timer: NodeJS.Timeout } | null = null;
+
   constructor(
-    private readonly d: { secrets: SecretStore; log: Logger; fetch?: CloudFetch; now?: () => number; config?: typeof KEO_CLOUD; changed?: () => void },
+    private readonly d: {
+      secrets: SecretStore;
+      log: Logger;
+      fetch?: CloudFetch;
+      now?: () => number;
+      config?: typeof KEO_CLOUD;
+      changed?: () => void;
+      /** Another account (or none) is now signed in: Keo switches to that account's own data. */
+      accountChanged?: (userId: string | null) => void;
+      /** How often to check whether a new account's email is confirmed (tests: faster). */
+      confirmPollMs?: number;
+    },
   ) {
     this.session = this.load();
+  }
+
+  /** The signed-in account's id. */
+  userId(): string | null {
+    const s = this.session;
+    return s ? (s.userId ?? userIdOfToken(s.access)) : null;
   }
 
   private get cfg() {
@@ -83,10 +109,14 @@ export class KeoAccount {
   }
 
   private save(s: Session | null): void {
+    const before = this.userId();
     this.session = s;
     if (s) this.d.secrets.set('keo_account', JSON.stringify(s));
     else this.d.secrets.delete('keo_account');
+    if (s) this.stopWaiting();
     this.d.changed?.();
+    const after = this.userId();
+    if (before !== after) this.d.accountChanged?.(after);
   }
 
   signedIn(): boolean {
@@ -109,6 +139,7 @@ export class KeoAccount {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.stopWaiting();
   }
 
   private async auth(path: string, body: Record<string, unknown>, opts: { emailLink?: boolean } = {}): Promise<Record<string, unknown>> {
@@ -130,7 +161,8 @@ export class KeoAccount {
     const refresh = String(j.refresh_token ?? '');
     if (!access || !refresh) throw new AccountError('Keo’s servers did not return a sign-in. Please try again.');
     const expiresIn = Number(j.expires_in) || 3600;
-    return { access, refresh, expiresAt: this.now() + expiresIn * 1000, email };
+    const userId = (j.user as { id?: unknown } | undefined)?.id;
+    return { access, refresh, expiresAt: this.now() + expiresIn * 1000, email, ...(typeof userId === 'string' ? { userId } : userIdOfToken(access) ? { userId: userIdOfToken(access)! } : {}) };
   }
 
   /** Creates an account. Usually the user must confirm their email first (then sign in). */
@@ -145,12 +177,48 @@ export class KeoAccount {
     }
     this.pendingEmail = e;
     this.d.log.info('account.signed_up', {});
+    this.waitForConfirmation(e, password);
     this.d.changed?.();
     return { needsConfirmation: true };
   }
 
+  /**
+   * Until the new account's email is confirmed (in the browser, maybe on a phone), Keo quietly
+   * tries to sign in every few seconds, so the user never has to sign in again by hand. The
+   * password stays in memory only, and only for 30 minutes.
+   */
+  private waitForConfirmation(email: string, password: string): void {
+    this.stopWaiting();
+    const timer = setInterval(() => void this.tryConfirmed(), this.d.confirmPollMs ?? CONFIRM_POLL_MS);
+    timer.unref?.();
+    this.waiting = { email, password, until: this.now() + CONFIRM_WAIT_MS, timer };
+  }
+
+  private stopWaiting(): void {
+    if (this.waiting) clearInterval(this.waiting.timer);
+    this.waiting = null;
+  }
+
+  private checking = false;
+  private async tryConfirmed(): Promise<void> {
+    const w = this.waiting;
+    if (!w || this.checking || this.session) return;
+    if (this.now() > w.until) return this.stopWaiting();
+    this.checking = true;
+    try {
+      await this.signIn(w.email, w.password);
+      this.d.log.info('account.confirmed_signed_in', {});
+    } catch (e) {
+      // Not confirmed yet: keep waiting. Anything else (wrong password, account gone): stop.
+      if (!/Confirm your email first|reach its servers|Too many tries/.test((e as Error).message)) this.stopWaiting();
+    } finally {
+      this.checking = false;
+    }
+  }
+
   async signIn(email: string, password: string): Promise<void> {
     const e = email.trim().toLowerCase();
+    if (this.waiting && this.waiting.email !== e) this.stopWaiting();
     const j = await this.auth('token?grant_type=password', { email: e, password });
     this.save(this.fromTokens(j, e));
     this.pendingEmail = null;
@@ -326,6 +394,7 @@ export class KeoAccount {
       signedIn: !!this.session,
       email: this.session?.email ?? null,
       pendingEmail: this.pendingEmail,
+      waitingForConfirmation: !!this.waiting && !this.session,
       plan: this.me?.plan ?? null,
       usage: this.me?.usage ?? null,
       billing: this.me?.billing ?? null,

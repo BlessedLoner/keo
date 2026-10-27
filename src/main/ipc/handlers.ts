@@ -49,6 +49,8 @@ export interface HostHooks {
   pickOpenFile?(): Promise<string | null>;
   captureFrom?: never;
   relaunch(): void;
+  /** Use Keo without a Keo account: start again on the local (own API keys) data. */
+  useLocal?(): void;
   openMain?(view?: 'chat' | 'tasks' | 'settings' | 'call'): void;
   showCommandBar?(): void;
   hideCommandBar?(): void;
@@ -421,6 +423,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       } catch (e) {
         throw new KeoError('account', (e as Error).message);
       }
+      return { ok: true as const };
+    },
+    'account:useLocal': () => {
+      host.useLocal?.();
       return { ok: true as const };
     },
     'account:upgrade': async () => {
