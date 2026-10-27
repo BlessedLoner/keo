@@ -111,10 +111,12 @@ export class KeoAccount {
     this.timer = null;
   }
 
-  private async auth(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async auth(path: string, body: Record<string, unknown>, opts: { emailLink?: boolean } = {}): Promise<Record<string, unknown>> {
     let r: Response;
+    // Emails (confirm, new password) link to Keo's account page, whatever Supabase's Site URL says.
+    const link = opts.emailLink ? `${path.includes('?') ? '&' : '?'}redirect_to=${encodeURIComponent(this.cfg.accountPageUrl)}` : '';
     try {
-      r = await this.f(`${this.cfg.supabaseUrl}/auth/v1/${path}`, { method: 'POST', headers: { apikey: this.cfg.anonKey, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      r = await this.f(`${this.cfg.supabaseUrl}/auth/v1/${path}${link}`, { method: 'POST', headers: { apikey: this.cfg.anonKey, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     } catch {
       throw new AccountError('Keo could not reach its servers. Check your internet connection.');
     }
@@ -134,7 +136,7 @@ export class KeoAccount {
   /** Creates an account. Usually the user must confirm their email first (then sign in). */
   async signUp(email: string, password: string): Promise<{ needsConfirmation: boolean }> {
     const e = email.trim().toLowerCase();
-    const j = await this.auth('signup', { email: e, password });
+    const j = await this.auth('signup', { email: e, password }, { emailLink: true });
     if (j.access_token) {
       this.save(this.fromTokens(j, e));
       this.pendingEmail = null;
@@ -158,7 +160,7 @@ export class KeoAccount {
 
   /** Emails a password-reset link. */
   async resetPassword(email: string): Promise<void> {
-    await this.auth('recover', { email: email.trim().toLowerCase() });
+    await this.auth('recover', { email: email.trim().toLowerCase() }, { emailLink: true });
   }
 
   async signOut(): Promise<void> {

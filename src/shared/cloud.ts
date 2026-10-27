@@ -8,6 +8,8 @@ export const KEO_CLOUD = {
   anonKey:
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNuYWN1eXVrZ3ppempxZHd4ZXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMTg5NzYsImV4cCI6MjEwODU5NDk3Nn0.b86L_GmzwJJ6O_JYoJKOw0RKtv6r8cMgOrNL69BOjtU',
   gatewayUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',
+  /** Where the links in Keo's account emails land (must be in Supabase → URL Configuration → Redirect URLs). */
+  accountPageUrl: 'https://keo-cloud.blessednoble90.workers.dev/account',
 } as const;
 
 /** What the app shows about the signed-in Keo account. */

@@ -229,6 +229,18 @@ describe('Keo Cloud gateway', () => {
     expect((await w.call('/v1/speech', { token: 'tok-ana', body: { text: 'More' } })).status).toBe(429);
   });
 
+  it('serves the page the account emails open, without needing a sign-in', async () => {
+    const r = await w.call('/account');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toMatch(/text\/html/);
+    expect(r.headers.get('content-security-policy')).toContain("connect-src https://db.test");
+    const html = await r.text();
+    expect(html).toContain('Your email is confirmed');
+    expect(html).toContain('Choose a new password');
+    expect(html).not.toContain('service-secret');
+    expect(html).not.toContain('or-secret');
+  });
+
   it('turns a recording into text', async () => {
     const { wav } = await import('../src/gateway');
     const rec = wav(new Uint8Array(32000 * 2), 16000); // 2 s at 16 kHz

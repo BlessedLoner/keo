@@ -99,6 +99,8 @@ describe('Keo account', () => {
     const stored = h.services.secrets.get('keo_account')!;
     expect(stored).toContain('refresh-1');
     expect(stored).not.toContain('longpassword1');
+    // The confirmation email links to Keo's account page.
+    expect(cloud.calls).toContain(`POST /auth/v1/signup?redirect_to=${encodeURIComponent('https://keo-cloud.blessednoble90.workers.dev/account')}`);
   });
 
   it('says plainly what went wrong', async () => {

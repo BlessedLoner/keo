@@ -7,6 +7,8 @@
  * No provider key ever reaches the app; nothing of the conversation is stored here.
  */
 
+import { accountPage } from './pages';
+
 export interface Env {
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
@@ -302,6 +304,9 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       out.ok = (out.database as { ok: boolean }).ok && (out.openrouter as { ok: boolean }).ok;
       return json(200, out);
     }
+
+    // Where the links in Keo's account emails land (Supabase → URL Configuration → Site URL).
+    if (req.method === 'GET' && route === '/account') return accountPage(env);
 
     if (req.method === 'GET' && route === '/v1/models') {
       const a = await account(req, db, now);
