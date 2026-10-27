@@ -1,6 +1,7 @@
+import { KeoAccount } from './cloud/account';
 import { ProviderError } from './providers/types';
 import { pictureCapabilities } from './capabilities/pictures';
-import { PictureStudio, type PictureAi } from './pictures/studio';
+import { PictureError, PictureStudio, type PictureAi } from './pictures/studio';
 import { AttachmentStaging, type AttachmentImages } from './chat/attachments';
 import os from 'node:os';
 import { FileSearch, isInside, type IndexBackend } from './files/fileSearch';
@@ -139,6 +140,8 @@ export interface ServiceDeps {
   googleFetch?: FetchLike;
   /** Pictures attached to chat messages, resized (the app uses Electron's image tools; tests a fake). */
   attachmentImages?: AttachmentImages;
+  /** HTTP to Keo Cloud and Supabase (tests inject a fake; nothing reaches the network in tests). */
+  cloudFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** AI pictures (tests inject a fake; the app uses the OpenAI provider when a key is saved). */
   pictureAi?: PictureAi | null;
   /** A picture as PNG through Chromium's decoder (pictures ffmpeg cannot read). */
@@ -296,14 +299,17 @@ export class Services {
       this.log.info('settings.shortcuts_migrated', { movedCommandBar: sc.commandBar.toLowerCase() === 'control+k' });
     }
     if (d.testProvider && getSettings().activeProvider === null) this.settings.update({ activeProvider: 'test' });
-    this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null });
+    this.account = new KeoAccount({ secrets: this.secrets, log: this.log, ...(d.cloudFetch ? { fetch: d.cloudFetch } : {}), changed: () => this.push('account:changed', this.account.status()) });
+    this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null, keoAccount: this.account });
+    this.account.start();
     this.registry = new CapabilityRegistry(getSettings, this.audit, this.log);
     this.tasks = new TaskOrchestrator(this.taskRepo, this.registry, this.audit, this.log, getSettings);
     this.grants = new GrantService(this.audit);
     this.desktop = new DesktopService(d.desktopBackend);
     this.vision = new VisionService(this.observations, this.desktop, d.captureSource, d.imageTools, this.providers, d.profile.observationsDir, this.log);
-    this.voice = new VoiceService(this.providers.openai, getSettings, () => this.secrets.has('openai'), this.log);
+    this.voice = new VoiceService(this.providers.openai, getSettings, () => this.secrets.has('openai'), this.log, this.account);
     this.web = d.web ?? new WebService(() => this.secrets.get('brave'), this.log);
+    this.web.useCloud?.({ signedIn: () => this.account.signedIn(), search: (q, n, signal) => this.account.search(q, n, signal) });
 
     this.clipboard = d.clipboard ?? memoryClipboard();
     this.launchTestWindow = d.launchTestWindow ?? launchPowerShellTestWindow;
@@ -477,10 +483,21 @@ export class Services {
       workRoot: path.join(d.profile.userData, 'pictures-work'),
       ai: () => {
         if (d.pictureAi !== undefined) return d.pictureAi;
-        if (!this.secrets.has('openai')) return null;
+        // As the user chose; 'auto': their own OpenAI key first, otherwise Keo Cloud with their Keo account.
+        const source = getSettings().pictures.aiSource;
+        if (source !== 'keo' && this.secrets.has('openai'))
+          return {
+            generate: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.generateImage({ ...o, model }, signal)),
+            edit: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.editImage({ ...o, model }, signal)),
+          };
+        if (source === 'openai' || !this.account.signedIn()) return null;
         return {
-          generate: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.generateImage({ ...o, model }, signal)),
-          edit: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.editImage({ ...o, model }, signal)),
+          generate: async (o, signal) => this.asPng(await this.cloudPicture(() => this.account.image(o, signal)), d),
+          edit: async (o, signal) => {
+            const ext = (o.name.split('.').pop() ?? 'png').toLowerCase();
+            const type = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+            return this.asPng(await this.cloudPicture(() => this.account.image({ prompt: o.prompt, size: o.size, quality: o.quality, background: o.background, image: { data: o.image, type } }, signal)), d);
+          },
         };
       },
       ...(d.pictureNormalize ? { normalize: d.pictureNormalize } : {}),
@@ -1555,6 +1572,8 @@ export class Services {
   private windowsVoiceTurn: Promise<void> = Promise.resolve();
 
   private readonly deps: ServiceDeps;
+  /** The user's Keo account (Keo Cloud). */
+  readonly account: KeoAccount;
   readonly fileSearch: FileSearch;
   /** Picture edits, animations and AI pictures. */
   readonly pictures: PictureStudio;
@@ -1569,6 +1588,32 @@ export class Services {
     if (!mime[ext] || !path.isAbsolute(p)) return null;
     const ok = isInside(p, this.keoOutputRoot(this.deps)) || this.fileSearch.allowed(p) || isInside(p, this.attachments.dir());
     return ok ? { mimeType: mime[ext]! } : null;
+  }
+
+  /** Keo Cloud's refusals (not in the plan, today's pictures used up) as a plain "nothing was made". */
+  private async cloudPicture(call: () => Promise<{ bytes: Buffer; mediaType: string }>): Promise<{ bytes: Buffer; mediaType: string }> {
+    try {
+      return await call();
+    } catch (e) {
+      const status = (e as { status?: number }).status ?? 0;
+      if (status === 403 || status === 429) throw new PictureError('plan_limit', `${(e as Error).message} Nothing was made.`);
+      throw e;
+    }
+  }
+
+  /** Pictures are saved as PNG: another format from Keo Cloud is converted first. */
+  private async asPng(p: { bytes: Buffer; mediaType: string }, d: ServiceDeps): Promise<Buffer> {
+    const isPng = p.bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    if (isPng || !d.pictureNormalize) return p.bytes;
+    const dir = path.join(d.profile.userData, 'pictures-work');
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = path.join(dir, `cloud-${Date.now()}.${p.mediaType.split('/')[1] ?? 'img'}`);
+    try {
+      fs.writeFileSync(tmp, p.bytes);
+      return (await d.pictureNormalize(tmp)) ?? p.bytes;
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
   }
 
   /** The image model found for "auto" (once per run). */
@@ -1793,6 +1838,7 @@ export class Services {
     this.tasks.dispose();
     this.video.shutdown();
     this.photos.stop();
+    this.account.stop();
     this.fileIndex?.close?.();
     await this.webBrowser.close();
     this.desktop.backend.dispose();

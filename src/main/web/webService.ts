@@ -41,8 +41,14 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const DDG_ENDPOINT = 'https://html.duckduckgo.com/html/';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
-export type SearchEngine = 'auto' | 'brave' | 'duckduckgo';
-export type SearchSource = 'Brave Search' | 'DuckDuckGo';
+export type SearchEngine = 'auto' | 'keo' | 'brave' | 'duckduckgo';
+export type SearchSource = 'Keo Search' | 'Brave Search' | 'DuckDuckGo';
+
+/** Web search through Keo Cloud with the user's Keo account. */
+export interface CloudSearch {
+  signedIn(): boolean;
+  search(query: string, count: number, signal: AbortSignal): Promise<SearchResult[]>;
+}
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const MAX_TEXT_CHARS = 20000;
 const MAX_REDIRECTS = 4;
@@ -63,23 +69,60 @@ export class WebService {
     private readonly lookup: Lookup = (h) => dns.lookup(h, { all: true, verbatim: true }),
   ) {}
 
+  private cloud: CloudSearch | null = null;
+
+  /** Lets search go through Keo Cloud when the user is signed in to their Keo account. */
+  useCloud(c: CloudSearch): void {
+    this.cloud = c;
+  }
+
   hasKey(): boolean {
     return !!this.getKey();
   }
 
-  /** Which search the engine setting resolves to right now (null: Brave chosen but no key). */
+  /**
+   * Which search the engine setting resolves to right now (null: the chosen engine is not set up).
+   * 'auto': the user's own Brave key, else Keo Search with a Keo account, else DuckDuckGo.
+   */
   sourceFor(engine: SearchEngine): SearchSource | null {
     if (engine === 'duckduckgo') return 'DuckDuckGo';
+    if (engine === 'keo') return this.cloud?.signedIn() ? 'Keo Search' : null;
     if (this.hasKey()) return 'Brave Search';
-    return engine === 'auto' ? 'DuckDuckGo' : null;
+    if (engine === 'auto') return this.cloud?.signedIn() ? 'Keo Search' : 'DuckDuckGo';
+    return null;
   }
 
-  /** Search with the engine the user chose ('auto': Brave when a key is stored, else DuckDuckGo). */
+  /** Search with the engine the user chose (see sourceFor). */
   async find(query: string, opts: { count: number; freshness?: string; safesearch: 'off' | 'moderate' | 'strict'; engine: SearchEngine }, signal: AbortSignal): Promise<{ results: SearchResult[]; source: SearchSource }> {
     const source = this.sourceFor(opts.engine);
-    if (!source) throw new CapabilityError('unconfigured', 'Web search is set to Brave Search but no key is stored (Settings → Web search).');
+    if (!source) throw new CapabilityError('unconfigured', opts.engine === 'keo' ? 'Web search is set to Keo Search: sign in to your Keo account (Settings → Providers).' : 'Web search is set to Brave Search but no key is stored (Settings → Web search).');
+    if (source === 'Keo Search') {
+      try {
+        return { results: await this.searchKeo(query, opts.count, signal), source };
+      } catch (e) {
+        // Today's Keo searches used up (or not in the plan): 'auto' carries on with DuckDuckGo.
+        if (opts.engine === 'auto' && e instanceof CapabilityError && e.code === 'rate_limit') return { results: await this.searchDuckDuckGo(query, opts, signal), source: 'DuckDuckGo' };
+        throw e;
+      }
+    }
     const results = source === 'Brave Search' ? await this.search(query, opts, signal) : await this.searchDuckDuckGo(query, opts, signal);
     return { results, source };
+  }
+
+  private async searchKeo(query: string, count: number, signal: AbortSignal): Promise<SearchResult[]> {
+    if (!this.cloud) throw new CapabilityError('unconfigured', 'Keo Search needs a Keo account.');
+    try {
+      const results = (await this.cloud.search(query, Math.min(10, Math.max(1, count)), signal)).slice(0, 10);
+      this.log.info('web.search', { engine: 'keo', results: results.length, queryLength: query.length });
+      return results;
+    } catch (e) {
+      if (signal.aborted) throw new CapabilityError('cancelled', 'Search cancelled.');
+      const status = (e as { status?: number }).status ?? 0;
+      const message = (e as Error).message;
+      if (status === 403 || status === 429) throw new CapabilityError('rate_limit', message, { retryable: false });
+      if (status === 401) throw new CapabilityError('auth', message);
+      throw new CapabilityError(status ? 'search_failed' : 'network', message, { retryable: !status || status >= 500 });
+    }
   }
 
   /** DuckDuckGo's HTML results page (a fixed public host), parsed to titles, links and snippets; ads are skipped. */

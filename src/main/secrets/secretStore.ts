@@ -10,6 +10,8 @@ export interface SecretCipher {
 }
 
 export type SecretName =
+  /** The Keo account session (access + refresh token), not a provider key. */
+  | 'keo_account'
   | 'anthropic'
   | 'openai'
   | 'openrouter'

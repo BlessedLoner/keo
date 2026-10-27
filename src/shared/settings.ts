@@ -44,7 +44,7 @@ export const OpenAICompatSettings = z
 /** One side of smart routing: a provider and a model id ('' = that provider's own model setting). */
 export const RouteTarget = z
   .object({
-    provider: z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
+    provider: z.enum(['keo', 'anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/@-]*$/, 'Invalid model id').default(''),
   })
   .strict();
@@ -78,9 +78,18 @@ export const LaunchableApp = z
 export const SettingsSchema = z
   .object({
     version: z.literal(SETTINGS_VERSION).default(SETTINGS_VERSION),
-    activeProvider: z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
+    activeProvider: z.enum(['keo', 'anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
     providers: z
       .object({
+        /** Keo's own AI through Keo Cloud (the user's Keo account; no key). */
+        keo: OpenAICompatSettings.default({
+          baseUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',
+          model: 'keo-fast',
+          supportsTools: true,
+          supportsVision: true,
+          contextTokens: 128000,
+          maxOutputTokens: 8192,
+        }),
         anthropic: AnthropicSettings.prefault({}),
         openai: OpenAICompatSettings.default({
           baseUrl: 'https://api.openai.com/v1',
@@ -150,6 +159,7 @@ export const SettingsSchema = z
         launchableApps: z.array(LaunchableApp).max(50).default([]),
         visionExport: z
           .object({
+            keo: z.boolean().default(false),
             anthropic: z.boolean().default(false),
             openai: z.boolean().default(false),
             openrouter: z.boolean().default(false),
@@ -162,9 +172,11 @@ export const SettingsSchema = z
       .prefault({}),
     voice: z
       .object({
-        sttProvider: z.enum(['none', 'openai']).default('none'),
+        sttProvider: z.enum(['none', 'keo', 'openai']).default('none'),
         sttModel: modelId.default('gpt-4o-mini-transcribe'),
-        ttsEngine: z.enum(['none', 'system', 'openai']).default('system'),
+        ttsEngine: z.enum(['none', 'system', 'keo', 'openai']).default('system'),
+        /** Keo's own voice (with a Keo account): a female or a male voice. */
+        keoVoice: z.enum(['female', 'male']).default('female'),
         systemVoice: z.string().max(200).default(''),
         openaiTtsModel: modelId.default('gpt-4o-mini-tts'),
         openaiTtsVoice: z.string().regex(/^[a-z]{2,20}$/).default('alloy'),
@@ -177,7 +189,7 @@ export const SettingsSchema = z
     web: z
       .object({
         /** auto: Brave Search when a key is stored, otherwise DuckDuckGo (no key needed). */
-        engine: z.enum(['auto', 'brave', 'duckduckgo']).default('auto'),
+        engine: z.enum(['auto', 'keo', 'brave', 'duckduckgo']).default('auto'),
         safesearch: z.enum(['off', 'moderate', 'strict']).default('moderate'),
         resultsPerSearch: z.number().int().min(1).max(20).default(8),
       })
@@ -274,9 +286,11 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
-    /** Pictures Keo makes or changes with AI (through the user's OpenAI account; each one asks first). */
+    /** Pictures Keo makes or changes with AI (Keo Cloud or the user's OpenAI account; each one asks first). */
     pictures: z
       .object({
+        /** Who makes AI pictures: 'auto' = the user's OpenAI key if saved, else their Keo account. */
+        aiSource: z.enum(['auto', 'keo', 'openai']).default('auto'),
         /** The OpenAI image model; "auto" = the newest one the account can use. */
         aiModel: z.string().trim().min(3).max(80).regex(/^[A-Za-z0-9._-]+$/).default('auto'),
         /** Higher quality costs more per picture. */
@@ -445,6 +459,8 @@ export const SettingsSchema = z
         keoModeOnWake: z.boolean().default(false),
         /** The first-run welcome has been completed or skipped. */
         onboarded: z.boolean().default(false),
+        /** The user chose their own API key over a Keo account (skips the sign-in screen). */
+        ownKeys: z.boolean().default(false),
       })
       .strict()
       .prefault({}),

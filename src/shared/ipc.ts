@@ -1,3 +1,4 @@
+import type { AccountStatus } from './cloud';
 import { z } from 'zod';
 import type {
   MessageAttachment,
@@ -41,7 +42,7 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{6,64}$/, 'invalid id');
 const empty = z.object({}).strict();
 const text = (max: number) => z.string().max(max);
 
-export const ProviderIdSchema = z.enum(['anthropic', 'openai', 'openrouter', 'local', 'test']);
+export const ProviderIdSchema = z.enum(['keo', 'anthropic', 'openai', 'openrouter', 'local', 'test']);
 
 export const invokeSchemas = {
   'app:info': empty,
@@ -113,6 +114,12 @@ export const invokeSchemas = {
   'chat:pickAttachments': empty,
   'chat:attachBytes': z.object({ name: z.string().trim().min(1).max(200), dataBase64: z.string().max(36_000_000) }).strict(),
   'chat:attachScreenshot': empty,
+  'account:status': empty,
+  'account:signUp': z.object({ email: z.string().trim().email().max(254), password: z.string().min(8).max(200) }).strict(),
+  'account:signIn': z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict(),
+  'account:signOut': empty,
+  'account:resetPassword': z.object({ email: z.string().trim().email().max(254) }).strict(),
+  'account:refresh': empty,
   'picture:view': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
   'picture:open': z.object({ path: z.string().trim().min(3).max(1000), reveal: z.boolean().default(false) }).strict(),
   'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
@@ -361,6 +368,12 @@ export interface InvokeOutputs {
   'chat:attachScreenshot': AttachmentView;
   'chat:discardAttachment': { ok: true };
   'picture:view': { mimeType: string; dataBase64: string };
+  'account:status': AccountStatus;
+  'account:signUp': { needsConfirmation: boolean; status: AccountStatus };
+  'account:signIn': AccountStatus;
+  'account:signOut': AccountStatus;
+  'account:resetPassword': { ok: true };
+  'account:refresh': AccountStatus;
   'picture:open': { opened: boolean };
   'chat:retry': { accepted: true };
   'chat:cancel': { cancelled: boolean };

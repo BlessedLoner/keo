@@ -38,6 +38,12 @@ export const INVOKE_CHANNELS = [
   'chat:attachScreenshot',
   'chat:discardAttachment',
   'picture:view',
+  'account:status',
+  'account:signUp',
+  'account:signIn',
+  'account:signOut',
+  'account:resetPassword',
+  'account:refresh',
   'picture:open',
   'files:photosState',
   'files:photosEstimate',
@@ -199,6 +205,7 @@ export const pushChannels = [
   'jobs:changed',
   'schedule:changed',
   'presence:level',
+  'account:changed',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

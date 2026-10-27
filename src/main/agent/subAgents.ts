@@ -63,7 +63,8 @@ export async function runResearchAgent(d: SubAgentDeps, question: string, ctx: {
   const tools = d.registry.toolSpecs().filter((t) => SUB_AGENT_TOOLS.has(d.registry.resolveToolName(t.name) ?? ''));
   const result: SubAgentResult = { question, answer: '', findings: [], open: [], unsupported: 0, error: null, toolCalls: 0 };
   if (!tools.length) return { ...result, error: 'Web search and page reading are turned off (Settings → Web search).' };
-  const messages: NeutralMessage[] = [{ role: 'user', content: [{ type: 'text', text: `Question: ${question}` }] }];
+  const messages: NeutralMessage[] = [{ role: 'user', content: [{ type: 'text', text: `Question: ${question}
+(You have at most ${ctx.maxTurns} rounds of searching and reading: answer before they run out.)` }] }];
   for (let turn = 0; turn < ctx.maxTurns; turn++) {
     if (ctx.signal.aborted) return { ...result, error: 'Cancelled.' };
     const r = await provider.stream({ model, system: SUB_SYSTEM, messages, tools, maxOutputTokens: 1500, correlationId: ctx.correlationId }, { onText: () => undefined, onPhase: () => undefined }, ctx.signal);
@@ -108,6 +109,8 @@ export async function runResearchAgent(d: SubAgentDeps, question: string, ctx: {
       }
       results.push({ type: 'tool_result', callId: call.id, content, isError });
     }
+    // Smaller models keep searching until the rounds run out: the last round is for the answer.
+    if (turn === ctx.maxTurns - 2) results.push({ type: 'text', text: 'This is your last round: do not search or read any more. Reply now with ONLY the JSON answer, using the pages you have read (say what is still unclear).' });
     messages.push({ role: 'user', content: results });
   }
   return { ...result, error: `Stopped after ${ctx.maxTurns} rounds without a final answer.` };

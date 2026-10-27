@@ -1,0 +1,24 @@
+# Keo Cloud — the AI gateway on Cloudflare Workers.
+# Deploy:  cd cloud && npx wrangler deploy
+# Secrets (typed into your own terminal, never committed):
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#   npx wrangler secret put OPENROUTER_API_KEY
+name = "keo-cloud"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+SUPABASE_URL = "https://snacuyukgzizjqdwxexn.supabase.co"
+# The anon key is public by design (it only allows what the database's row-level security allows).
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNuYWN1eXVrZ3ppempxZHd4ZXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMTg5NzYsImV4cCI6MjEwODU5NDk3Nn0.b86L_GmzwJJ6O_JYoJKOw0RKtv6r8cMgOrNL69BOjtU"
+
+# Which OpenRouter models do the extra jobs. Change them here (or in Cloudflare → keo-cloud →
+# Settings → Variables) any time; see openrouter.ai/models for what exists and what it costs.
+KEO_SEARCH_MODEL = "openai/gpt-4o-mini"
+KEO_SEARCH_ENGINE = "exa"
+KEO_IMAGE_MODEL = "openai/gpt-image-1-mini"
+KEO_TTS_MODEL = "openai/gpt-audio-mini"
+KEO_STT_MODEL = "google/gemini-2.5-flash-lite"
+KEO_VOICE_FEMALE = "shimmer"
+KEO_VOICE_MALE = "echo"

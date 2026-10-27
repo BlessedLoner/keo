@@ -1,0 +1,333 @@
+import type { AccountStatus } from '../../shared/cloud';
+import { KEO_CLOUD } from '../../shared/cloud';
+import type { Logger } from '../logging/logger';
+import type { SecretStore } from '../secrets/secretStore';
+
+/**
+ * The user's Keo account: sign-up, sign-in, staying signed in, signing out — straight against
+ * Supabase Auth's REST API (no SDK) — and their plan, today's usage and models from Keo Cloud.
+ * The session (access + refresh token) is kept in the encrypted secret store; the password is
+ * never stored.
+ */
+export type CloudFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+interface Session {
+  access: string;
+  refresh: string;
+  /** ms since epoch. */
+  expiresAt: number;
+  email: string;
+}
+
+export interface CloudModel {
+  id: string;
+  label: string;
+  vision: boolean;
+  tools: boolean;
+  contextTokens: number;
+  maxOutputTokens: number;
+}
+
+export class AccountError extends Error {
+  constructor(
+    message: string,
+    /** Keo Cloud's HTTP status (403: not in the plan, 429: today's allowance used up). */
+    readonly status = 0,
+    readonly code = '',
+  ) {
+    super(message);
+  }
+}
+
+/** A web search result from Keo Cloud. */
+export interface CloudSearchResult {
+  title: string;
+  url: string;
+  description: string;
+  age: string | null;
+}
+
+export class KeoAccount {
+  private session: Session | null;
+  private pendingEmail: string | null = null;
+  private refreshing: Promise<void> | null = null;
+  private me: { plan: AccountStatus['plan']; usage: AccountStatus['usage']; at: number } | null = null;
+  private modelList: CloudModel[] = [];
+  private lastError: string | null = null;
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly d: { secrets: SecretStore; log: Logger; fetch?: CloudFetch; now?: () => number; config?: typeof KEO_CLOUD; changed?: () => void },
+  ) {
+    this.session = this.load();
+  }
+
+  private get cfg() {
+    return this.d.config ?? KEO_CLOUD;
+  }
+  private now() {
+    return this.d.now?.() ?? Date.now();
+  }
+  private f(url: string, init?: RequestInit) {
+    return (this.d.fetch ?? ((u, i) => fetch(u, i)))(url, init);
+  }
+
+  private load(): Session | null {
+    try {
+      const raw = this.d.secrets.get('keo_account');
+      const s = raw ? (JSON.parse(raw) as Session) : null;
+      return s?.access && s.refresh ? s : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private save(s: Session | null): void {
+    this.session = s;
+    if (s) this.d.secrets.set('keo_account', JSON.stringify(s));
+    else this.d.secrets.delete('keo_account');
+    this.d.changed?.();
+  }
+
+  signedIn(): boolean {
+    return !!this.session;
+  }
+
+  /** The current access token (refreshed in the background; `fresh()` before a request makes sure). */
+  token(): string | null {
+    return this.session?.access ?? null;
+  }
+
+  /** Keeps the session fresh: checks every few minutes while Keo runs. */
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.fresh().catch(() => undefined), 5 * 60_000);
+    this.timer.unref?.();
+    if (this.session) void this.refreshMe().catch(() => undefined);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  private async auth(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    let r: Response;
+    try {
+      r = await this.f(`${this.cfg.supabaseUrl}/auth/v1/${path}`, { method: 'POST', headers: { apikey: this.cfg.anonKey, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    } catch {
+      throw new AccountError('Keo could not reach its servers. Check your internet connection.');
+    }
+    const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!r.ok) throw new AccountError(friendly(j, r.status));
+    return j;
+  }
+
+  private fromTokens(j: Record<string, unknown>, email: string): Session {
+    const access = String(j.access_token ?? '');
+    const refresh = String(j.refresh_token ?? '');
+    if (!access || !refresh) throw new AccountError('Keo’s servers did not return a sign-in. Please try again.');
+    const expiresIn = Number(j.expires_in) || 3600;
+    return { access, refresh, expiresAt: this.now() + expiresIn * 1000, email };
+  }
+
+  /** Creates an account. Usually the user must confirm their email first (then sign in). */
+  async signUp(email: string, password: string): Promise<{ needsConfirmation: boolean }> {
+    const e = email.trim().toLowerCase();
+    const j = await this.auth('signup', { email: e, password });
+    if (j.access_token) {
+      this.save(this.fromTokens(j, e));
+      this.pendingEmail = null;
+      await this.refreshMe().catch(() => undefined);
+      return { needsConfirmation: false };
+    }
+    this.pendingEmail = e;
+    this.d.log.info('account.signed_up', {});
+    this.d.changed?.();
+    return { needsConfirmation: true };
+  }
+
+  async signIn(email: string, password: string): Promise<void> {
+    const e = email.trim().toLowerCase();
+    const j = await this.auth('token?grant_type=password', { email: e, password });
+    this.save(this.fromTokens(j, e));
+    this.pendingEmail = null;
+    this.d.log.info('account.signed_in', {});
+    await this.refreshMe().catch(() => undefined);
+  }
+
+  /** Emails a password-reset link. */
+  async resetPassword(email: string): Promise<void> {
+    await this.auth('recover', { email: email.trim().toLowerCase() });
+  }
+
+  async signOut(): Promise<void> {
+    const s = this.session;
+    this.save(null);
+    this.me = null;
+    this.modelList = [];
+    if (s) await this.f(`${this.cfg.supabaseUrl}/auth/v1/logout`, { method: 'POST', headers: { apikey: this.cfg.anonKey, authorization: `Bearer ${s.access}` } }).catch(() => undefined);
+    this.d.log.info('account.signed_out', {});
+  }
+
+  /** Makes sure the access token is valid for at least two more minutes. */
+  async fresh(): Promise<void> {
+    const s = this.session;
+    if (!s || s.expiresAt - this.now() > 120_000) return;
+    this.refreshing ??= (async () => {
+      try {
+        const j = await this.auth('token?grant_type=refresh_token', { refresh_token: s.refresh });
+        this.save(this.fromTokens(j, s.email));
+      } catch (e) {
+        // A refresh token Supabase no longer accepts: the user has to sign in again.
+        if (e instanceof AccountError && !/reach its servers/.test(e.message)) {
+          this.d.log.warn('account.session_ended', {});
+          this.save(null);
+        }
+        throw e;
+      } finally {
+        this.refreshing = null;
+      }
+    })();
+    await this.refreshing;
+  }
+
+  private async gateway<T>(path: string): Promise<T> {
+    await this.fresh();
+    const t = this.token();
+    if (!t) throw new AccountError('Sign in to your Keo account.');
+    let r: Response;
+    try {
+      r = await this.f(`${this.cfg.gatewayUrl}${path}`, { headers: { authorization: `Bearer ${t}` } });
+    } catch {
+      throw new AccountError('Keo could not reach Keo Cloud. Check your internet connection.');
+    }
+    const j = (await r.json().catch(() => ({}))) as { error?: { message?: string } };
+    if (!r.ok) throw new AccountError(j.error?.message ?? `Keo Cloud answered ${r.status}.`);
+    return j as T;
+  }
+
+  /** A request to one of Keo Cloud's services (search, pictures, voice) with the user's sign-in. */
+  private async post(path: string, body: unknown, signal: AbortSignal): Promise<Response> {
+    await this.fresh();
+    const t = this.token();
+    if (!t) throw new AccountError('Sign in to your Keo account first (Settings → Providers).');
+    let r: Response;
+    try {
+      r = await this.f(`${this.cfg.gatewayUrl}${path}`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal.aborted) throw e;
+      throw new AccountError('Keo could not reach Keo Cloud. Check your internet connection.');
+    }
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
+      throw new AccountError(j.error?.message ?? `Keo Cloud answered ${r.status}.`, r.status, j.error?.code ?? '');
+    }
+    this.refreshSoon();
+    return r;
+  }
+
+  /** Web search through Keo Cloud (counts toward the plan's daily searches). */
+  async search(query: string, count: number, signal: AbortSignal): Promise<CloudSearchResult[]> {
+    const r = await this.post('/search', { query, count }, signal);
+    const j = (await r.json().catch(() => ({}))) as { results?: CloudSearchResult[] };
+    return Array.isArray(j.results) ? j.results : [];
+  }
+
+  /** A new picture, or a changed copy of `image` (counts toward the plan's daily pictures). */
+  async image(o: { prompt: string; size: string; quality: string; background: string; image?: { data: Buffer; type: string } }, signal: AbortSignal): Promise<{ bytes: Buffer; mediaType: string }> {
+    const { image, ...rest } = o;
+    const r = await this.post('/images', { ...rest, ...(image ? { image: { data: image.data.toString('base64'), type: image.type } } : {}) }, signal);
+    const j = (await r.json().catch(() => ({}))) as { b64?: string; mediaType?: string };
+    if (!j.b64) throw new AccountError('Keo Cloud returned no picture.');
+    return { bytes: Buffer.from(j.b64, 'base64'), mediaType: j.mediaType ?? 'image/png' };
+  }
+
+  /** Text read aloud in Keo's voice (a WAV file). */
+  async speak(text: string, voice: 'female' | 'male', signal: AbortSignal): Promise<{ audio: Uint8Array; mimeType: string }> {
+    const r = await this.post('/speech', { text, voice }, signal);
+    return { audio: new Uint8Array(await r.arrayBuffer()), mimeType: r.headers.get('content-type') ?? 'audio/wav' };
+  }
+
+  /** A WAV recording turned into text. */
+  async transcribe(wav: Uint8Array, language: string, signal: AbortSignal): Promise<string> {
+    const r = await this.post('/transcribe', { audio: Buffer.from(wav).toString('base64'), format: 'wav', language }, signal);
+    const j = (await r.json().catch(() => ({}))) as { text?: string };
+    return j.text ?? '';
+  }
+
+  /** Reads the plan, today's usage and the plan's models from Keo Cloud. */
+  async refreshMe(): Promise<void> {
+    try {
+      const me = await this.gateway<{
+        plan: { id: string; name: string; daily_requests: number; daily_tokens: number; features: Record<string, unknown> };
+        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number };
+      }>('/me');
+      this.me = {
+        plan: { id: me.plan.id, name: me.plan.name, dailyRequests: me.plan.daily_requests, dailyTokens: me.plan.daily_tokens, features: me.plan.features ?? {} },
+        usage: {
+          day: me.usage.day,
+          requests: me.usage.requests,
+          inputTokens: me.usage.input_tokens,
+          outputTokens: me.usage.output_tokens,
+          webSearches: me.usage.web_searches ?? 0,
+          images: me.usage.images ?? 0,
+          voiceSeconds: me.usage.voice_seconds ?? 0,
+        },
+        at: this.now(),
+      };
+      const models = await this.gateway<{ data: Array<{ id: string; keo?: { label?: string; vision?: boolean; tools?: boolean; contextTokens?: number; maxOutputTokens?: number } }> }>('/models');
+      this.modelList = models.data.map((m) => ({
+        id: m.id,
+        label: m.keo?.label ?? m.id,
+        vision: m.keo?.vision ?? true,
+        tools: m.keo?.tools ?? true,
+        contextTokens: m.keo?.contextTokens ?? 128000,
+        maxOutputTokens: m.keo?.maxOutputTokens ?? 8192,
+      }));
+      this.lastError = null;
+    } catch (e) {
+      this.lastError = (e as Error).message;
+      throw e;
+    } finally {
+      this.d.changed?.();
+    }
+  }
+
+  private lastRefresh = 0;
+  /** Reads plan and usage again, at most every 30 s (after model calls). */
+  refreshSoon(): void {
+    if (this.now() - this.lastRefresh < 30_000) return;
+    this.lastRefresh = this.now();
+    void this.refreshMe().catch(() => undefined);
+  }
+
+  models(): CloudModel[] {
+    return this.modelList;
+  }
+
+  status(): AccountStatus {
+    return {
+      signedIn: !!this.session,
+      email: this.session?.email ?? null,
+      pendingEmail: this.pendingEmail,
+      plan: this.me?.plan ?? null,
+      usage: this.me?.usage ?? null,
+      error: this.session ? this.lastError : null,
+    };
+  }
+}
+
+/** Supabase's error, in plain words. */
+function friendly(j: Record<string, unknown>, status: number): string {
+  const code = String(j.error_code ?? j.code ?? j.error ?? '');
+  const msg = String(j.msg ?? j.error_description ?? j.message ?? '');
+  if (/invalid_credentials|invalid login/i.test(code + msg)) return 'The email or password is not right.';
+  if (/email_not_confirmed/i.test(code + msg)) return 'Confirm your email first: open the link Keo sent you, then sign in.';
+  if (/user_already_exists|already registered/i.test(code + msg)) return 'There is already a Keo account with this email. Sign in instead.';
+  if (/weak_password|password should be/i.test(code + msg)) return 'Choose a longer password (at least 8 characters, with letters and numbers).';
+  if (/over_email_send_rate_limit|rate limit/i.test(code + msg) || status === 429) return 'Too many tries just now. Wait a minute and try again.';
+  if (/invalid.*refresh|refresh_token_not_found|session_not_found/i.test(code + msg)) return 'Your Keo sign-in has ended. Sign in again.';
+  if (/email.*invalid|validation_failed/i.test(code + msg)) return 'That email address does not look right.';
+  return msg ? `Keo’s servers said: ${msg.slice(0, 160)}` : `Keo’s servers answered ${status}.`;
+}

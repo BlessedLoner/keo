@@ -1,3 +1,4 @@
+import { AccountPanel, useAccount } from '../components/AccountPanel';
 import { useCallback, useEffect, useState } from 'react';
 import type { PhotoIndexState, ProviderDiagnostic, ProviderInfo, SelfTestResult, VideoToolsSetup } from '@shared/domain';
 import type { WakeStatusInfo, WebStatus } from '@shared/ipc';
@@ -230,7 +231,7 @@ function Files({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
-/** Pictures: local edits need nothing; AI pictures use the user's OpenAI key and ask before each one. */
+/** Pictures: local edits need nothing; AI pictures use Keo Cloud or the user's OpenAI key and ask before each one. */
 function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
   const [model, setModel] = useState(s.pictures.aiModel);
   return (
@@ -240,9 +241,17 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
         Keo edits pictures on this PC for free with the video tools (ffmpeg): text in any Windows font, crop, colours, a logo on a photo, rounded corners — and short animations (zoom, float, pulse, spin, text that slides in) as MP4 or GIF. Results are new files in Documents\Keo; your originals are never changed.
       </p>
       <p className="muted small">
-        Making a new picture from a description, an AI redesign or removing a background uses your OpenAI account (Settings → Providers → OpenAI). Each one costs money and Keo asks you first, showing what is sent.
+        Making a new picture from a description, an AI redesign or removing a background uses your Keo account (it counts toward your plan’s daily pictures) or your own OpenAI key. Keo asks you first each time, showing what is sent.
       </p>
       <div className="grid-2">
+        <div className="field">
+          <label htmlFor="pic-source">Pictures made with</label>
+          <select id="pic-source" className="select" value={s.pictures.aiSource} onChange={(e) => void patch({ pictures: { aiSource: e.target.value as Settings['pictures']['aiSource'] } })}>
+            <option value="auto">Automatic — my OpenAI key if saved, otherwise my Keo account</option>
+            <option value="keo">My Keo account</option>
+            <option value="openai">My OpenAI key</option>
+          </select>
+        </div>
         <div className="field">
           <label htmlFor="pic-model">OpenAI image model (“auto” picks the newest your account has)</label>
           <input
@@ -406,13 +415,30 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
   const list = app.providers.data ?? [];
   return (
     <>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Keo uses your own provider account. API keys are encrypted with Windows (DPAPI) via Electron safeStorage, stay in the main process, and are never shown again or logged.
-      </p>
-      {list.map((p) => (
-        <ProviderCard key={p.id} p={p} active={s.activeProvider === p.id} s={s} patch={patch} />
-      ))}
-      <SmartRouting s={s} patch={patch} list={list} />
+      <section className="card" aria-label="Keo account">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>Keo account</h2>
+          {s.activeProvider === 'keo' && <span className="chip ok">In use</span>}
+        </div>
+        <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the daily allowance.</p>
+        <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
+      </section>
+      <details className="card" open={s.ui.ownKeys || (!!s.activeProvider && s.activeProvider !== 'keo')}>
+        <summary>
+          <strong>Advanced: use your own API key</strong>
+        </summary>
+        <p className="muted small">
+          For people who already pay an AI provider. API keys are encrypted with Windows (DPAPI) via Electron safeStorage, stay in the main process, and are never shown again or logged.
+        </p>
+        <label className="row small" style={{ gap: 8, marginBottom: 10 }}>
+          <input type="checkbox" checked={s.ui.ownKeys} onChange={(e) => void patch({ ui: { ownKeys: e.target.checked } })} />
+          Use Keo without a Keo account (skip the sign-in screen)
+        </label>
+        {list.filter((p) => p.id !== 'keo').map((p) => (
+          <ProviderCard key={p.id} p={p} active={s.activeProvider === p.id} s={s} patch={patch} />
+        ))}
+        <SmartRouting s={s} patch={patch} list={list} />
+      </details>
     </>
   );
 }
@@ -1117,6 +1143,9 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
     return () => speechSynthesis.removeEventListener('voiceschanged', load);
   }, []);
   const openai = app.providers.data?.find((p) => p.id === 'openai');
+  const keo = useAccount();
+  const keoNote = keo?.signedIn ? '' : '(needs your Keo account)';
+  const sendsTo = v.sttProvider === 'keo' ? 'Keo Cloud' : 'OpenAI';
   return (
     <>
       <section className="card">
@@ -1127,15 +1156,21 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
             <label htmlFor="stt">Speech-to-text provider</label>
             <select id="stt" className="select" value={v.sttProvider} onChange={(e) => void patch({ voice: { sttProvider: e.target.value } })}>
               <option value="none">Off</option>
+              <option value="keo">Keo’s listening (Keo account) {keoNote}</option>
               <option value="openai">OpenAI transcription {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>
             </select>
           </div>
-          <div className="field">
-            <label htmlFor="stt-model">Transcription model</label>
-            <input id="stt-model" className="input" defaultValue={v.sttModel} onBlur={(e) => void patch({ voice: { sttModel: e.target.value } })} />
-          </div>
+          {v.sttProvider === 'openai' ? (
+            <div className="field">
+              <label htmlFor="stt-model">Transcription model</label>
+              <input id="stt-model" className="input" defaultValue={v.sttModel} onBlur={(e) => void patch({ voice: { sttModel: e.target.value } })} />
+            </div>
+          ) : (
+            <div />
+          )}
         </div>
-        <Toggle checked={v.audioExportConsent} onChange={(c) => void patch({ voice: { audioExportConsent: c } })} label="I allow Keo to send my voice recordings to OpenAI for transcription" />
+        <Toggle checked={v.audioExportConsent} onChange={(c) => void patch({ voice: { audioExportConsent: c } })} label={`I allow Keo to send my voice recordings to ${sendsTo} for transcription`} />
+        {v.sttProvider === 'keo' && <p className="small muted">Counts toward your plan’s daily voice minutes. Recordings are turned into text and not kept.</p>}
         <p className="small muted">Microphone permission: {app.voice.micPermission === 'granted' ? 'granted' : app.voice.micPermission === 'denied' ? 'denied by Windows or you' : 'requested the first time you record'}.</p>
       </section>
       <section className="card">
@@ -1146,11 +1181,28 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
             <select id="tts" className="select" value={v.ttsEngine} onChange={(e) => void patch({ voice: { ttsEngine: e.target.value } })}>
               <option value="none">Off</option>
               <option value="system">Windows voices (local, offline)</option>
+              <option value="keo">Keo’s voice (Keo account) {keoNote}</option>
               <option value="openai">OpenAI voices (cloud) {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>
             </select>
-            <span className="hint">{v.ttsEngine === 'system' ? 'The emblem animates on spoken word boundaries.' : v.ttsEngine === 'openai' ? 'Reply text is sent to OpenAI; the emblem follows the real audio level.' : ''}</span>
+            <span className="hint">
+              {v.ttsEngine === 'system'
+                ? 'The emblem animates on spoken word boundaries.'
+                : v.ttsEngine === 'keo'
+                  ? 'Reply text is sent to Keo Cloud and counts toward your plan’s daily voice minutes.'
+                  : v.ttsEngine === 'openai'
+                    ? 'Reply text is sent to OpenAI; the emblem follows the real audio level.'
+                    : ''}
+            </span>
           </div>
-          {v.ttsEngine === 'system' ? (
+          {v.ttsEngine === 'keo' ? (
+            <div className="field">
+              <label htmlFor="keovoice">Keo’s voice</label>
+              <select id="keovoice" className="select" value={v.keoVoice} onChange={(e) => void patch({ voice: { keoVoice: e.target.value as 'female' | 'male' } })}>
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+              </select>
+            </div>
+          ) : v.ttsEngine === 'system' ? (
             <div className="field">
               <label htmlFor="sysvoice">Windows voice</label>
               <select id="sysvoice" className="select" value={v.systemVoice} onChange={(e) => void patch({ voice: { systemVoice: e.target.value } })}>
@@ -1265,7 +1317,8 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
         <div className="field">
           <label htmlFor="engine">Search engine</label>
           <select id="engine" className="select" value={s.web.engine} onChange={(e) => void patch({ web: { engine: e.target.value } })}>
-            <option value="auto">Automatic — Brave Search with a key, otherwise DuckDuckGo</option>
+            <option value="auto">Automatic — your Brave key, else Keo Search with your Keo account, else DuckDuckGo</option>
+            <option value="keo">Keo Search only (needs your Keo account)</option>
             <option value="brave">Brave Search only (needs the key)</option>
             <option value="duckduckgo">DuckDuckGo (no key)</option>
           </select>

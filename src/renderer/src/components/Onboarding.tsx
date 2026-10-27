@@ -1,27 +1,65 @@
-import { useState } from 'react';
-import type { ProviderDiagnostic, ProviderId } from '@shared/domain';
-import type { LinkId } from '@shared/release';
-import { errText, invoke } from '../lib/api';
-import { useApp } from '../state/AppState';
-import { KeoEmblem } from './KeoEmblem';
+import { AccountPanel, useAccount } from "./AccountPanel";
+import { useState } from "react";
+import type { ProviderDiagnostic, ProviderId } from "@shared/domain";
+import type { LinkId } from "@shared/release";
+import { errText, invoke } from "../lib/api";
+import { useApp } from "../state/AppState";
+import { KeoEmblem } from "./KeoEmblem";
 
-type Choice = Exclude<ProviderId, 'test'>;
+type Choice = Exclude<ProviderId, "test">;
 
-const PROVIDERS: Array<{ id: Choice; title: string; text: string; keyLink: LinkId | null; model: string; modelHint: string }> = [
+const PROVIDERS: Array<{
+  id: Choice;
+  title: string;
+  text: string;
+  keyLink: LinkId | null;
+  model: string;
+  modelHint: string;
+}> = [
   {
-    id: 'openrouter',
-    title: 'OpenRouter',
-    text: 'One key for many models (OpenAI, Anthropic, Google, open models). Easiest start.',
-    keyLink: 'openrouterKeys',
-    model: 'openai/gpt-4o-mini',
-    modelHint: 'e.g. openai/gpt-4o-mini, anthropic/claude-sonnet-4.5',
+    id: "keo",
+    title: "Keo account (recommended)",
+    text: "No API keys: create a free account and start. Upgrade any time for more.",
+    keyLink: null,
+    model: "keo-fast",
+    modelHint: "",
   },
-  { id: 'openai', title: 'OpenAI', text: 'Use your OpenAI API key directly.', keyLink: 'openaiKeys', model: 'gpt-4o-mini', modelHint: 'e.g. gpt-4o-mini' },
-  { id: 'anthropic', title: 'Anthropic (Claude)', text: 'Use your Anthropic API key directly.', keyLink: 'anthropicKeys', model: 'claude-sonnet-5-5', modelHint: 'e.g. claude-sonnet-5-5' },
-  { id: 'local', title: 'Local model', text: 'Free and private: a model running on this PC (Ollama, LM Studio). No key needed.', keyLink: 'ollama', model: '', modelHint: 'the model name in your local server' },
+  {
+    id: "openrouter",
+    title: "OpenRouter",
+    text: "One key for many models (OpenAI, Anthropic, Google, open models). Easiest start.",
+    keyLink: "openrouterKeys",
+    model: "openai/gpt-4o-mini",
+    modelHint: "e.g. openai/gpt-4o-mini, anthropic/claude-sonnet-4.5",
+  },
+  {
+    id: "openai",
+    title: "OpenAI",
+    text: "Use your OpenAI API key directly.",
+    keyLink: "openaiKeys",
+    model: "gpt-4o-mini",
+    modelHint: "e.g. gpt-4o-mini",
+  },
+  {
+    id: "anthropic",
+    title: "Anthropic (Claude)",
+    text: "Use your Anthropic API key directly.",
+    keyLink: "anthropicKeys",
+    model: "claude-sonnet-5-5",
+    modelHint: "e.g. claude-sonnet-5-5",
+  },
+  {
+    id: "local",
+    title: "Local model",
+    text: "Free and private: a model running on this PC (Ollama, LM Studio). No key needed.",
+    keyLink: "ollama",
+    model: "",
+    modelHint: "the model name in your local server",
+  },
 ];
 
-const open = (id: LinkId) => void invoke('app:openLink', { id }).catch(() => undefined);
+const open = (id: LinkId) =>
+  void invoke("app:openLink", { id }).catch(() => undefined);
 
 /**
  * First-run welcome for a new installation: what Keo is, connecting an AI
@@ -32,17 +70,25 @@ const open = (id: LinkId) => void invoke('app:openLink', { id }).catch(() => und
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const app = useApp();
   const [step, setStep] = useState(0);
-  const [choice, setChoice] = useState<Choice>('openrouter');
+  const [choice, setChoice] = useState<Choice>("keo");
   const p = PROVIDERS.find((x) => x.id === choice)!;
-  const [key, setKey] = useState('');
+  const [key, setKey] = useState("");
   const [model, setModel] = useState(p.model);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [brave, setBrave] = useState('');
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const [brave, setBrave] = useState("");
   const [braveNote, setBraveNote] = useState<string | null>(null);
+  // Signed in to Keo (the sign-in screen comes first): no provider step to show.
+  const signedIn = !!useAccount()?.signedIn;
+  const steps = signedIn ? [0, 2, 3] : [0, 1, 2, 3];
+  const at = Math.max(0, steps.indexOf(step));
 
   const finish = async () => {
-    await invoke('settings:update', { patch: { ui: { onboarded: true } } }).catch(() => undefined);
+    await invoke("settings:update", {
+      patch: { ui: { onboarded: true } },
+    }).catch(() => undefined);
     onDone();
   };
 
@@ -50,16 +96,26 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setResult(null);
     try {
-      if (choice !== 'local') {
-        if (key.trim().length < 8) throw new Error('Paste your API key first.');
-        await invoke('providers:setKey', { providerId: choice, apiKey: key.trim() });
+      if (choice !== "local") {
+        if (key.trim().length < 8) throw new Error("Paste your API key first.");
+        await invoke("providers:setKey", {
+          providerId: choice,
+          apiKey: key.trim(),
+        });
       }
-      const providerPatch = choice === 'anthropic' ? { anthropic: { model: model.trim() || p.model } } : { [choice]: { model: model.trim() } };
-      await invoke('settings:update', { patch: { activeProvider: choice, providers: providerPatch } });
-      const d: ProviderDiagnostic = await invoke('providers:diagnose', { providerId: choice });
+      const providerPatch =
+        choice === "anthropic"
+          ? { anthropic: { model: model.trim() || p.model } }
+          : { [choice]: { model: model.trim() } };
+      await invoke("settings:update", {
+        patch: { activeProvider: choice, providers: providerPatch },
+      });
+      const d: ProviderDiagnostic = await invoke("providers:diagnose", {
+        providerId: choice,
+      });
       setResult({ ok: d.ok, text: d.message });
       void app.providers.refresh();
-      if (d.ok) setKey('');
+      if (d.ok) setKey("");
     } catch (e) {
       setResult({ ok: false, text: errText(e) });
     } finally {
@@ -69,23 +125,32 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   const saveBrave = async () => {
     try {
-      await invoke('web:setKey', { apiKey: brave.trim() });
-      await invoke('settings:update', { patch: { permissions: { webSearchEnabled: true, webFetchEnabled: true } } });
-      setBrave('');
-      setBraveNote('Saved. Web search is on.');
+      await invoke("web:setKey", { apiKey: brave.trim() });
+      await invoke("settings:update", {
+        patch: {
+          permissions: { webSearchEnabled: true, webFetchEnabled: true },
+        },
+      });
+      setBrave("");
+      setBraveNote("Saved. Web search is on.");
     } catch (e) {
       setBraveNote(errText(e));
     }
   };
 
   return (
-    <div className="onboarding-backdrop" role="dialog" aria-modal="true" aria-label="Welcome to Keo">
+    <div
+      className="onboarding-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Welcome to Keo"
+    >
       <div className="onboarding">
         <div className="row" style={{ gap: 12, marginBottom: 6 }}>
           <KeoEmblem state="idle" size={44} />
           <div className="grow">
             <h2 style={{ margin: 0 }}>Welcome to Keo</h2>
-            <span className="muted small">Step {step + 1} of 4</span>
+            <span className="muted small">Step {at + 1} of {steps.length}</span>
           </div>
           <button className="btn sm ghost" onClick={() => void finish()}>
             Skip setup
@@ -94,19 +159,30 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 0 && (
           <>
-            <p>Keo is a personal AI agent that runs on your Windows computer. It can chat, research, remember what matters to you, and — only when you allow it — work in your apps (Notepad, your browser, WhatsApp…).</p>
+            <p>
+              Keo is a personal AI agent that runs on your Windows computer. It
+              can chat, research, remember what matters to you, and — only when
+              you allow it — work in your apps (Notepad, your browser,
+              WhatsApp…).
+            </p>
             <ul className="onboarding-points">
               <li>
-                <strong>Your computer, your data.</strong> Conversations, memory and settings stay on this PC. There is no Keo account and no Keo server.
+                <strong>Your computer, your data.</strong> Conversations, memory
+                and settings stay on this PC.
               </li>
               <li>
-                <strong>Your own AI key.</strong> You connect the AI provider you choose; its messages go only to that provider.
+                <strong>Ready to use.</strong> With a free Keo account, Keo’s AI
+                works right away — no API keys. Your messages go through Keo
+                Cloud to the AI model and are not kept there. Prefer your own
+                key? That works too.
               </li>
               <li>
-                <strong>Nothing happens behind your back.</strong> Using your apps is off until you turn it on, and by default every action asks you first. <strong>Stop</strong> halts everything at once.
+                <strong>Nothing happens behind your back.</strong> Using your
+                apps is off until you turn it on, and by default every action
+                asks you first. <strong>Stop</strong> halts everything at once.
               </li>
             </ul>
-            <button className="link-btn small" onClick={() => open('privacy')}>
+            <button className="link-btn small" onClick={() => open("privacy")}>
               Read the privacy note
             </button>
           </>
@@ -114,10 +190,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 1 && (
           <>
-            <p>Choose where Keo’s thinking happens. You pay the provider directly for what you use.</p>
-            <div className="choice-list" role="radiogroup" aria-label="AI provider">
+            <p>
+              Choose where Keo’s thinking happens: Keo’s own AI with a free
+              account, or an AI provider with your own key (you pay them
+              directly).
+            </p>
+            <div
+              className="choice-list"
+              role="radiogroup"
+              aria-label="AI provider"
+            >
               {PROVIDERS.map((x) => (
-                <label key={x.id} className={`choice ${choice === x.id ? 'selected' : ''}`}>
+                <label
+                  key={x.id}
+                  className={`choice ${choice === x.id ? "selected" : ""}`}
+                >
                   <input
                     type="radio"
                     name="provider"
@@ -130,66 +217,134 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   />
                   <span>
                     <strong>{x.title}</strong>
-                    <span className="muted small" style={{ display: 'block' }}>
+                    <span className="muted small" style={{ display: "block" }}>
                       {x.text}
                     </span>
                   </span>
                 </label>
               ))}
             </div>
-            {choice !== 'local' && (
+            {choice === "keo" && (
+              <div style={{ marginTop: 10 }}>
+                <AccountPanel
+                  onSignedIn={() =>
+                    setResult({
+                      ok: true,
+                      text: "You’re signed in. Keo’s AI is ready.",
+                    })
+                  }
+                />
+                {result?.ok && <p className="small muted">{result.text}</p>}
+              </div>
+            )}
+            {choice !== "local" && choice !== "keo" && (
               <div className="field" style={{ marginTop: 10 }}>
                 <label htmlFor="ob-key">API key</label>
                 <div className="row">
-                  <input id="ob-key" className="input grow" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your key" />
+                  <input
+                    id="ob-key"
+                    className="input grow"
+                    type="password"
+                    autoComplete="off"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="Paste your key"
+                  />
                   {p.keyLink && (
                     <button className="btn sm" onClick={() => open(p.keyLink!)}>
                       Get a key
                     </button>
                   )}
                 </div>
-                <span className="muted small">Stored encrypted by Windows on this PC; never shown again.</span>
+                <span className="muted small">
+                  Stored encrypted by Windows on this PC; never shown again.
+                </span>
               </div>
             )}
-            {choice === 'local' && (
+            {choice === "local" && (
               <p className="muted small">
-                Start your local server first (for Ollama: install it, then run a model). Keo connects to it on this PC only.{' '}
-                <button className="link-btn" onClick={() => open('ollama')}>
+                Start your local server first (for Ollama: install it, then run
+                a model). Keo connects to it on this PC only.{" "}
+                <button className="link-btn" onClick={() => open("ollama")}>
                   Get Ollama
                 </button>
               </p>
             )}
-            <div className="field">
-              <label htmlFor="ob-model">Model</label>
-              <input id="ob-model" className="input" value={model} onChange={(e) => setModel(e.target.value)} placeholder={p.modelHint} />
-              <span className="muted small">{p.modelHint}. You can change it later in Settings → Providers.</span>
-            </div>
-            <div className="row">
-              <button className="btn primary" disabled={busy || (choice !== 'local' && key.trim().length < 8) || (choice !== 'anthropic' && !model.trim())} onClick={() => void connect()}>
-                {busy ? 'Connecting…' : 'Connect and test'}
-              </button>
-              {result && <span className={`chip ${result.ok ? 'ok' : 'danger'}`}>{result.ok ? 'Connected' : 'Not connected'}</span>}
-            </div>
-            {result && <p className={`small ${result.ok ? 'muted' : ''}`}>{result.text}</p>}
+            {choice !== "keo" && (
+              <>
+                <div className="field">
+                  <label htmlFor="ob-model">Model</label>
+                  <input
+                    id="ob-model"
+                    className="input"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={p.modelHint}
+                  />
+                  <span className="muted small">
+                    {p.modelHint}. You can change it later in Settings →
+                    Providers.
+                  </span>
+                </div>
+                <div className="row">
+                  <button
+                    className="btn primary"
+                    disabled={
+                      busy ||
+                      (choice !== "local" && key.trim().length < 8) ||
+                      (choice !== "anthropic" && !model.trim())
+                    }
+                    onClick={() => void connect()}
+                  >
+                    {busy ? "Connecting…" : "Connect and test"}
+                  </button>
+                  {result && (
+                    <span className={`chip ${result.ok ? "ok" : "danger"}`}>
+                      {result.ok ? "Connected" : "Not connected"}
+                    </span>
+                  )}
+                </div>
+                {result && (
+                  <p className={`small ${result.ok ? "muted" : ""}`}>
+                    {result.text}
+                  </p>
+                )}
+              </>
+            )}
           </>
         )}
 
         {step === 2 && (
           <>
             <p>
-              <strong>Optional:</strong> let Keo search the web for research and current information. It uses a Brave Search API key (there is a free tier).
+              <strong>Optional:</strong> let Keo search the web for research and
+              current information. It uses a Brave Search API key (there is a
+              free tier).
             </p>
             <div className="row">
-              <input className="input grow" type="password" autoComplete="off" value={brave} onChange={(e) => setBrave(e.target.value)} placeholder="Brave Search API key (optional)" />
-              <button className="btn sm" onClick={() => open('braveKeys')}>
+              <input
+                className="input grow"
+                type="password"
+                autoComplete="off"
+                value={brave}
+                onChange={(e) => setBrave(e.target.value)}
+                placeholder="Brave Search API key (optional)"
+              />
+              <button className="btn sm" onClick={() => open("braveKeys")}>
                 Get a key
               </button>
-              <button className="btn sm primary" disabled={brave.trim().length < 8} onClick={() => void saveBrave()}>
+              <button
+                className="btn sm primary"
+                disabled={brave.trim().length < 8}
+                onClick={() => void saveBrave()}
+              >
                 Save
               </button>
             </div>
             {braveNote && <p className="small muted">{braveNote}</p>}
-            <p className="muted small">You can skip this and add it later in Settings → Web search.</p>
+            <p className="muted small">
+              You can skip this and add it later in Settings → Web search.
+            </p>
           </>
         )}
 
@@ -198,36 +353,45 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p>You’re ready. A few things to know:</p>
             <ul className="onboarding-points">
               <li>
-                <strong>Working in your apps</strong> is off until you allow it in <em>Access</em> — you choose exactly which apps Keo may use.
+                <strong>Working in your apps</strong> is off until you allow it
+                in <em>Access</em> — you choose exactly which apps Keo may use.
               </li>
               <li>
-                <strong>Approvals:</strong> Keo asks before each action. When you trust it more (e.g. for voice use), choose a level in Settings → Approvals &amp; live chat.
+                <strong>Approvals:</strong> Keo asks before each action. When
+                you trust it more (e.g. for voice use), choose a level in
+                Settings → Approvals &amp; live chat.
               </li>
               <li>
-                <strong>Quick commands:</strong> press <kbd>Ctrl</kbd>+<kbd>K</kbd> anywhere; a wake word (“Hey Keo”) can be turned on in Settings → Voice.
+                <strong>Quick commands:</strong> press <kbd>Ctrl</kbd>+
+                <kbd>K</kbd> anywhere; a wake word (“Hey Keo”) can be turned on
+                in Settings → Voice.
               </li>
             </ul>
-            <p className="muted small">Try: “Research the best budget microphone and summarise it”, “Open Notepad and write a short cover letter”, or “Chat with Ma on WhatsApp until I say stop”.</p>
+            <p className="muted small">
+              Try: “Research the best budget microphone and summarise it”, “Open
+              Notepad and write a short cover letter”, or “Chat with Ma on
+              WhatsApp until I say stop”.
+            </p>
           </>
         )}
 
         <div className="row" style={{ marginTop: 14 }}>
           {step > 0 && (
-            <button className="btn ghost" onClick={() => setStep(step - 1)}>
+            <button className="btn ghost" onClick={() => setStep(steps[at - 1] ?? 0)}>
               Back
             </button>
           )}
           <span className="grow" />
           {step < 3 ? (
-            <button className="btn primary" onClick={() => setStep(step + 1)}>
-              {step === 1 && !result?.ok ? 'Skip for now' : 'Next'}
+            <button className="btn primary" onClick={() => setStep(steps[at + 1] ?? 3)}>
+              {step === 1 && !result?.ok ? "Skip for now" : "Next"}
             </button>
           ) : (
             <button
               className="btn primary"
               onClick={() => {
                 void finish();
-                if (app.view !== 'chat') app.setView('chat');
+                if (app.view !== "chat") app.setView("chat");
               }}
             >
               Start using Keo

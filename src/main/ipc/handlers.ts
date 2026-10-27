@@ -91,6 +91,12 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     pencilShortcut: host.pencilShortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.pencil, enabled: s.settings.get().shortcuts.pencilEnabled, registered: false, error: 'Not available in this build.' },
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
+  /** After signing in: Keo's own AI is used, unless the user already has a working provider. */
+  const useKeoIfNothingElse = () => {
+    const cur = s.settings.get().activeProvider;
+    const working = cur && cur !== 'keo' && s.providers.has(cur) && s.providers.get(cur).status().kind === 'ready';
+    if (!working) s.settings.update({ activeProvider: 'keo' });
+  };
   const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
@@ -384,6 +390,42 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       if (!png) throw new KeoError('unavailable', 'Taking a screenshot is not available in this build.');
       return view(await s.attachments.fromPicture(`Screenshot ${new Date().toLocaleTimeString()}.png`, png));
     },
+    'account:status': () => s.account.status(),
+    'account:signUp': async ({ email, password }) => {
+      try {
+        const r = await s.account.signUp(email, password);
+        if (!r.needsConfirmation) useKeoIfNothingElse();
+        return { needsConfirmation: r.needsConfirmation, status: s.account.status() };
+      } catch (e) {
+        throw new KeoError('account', (e as Error).message);
+      }
+    },
+    'account:signIn': async ({ email, password }) => {
+      try {
+        await s.account.signIn(email, password);
+      } catch (e) {
+        throw new KeoError('account', (e as Error).message);
+      }
+      useKeoIfNothingElse();
+      return s.account.status();
+    },
+    'account:signOut': async () => {
+      await s.account.signOut();
+      if (s.settings.get().activeProvider === 'keo') s.settings.update({ activeProvider: null });
+      return s.account.status();
+    },
+    'account:resetPassword': async ({ email }) => {
+      try {
+        await s.account.resetPassword(email);
+      } catch (e) {
+        throw new KeoError('account', (e as Error).message);
+      }
+      return { ok: true as const };
+    },
+    'account:refresh': async () => {
+      await s.account.refreshMe().catch(() => undefined);
+      return s.account.status();
+    },
     'picture:view': ({ path: p }) => {
       const v = s.viewablePicture(p);
       if (!v) throw new KeoError('forbidden', 'Keo shows only pictures and animations from Documents\\Keo or your allowed folders.');
@@ -545,7 +587,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'web:test': async () => {
       try {
         const { results: r, source } = await s.web.find('Keo desktop assistant test', { count: 3, safesearch: 'moderate', engine: s.settings.get().web.engine }, abortAfter(20000));
-        return { ok: true, message: `${source} answered with ${r.length} result(s).${source === 'Brave Search' ? ' This used one query from your plan.' : ''}`, sample: r.slice(0, 3).map((x) => ({ title: x.title, url: x.url })) };
+        return { ok: true, message: `${source} answered with ${r.length} result(s).${source === 'Brave Search' ? ' This used one query from your plan.' : source === 'Keo Search' ? ' This used one of today’s Keo searches.' : ''}`, sample: r.slice(0, 3).map((x) => ({ title: x.title, url: x.url })) };
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : String(e), sample: [] };
       }
@@ -629,7 +671,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
 
     'voice:transcribe': async ({ audio, mimeType }) => ({ text: await s.voice.transcribe(audio, mimeType, abortAfter(120000)) }),
-    'voice:speak': async ({ text }) => ({ audio: await s.voice.speak(text, abortAfter(120000)), mimeType: 'audio/mpeg' }),
+    'voice:speak': async ({ text }) => s.voice.speak(text, abortAfter(120000)),
 
     'presence:get': () => s.presence.get(),
     'voice:level': (v) => {

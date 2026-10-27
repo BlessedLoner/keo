@@ -156,4 +156,36 @@ describe('research sub-agents', () => {
     expect([...toolsSeenBySub].sort()).toEqual(['web__fetch_page', 'web__search']);
     expect(m.content).toBe('Merged answer.');
   });
+
+  it('asks a sub-agent that keeps searching for its answer before its rounds run out', async () => {
+    let rounds = 0;
+    let firstAsk = '';
+    let merged = '';
+    h = makeHarness({
+      web: web(),
+      script: (req: ChatRequest) => {
+        const text = JSON.stringify(req.messages.at(-1)?.content ?? '');
+        if (req.system.startsWith('You are a research sub-agent')) {
+          rounds++;
+          if (text.includes('Question:')) firstAsk = text;
+          // Like a small model: one more search every round, until told this is the last one.
+          if (!text.includes('This is your last round')) return call('web__search', { query: `mics ${rounds}` });
+          return reply(JSON.stringify({ answer: 'Both are good podcast mics.', findings: [], open: ['prices'] }));
+        }
+        if (text.includes('tool_result')) merged = text;
+        if (text.includes('compare two mics')) return call('agents__research', { goal: 'Compare mics', questions: ['What does the Shure MV7+ offer?', 'What does the Rode PodMic USB offer?'] });
+        return reply('Merged.');
+      },
+    });
+    h.services.settings.update({ permissions: { webFetchEnabled: true, webSearchEnabled: true } });
+    h.services.secrets.set('brave', 'test-key');
+    const conv = h.services.conversations.create('r');
+    const m = await h.services.agent.send(conv.id, 'compare two mics').done;
+    const out = m.meta.tools?.find((x) => x.capabilityId === 'agents.research');
+    expect(out?.outcome).toBe('executed');
+    expect(firstAsk).toMatch(/at most 6 rounds/);
+    expect(rounds).toBe(12); // 6 rounds each, the last one answering
+    expect(merged).toMatch(/Both are good podcast mics/);
+    expect(merged).not.toMatch(/Stopped after/);
+  });
 });

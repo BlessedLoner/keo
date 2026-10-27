@@ -12,7 +12,7 @@ import {
   type ToolCall,
 } from './types';
 
-type Kind = 'openai' | 'openrouter' | 'local';
+type Kind = 'openai' | 'openrouter' | 'local' | 'keo';
 
 export type ClientFactory = (opts: { apiKey: string; baseURL: string }) => OpenAI;
 
@@ -70,7 +70,7 @@ export class OpenAICompatProvider implements ChatProvider {
 
   destination(): string {
     try {
-      const suffix = this.kind === 'local' ? ' (this computer)' : this.kind === 'openrouter' ? ' (OpenRouter → model vendor)' : ' (OpenAI)';
+      const suffix = this.kind === 'local' ? ' (this computer)' : this.kind === 'openrouter' ? ' (OpenRouter → model vendor)' : this.kind === 'keo' ? ' (Keo Cloud → AI model)' : ' (OpenAI)';
       return `${new URL(this.cfg().baseUrl).host}${suffix}`;
     } catch {
       return 'invalid URL';
@@ -352,8 +352,9 @@ export class OpenAICompatProvider implements ChatProvider {
   }
 }
 
-const LABEL: Record<Kind, string> = { openai: 'OpenAI', openrouter: 'OpenRouter', local: 'Local model (OpenAI-compatible)' };
+const LABEL: Record<Kind, string> = { openai: 'OpenAI', openrouter: 'OpenRouter', local: 'Local model (OpenAI-compatible)', keo: 'Keo' };
 const DESCRIPTION: Record<Kind, string> = {
+  keo: 'Keo’s own AI with your Keo account: no API keys. Requests go through Keo Cloud to the AI model; your plan sets the models and daily allowance.',
   openai: 'OpenAI models via the official Chat Completions API, using your own OpenAI API key. Also provides optional speech-to-text and text-to-speech.',
   openrouter:
     'Models from many vendors (OpenAI, Anthropic, Google, Meta and others) through OpenRouter’s OpenAI-compatible API, using your own OpenRouter key. Requests pass through OpenRouter to the chosen model’s vendor. No voice features.',
@@ -396,6 +397,12 @@ export function describeReportedCapabilities(raw: unknown): string {
 }
 
 export function mapOpenAIError(err: unknown, signal: AbortSignal | undefined, label: string): ProviderError {
+  // Keo Cloud explains itself (plan limits, sign-in): show its own message.
+  if (label === 'Keo' && err instanceof OpenAI.APIError && err.status) {
+    const m = (err.error as { message?: string } | undefined)?.message ?? err.message;
+    const kind = err.status === 401 ? 'auth' : err.status === 403 || err.status === 429 || err.status === 402 ? 'quota' : err.status >= 500 ? 'server' : 'bad_request';
+    return new ProviderError(kind, m, { status: err.status, retryable: err.status >= 500 });
+  }
   if (err instanceof ProviderError) return err;
   if (signal?.aborted || err instanceof OpenAI.APIUserAbortError) return new ProviderError('cancelled', 'Request cancelled.');
   if (err instanceof OpenAI.AuthenticationError) return new ProviderError('auth', `${label} rejected the API key (401).`, { status: 401 });

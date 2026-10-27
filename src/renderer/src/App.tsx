@@ -1,3 +1,5 @@
+import { useAccount } from './components/AccountPanel';
+import { SignInGate } from './components/SignInGate';
 import { useEffect, useState } from 'react';
 import type { UpdateDownload, UpdateInfo } from '@shared/domain';
 import { Onboarding } from './components/Onboarding';
@@ -44,16 +46,21 @@ export function App() {
   }, [app]);
 
   const provider = app.activeProvider;
-  // First run: show the welcome until it is finished or skipped. An installation that already has a
-  // working provider (e.g. after an update) is simply marked as set up.
+  // Keo opens on the sign-in screen until the user signs in to their Keo account, unless they
+  // chose their own API key (Settings → Providers → Advanced) or this is the dev test provider.
+  const account = useAccount();
   const settingsLoaded = !!app.settings.data;
+  const showSignIn = settingsLoaded && !!account && !account.signedIn && !app.settings.data?.ui.ownKeys && app.settings.data?.activeProvider !== 'test';
+  // First run: show the welcome until it is finished or skipped. An installation that already has a
+  // working provider of its own (e.g. after an update) is simply marked as set up.
   const onboarded = app.settings.data?.ui.onboarded ?? true;
   const ready = provider?.status.kind === 'ready';
+  const setUpBefore = ready && provider?.id !== 'keo';
   const [welcomeClosed, setWelcomeClosed] = useState(false);
   useEffect(() => {
-    if (settingsLoaded && !onboarded && ready) void invoke('settings:update', { patch: { ui: { onboarded: true } } }).catch(() => undefined);
-  }, [settingsLoaded, onboarded, ready]);
-  const showWelcome = settingsLoaded && !onboarded && !ready && !welcomeClosed;
+    if (settingsLoaded && !onboarded && setUpBefore) void invoke('settings:update', { patch: { ui: { onboarded: true } } }).catch(() => undefined);
+  }, [settingsLoaded, onboarded, setUpBefore]);
+  const showWelcome = settingsLoaded && !showSignIn && !onboarded && !setUpBefore && !welcomeClosed;
   const routing = app.settings.data?.routing;
   const routeName = (side: 'fast' | 'strong') => {
     const t = routing?.[side];
@@ -109,6 +116,7 @@ export function App() {
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>
+      {showSignIn && <SignInGate />}
       {showWelcome && <Onboarding onDone={() => setWelcomeClosed(true)} />}
     </div>
   );

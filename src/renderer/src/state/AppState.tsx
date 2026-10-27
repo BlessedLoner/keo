@@ -95,7 +95,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
   useEffect(() => voice.subscribe(setVoiceState), []);
   // Warm up the system voice once when Keo may talk (wake word or spoken replies are on).
-  const mayTalk = !!settings.data && (settings.data.wake.enabled || settings.data.voice.speakResponses) && settings.data.voice.ttsEngine !== 'openai';
+  const mayTalk = !!settings.data && (settings.data.wake.enabled || settings.data.voice.speakResponses) && settings.data.voice.ttsEngine === 'system';
   useEffect(() => {
     if (mayTalk) voice.prime();
   }, [mayTalk]);

@@ -254,7 +254,7 @@ export class PictureStudio {
     if (!ai)
       throw new PictureError(
         "no_ai",
-        "Making pictures needs an OpenAI API key (Settings → Providers → OpenAI).",
+        "Making pictures needs your Keo account (Settings → Providers) or an OpenAI API key.",
       );
     const png = await ai.generate(
       { prompt, size: o.size, quality: o.quality, background: o.background },
@@ -281,7 +281,7 @@ export class PictureStudio {
     if (!ai)
       throw new PictureError(
         "no_ai",
-        "Changing pictures with AI needs an OpenAI API key (Settings → Providers → OpenAI).",
+        "Changing pictures with AI needs your Keo account (Settings → Providers) or an OpenAI API key.",
       );
     this.checkSource(source);
     const bytes = fs.readFileSync(source);

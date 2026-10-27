@@ -481,3 +481,10 @@ video.pic-media { cursor: default; }
 .pic-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pic-lightbox { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgba(0, 0, 0, 0.85); cursor: zoom-out; animation: km-in 160ms ease-out both; }
 .pic-lightbox img { max-width: 92vw; max-height: 90vh; border-radius: 12px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7); }
+
+/* ---------------------------------------------------------------- the Keo account */
+.account-panel { display: flex; flex-direction: column; gap: 10px; }
+.account-form { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+.account-usage { display: flex; flex-direction: column; gap: 5px; }
+.usage-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; max-width: 460px; }
+.usage-bar span { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #5aa9ff, #a98bff); transition: width 400ms ease; }

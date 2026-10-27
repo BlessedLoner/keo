@@ -167,8 +167,10 @@ class VoiceController {
       let text: string | null = null;
       try {
         if (blob.size < 2000) throw new Error('The recording was too short.');
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        text = (await invoke('voice:transcribe', { audio: bytes, mimeType: 'audio/webm' })).text;
+        // Sent as WAV (16 kHz mono), which every speech service understands; the raw recording if it cannot be decoded.
+        const wav = await toWav(blob).catch(() => null);
+        const audio = wav ?? new Uint8Array(await blob.arrayBuffer());
+        text = (await invoke('voice:transcribe', { audio, mimeType: wav ? 'audio/wav' : 'audio/webm' })).text;
         if (!text) this.set({ error: 'No speech was recognised.' });
       } catch (e) {
         this.set({ error: e instanceof Error ? e.message : String(e) });
@@ -204,7 +206,8 @@ class VoiceController {
 
   // -- speech output ----------------------------------------------------------
 
-  async speak(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<void> {
+  /** 'keo' and 'openai' are both cloud voices: the audio comes from the main process (voice:speak). */
+  async speak(text: string, engine: 'system' | 'openai' | 'keo' | 'none', systemVoice: string): Promise<void> {
     this.stopSpeaking();
     const clean = speakable(text);
     if (!clean || engine === 'none') return;
@@ -318,11 +321,11 @@ class VoiceController {
    * began (it is then cancelled, so it cannot start late — while Keo listens, or after voice mode).
    * A Windows voice can take several seconds to start the first time.
    */
-  async speakAndWait(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
-    if (engine === 'openai') {
+  async speakAndWait(text: string, engine: 'system' | 'openai' | 'keo' | 'none', systemVoice: string): Promise<'spoken' | 'no_start'> {
+    if (engine === 'openai' || engine === 'keo') {
       // The cloud voice resolves when it has finished (or was stopped).
       this.lastPlayed = false;
-      await this.speak(text, 'openai', systemVoice);
+      await this.speak(text, engine, systemVoice);
       return this.lastPlayed ? 'spoken' : 'no_start';
     }
     await this.speak(text, engine === 'none' ? 'system' : engine, systemVoice);
@@ -349,10 +352,10 @@ class VoiceController {
    * voice could not say it. Parts play one after another without a gap (the next part's audio is
    * already downloading while one plays), so a reply sounds like one continuous answer.
    */
-  enqueue(text: string, engine: 'system' | 'openai' | 'none', systemVoice: string): Promise<'spoken' | 'no_start' | 'skipped'> {
+  enqueue(text: string, engine: 'system' | 'openai' | 'keo' | 'none', systemVoice: string): Promise<'spoken' | 'no_start' | 'skipped'> {
     const clean = speakable(text);
     if (!clean) return Promise.resolve('spoken');
-    const eng = engine === 'openai' ? 'openai' : 'system';
+    const eng = engine === 'openai' || engine === 'keo' ? 'openai' : 'system';
     return new Promise((resolve) => {
       const item: (typeof this.queue)[number] = { text: clean, engine: eng, systemVoice, seq: this.speechSeq, resolve };
       if (eng === 'openai') {
@@ -482,3 +485,33 @@ export function speakable(md: string): string {
 }
 
 export const voice = new VoiceController();
+
+/** A recording as a 16 kHz mono 16-bit WAV file (what speech-to-text services read best). */
+async function toWav(blob: Blob): Promise<Uint8Array<ArrayBuffer>> {
+  const ctx = new AudioContext();
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer()).finally(() => void ctx.close());
+  const rate = 16000;
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const tag = (at: number, t: string) => [...t].forEach((c, i) => out.setUint8(at + i, c.charCodeAt(0)));
+  tag(0, 'RIFF');
+  out.setUint32(4, 36 + pcm.length * 2, true);
+  tag(8, 'WAVE');
+  tag(12, 'fmt ');
+  out.setUint32(16, 16, true);
+  out.setUint16(20, 1, true);
+  out.setUint16(22, 1, true);
+  out.setUint32(24, rate, true);
+  out.setUint32(28, rate * 2, true);
+  out.setUint16(32, 2, true);
+  out.setUint16(34, 16, true);
+  tag(36, 'data');
+  out.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i]!)) * 0x7fff, true);
+  return new Uint8Array(out.buffer);
+}
