@@ -312,7 +312,10 @@ export class Services {
       ...(d.cloudFetch ? { fetch: d.cloudFetch } : {}),
       ...(d.confirmPollMs ? { confirmPollMs: d.confirmPollMs } : {}),
       changed: () => this.push('account:changed', this.account.status()),
-      accountChanged: (userId) => d.onAccountChange?.(userId),
+      accountChanged: (userId) => {
+        if (userId) this.useKeoIfNothingElse();
+        d.onAccountChange?.(userId);
+      },
     });
     this.providers = new ProviderService(getSettings, this.secrets, this.log, { testProvider: d.testProvider ?? null, keoAccount: this.account });
     this.account.start();
@@ -1727,7 +1730,20 @@ export class Services {
   }
 
   /** Startup recovery: interrupted messages and tasks are surfaced, never replayed blindly. */
+  /**
+   * Signed in to a Keo account: Keo's own AI is the one in use, unless this account already uses
+   * a working provider of its own (for example the user's own key). Runs at every start, so an
+   * account opened after sign-up, sign-in or switching accounts is ready to chat right away.
+   */
+  useKeoIfNothingElse(): void {
+    if (!this.account.signedIn()) return;
+    const cur = this.settings.get().activeProvider;
+    const working = cur && cur !== 'keo' && cur !== 'test' && this.providers.has(cur) && this.providers.get(cur).status().kind === 'ready';
+    if (!working && cur !== 'keo') this.settings.update({ activeProvider: 'keo' });
+  }
+
   start(): { interruptedMessages: number; recovery: ReturnType<TaskOrchestrator['recover']> } {
+    this.useKeoIfNothingElse();
     const interruptedMessages = this.conversations.markInterrupted();
     const recovery = this.tasks.recover();
     const interruptedJobs = this.jobs.recover();

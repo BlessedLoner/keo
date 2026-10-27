@@ -416,10 +416,35 @@ function switchAccountFolder(next: AccountState): void {
   accountState = next;
   if (same) return;
   log.info('app.switch_account_folder', { mode: next.mode });
-  setTimeout(() => {
+  setTimeout(restartKeo, 400);
+}
+
+/** Set while this (development) Keo hands over to a new one and waits for it. */
+let devHandover = false;
+
+/**
+ * Starts Keo again. In development (electron-vite) the dev server stops as soon as this process
+ * ends, which left the new window blank: there, the new Keo starts first and this one — windows
+ * closed, data saved and closed — waits in the background until it ends.
+ */
+function restartKeo(): void {
+  if (!DEV_URL) {
     app.relaunch();
     app.exit(0);
-  }, 400);
+    return;
+  }
+  devHandover = true;
+  presenceWindows?.shutdown();
+  presenceWindows = null;
+  for (const w of BrowserWindow.getAllWindows()) w.destroy();
+  const saved = services ? services.shutdown().catch(() => undefined) : Promise.resolve();
+  void saved.then(() => {
+    services = null;
+    app.releaseSingleInstanceLock();
+    const next = spawn(process.execPath, process.argv.slice(1), { env: process.env, stdio: 'inherit' });
+    next.on('exit', (code) => app.exit(code ?? 0));
+    next.on('error', () => app.exit(1));
+  });
 }
 
 app.whenReady().then(() => {
@@ -568,10 +593,7 @@ app.whenReady().then(() => {
         const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
         return r.canceled ? null : (r.filePaths[0] ?? null);
       },
-      relaunch: () => {
-        app.relaunch();
-        app.exit(0);
-      },
+      relaunch: () => restartKeo(),
       useLocal: () => switchAccountFolder({ mode: 'local', userId: null }),
       openMain: (view) => showMain(view),
       showCommandBar: () => presenceWindows?.showCommandBar(),
@@ -668,6 +690,7 @@ app.whenReady().then(() => {
 // Closing the main window keeps Keo running in the companion (if enabled);
 // with no companion, closing the last window quits.
 app.on('window-all-closed', () => {
+  if (devHandover) return; // the new Keo is starting; this one waits for it
   app.quit();
 });
 

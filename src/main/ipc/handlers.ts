@@ -94,11 +94,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     shortcut: host.shortcutStatus?.() ?? { accelerator: s.settings.get().shortcuts.commandBar, enabled: s.settings.get().shortcuts.commandBarEnabled, registered: false, error: 'Not available in this build.' },
   });
   /** After signing in: Keo's own AI is used, unless the user already has a working provider. */
-  const useKeoIfNothingElse = () => {
-    const cur = s.settings.get().activeProvider;
-    const working = cur && cur !== 'keo' && s.providers.has(cur) && s.providers.get(cur).status().kind === 'ready';
-    if (!working) s.settings.update({ activeProvider: 'keo' });
-  };
+  const useKeoIfNothingElse = () => s.useKeoIfNothingElse();
   const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();

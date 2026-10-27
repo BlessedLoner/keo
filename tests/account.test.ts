@@ -223,6 +223,18 @@ describe('Keo account', () => {
     expect(h.services.settings.get().activeProvider).toBeNull();
   });
 
+  it('an account opens ready to chat with Keo’s AI, unless it already uses a working provider of its own', async () => {
+    await signedIn();
+    h.services.settings.update({ activeProvider: null });
+    h.services.start(); // Keo opening on this account (after sign-up, sign-in or switching)
+    expect(h.services.settings.get().activeProvider).toBe('keo');
+    // Someone who chose their own OpenAI key keeps it.
+    h.services.secrets.set('openai', 'sk-test-not-real');
+    h.services.settings.update({ activeProvider: 'openai', providers: { openai: { model: 'gpt-test' } } });
+    h.services.useKeoIfNothingElse();
+    expect(h.services.settings.get().activeProvider).toBe('openai');
+  });
+
   it('tells the app when the signed-in account changes (so it opens that account’s own data)', async () => {
     await signedIn();
     expect(changes).toEqual(['11111111-1111-4111-8111-111111111111']);
