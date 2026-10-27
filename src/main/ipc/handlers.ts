@@ -100,7 +100,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
-    return { clientId: s.settings.get().calendar.googleClientId, builtIn: !!s.builtinGoogle, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
+    return { clientId: s.settings.get().calendar.googleClientId, builtIn: !!s.builtinGoogle, builtInId: s.builtinGoogle?.id ?? null, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
   };
   const webStatus = () => {
     const st = s.settings.get();
@@ -411,7 +411,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'account:signOut': async () => {
       await s.account.signOut();
-      if (s.settings.get().activeProvider === 'keo') s.settings.update({ activeProvider: null });
+      // Like any signed-in app: signing out goes back to the sign-in screen (not to "no provider").
+      s.settings.update({ ui: { ownKeys: false }, ...(s.settings.get().activeProvider === 'keo' ? { activeProvider: null } : {}) });
       return s.account.status();
     },
     'account:resetPassword': async ({ email }) => {

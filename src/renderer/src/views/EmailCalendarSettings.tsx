@@ -267,7 +267,8 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
   }, [ui, s.calendar.googleClientId]);
   // Keo's built-in client is used unless the user entered their own.
   const builtIn = !!status?.builtIn;
-  const own = !!clientId.trim();
+  // Keo's own client typed in by hand counts as Keo's (one click, no setup shown).
+  const own = !!clientId.trim() && clientId.trim() !== status?.builtInId;
   const canSignIn = own ? /\.apps\.googleusercontent\.com$/.test(clientId.trim()) : builtIn;
   const days = status?.signedInAt ? Math.floor((Date.now() - new Date(status.signedInAt).getTime()) / 86400_000) : null;
   const signIn = async () => {

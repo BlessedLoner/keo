@@ -423,7 +423,7 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
         <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the daily allowance.</p>
         <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
       </section>
-      <details className="card" open={s.ui.ownKeys || (!!s.activeProvider && s.activeProvider !== 'keo')}>
+      <details className="card">
         <summary>
           <strong>Advanced: use your own API key</strong>
         </summary>
@@ -1268,6 +1268,10 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
   const [key, setKey] = useState('');
   const [test, setTest] = useState<{ ok: boolean; message: string; sample: Array<{ title: string; url: string }> } | null>(null);
   const [testing, setTesting] = useState(false);
+  const account = useAccount();
+  // With a Keo account, search is part of the plan: the own-key options wait under "Advanced".
+  const keo = !!account?.signedIn;
+  const daily = typeof account?.plan?.features.web_search === 'number' ? (account.plan.features.web_search as number) : null;
   useEffect(() => {
     void invoke('web:status').then(setStatus, (e) => ui.error(errText(e)));
   }, [ui, s]);
@@ -1284,13 +1288,27 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
     <>
       <section className="card">
         <div className="row">
-          <h2 style={{ margin: 0 }}>Brave Search</h2>
-          {status?.hasKey ? <span className="chip ok">Key stored</span> : <span className="chip warn">No key</span>}
+          <h2 style={{ margin: 0 }}>Web search</h2>
+          {keo ? <span className="chip ok">Keo Search</span> : status?.hasKey ? <span className="chip ok">Brave key stored</span> : <span className="chip">DuckDuckGo</span>}
           {status && (status.searchEnabled ? <span className="chip ok">Search on</span> : <span className="chip">Search off</span>)}
         </div>
         <p className="muted small">
-          Lets Keo research with live web results. Queries go to api.search.brave.com using your key and plan quota. The key is encrypted with Windows (DPAPI) and never shown again.
+          {keo
+            ? `Keo Search is included in your Keo plan${daily ? ` (${daily.toLocaleString()} searches a day)` : ''}. When today’s searches are used up, Keo carries on with DuckDuckGo for free.`
+            : 'Lets Keo research with live web results: with a Keo account (Keo Search), your own Brave Search key, or DuckDuckGo (no key).'}
         </p>
+        {status && !status.searchEnabled && (
+          <div className="banner info small" style={{ marginBottom: 10 }}>
+            <Icon name="shield" size={15} />
+            <div className="grow">Web search and page reading are switched on separately in Access.</div>
+            <button className="btn sm" onClick={() => app.setView('capabilities')}>
+              Open Access
+            </button>
+          </div>
+        )}
+        <details className="small" open={!keo} style={{ marginBottom: 10 }}>
+          <summary>{keo ? 'Advanced: use your own Brave Search key or another engine' : 'Search engine and your own Brave Search key'}</summary>
+          <p className="muted small">Brave Search queries go to api.search.brave.com using your key and plan quota. The key is encrypted with Windows (DPAPI) and never shown again.</p>
         <div className="field">
           <label htmlFor="brave-key">API key</label>
           <div className="row">
@@ -1305,15 +1323,6 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
             )}
           </div>
         </div>
-        {status && !status.searchEnabled && (
-          <div className="banner info small" style={{ marginBottom: 10 }}>
-            <Icon name="shield" size={15} />
-            <div className="grow">Web search and page reading are switched on separately in Access.</div>
-            <button className="btn sm" onClick={() => app.setView('capabilities')}>
-              Open Access
-            </button>
-          </div>
-        )}
         <div className="field">
           <label htmlFor="engine">Search engine</label>
           <select id="engine" className="select" value={s.web.engine} onChange={(e) => void patch({ web: { engine: e.target.value } })}>
@@ -1324,6 +1333,7 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
           </select>
           <span className="muted small">DuckDuckGo needs no key: Keo reads its plain results page. It may slow down if you search a lot.</span>
         </div>
+        </details>
         <div className="grid-2">
           <div className="field">
             <label htmlFor="safe">Safe search</label>
@@ -1355,7 +1365,7 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
           >
             {testing ? <span className="spinner" /> : <Icon name="search" size={14} />} Test search
           </button>
-          <span className="muted small">Runs one real query{status?.hasKey && s.web.engine !== 'duckduckgo' ? ' (counts toward your Brave quota)' : ' on DuckDuckGo'}.</span>
+          <span className="muted small">Runs one real search.</span>
         </div>
         {test && (
           <div className={`banner ${test.ok ? 'info' : 'danger'} small`} style={{ marginTop: 10 }}>

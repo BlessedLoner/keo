@@ -18,6 +18,49 @@ export function useAccount(): AccountStatus | null {
   return a;
 }
 
+export type Note = { ok: boolean; text: string } | null;
+
+/** Create account / sign in / forgot password: the form's state and actions (sign-in screen and Settings). */
+export function useAuthForm(onSignedIn?: () => void) {
+  const [mode, setMode] = useState<'signin' | 'signup'>('signup');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<Note>(null);
+  const submit = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      if (mode === 'signup') {
+        const r = await invoke('account:signUp', { email, password });
+        if (r.needsConfirmation) {
+          setNote({ ok: true, text: `Almost there: open the link we sent to ${email.trim()}, then come back and sign in.` });
+          setMode('signin');
+        } else onSignedIn?.();
+      } else {
+        await invoke('account:signIn', { email, password });
+        setPassword('');
+        onSignedIn?.();
+      }
+    } catch (e) {
+      setNote({ ok: false, text: errText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reset = async () => {
+    if (!email.includes('@')) return setNote({ ok: false, text: 'Type your email first.' });
+    try {
+      await invoke('account:resetPassword', { email });
+      setNote({ ok: true, text: `If there is a Keo account for ${email.trim()}, a link to choose a new password is on its way.` });
+    } catch (e) {
+      setNote({ ok: false, text: errText(e) });
+    }
+  };
+  const ready = email.includes('@') && password.length >= (mode === 'signup' ? 8 : 1);
+  return { mode, setMode, email, setEmail, password, setPassword, busy, note, setNote, submit, reset, ready };
+}
+
 /** "Renews around 30 November 2026" / "Ends 30 November 2026" / a payment problem. */
 function billingLine(b: NonNullable<AccountStatus['billing']>): string {
   const day = b.until ? new Date(b.until).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : null;
@@ -41,11 +84,9 @@ function extras(features: Record<string, unknown>, u: NonNullable<AccountStatus[
  */
 export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSignedIn?: () => void; activeProvider?: string | null; onUseKeo?: () => void }) {
   const a = useAccount();
-  const [mode, setMode] = useState<'signin' | 'signup'>('signup');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const f = useAuthForm(onSignedIn);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [note, setNote] = useState<Note>(null);
 
   if (!a) return <div className="muted small">Loading…</div>;
 
@@ -107,36 +148,7 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
     );
   }
 
-  const submit = async () => {
-    setBusy(true);
-    setNote(null);
-    try {
-      if (mode === 'signup') {
-        const r = await invoke('account:signUp', { email, password });
-        if (r.needsConfirmation) {
-          setNote({ ok: true, text: `Almost there: open the link we sent to ${email.trim()}, then come back and sign in.` });
-          setMode('signin');
-        } else onSignedIn?.();
-      } else {
-        await invoke('account:signIn', { email, password });
-        setPassword('');
-        onSignedIn?.();
-      }
-    } catch (e) {
-      setNote({ ok: false, text: errText(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-  const reset = async () => {
-    if (!email.includes('@')) return setNote({ ok: false, text: 'Type your email first.' });
-    try {
-      await invoke('account:resetPassword', { email });
-      setNote({ ok: true, text: `If there is a Keo account for ${email.trim()}, a link to choose a new password is on its way.` });
-    } catch (e) {
-      setNote({ ok: false, text: errText(e) });
-    }
-  };
+  const { mode, setMode, email, setEmail, password, setPassword, submit, reset } = f;
 
   return (
     <div className="account-panel">
@@ -167,8 +179,8 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
           required
         />
         <div className="row">
-          <button className="btn primary" type="submit" disabled={busy || !email.includes('@') || password.length < (mode === 'signup' ? 8 : 1)}>
-            {busy ? 'Please wait…' : mode === 'signup' ? 'Create my Keo account' : 'Sign in'}
+          <button className="btn primary" type="submit" disabled={f.busy || !f.ready}>
+            {f.busy ? 'Please wait…' : mode === 'signup' ? 'Create my Keo account' : 'Sign in'}
           </button>
           {mode === 'signin' && (
             <button type="button" className="link-btn small" onClick={() => void reset()}>
@@ -177,8 +189,8 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
           )}
         </div>
       </form>
-      {a.pendingEmail && !note && <p className="small muted">Check {a.pendingEmail} for the confirmation link, then sign in.</p>}
-      {note && <p className={`small ${note.ok ? 'muted' : ''}`} style={note.ok ? undefined : { color: 'var(--danger, #ff5d6c)' }}>{note.text}</p>}
+      {a.pendingEmail && !f.note && <p className="small muted">Check {a.pendingEmail} for the confirmation link, then sign in.</p>}
+      {f.note && <p className={`small ${f.note.ok ? 'muted' : ''}`} style={f.note.ok ? undefined : { color: 'var(--danger, #ff5d6c)' }}>{f.note.text}</p>}
       <p className="muted small">The Free plan is included. Your messages go through Keo Cloud to the AI model; Keo Cloud does not keep them.</p>
       <p className="muted small">
         By creating an account you agree to Keo’s{' '}

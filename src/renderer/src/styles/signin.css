@@ -1,0 +1,334 @@
+/* Keo's sign-in screen: the whole window, with the intro video gliding aside for the form. */
+
+.signin {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: hidden;
+  background: #000;
+  color: #f2f2f2;
+  font-family: inherit;
+}
+
+/* The window can still be moved by its top strip (Windows draws its buttons on the right). */
+.signin-drag {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--titlebar-h, 38px);
+  -webkit-app-region: drag;
+  z-index: 3;
+}
+
+.signin-glow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 55% at 50% 48%, rgba(255, 255, 255, 0.06), transparent 70%);
+  transition: background 1100ms ease;
+  pointer-events: none;
+}
+.signin.form .signin-glow {
+  background: radial-gradient(45% 50% at 27% 42%, rgba(255, 255, 255, 0.07), transparent 70%),
+    radial-gradient(40% 40% at 75% 55%, rgba(255, 255, 255, 0.03), transparent 70%);
+}
+
+/* The video: big and centred during the intro, then smaller in the left half. */
+.signin-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(880px, 82vw);
+  transform: translate(-50%, -50%);
+  transition:
+    left 1100ms cubic-bezier(0.65, 0, 0.2, 1),
+    top 1100ms cubic-bezier(0.65, 0, 0.2, 1),
+    width 1100ms cubic-bezier(0.65, 0, 0.2, 1);
+  animation: signin-in 900ms ease both;
+  /* The video's black lets the glow behind it show through, so there is no visible box. */
+  mix-blend-mode: lighten;
+}
+.signin-stage video {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The video's own near-black becomes the screen's true black, and its edges fade out. */
+  filter: contrast(1.18) brightness(0.98);
+  mask-image: radial-gradient(70% 72% at 50% 50%, #000 48%, transparent 98%);
+}
+.signin.form .signin-stage {
+  left: 27%;
+  top: 36%;
+  width: min(520px, 40vw);
+  animation: none;
+}
+
+@keyframes signin-in {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+.signin-skip {
+  position: absolute;
+  right: 28px;
+  bottom: 26px;
+  z-index: 2;
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #bdbdbd;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.signin-skip:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Under the robot: what Keo is. */
+.signin-pitch {
+  position: absolute;
+  left: 27%;
+  top: calc(36% + min(150px, 12vw));
+  width: min(440px, 40vw);
+  transform: translateX(-50%);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 700ms ease 900ms, transform 700ms ease 900ms;
+}
+.signin.form .signin-pitch {
+  opacity: 1;
+  pointer-events: auto;
+}
+.signin-pitch h1 {
+  margin: 0 0 14px;
+  font-size: clamp(20px, 2.1vw, 28px);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.signin-pitch ul {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  color: #a8a8a8;
+  font-size: 14px;
+}
+.signin-pitch li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.signin-pitch li svg {
+  color: #fff;
+  flex: none;
+}
+
+/* The form, on the right. */
+.signin-card {
+  position: absolute;
+  right: max(6vw, 28px);
+  top: 50%;
+  width: min(400px, 42vw);
+  padding: 30px 30px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  transform: translate(40px, -50%);
+  pointer-events: none;
+  transition: opacity 700ms ease 650ms, transform 800ms cubic-bezier(0.2, 0.8, 0.2, 1) 650ms;
+}
+.signin.form .signin-card {
+  opacity: 1;
+  transform: translate(0, -50%);
+  pointer-events: auto;
+}
+.signin-card h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+.signin-sub {
+  margin: 6px 0 20px;
+  color: #9a9a9a;
+  font-size: 14px;
+}
+.signin-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.signin-tabs button {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: #9a9a9a;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+.signin-tabs button.on {
+  background: #fff;
+  color: #000;
+  font-weight: 600;
+}
+.signin-field {
+  display: block;
+  margin-bottom: 12px;
+}
+.signin-field span {
+  display: block;
+  margin-bottom: 6px;
+  color: #bdbdbd;
+  font-size: 13px;
+}
+.signin-field input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.signin-field input:focus {
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.07);
+}
+.signin-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 6px;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  color: #000;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 160ms ease;
+}
+.signin-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.signin-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.signin-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  font: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.signin-link.right {
+  display: block;
+  margin: -4px 0 8px auto;
+  font-size: 13px;
+  text-decoration: none;
+  color: #bdbdbd;
+}
+.signin-link.muted {
+  color: #8a8a8a;
+  font-size: 13px;
+  text-decoration: none;
+}
+.signin-link:hover {
+  color: #fff;
+}
+.signin-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.signin-note.ok {
+  background: rgba(126, 226, 168, 0.08);
+  color: #9be8bb;
+}
+.signin-note.bad {
+  background: rgba(255, 110, 110, 0.08);
+  color: #ff9a9a;
+}
+.signin-fine {
+  margin: 16px 0 0;
+  color: #7d7d7d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.signin-fine .signin-link {
+  color: #bdbdbd;
+}
+.signin-divider {
+  height: 1px;
+  margin: 16px 0 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Narrow windows: robot on top, form below. */
+@media (max-width: 860px) {
+  .signin.form .signin-stage {
+    left: 50%;
+    top: 17%;
+    width: min(360px, 70vw);
+  }
+  .signin-pitch {
+    display: none;
+  }
+  .signin-card {
+    right: 50%;
+    top: auto;
+    bottom: 24px;
+    width: min(420px, calc(100vw - 32px));
+    transform: translate(50%, 40px);
+  }
+  .signin.form .signin-card {
+    transform: translate(50%, 0);
+  }
+}
+@media (max-height: 640px) {
+  .signin-pitch ul {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signin-stage,
+  .signin-pitch,
+  .signin-card,
+  .signin-glow {
+    transition: none !important;
+    animation: none !important;
+  }
+}

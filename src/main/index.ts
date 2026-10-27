@@ -41,7 +41,8 @@ const SMOKE = process.env.KEO_SMOKE === '1';
 
 const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
-protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+// stream: Keo's own videos (the sign-in intro) play from app://keo like any other bundled file.
+protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
 const log = new Logger(profile.logsDir, !app.isPackaged && !SMOKE);
 const updates = new UpdateService(app.getVersion(), log);
@@ -96,6 +97,9 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.json': 'application/json',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.mp4': 'video/mp4',
 };
 
 // ---------------------------------------------------------------------------
@@ -652,6 +656,11 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   await js(`await call('settings:update', { patch: { activeProvider: null, ui: { onboarded: false } } });`);
   await wait(1200);
   fs.writeFileSync(path.join(dir, 'welcome.png'), (await win.webContents.capturePage()).toPNG());
+  // Signed out, Keo shows its sign-in screen: the intro, then the form.
+  await wait(2300);
+  fs.writeFileSync(path.join(dir, 'signin-intro.png'), (await win.webContents.capturePage()).toPNG());
+  await wait(6500);
+  fs.writeFileSync(path.join(dir, 'signin-form.png'), (await win.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('.onboarding button')].find(b => b.textContent.trim() === 'Next')?.click();`);
   await wait(700);
   fs.writeFileSync(path.join(dir, 'welcome-provider.png'), (await win.webContents.capturePage()).toPNG());

@@ -538,6 +538,8 @@ export interface CalendarStatus {
   clientId: string;
   /** This build ships Keo's own Google client: users only choose Sign in with Google. */
   builtIn: boolean;
+  /** Keo's built-in Google client ID (public by design), to recognise it when typed in as "your own". */
+  builtInId: string | null;
   hasClientSecret: boolean;
   signedIn: boolean;
   signingIn: boolean;

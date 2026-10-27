@@ -210,6 +210,17 @@ describe('Keo account', () => {
     expect(cloud.calls).toContain('POST /v1/billing/ticket');
   });
 
+  it('signing out from the app goes back to the sign-in screen', async () => {
+    await signedIn();
+    h.services.settings.update({ ui: { ownKeys: true }, activeProvider: 'keo' });
+    const { createHandlers } = await import('../src/main/ipc/handlers');
+    const handlers = createHandlers(h.services, { appInfo: () => ({ name: 'Keo', version: '0', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const st = await handlers['account:signOut']({});
+    expect(st.signedIn).toBe(false);
+    expect(h.services.settings.get().ui.ownKeys).toBe(false);
+    expect(h.services.settings.get().activeProvider).toBeNull();
+  });
+
   it('signing out forgets the session', async () => {
     const cloud = setup();
     cloud.confirmRequired = false;
