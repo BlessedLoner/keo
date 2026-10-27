@@ -58,6 +58,17 @@ export interface EmailServiceDeps {
  * and closes it again. The password is read from the secret store for that
  * connection only; it is never logged, returned or put into a prompt.
  */
+/**
+ * mailparser is loaded on first use, once: several messages are parsed at the same time, and
+ * parallel first imports of the same module could hang the test runner under load.
+ */
+let mailparser: Promise<typeof import('mailparser')> | null = null;
+const loadMailparser = () =>
+  (mailparser ??= import('mailparser').catch((e: unknown) => {
+    mailparser = null; // a failed load is tried again next time
+    throw e;
+  }));
+
 export class EmailService {
   private readonly connect: MailConnector;
   private readonly sender: MailSender;
@@ -296,7 +307,7 @@ export class EmailService {
   // ---------------------------------------------------------------- parsing
 
   private async parse(box: MailboxKey, r: RawMessage, full: boolean): Promise<MailFull> {
-    const { simpleParser } = await import('mailparser');
+    const { simpleParser } = await loadMailparser();
     const p = await simpleParser(r.source, { skipImageLinks: true, skipTextToHtml: true, skipTextLinks: true });
     const ref = `${box}:${r.uid}`;
     const from = addresses(p.from)[0] ?? { address: '', name: '' };

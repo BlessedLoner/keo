@@ -19,7 +19,7 @@ create table if not exists public.plans (
 );
 
 insert into public.plans (id, name, price_usd_month, daily_requests, daily_tokens, max_tier, features, sort) values
-  ('free', 'Free', 0, 60, 300000, 1, '{"web_search": 10, "images": 0, "voice_minutes": 10, "background_jobs": 1, "video": false}', 0),
+  ('free', 'Free', 0, 60, 300000, 1, '{"web_search": 3, "images": 0, "voice_minutes": 10, "background_jobs": 1, "video": false}', 0),
   ('pro', 'Pro', 15, 600, 4000000, 2, '{"web_search": 150, "images": 10, "voice_minutes": 120, "background_jobs": 3, "video": true}', 1),
   ('max', 'Max', 40, 2000, 15000000, 3, '{"web_search": 600, "images": 60, "voice_minutes": 600, "background_jobs": 6, "video": true}', 2)
 on conflict (id) do nothing;
