@@ -7,7 +7,9 @@
  * No provider key ever reaches the app; nothing of the conversation is stored here.
  */
 
+import { handleBilling, readTicket } from './billing';
 import { accountPage } from './pages';
+import { upgradePage } from './upgradePage';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -17,6 +19,9 @@ export interface Env {
   /** Secret: Keo's OpenRouter key (with a monthly spending limit set at openrouter.ai). */
   OPENROUTER_API_KEY: string;
   OPENROUTER_URL?: string;
+  /** Secret: Paystack's secret key (test or live). Without it, payments are off. */
+  PAYSTACK_SECRET_KEY?: string;
+  PAYSTACK_URL?: string;
   /** Which OpenRouter models do web search, pictures and voice (wrangler.toml [vars]; change any time). */
   KEO_SEARCH_MODEL?: string;
   KEO_SEARCH_ENGINE?: string;
@@ -70,10 +75,10 @@ interface Added {
   voiceSeconds?: number;
 }
 
-const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
+export const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 /** Errors in OpenAI's shape, so the app shows the message. */
-const fail = (status: number, message: string, code: string, type = 'keo_error') => json(status, { error: { message, type, code } });
+export const fail = (status: number, message: string, code: string, type = 'keo_error') => json(status, { error: { message, type, code } });
 
 /** Today in UTC (usage resets at 00:00 UTC). */
 export const today = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
@@ -92,7 +97,7 @@ export function clearCache(): void {
   cache.clear();
 }
 
-class Supabase {
+export class Supabase {
   constructor(
     private readonly env: Env,
     private readonly fetch: Fetch,
@@ -109,7 +114,7 @@ class Supabase {
     });
   }
 
-  private async rest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async rest<T>(path: string, init: RequestInit = {}): Promise<T> {
     const r = await this.fetch(`${this.env.SUPABASE_URL}/rest/v1/${path}`, {
       ...init,
       headers: { apikey: this.env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
@@ -119,8 +124,9 @@ class Supabase {
     return (text ? JSON.parse(text) : null) as T;
   }
 
-  async profile(userId: string): Promise<{ plan: string; plan_until: string | null; blocked: boolean } | null> {
-    const rows = await this.rest<Array<{ plan: string; plan_until: string | null; blocked: boolean }>>(`profiles?id=eq.${encodeURIComponent(userId)}&select=plan,plan_until,blocked`);
+  async profile(userId: string): Promise<{ plan: string; plan_until: string | null; blocked: boolean; billing_status?: string | null } | null> {
+    // select=* so a database without the payment columns still works.
+    const rows = await this.rest<Array<{ plan: string; plan_until: string | null; blocked: boolean; billing_status?: string | null }>>(`profiles?id=eq.${encodeURIComponent(userId)}&select=*`);
     return rows[0] ?? null;
   }
 
@@ -148,7 +154,7 @@ class Supabase {
   }
 }
 
-async function sha256(s: string): Promise<string> {
+export async function sha256(s: string): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -158,6 +164,8 @@ interface Account {
   plan: Plan;
   usage: Usage;
   day: string;
+  /** A paid plan: until when it is paid, and whether it renews (null on Free). */
+  billing: { until: string | null; status: string } | null;
 }
 
 /** Who is asking, and with which plan and usage today (or the error to answer with). */
@@ -176,7 +184,8 @@ async function account(req: Request, db: Supabase, now: number): Promise<Account
   const plan = plans.find((p) => p.id === (expired ? 'free' : profile.plan)) ?? plans.find((p) => p.id === 'free');
   if (!plan) return fail(500, 'Keo’s plans are not set up.', 'no_plans');
   const day = today(now);
-  return { user, plan, usage: await db.usage(user.id, day), day };
+  const billing = plan.id !== 'free' ? { until: profile.plan_until, status: profile.billing_status ?? 'active' } : null;
+  return { user, plan, usage: await db.usage(user.id, day), day, billing };
 }
 
 function overLimit(a: Account): Response | null {
@@ -307,6 +316,24 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
 
     // Where the links in Keo's account emails land (Supabase → URL Configuration → Site URL).
     if (req.method === 'GET' && route === '/account') return accountPage(env);
+    // Keo's plans and payment page.
+    if (req.method === 'GET' && route === '/upgrade') return upgradePage();
+
+    // Payments: prices, checkout, the Paystack webhook. Billing accepts the user's sign-in or an
+    // Upgrade-page ticket.
+    const billing = await handleBilling(req, route, env, {
+      fetch: deps.fetch,
+      now,
+      db,
+      waitUntil: deps.waitUntil,
+      who: async () => {
+        const token = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')?.[1]?.trim();
+        if (!token) return fail(401, 'Sign in to Keo first.', 'not_signed_in', 'authentication_error');
+        const who = token.startsWith('kt.') ? await readTicket(env, token, now) : await db.user(token);
+        return who ?? fail(401, 'This link has expired. Open the Upgrade page again from Keo.', 'sign_in_expired', 'authentication_error');
+      },
+    });
+    if (billing) return billing;
 
     if (req.method === 'GET' && route === '/v1/models') {
       const a = await account(req, db, now);
@@ -321,7 +348,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     if (req.method === 'GET' && route === '/v1/me') {
       const a = await account(req, db, now);
       if (a instanceof Response) return a;
-      return json(200, { user: a.user, plan: a.plan, usage: { day: a.day, ...a.usage } });
+      return json(200, { user: a.user, plan: a.plan, usage: { day: a.day, ...a.usage }, billing: a.billing });
     }
 
     const OR = env.OPENROUTER_URL ?? 'https://openrouter.ai/api/v1';

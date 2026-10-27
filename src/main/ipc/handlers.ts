@@ -422,6 +422,17 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       }
       return { ok: true as const };
     },
+    'account:upgrade': async () => {
+      let url: string;
+      try {
+        url = await s.account.upgradeUrl(abortAfter(20000));
+      } catch (e) {
+        throw new KeoError('account', (e as Error).message);
+      }
+      if (!host.openExternal) return { opened: false };
+      await host.openExternal(url);
+      return { opened: true };
+    },
     'account:refresh': async () => {
       await s.account.refreshMe().catch(() => undefined);
       return s.account.status();

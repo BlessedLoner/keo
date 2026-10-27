@@ -44,6 +44,7 @@ export const INVOKE_CHANNELS = [
   'account:signOut',
   'account:resetPassword',
   'account:refresh',
+  'account:upgrade',
   'picture:open',
   'files:photosState',
   'files:photosEstimate',

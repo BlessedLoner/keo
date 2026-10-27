@@ -42,6 +42,7 @@ class FakeCloud {
       return this.refreshOk ? j(200, this.tokens()) : j(400, { error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' });
     }
     if (u.pathname === '/auth/v1/logout') return new Response(null, { status: 204 });
+    if (u.pathname === '/v1/billing/ticket') return j(200, { ticket: 'kt.payload.sig' });
     if (u.pathname === '/v1/me') return j(200, { user: { id: 'u1' }, plan: { id: 'free', name: 'Free', daily_requests: 60, daily_tokens: 300000, features: { web_search: 10 } }, usage: { day: '2026-10-26', requests: 5, input_tokens: 1200, output_tokens: 300 } });
     if (u.pathname === '/v1/models') return j(200, { data: [{ id: 'keo-fast', keo: { label: 'Keo Fast', vision: true, tools: true, contextTokens: 128000, maxOutputTokens: 4096 } }] });
     return j(404, {});
@@ -196,6 +197,17 @@ describe('Keo account', () => {
     expect(cloud.sent('/v1/transcribe')).toMatchObject({ format: 'wav', language: 'en' });
     cloud.mediaStatus = 429;
     await expect(h.services.voice.speak('More', signal())).rejects.toMatchObject({ code: 'voice_limit' });
+  });
+
+  it('opens Keo’s plans page in the browser with a billing ticket, never the sign-in itself', async () => {
+    const cloud = await signedIn();
+    const opened: string[] = [];
+    const { createHandlers } = await import('../src/main/ipc/handlers');
+    const handlers = createHandlers(h.services, { appInfo: () => ({ name: 'Keo', version: '0', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, openExternal: async (u) => void opened.push(u), pickExecutable: async () => null, relaunch: () => undefined });
+    expect(await handlers['account:upgrade']({})).toEqual({ opened: true });
+    expect(opened).toEqual(['https://keo-cloud.blessednoble90.workers.dev/upgrade#t=kt.payload.sig']);
+    expect(opened[0]).not.toContain(h.services.account.token()!);
+    expect(cloud.calls).toContain('POST /v1/billing/ticket');
   });
 
   it('signing out forgets the session', async () => {

@@ -51,7 +51,7 @@ export class KeoAccount {
   private session: Session | null;
   private pendingEmail: string | null = null;
   private refreshing: Promise<void> | null = null;
-  private me: { plan: AccountStatus['plan']; usage: AccountStatus['usage']; at: number } | null = null;
+  private me: { plan: AccountStatus['plan']; usage: AccountStatus['usage']; billing: AccountStatus['billing']; at: number } | null = null;
   private modelList: CloudModel[] = [];
   private lastError: string | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -229,6 +229,17 @@ export class KeoAccount {
     return r;
   }
 
+  /**
+   * The Upgrade page for this account: Keo's plans and payment page in the browser, signed in
+   * with a 30-minute billing ticket (it allows billing only, never Keo's AI).
+   */
+  async upgradeUrl(signal: AbortSignal): Promise<string> {
+    const r = await this.post('/billing/ticket', {}, signal);
+    const j = (await r.json().catch(() => ({}))) as { ticket?: string };
+    if (!j.ticket) throw new AccountError('Keo Cloud did not open the Upgrade page. Please try again.');
+    return `${this.cfg.upgradePageUrl}#t=${encodeURIComponent(j.ticket)}`;
+  }
+
   /** Web search through Keo Cloud (counts toward the plan's daily searches). */
   async search(query: string, count: number, signal: AbortSignal): Promise<CloudSearchResult[]> {
     const r = await this.post('/search', { query, count }, signal);
@@ -264,6 +275,7 @@ export class KeoAccount {
       const me = await this.gateway<{
         plan: { id: string; name: string; daily_requests: number; daily_tokens: number; features: Record<string, unknown> };
         usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number };
+        billing?: { until: string | null; status: string } | null;
       }>('/me');
       this.me = {
         plan: { id: me.plan.id, name: me.plan.name, dailyRequests: me.plan.daily_requests, dailyTokens: me.plan.daily_tokens, features: me.plan.features ?? {} },
@@ -276,6 +288,7 @@ export class KeoAccount {
           images: me.usage.images ?? 0,
           voiceSeconds: me.usage.voice_seconds ?? 0,
         },
+        billing: me.billing ?? null,
         at: this.now(),
       };
       const models = await this.gateway<{ data: Array<{ id: string; keo?: { label?: string; vision?: boolean; tools?: boolean; contextTokens?: number; maxOutputTokens?: number } }> }>('/models');
@@ -315,6 +328,7 @@ export class KeoAccount {
       pendingEmail: this.pendingEmail,
       plan: this.me?.plan ?? null,
       usage: this.me?.usage ?? null,
+      billing: this.me?.billing ?? null,
       error: this.session ? this.lastError : null,
     };
   }

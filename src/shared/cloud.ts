@@ -10,6 +10,8 @@ export const KEO_CLOUD = {
   gatewayUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',
   /** Where the links in Keo's account emails land (must be in Supabase → URL Configuration → Redirect URLs). */
   accountPageUrl: 'https://keo-cloud.blessednoble90.workers.dev/account',
+  /** Keo's plans and payment page (opened in the browser with a short-lived ticket). */
+  upgradePageUrl: 'https://keo-cloud.blessednoble90.workers.dev/upgrade',
 } as const;
 
 /** What the app shows about the signed-in Keo account. */
@@ -20,6 +22,8 @@ export interface AccountStatus {
   pendingEmail: string | null;
   plan: { id: string; name: string; dailyRequests: number; dailyTokens: number; features: Record<string, unknown> } | null;
   usage: { day: string; requests: number; inputTokens: number; outputTokens: number; webSearches: number; images: number; voiceSeconds: number } | null;
+  /** A paid plan: paid until when, and whether it renews ('active', 'non-renewing', 'attention', 'cancelled'). */
+  billing: { until: string | null; status: string } | null;
   /** Why plan/usage could not be read just now (offline, gateway not deployed yet…). */
   error: string | null;
 }

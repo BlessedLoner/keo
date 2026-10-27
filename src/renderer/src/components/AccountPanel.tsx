@@ -18,6 +18,14 @@ export function useAccount(): AccountStatus | null {
   return a;
 }
 
+/** "Renews around 30 November 2026" / "Ends 30 November 2026" / a payment problem. */
+function billingLine(b: NonNullable<AccountStatus['billing']>): string {
+  const day = b.until ? new Date(b.until).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : null;
+  if (b.status === 'attention') return 'The last renewal payment did not go through — update your card with Manage plan.';
+  if (b.status === 'non-renewing' || b.status === 'cancelled') return day ? `Your plan ends ${day} (it will not renew).` : 'Your plan will not renew.';
+  return day ? `Renews around ${day}.` : 'Renews monthly.';
+}
+
 const pct = (used: number, limit: number) => (limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0);
 
 /** Today's web searches, pictures and voice minutes against the plan ("not in plan" when it has none). */
@@ -41,6 +49,19 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
 
   if (!a) return <div className="muted small">Loading…</div>;
 
+  const upgrade = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke('account:upgrade', {});
+      if (!r.opened) setNote({ ok: false, text: 'Keo could not open your browser.' });
+    } catch (e) {
+      setNote({ ok: false, text: errText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (a.signedIn) {
     const u = a.usage;
     const plan = a.plan;
@@ -63,8 +84,13 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
             <div className="small muted">Resets every day at midnight UTC.</div>
           </div>
         )}
+        {a.billing && <div className="small muted">{billingLine(a.billing)}</div>}
         {a.error && <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>{a.error}</div>}
+        {note && <div className="small" style={{ color: 'var(--danger, #ff5d6c)' }}>{note.text}</div>}
         <div className="row" style={{ marginTop: 8 }}>
+          <button className={`btn sm ${plan?.id === 'free' ? 'primary' : ''}`} onClick={() => void upgrade()} disabled={busy} title="Opens Keo’s plans page in your browser">
+            {plan?.id === 'free' || !plan ? 'Upgrade' : 'Manage plan'}
+          </button>
           {activeProvider !== 'keo' && onUseKeo && (
             <button className="btn primary sm" onClick={onUseKeo}>
               Use Keo’s AI
