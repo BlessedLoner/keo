@@ -1,11 +1,12 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import { INVOKE_CHANNELS, INVOKE_PREFIX, pushChannels } from '../shared/channels';
 import type { KeoBridge } from './api';
 
 /**
  * Narrow, typed bridge. The renderer can only:
  *  - invoke one of the allow-listed channels (main re-validates everything), and
- *  - subscribe to allow-listed push channels.
+ *  - subscribe to allow-listed push channels, and
+ *  - read where a file the user dropped on Keo is on their PC (Studio's drag and drop).
  * No ipcRenderer, Node, filesystem or process objects are exposed.
  */
 const invokeAllowed = new Set<string>(INVOKE_CHANNELS);
@@ -27,6 +28,13 @@ const bridge: KeoBridge = {
     return () => {
       ipcRenderer.removeListener(channel, wrapped);
     };
+  },
+  pathForFile(file) {
+    try {
+      return file instanceof File ? webUtils.getPathForFile(file) || null : null;
+    } catch {
+      return null;
+    }
   },
 };
 

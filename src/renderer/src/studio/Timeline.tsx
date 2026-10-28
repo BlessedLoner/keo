@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { clipEnd, projectDuration, type Clip, type EditOp, type Project, type Track } from '@shared/studio';
+import { memo, useEffect, useRef, useState } from 'react';
+import { clipEnd, projectDuration, type Asset, type Clip, type EditOp, type Project, type Track } from '@shared/studio';
 import { Icon } from '../components/Icon';
+import { useFilmstrip, useWaveform } from './thumbs';
 
 /**
  * The Studio timeline: tracks of clips over time. Drag a clip to move it (also onto another track
@@ -9,7 +10,7 @@ import { Icon } from '../components/Icon';
  */
 
 const LABEL_W = 132;
-const ROW_H: Record<Track['kind'], number> = { video: 54, text: 36, audio: 40 };
+const ROW_H: Record<Track['kind'], number> = { video: 64, text: 36, audio: 46 };
 const SNAP_PX = 8;
 
 type Drag =
@@ -25,6 +26,8 @@ export function Timeline({
   onTime,
   onEdit,
   zoom,
+  onZoom,
+  height,
 }: {
   project: Project;
   time: number;
@@ -33,6 +36,8 @@ export function Timeline({
   onTime: (t: number) => void;
   onEdit: (ops: EditOp[]) => void;
   zoom: number;
+  onZoom?: (z: number) => void;
+  height?: number;
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -142,11 +147,45 @@ export function Timeline({
   for (let s = 0; s <= duration + 8; s += step) ticks.push(s);
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}${step < 1 ? `.${Math.round((s % 1) * 10)}` : ''}`;
 
+  /** Clips that overlap on a track go on separate lanes, so each one can be seen and grabbed. */
+  const laneCache = new Map<string, { lane: Map<string, number>; count: number }>();
+  const lanesOf = (t: Track) => {
+    let r = laneCache.get(t.id);
+    if (r) return r;
+    const lane = new Map<string, number>();
+    const ends: number[] = [];
+    for (const c of [...t.clips].sort((a, b) => a.start - b.start)) {
+      let i = ends.findIndex((e) => e <= c.start + 1e-6);
+      if (i < 0) i = ends.push(0) - 1;
+      ends[i] = clipEnd(c);
+      lane.set(c.id, i);
+    }
+    r = { lane, count: ends.length };
+    laneCache.set(t.id, r);
+    return r;
+  };
+
   // Tracks top to bottom: the highest layer first.
   const rows = [...project.tracks].reverse();
 
   return (
-    <div className="studio-timeline" ref={area}>
+    <div
+      className="studio-timeline"
+      ref={area}
+      style={height ? { height } : undefined}
+      onWheel={(e) => {
+        // Ctrl + wheel zooms around the mouse, like other editors.
+        if (!e.ctrlKey || !onZoom) return;
+        const el = area.current!;
+        const r = el.getBoundingClientRect();
+        const at = (e.clientX - r.left - LABEL_W + el.scrollLeft) / pps;
+        const next = Math.max(4, Math.min(400, Math.round(pps * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+        onZoom(next);
+        requestAnimationFrame(() => {
+          el.scrollLeft = Math.max(0, at * next - (e.clientX - r.left - LABEL_W));
+        });
+      }}
+    >
       <div className="tl-inner" style={{ width: width + LABEL_W }}>
         <div
           className="tl-ruler"
@@ -166,7 +205,7 @@ export function Timeline({
           <div
             key={t.id}
             className={`tl-row ${t.kind} ${drag?.kind === 'move' && drag.targetTrack === t.id && drag.track.id !== t.id ? 'drop' : ''}`}
-            style={{ height: ROW_H[t.kind] }}
+            style={{ height: ROW_H[t.kind] * Math.max(1, lanesOf(t).count) }}
             data-track={t.id}
             onDragOver={(e) => {
               if (e.dataTransfer.types.includes('application/x-keo-asset')) e.preventDefault();
@@ -203,11 +242,12 @@ export function Timeline({
             </div>
             {t.clips.map((c) => {
               const w = where(c, t);
+              const lane = lanesOf(t).lane.get(c.id) ?? 0;
               return (
                 <div
                   key={c.id}
                   className={`tl-clip ${c.type} ${selected === c.id ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''}`}
-                  style={{ left: LABEL_W + w.left, width: w.width }}
+                  style={{ left: LABEL_W + w.left, width: w.width, top: 4 + lane * ROW_H[t.kind], height: ROW_H[t.kind] - 8, bottom: 'auto' }}
                   title={`${label(c)} · ${c.start.toFixed(2)}s–${clipEnd(c).toFixed(2)}s`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
@@ -218,6 +258,7 @@ export function Timeline({
                     else setDrag({ kind: edge, clip: c, track: t, dx: 0, startX: e.clientX });
                   }}
                 >
+                  {c.type !== 'text' && c.type !== 'shape' && <ClipBody projectId={project.id} clip={c} asset={project.assets.find((a) => a.id === c.assetId)} width={w.width} pps={pps} height={ROW_H[t.kind] - 8} />}
                   <span className="tl-clip-label">{label(c)}</span>
                 </div>
               );
@@ -229,3 +270,47 @@ export function Timeline({
     </div>
   );
 }
+
+/** What a video or sound clip looks like on the timeline: its frames and the shape of its sound. */
+const ClipBody = memo(function ClipBody({ projectId, clip, asset, width, pps, height }: { projectId: string; clip: Extract<Clip, { type: 'media' | 'audio' }>; asset: Asset | undefined; width: number; pps: number; height: number }) {
+  const strip = useFilmstrip(projectId, asset);
+  const wave = useWaveform(projectId, asset);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const rate = clip.type === 'media' ? clip.speed : 1;
+  const waveH = clip.type === 'audio' ? height : Math.round(height * 0.32);
+  const w = Math.max(4, Math.min(8000, Math.round(width)));
+  useEffect(() => {
+    const c = canvas.current;
+    if (!c || !wave) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(waveH * dpr);
+    const ctx = c.getContext('2d')!;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.fillStyle = clip.type === 'audio' ? 'rgba(190, 255, 220, 0.75)' : 'rgba(170, 220, 255, 0.7)';
+    const mid = clip.type === 'audio' ? c.height / 2 : c.height;
+    for (let x = 0; x < c.width; x++) {
+      const t = clip.in + (x / dpr / pps) * rate;
+      const v = wave[Math.floor(t * 50)] ?? 0;
+      const hh = Math.max(dpr, v * (clip.type === 'audio' ? c.height / 2 : c.height));
+      ctx.fillRect(x, mid - hh, 1, clip.type === 'audio' ? hh * 2 : hh);
+    }
+  }, [wave, w, waveH, pps, rate, clip.in, clip.type]);
+  const tiles: Array<{ x: number; src: string }> = [];
+  if (strip && clip.type === 'media') {
+    const tileW = Math.max(16, height * strip.aspect);
+    for (let x = 0; x < w; x += tileW) {
+      const t = clip.in + (x / pps) * rate;
+      const i = strip.step === Infinity ? 0 : Math.min(strip.frames.length - 1, Math.floor(t / strip.step));
+      tiles.push({ x, src: strip.frames[i]! });
+    }
+  }
+  return (
+    <div className="tl-body" aria-hidden>
+      {tiles.map((tile, i) => (
+        <img key={i} src={tile.src} alt="" draggable={false} style={{ left: tile.x, height }} />
+      ))}
+      {wave && <canvas ref={canvas} className={clip.type === 'audio' ? 'tl-wave full' : 'tl-wave'} style={{ width: w, height: waveH }} />}
+    </div>
+  );
+});

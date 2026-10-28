@@ -29,6 +29,16 @@
 .studio-stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-inset); }
 .studio-preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 14px; overflow: hidden; }
 .studio-preview canvas { display: block; background: #000; border-radius: 4px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line); }
+.preview-frame { position: relative; flex: none; }
+.preview-overlay { position: absolute; inset: 0; }
+.sel-box { position: absolute; border: 1.5px solid #fff; outline: 1px solid rgba(0, 0, 0, 0.55); pointer-events: none; }
+.sel-box .handle { pointer-events: auto; position: absolute; width: 12px; height: 12px; background: #fff; border: 1px solid rgba(0, 0, 0, 0.6); border-radius: 3px; }
+.sel-box .handle.scale { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.sel-box .handle.rotate { left: 50%; top: -28px; margin-left: -7px; border-radius: 50%; cursor: grab; }
+.sel-box .handle.rotate::after { content: ''; position: absolute; left: 5px; top: 11px; width: 1px; height: 16px; background: #fff; }
+.preview-overlay .guide { position: absolute; background: #ff3df0; pointer-events: none; }
+.preview-overlay .guide.v { left: 50%; top: 0; bottom: 0; width: 1px; }
+.preview-overlay .guide.h { top: 50%; left: 0; right: 0; height: 1px; }
 .studio-transport { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 12px 10px; }
 .studio-transport .play { width: 38px; height: 38px; border-radius: 50%; background: var(--primary-bg); color: var(--primary-text); border-color: transparent; }
 .studio-time { font: 12.5px/1 ui-monospace, Consolas, monospace; color: var(--text); margin-left: 8px; min-width: 150px; }
@@ -99,7 +109,9 @@
 .shape-row .btn { font-size: 14px; }
 .tl-clip.shape { background: linear-gradient(180deg, #b0476e, #8a2e52); }
 
-/* Tools row above the timeline */
+/* Tools row above the timeline (and the bar that resizes the timeline) */
+.tl-resize { height: 5px; cursor: ns-resize; background: transparent; border-top: 1px solid var(--line); margin-top: -1px; }
+.tl-resize:hover { background: var(--accent-soft); }
 .studio-tools { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-top: 1px solid var(--line); background: var(--bg-elev); }
 .studio-tools .btn { display: inline-flex; align-items: center; gap: 5px; }
 .studio-tools input[type='range'] { width: 140px; }
@@ -126,7 +138,12 @@
 .tl-clip.sel { outline: 2px solid #fff; outline-offset: -1px; z-index: 1; }
 .tl-clip.ghost { opacity: 0.45; }
 .tl-clip.hidden { opacity: 0.4; }
-.tl-clip-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.tl-clip-label { position: relative; z-index: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9); align-self: flex-start; margin-top: 3px; font-weight: 600; }
+.tl-body { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.tl-body img { position: absolute; top: 0; object-fit: cover; opacity: 0.9; border-right: 1px solid rgba(0, 0, 0, 0.35); }
+.tl-wave { position: absolute; left: 0; bottom: 0; }
+.tl-wave.full { top: 0; bottom: auto; }
+.tl-clip.media .tl-body::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 40%); }
 .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4d5e; z-index: 4; pointer-events: none; }
 .tl-playhead::before { content: ''; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: #ff4d5e; }
 
@@ -150,6 +167,42 @@
 .faceless .field { margin-bottom: 10px; }
 .faceless-steps { padding: 4px 0 8px; }
 .warn-text { color: #ffe1a6; }
+
+/* Dropping files from File Explorer */
+.studio { position: relative; }
+.studio-drop { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgba(10, 10, 14, 0.78); border: 2px dashed var(--accent); border-radius: 12px; color: var(--text); font-size: 14px; text-align: center; padding: 24px; pointer-events: none; }
+
+/* Side panel tabs and Ask Keo */
+.studio-side { position: relative; }
+.side-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; padding: 6px 8px; background: var(--bg-side); border-bottom: 1px solid var(--line); }
+.side-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.side-tabs button:hover { background: var(--bg-hover); color: var(--text); }
+.side-tabs button.on { background: var(--accent-soft); color: var(--text); }
+.keo-dot { width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #8b6bff, #3dd6ff); box-shadow: 0 0 6px #8b6bff; }
+.studio-side.tab-keo { overflow: hidden; }
+.studio-keo { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.keo-list { flex: 1; min-height: 0; overflow: auto; padding: 10px 10px 4px; display: flex; flex-direction: column; gap: 8px; }
+.keo-hello { padding: 8px 4px; line-height: 1.5; }
+.keo-hello p { margin: 0 0 6px; }
+.keo-msg { border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
+.keo-msg p { margin: 0; }
+.keo-msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid var(--line-strong); max-width: 88%; }
+.keo-msg.assistant { background: var(--bg-elev); border: 1px solid var(--line); }
+.keo-msg.live { border-color: rgba(139, 107, 255, 0.5); box-shadow: 0 0 0 1px rgba(139, 107, 255, 0.15); }
+.keo-msg .md p:last-child { margin-bottom: 0; }
+.keo-tools { list-style: none; margin: 6px 0 0; padding: 6px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-2); }
+.keo-tools li { display: flex; gap: 6px; }
+.keo-tool-mark { width: 14px; flex: none; text-align: center; color: var(--text-3); }
+.keo-tools li.executed .keo-tool-mark { color: #4ade80; }
+.keo-tools li.failed .keo-tool-mark, .keo-tools li.denied .keo-tool-mark { color: #ff8a95; }
+.keo-tools li.awaiting_authorization .keo-tool-mark { color: #ffbf47; }
+.keo-approval .approval { margin: 0; font-size: 12.5px; }
+.keo-approval .approval .row { flex-wrap: wrap; }
+.keo-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px; border-top: 1px solid var(--line); }
+.keo-chips .btn { font-size: 11.5px; height: 24px; }
+.keo-input { display: flex; gap: 6px; align-items: flex-end; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+.keo-input .textarea { flex: 1; resize: none; font-size: 13px; min-height: 44px; max-height: 140px; }
+.keo-input .btn { display: inline-flex; align-items: center; gap: 5px; height: 32px; }
 
 @media (max-width: 1100px) {
   .studio-main { grid-template-columns: 200px minmax(0, 1fr) 240px; }

@@ -7,6 +7,7 @@ import { mediaUrl } from '../studio/media';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields } from '../studio/MotionFields';
@@ -26,7 +27,7 @@ const fmtTime = (s: number, fps = 30) => {
   const f = Math.floor((s % 1) * fps);
   return `${m}:${String(sec).padStart(2, '0')}.${String(f).padStart(2, '0')}`;
 };
-const fmtDur = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${s.toFixed(1)}s`);
+const fmtDur = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m` : s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s` : `${s.toFixed(1)}s`);
 
 export function StudioView() {
   const ui = useUi();
@@ -43,6 +44,38 @@ export function StudioView() {
   const [creating, setCreating] = useState(false);
   const [captioning, setCaptioning] = useState(false);
   const [faceless, setFaceless] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const [tlHeight, setTlHeight] = useState(() => {
+    try {
+      return Number(localStorage.getItem('keo.studio.timelineHeight')) || 250;
+    } catch {
+      return 250;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('keo.studio.timelineHeight', String(Math.round(tlHeight)));
+    } catch {
+      /* a per-viewer convenience only */
+    }
+  }, [tlHeight]);
+  const clipboard = useRef<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selected;
+  const timeRef = useRef(0);
+  timeRef.current = time;
+  const [sideTab, setSideTab] = useState<'keo' | 'tools' | 'inspect'>('keo');
+  // Picking a clip opens its settings.
+  useEffect(() => {
+    if (selected) setSideTab('inspect');
+  }, [selected]);
+  // Keo knows where the user is: the playhead and the selection (a moment after they settle).
+  const focusId = project?.id ?? null;
+  useEffect(() => {
+    if (!focusId || playing) return;
+    const t = setTimeout(() => void invoke('studio:focus', { id: focusId, time: Math.max(0, time), selected: selected ? [selected] : [] }).catch(() => undefined), 400);
+    return () => clearTimeout(t);
+  }, [focusId, time, selected, playing]);
   const projectRef = useRef<Project | null>(null);
   projectRef.current = project;
 
@@ -130,6 +163,27 @@ export function StudioView() {
     }
   };
 
+  /** Files dropped from File Explorer: into the project, and onto the timeline at the playhead (or in order when it is empty). */
+  const dropFiles = async (paths: string[], where: 'bin' | 'timeline') => {
+    const p = projectRef.current;
+    if (!p || !paths.length) return;
+    try {
+      const r = await invoke('studio:import', { id: p.id, paths });
+      show(r.project);
+      if (r.skipped.length) ui.toast(`Not added: ${r.skipped.slice(0, 3).join('; ')}`, 'error');
+      if (where === 'bin' || !r.added.length) return;
+      const empty = projectDuration(p) === 0;
+      let at = timeRef.current;
+      const ops: EditOp[] = r.added.map((a) => {
+        const op: EditOp = a.kind === 'audio' ? { op: 'add_audio', assetId: a.id, start: empty ? 'end' : at } : { op: 'add_media', assetId: a.id, start: empty ? 'end' : at };
+        if (!empty) at += a.kind === 'image' ? 3 : a.duration;
+        return op;
+      });
+      await edit(ops);
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
   const addAsset = (a: Asset) => void edit([a.kind === 'audio' ? { op: 'add_audio', assetId: a.id, start: time } : { op: 'add_media', assetId: a.id, start: time }]);
   const autoCaptions = async () => {
     if (!project) return;
@@ -221,10 +275,27 @@ export function StudioView() {
       } else if (e.key === 'Home') setTime(0);
       else if (e.key === 'End') setTime(projectDuration(p));
       else if (e.key === 'Escape') setSelected(null);
+      else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
+        e.preventDefault();
+        void edit([{ op: 'duplicate', clip: selectedRef.current }]);
+      } else if (e.ctrlKey && (e.key === 'c' || e.key === 'C') && selectedRef.current) {
+        e.preventDefault();
+        clipboard.current = selectedRef.current;
+        ui.toast('Copied. Ctrl+V puts it at the playhead.', 'info');
+      } else if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && clipboard.current) {
+        e.preventDefault();
+        if (findClip(p, clipboard.current)) void edit([{ op: 'duplicate', clip: clipboard.current, start: timeRef.current }]);
+      } else if (!e.ctrlKey && (e.key === 'k' || e.key === 'K')) setPlaying(false);
+      else if (!e.ctrlKey && (e.key === 'l' || e.key === 'L')) setPlaying(true);
+      else if (!e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
+        setPlaying(false);
+        setTime((t) => Math.max(0, t - 2));
+      } else if (e.key === '+' || e.key === '=') setZoom((z) => Math.min(400, Math.round(z * 1.25)));
+      else if (e.key === '-' || e.key === '_') setZoom((z) => Math.max(4, Math.round(z / 1.25)));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, splitAtPlayhead, deleteSelected]);
+  }, [undo, redo, splitAtPlayhead, deleteSelected, edit, ui]);
 
   const exportVideo = async () => {
     if (!project) return;
@@ -316,7 +387,32 @@ export function StudioView() {
   const duration = projectDuration(project);
 
   return (
-    <div className="view studio">
+    <div
+      className={`view studio ${dropping ? 'dropping' : ''}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        if (!dropping) setDropping(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDropping(false);
+        const paths = [...e.dataTransfer.files].map((f) => window.keo.pathForFile(f)).filter((x): x is string => !!x);
+        const target = e.target as HTMLElement;
+        void dropFiles(paths, target.closest('.studio-bin') ? 'bin' : 'timeline');
+      }}
+    >
+      {dropping && (
+        <div className="studio-drop" aria-hidden>
+          <Icon name="download" size={28} />
+          <span>Drop videos, pictures or music — on the media list to keep them there, anywhere else to put them on the timeline</span>
+        </div>
+      )}
       <header className="studio-bar">
         <Icon name="film" size={18} />
         <select className="select studio-picker" value={project.id} onChange={(e) => void openProject(e.target.value)} aria-label="Project">
@@ -406,7 +502,7 @@ export function StudioView() {
           </div>
         </aside>
         <section className="studio-stage">
-          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} />
+          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} />
           <div className="studio-transport">
             <button className="btn icon sm ghost" onClick={() => setTime(0)} title="To the start (Home)">
               <Icon name="skipback" size={15} />
@@ -430,20 +526,48 @@ export function StudioView() {
             </span>
           </div>
         </section>
-        <aside className="studio-side">
+        <aside className={`studio-side tab-${sideTab}`}>
+          <div className="side-tabs" role="tablist" aria-label="Side panel">
+            {(
+              [
+                ['keo', 'Keo'],
+                ['tools', 'Tools'],
+                ['inspect', sel ? 'Inspector' : 'Project'],
+              ] as const
+            ).map(([id, label]) => (
+              <button key={id} role="tab" aria-selected={sideTab === id} className={sideTab === id ? 'on' : ''} onClick={() => setSideTab(id)}>
+                {id === 'keo' && <span className="keo-dot" />}
+                {label}
+              </button>
+            ))}
+          </div>
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} />}
-          {sel ? (
-            <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} />
-          ) : (
+          {sideTab === 'keo' && <StudioKeo project={project} />}
+          {sideTab === 'tools' && (
             <>
               <Autopilot project={project} time={time} onEdit={edit} onBusy={(b) => b && setPlaying(false)} />
               <ElementsPanel project={project} time={time} onEdit={edit} />
-              <ProjectSettings project={project} onEdit={edit} />
             </>
           )}
+          {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} /> : <ProjectSettings project={project} onEdit={edit} />)}
         </aside>
       </div>
+      <div
+        className="tl-resize"
+        title="Drag to make the timeline taller or shorter"
+        onPointerDown={(e) => {
+          const y0 = e.clientY;
+          const h0 = tlHeight;
+          const move = (ev: PointerEvent) => setTlHeight(Math.max(140, Math.min(window.innerHeight * 0.65, h0 + (y0 - ev.clientY))));
+          const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up);
+        }}
+      />
       <div className="studio-tools">
         <button className="btn sm ghost" onClick={splitAtPlayhead} title="Split at the playhead (S)">
           <Icon name="scissors" size={14} /> Split
@@ -469,6 +593,8 @@ export function StudioView() {
         }}
         onEdit={(ops) => void edit(ops)}
         zoom={zoom}
+        onZoom={setZoom}
+        height={tlHeight}
       />
     </div>
   );

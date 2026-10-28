@@ -67,6 +67,8 @@ interface ActiveTurn {
 export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
   systemExtra: (conversationId: string) => string = () => '';
+  /** Tool groups a conversation always gets (e.g. video tools for Keo Studio's own conversations). */
+  extraGroups: ((conversationId: string) => ToolGroup[]) | null = null;
   /**
    * Open questions per conversation: an action that could not run because a
    * choice was missing (which app, which profile, which window). The next
@@ -429,7 +431,7 @@ export class AgentService {
       // tools__load for any other group. "all" (Settings) sends every tool. The checklist tool always goes.
       const latest = this.conversations.getMessage(sourceMessageId);
       const attached = latest?.meta.attachments ?? [];
-      const recentGroups = this.recentToolGroups(conversationId);
+      const recentGroups = [...this.recentToolGroups(conversationId), ...(this.extraGroups?.(conversationId) ?? [])];
       const turnGroups = this.startToolGroupTurn(conversationId);
       const groups: Set<ToolGroup> =
         settings.agent.toolSelection === 'all'

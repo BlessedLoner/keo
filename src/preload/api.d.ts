@@ -48,6 +48,8 @@ export type PresenceCommand =
 export interface KeoBridge {
   invoke<C extends InvokeChannel>(channel: C, input?: InvokeInput<C>): Promise<IpcResult<InvokeOutputs[C]>>;
   on<P extends PushChannel>(channel: P, listener: (payload: PushPayloads[P]) => void): () => void;
+  /** Where a file the user dropped is on their PC (null: not a file from the PC). */
+  pathForFile(file: File): string | null;
 }
 
 declare global {

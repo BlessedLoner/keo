@@ -475,6 +475,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     // The user's own click in Studio, after the page showed what is made and sent where.
     'studio:faceless': async (board) => s.facelessCreate(board).catch(studioErr),
     'studio:facelessPlan': (board) => s.facelessPlan(board),
+    'studio:focus': ({ id, time, selected }) => {
+      s.setStudioFocus({ projectId: id, time, selected });
+      return { ok: true as const };
+    },
+    'studio:conversation': ({ id }) => studioCall(() => ({ conversationId: s.studioConversation(id, s.studio.get(id).name) })),
     'studio:soundEffect': ({ id, kind, at }) => {
       try {
         const { asset } = s.studio.soundEffect(id, kind);

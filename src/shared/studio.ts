@@ -419,6 +419,8 @@ export const EditOp = z.discriminatedUnion('op', [
   /** Trim a clip's start (keeps its end where it is) and/or its length. */
   z.object({ op: z.literal('trim'), clip: ClipRef, trimStart: z.number().min(-3600).max(3600).optional(), duration: z.number().min(0.04).optional() }).strict(),
   z.object({ op: z.literal('split'), clip: ClipRef, at: Sec }).strict(),
+  /** A copy of a clip (default: right after it, on the same track). */
+  z.object({ op: z.literal('duplicate'), clip: ClipRef, start: At.optional(), track: TrackRef.optional() }).strict(),
   /** Delete a clip; ripple: later clips on its track move left to close the gap. */
   z.object({ op: z.literal('delete'), clip: ClipRef, ripple: z.boolean().optional() }).strict(),
   /** Cut a time range out of the whole timeline (every track), closing the gap. */
@@ -922,6 +924,17 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         }
         sortClips(f.track);
         changes.push(`Trimmed ${c.id}: ${c.start}s for ${c.duration}s.`);
+        break;
+      }
+      case 'duplicate': {
+        const f = get(op.clip);
+        const to = op.track ? track(op.track, f.track.kind) : f.track;
+        const copy = structuredClone(f.clip);
+        copy.id = rid('cl', rand);
+        copy.start = round(op.start === undefined || op.start === 'end' ? (op.start === 'end' ? endOf(to) : clipEnd(f.clip)) : op.start);
+        to.clips.push(copy);
+        sortClips(to);
+        changes.push(`Copied ${f.clip.id} to ${copy.start}s (${copy.id}).`);
         break;
       }
       case 'split': {

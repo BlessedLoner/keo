@@ -48,7 +48,7 @@ const a = launch(1);
 check('renderer has no require()', a.hasRequire === false, a.hasRequire);
 check('renderer has no process', a.hasProcess === false, a.hasProcess);
 check('renderer has no module', a.hasModule === false, a.hasModule);
-check('bridge exposes only invoke/on', JSON.stringify(a.bridgeKeys) === '["invoke","on"]', a.bridgeKeys);
+check('bridge exposes only invoke/on/pathForFile', JSON.stringify(a.bridgeKeys) === '["invoke","on","pathForFile"]', a.bridgeKeys);
 check('bridge is frozen', a.bridgeFrozen === true, a.bridgeFrozen);
 check('unknown channel rejected', a.unknownChannel === 'rejected', a.unknownChannel);
 check('invalid input rejected', a.invalidInput === 'invalid_input', a.invalidInput);
@@ -127,6 +127,7 @@ check('conversations persist across restart', b.conversationCount === (p.convers
 
 // Keo Studio with real codecs: export, re-import, edit, export again, frames for Keo.
 const st = a.studio ?? {};
+check('studio: media loads in pages from another origin (development)', st.crossOrigin?.img === 640 && st.crossOrigin?.audio > 1.9 && st.crossOrigin?.bytes > 100000, st.error ?? JSON.stringify(st.crossOrigin));
 check('studio: pictures and sound import', Array.isArray(st.imported) && st.imported.length === 2, st.error ?? JSON.stringify(st.imported));
 check('studio: exports picture + animated text + sound to MP4', st.first?.frames === 60 && st.firstHasSound === true, st.error ?? JSON.stringify(st.first) + ' sound ' + st.firstHasSound);
 check('studio: re-imports its own MP4 (video with sound)', typeof st.reimported === 'string' && st.reimported.startsWith('video:640x360:') && st.reimported.endsWith(':true'), st.error ?? st.reimported);

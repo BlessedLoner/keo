@@ -83,11 +83,11 @@ function fitBox(fit: MediaClip['fit'], w: number, h: number, bw: number, bh: num
   return { dw: w * k, dh: h * k };
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number): void {
-  const { w, h } = sizeOf(src);
-  const rt = t - c.start;
-  const m = motionAt(c, t, H);
-  // The layer's box: the frame (or, in a device, the device's screen), at the layer's scale.
+/**
+ * A video or picture of w×h in a W×H frame: the size it is drawn at (dw×dh), the part that shows
+ * (vw×vh: a device's screen or a mask cuts it), before the layer's own scale.
+ */
+function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { dw: number; dh: number; vw: number; vh: number; inDevice: boolean } {
   let bw = W;
   let bh = H;
   if (c.frame === 'phone') {
@@ -110,8 +110,14 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
     ({ dw, dh } = fitBox('cover', w, h, side, side));
   }
   // The visible box (media drawn larger than it is cut to it).
-  const vw = inDevice || c.mask ? bw : dw;
-  const vh = inDevice || c.mask ? bh : dh;
+  return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
+}
+
+function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number): void {
+  const { w, h } = sizeOf(src);
+  const rt = t - c.start;
+  const m = motionAt(c, t, H);
+  const { dw, dh, vw, vh, inDevice } = mediaBox(c, w, h, W, H);
   ctx.save();
   ctx.globalAlpha = clamp(m.opacity * fade);
   // Punch-ins: the whole layer is scaled around the zoom's centre point of the frame.
@@ -223,6 +229,49 @@ function layout(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): 
 function phases(c: TextClip, t: number): { pin: number; pout: number } {
   const s = Math.max(0.01, c.animSeconds);
   return { pin: c.animIn === 'none' ? 1 : clamp((t - c.start) / s), pout: c.animOut === 'none' ? 1 : clamp((clipEnd(c) - t) / s) };
+}
+
+/** Where a layer is on the canvas (pixels): its centre, size (with its scale) and rotation. */
+export interface LayerBox {
+  id: string;
+  type: 'media' | 'text' | 'shape';
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+  rotation: number;
+}
+
+/** The visible layers' boxes at time t, bottom layer first (for selecting and moving them on the preview). */
+export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number, W: number, H: number): LayerBox[] {
+  const out: LayerBox[] = [];
+  for (const c of visibleAt(p, t)) {
+    const m = motionAt(c, t, H);
+    let w: number;
+    let h: number;
+    if (c.type === 'media') {
+      const a = p.assets.find((x) => x.id === c.assetId);
+      const b = mediaBox(c, a?.width || W, a?.height || H, W, H);
+      w = b.vw;
+      h = b.vh;
+    } else if (c.type === 'shape') {
+      w = c.style.width * W;
+      h = c.style.height * H;
+    } else {
+      const st = c.style;
+      const px = (st.sizePct / 100) * H;
+      ctx.save();
+      ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
+      (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(st.letterSpacing * px) / 100}px`;
+      const raw = c.counter ? counterText(c.counter, c.duration, c.duration) : c.text;
+      const lines = layout(ctx, st.uppercase ? raw.toUpperCase() : raw, st.maxWidth * W);
+      ctx.restore();
+      w = Math.max(px, ...lines.map((l) => l.width)) + px * 0.4;
+      h = px * st.lineHeight * lines.length + px * 0.3;
+    }
+    out.push({ id: c.id, type: c.type, cx: m.x * W, cy: m.y * H, w: w * Math.abs(m.scaleX), h: h * Math.abs(m.scaleY), rotation: m.rotation });
+  }
+  return out;
 }
 
 export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, W: number, H: number): void {

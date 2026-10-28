@@ -143,6 +143,8 @@ export const invokeSchemas = {
     .strict(),
   'studio:punchIn': z.object({ id: studioProjectId, scale: z.number().min(1.03).max(1.6).optional() }).strict(),
   'studio:faceless': Storyboard,
+  'studio:focus': z.object({ id: studioProjectId, time: z.number().min(0).max(86400), selected: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(200) }).strict(),
+  'studio:conversation': z.object({ id: studioProjectId }).strict(),
   'studio:facelessPlan': Storyboard,
   'studio:soundEffect': z.object({ id: studioProjectId, kind: z.enum(['whoosh', 'pop', 'click', 'ding', 'riser', 'boom', 'swipe']), at: z.number().min(0).max(86400) }).strict(),
   /** No paths: Keo opens a file picker. */
@@ -447,6 +449,8 @@ export interface InvokeOutputs {
   'studio:punchIn': { points: number };
   'studio:soundEffect': { ok: true };
   'studio:faceless': { projectId: string; duration: number; scenes: number; pictures: number; voice: string };
+  'studio:focus': { ok: true };
+  'studio:conversation': { conversationId: string };
   'studio:facelessPlan': { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };

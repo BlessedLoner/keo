@@ -174,3 +174,48 @@ describe('Keo’s faceless video tool', () => {
     await expect(h.services.facelessCreate(Storyboard.parse({ title: 'X', scenes: [{ narration: 'Hello there.' }] }))).rejects.toThrow(/voice needs/);
   });
 });
+
+describe('Faceless creator: plans, retries and failures', () => {
+  const board = (n = 3) => Storyboard.parse({ title: 'Plan test', scenes: Array.from({ length: n }, (_, i) => ({ narration: `Scene number ${i + 1} is here.` })) });
+  /** The account as Keo Cloud reports it (signed in, this plan, this much used today). */
+  const plan = (features: Record<string, number>, usage: { images?: number; voiceSeconds?: number } = {}) => {
+    const acc = h!.services.account as unknown as { status: () => unknown };
+    const real = acc.status.bind(acc);
+    acc.status = () => ({ ...(real() as object), signedIn: true, plan: { id: 'x', name: 'Free', dailyRequests: 1, dailyTokens: 1, features }, usage: { day: 'd', requests: 0, inputTokens: 0, outputTokens: 0, webSearches: 0, images: usage.images ?? 0, voiceSeconds: usage.voiceSeconds ?? 0 } });
+  };
+
+  it('checks the plan’s pictures before anything is made', async () => {
+    const s = setup();
+    plan({ images: 0 });
+    expect(h!.services.facelessPlan(board()).reason).toMatch(/not in your Free plan/);
+    plan({ images: 5 }, { images: 4 });
+    expect(h!.services.facelessPlan(board()).reason).toMatch(/needs 3 new pictures, and your plan makes 1 more today/);
+    await expect(h!.services.facelessCreate(board())).rejects.toThrow(/makes 1 more today/);
+    expect(s.spoken).toHaveLength(0);
+    expect(s.pictures).toHaveLength(0);
+    plan({ images: 10 }, { images: 4 });
+    expect(h!.services.facelessPlan(board()).reason).toBeNull();
+  });
+
+  it('a failed run leaves no empty project, and the next try reuses what was made', async () => {
+    const s = setup();
+    // The pictures fail the first time (after the voice is made).
+    let fail = true;
+    const ai = (h!.services.pictures as unknown as { d: { ai: () => unknown } }).d;
+    const realAi = ai.ai;
+    ai.ai = () => ({ generate: async () => { if (fail) throw new Error('The picture service is busy'); return PNG_1PX; }, edit: async () => PNG_1PX });
+    await expect(h!.services.facelessCreate(board())).rejects.toThrow(/busy\. What Keo already made is kept/);
+    expect(h!.services.studio.list()).toHaveLength(0);
+    expect(s.spoken).toHaveLength(3);
+    fail = false;
+    const r = await h!.services.facelessCreate(board());
+    expect(r.scenes).toBe(3);
+    // The voice was not made again.
+    expect(s.spoken).toHaveLength(3);
+    // And a third time, nothing new at all (pictures reused too).
+    ai.ai = () => ({ generate: async () => { throw new Error('should not be asked'); }, edit: async () => PNG_1PX });
+    expect(h!.services.facelessPlan(board()).reason).toBeNull();
+    await h!.services.facelessCreate(board());
+    ai.ai = realAi;
+  });
+});

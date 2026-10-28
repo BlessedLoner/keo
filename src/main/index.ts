@@ -51,7 +51,8 @@ const SMOKE = process.env.KEO_SMOKE === '1';
 const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
 // stream: Keo's own videos (the sign-in intro) play from app://keo like any other bundled file.
-protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+// corsEnabled: Studio's media is read by Keo's own pages, which in development come from the dev server's origin.
+protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 
 const log = new Logger(profile.logsDir, !app.isPackaged && !SMOKE);
 const updates = new UpdateService(app.getVersion(), log);
@@ -873,6 +874,28 @@ app.on('before-quit', (e) => {
  * to MP4; that MP4 is imported into a second project, edited (split, text, music) and exported
  * again (exact decoding of real H.264); frames are rendered for Keo to look at.
  */
+/**
+ * Smoke: Studio media loads in a page from another origin (as in development, where Keo's pages
+ * come from the dev server): a picture, a sound and fetch() from a blank page (its origin is not app://keo).
+ */
+async function studioMediaFromOtherOrigin(projectId: string, picId: string, soundId: string): Promise<Record<string, unknown>> {
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await win.loadURL('data:text/html,<!doctype html><title>origin</title>');
+    return (await win.webContents.executeJavaScript(`(async () => {
+      const pic = 'app://keo/media/${projectId}/${picId}';
+      const sound = 'app://keo/media/${projectId}/${soundId}';
+      const img = await new Promise((res) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i.naturalWidth); i.onerror = () => res(0); i.src = pic; });
+      const audio = await new Promise((res) => { const a = document.createElement('audio'); a.crossOrigin = 'anonymous'; a.preload = 'metadata'; a.onloadedmetadata = () => res(a.duration); a.onerror = () => res(0); a.src = sound; });
+      let bytes = 0;
+      try { bytes = (await (await fetch(sound)).arrayBuffer()).byteLength; } catch {}
+      return { img, audio, bytes };
+    })()`)) as Record<string, unknown>;
+  } finally {
+    win.destroy();
+  }
+}
+
 /** Smoke checks of the faceless creator: a voice that is a tone as long as the text, and gradient pictures. */
 function smokeFacelessDeps(): Pick<ServiceDeps, 'studioNarrate' | 'pictureAi'> {
   const picture = (): Buffer => {
@@ -950,6 +973,7 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const picAsset = imported.added.find((x) => x.kind === 'image');
   const toneAsset = imported.added.find((x) => x.kind === 'audio');
   if (!picAsset || !toneAsset) throw new Error(`import failed: ${JSON.stringify(imported.skipped)}`);
+  out.crossOrigin = await studioMediaFromOtherOrigin(a.id, picAsset.id, toneAsset.id);
   s.studio.edit(a.id, [
     { op: 'set_project', width: 640, height: 360 },
     { op: 'add_media', assetId: picAsset.id, duration: 2 },
@@ -1180,6 +1204,14 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.tl-clip.text')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 10 })); window.dispatchEvent(new PointerEvent('pointerup'));`);
       await wait(900);
       fs.writeFileSync(path.join(dir, 'studio-text.png'), (await win.webContents.capturePage()).toPNG());
+      // Ask Keo from Studio: a request in the panel, Keo's edit and reply.
+      await js(`[...document.querySelectorAll('.side-tabs button')].find((b) => b.textContent.includes('Keo'))?.click();`);
+      await wait(600);
+      await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.preset {"preset":"subscribe","at":1}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(200);
+      await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
+      await wait(3500);
+      fs.writeFileSync(path.join(dir, 'studio-keo.png'), (await win.webContents.capturePage()).toPNG());
       // The faceless creator with the example script.
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('New'))?.click();`);
       await wait(500);

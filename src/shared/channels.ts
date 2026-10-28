@@ -62,6 +62,8 @@ export const INVOKE_CHANNELS = [
   'studio:punchIn',
   'studio:soundEffect',
   'studio:faceless',
+  'studio:focus',
+  'studio:conversation',
   'studio:facelessPlan',
   'studio:import',
   'studio:export',
