@@ -7,6 +7,7 @@ import { mediaUrl } from '../studio/media';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields } from '../studio/MotionFields';
 import '../styles/studio.css';
@@ -41,6 +42,7 @@ export function StudioView() {
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [captioning, setCaptioning] = useState(false);
+  const [faceless, setFaceless] = useState(false);
   const projectRef = useRef<Project | null>(null);
   projectRef.current = project;
 
@@ -287,10 +289,25 @@ export function StudioView() {
       </div>
     );
   }
+  if (faceless) {
+    return (
+      <div className="view studio">
+        <FacelessCreator
+          onCancel={() => setFaceless(false)}
+          onDone={(id) => {
+            setFaceless(false);
+            setCreating(false);
+            refreshList();
+            void openProject(id);
+          }}
+        />
+      </div>
+    );
+  }
   if (!project || creating) {
     return (
       <div className="view studio">
-        <NewProject onCreate={create} onCancel={project ? () => setCreating(false) : undefined} />
+        <NewProject onCreate={create} onFaceless={() => setFaceless(true)} onCancel={project ? () => setCreating(false) : undefined} />
       </div>
     );
   }
@@ -471,7 +488,7 @@ function AssetThumb({ projectId, asset }: { projectId: string; asset: Asset }) {
   );
 }
 
-function NewProject({ onCreate, onCancel }: { onCreate: (name: string, f: FormatId) => void; onCancel?: () => void }) {
+function NewProject({ onCreate, onFaceless, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onCancel?: () => void }) {
   const [name, setName] = useState('My video');
   const [format, setFormat] = useState<FormatId>('vertical');
   return (
@@ -503,6 +520,12 @@ function NewProject({ onCreate, onCancel }: { onCreate: (name: string, f: Format
           )}
           <button className="btn primary" disabled={!name.trim()} onClick={() => onCreate(name.trim(), format)}>
             Create
+          </button>
+        </div>
+        <div className="faceless-offer">
+          <span className="muted small">No footage? Make a video from a script:</span>
+          <button className="btn sm" onClick={onFaceless}>
+            <Icon name="text" size={13} /> Faceless video from a script
           </button>
         </div>
       </div>

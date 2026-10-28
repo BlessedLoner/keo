@@ -135,6 +135,7 @@ check('studio: the timeline sound is mixed for captions (speech found)', st.spee
 check('studio: a video’s own sound is analysed for speech', Array.isArray(st.third?.speech) && st.third.speech.length >= 1 && st.third.speech[0].start < 0.2, st.error ?? JSON.stringify(st.third));
 check('studio: voice clean-up, loudness, colour, push-in and a sound effect export', st.third?.frames >= 55 && st.third?.frames <= 61 && st.third?.sound === true, st.error ?? JSON.stringify(st.third));
 check('studio: motion design draws, moves and exports (presets, shapes, keyframes)', st.motion?.frames >= 70 && st.motion?.frames <= 73 && st.motion?.layers === 11 && Array.isArray(st.motion?.brightness) && st.motion.brightness.every((b) => b > 8) && new Set(st.motion.brightness).size > 1, st.error ?? JSON.stringify(st.motion));
+check('studio: a faceless video is made from a script (voice, pictures, captions) and exported', st.faceless?.scenes === 3 && st.faceless?.voice === 3 && st.faceless?.captions >= 3 && st.faceless?.sound === true && st.faceless?.frames > 60, st.error ?? JSON.stringify(st.faceless));
 check('studio: frames for Keo to look at are drawn', Array.isArray(st.frames) && st.frames.length === 2 && st.frames.every((f) => f.width === 180 && f.centre > 20), st.error ?? JSON.stringify(st.frames));
 
 // Switching to another data folder happens in place: same window, same process, other data.

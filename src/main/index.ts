@@ -1,7 +1,8 @@
 import { Mp4Reader } from './studio/mp4';
-import { voicedSpans } from './studio/captions';
+import { voicedSpans, wavOf } from './studio/captions';
 import { LOOKS, type EditOp } from '../shared/studio';
 import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
+import { scenesFromScript, Storyboard } from '../shared/studioFaceless';
 import os from 'node:os';
 import type { RenderJob } from './studio/studioService';
 import { Readable } from 'node:stream';
@@ -23,7 +24,7 @@ import { originOf, registerIpc } from './ipc/router';
 import { Logger } from './logging/logger';
 import { TestProvider } from './providers/testProvider';
 import { SecretStore, type SecretCipher } from './secrets/secretStore';
-import { Services } from './services';
+import { Services, type ServiceDeps } from './services';
 import { errorMessage } from './util/errors';
 import { electronImageTools, ElectronWindowCapture } from './vision/electronCapture';
 import { buildCsp } from './window/csp';
@@ -620,6 +621,8 @@ app.whenReady().then(() => {
         openPath: async (p) => (await shell.openPath(p)) === '',
         showInFolder: (p) => shell.showItemInFolder(p),
         pickMedia: pickStudioMedia,
+        // Smoke checks only: a stand-in voice (a tone) and pictures (a gradient), never in the real app.
+        ...(SMOKE ? smokeFacelessDeps() : {}),
         pickVideo: async (what) => {
           const opts: OpenDialogOptions =
             what === 'clips_folder'
@@ -870,6 +873,35 @@ app.on('before-quit', (e) => {
  * to MP4; that MP4 is imported into a second project, edited (split, text, music) and exported
  * again (exact decoding of real H.264); frames are rendered for Keo to look at.
  */
+/** Smoke checks of the faceless creator: a voice that is a tone as long as the text, and gradient pictures. */
+function smokeFacelessDeps(): Pick<ServiceDeps, 'studioNarrate' | 'pictureAi'> {
+  const picture = (): Buffer => {
+    const W = 256;
+    const H = 384;
+    const px = Buffer.alloc(W * H * 4);
+    const hue = Math.floor(Math.random() * 200);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        px[i] = (hue + x) % 256;
+        px[i + 1] = Math.round((y / H) * 200);
+        px[i + 2] = 180;
+        px[i + 3] = 255;
+      }
+    return nativeImage.createFromBitmap(px, { width: W, height: H }).toPNG();
+  };
+  return {
+    studioNarrate: async (text) => {
+      const rate = 16000;
+      const secs = Math.max(1, Math.min(8, text.length / 15));
+      const pcm = new Int16Array(Math.round(secs * rate));
+      for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(Math.sin((2 * Math.PI * 220 * i) / rate) * 8000);
+      return { audio: wavOf(pcm, rate), mimeType: 'audio/wav' };
+    },
+    pictureAi: { generate: async () => picture(), edit: async () => picture() },
+  };
+}
+
 /** Test media for Studio checks: a colourful picture and a 2-second 440 Hz tone, in dir. */
 function studioSampleMedia(dir: string): { pic: string; tone: string } {
   const W = 640;
@@ -998,6 +1030,16 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   });
   const moOut = await s.studio.exportVideo(mo.id);
   out.motion = { frames: moOut.frames, brightness: stats, layers: moP().tracks.reduce((n, t) => n + t.clips.length, 0) };
+  // Phase 4: a faceless video from a three-scene script, built and exported for real.
+  const fl = await s.facelessCreate(Storyboard.parse({ title: 'Studio smoke faceless', format: 'square', look: 'warm', scenes: scenesFromScript('Did you know the sea makes air?\n[title: Sea air]\n\nTiny plants do it.\n\nSay thanks.') }));
+  s.studio.edit(fl.projectId, [{ op: 'set_project', width: 320, height: 320 }]);
+  const flOut = await s.studio.exportVideo(fl.projectId);
+  const flReader = Mp4Reader.open(flOut.file);
+  const flP = s.studio.get(fl.projectId);
+  out.faceless = { scenes: fl.scenes, durationSec: flOut.durationSec, frames: flOut.frames, sound: !!flReader?.audio(), captions: flP.tracks.find((t) => t.name === 'Captions')?.clips.length ?? 0, voice: flP.tracks.find((t) => t.name === 'Voice')?.clips.length ?? 0 };
+  flReader?.close();
+  fs.rmSync(flOut.file, { force: true });
+  s.studio.delete(fl.projectId);
   for (const f of [first.file, second.file, third.file, moOut.file]) fs.rmSync(f, { force: true });
   s.studio.delete(mo.id);
   s.studio.delete(a.id);
@@ -1138,6 +1180,16 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.tl-clip.text')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 10 })); window.dispatchEvent(new PointerEvent('pointerup'));`);
       await wait(900);
       fs.writeFileSync(path.join(dir, 'studio-text.png'), (await win.webContents.capturePage()).toPNG());
+      // The faceless creator with the example script.
+      await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('New'))?.click();`);
+      await wait(500);
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Faceless video from a script'))?.click();`);
+      await wait(500);
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Use the example'))?.click();`);
+      await wait(900);
+      fs.writeFileSync(path.join(dir, 'studio-faceless.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(300);
     }
     if (name === 'settings') {
       await js(`document.querySelector('section[aria-label="OpenRouter"]')?.scrollIntoView({ block: 'start' });`);

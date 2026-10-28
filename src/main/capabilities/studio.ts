@@ -3,6 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project } from '../../shared/studio';
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
+import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
 import { SFX, type SfxKind } from '../studio/sfx';
 import { Mp4Reader } from '../studio/mp4';
@@ -35,6 +36,10 @@ export interface StudioToolDeps {
   transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean }>;
   /** Files Keo made itself (its own output folders): usable as media without the user naming them. */
   keoMade: (file: string) => boolean;
+  /** Why a faceless video cannot be made now (null: it can). */
+  facelessReady: () => string | null;
+  facelessPlan: (board: Storyboard) => { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
+  faceless: (board: Storyboard, o: { projectId?: string; signal: AbortSignal }) => Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }>;
   captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
@@ -616,6 +621,45 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const faceless = defineCapability({
+    id: 'studio.faceless',
+    version: '1.0.0',
+    title: 'Make a faceless video',
+    description:
+      'Make a whole faceless video in a new Studio project from a storyboard: a voice reads each scene, each scene gets its picture (made with AI from picture.prompt — or the narration — unless you give media of the project), the pictures move (push-in, pull-out, pans), scenes change with transitions and a whoosh, a title shows where a scene has one, captions come word by word, and music (the user’s own sound file in the project) plays under the voice. Write the script yourself first when the user gives only a topic: a strong hook in the first scene, short scenes (1–3 sentences, 3–8 seconds each), one clear picture idea per scene, written for the ear. Give pictureStyle so the pictures look like one set. Afterwards look at a few frames (studio__look), fix what needs it, and offer to export. Never copy someone else’s script, characters or brand.',
+    input: Storyboard.extend({ projectId: ProjectId.optional() }).strict(),
+    output: z.object({ projectId: z.string(), durationSec: z.number(), scenes: z.number(), pictures: z.number(), voice: z.string(), timeline: z.string() }),
+    risk: 'low',
+    // Uses the user's voice and picture allowance (or their own OpenAI account): the user approves.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The video is built in a new Studio project in one edit (and the look in a second); nothing is exported until the user asks.',
+    unavailableReason: () => d.facelessReady(),
+    autonomy: () => ({ tier: 'important', reason: 'it makes a voice and pictures with a cloud service' }),
+    preview: (i) => {
+      const plan = d.facelessPlan(i);
+      return {
+        summary: `Make the faceless video “${i.title}” (${i.scenes.length} scene${i.scenes.length === 1 ? '' : 's'})`,
+        target: null,
+        consequences: [`${plan.narrations} voice clip${plan.narrations === 1 ? '' : 's'}${plan.aiPictures ? ` and ${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}` : ''} are made (they count toward your plan, or your own OpenAI account).`, 'A new Studio project is made; nothing is exported yet.'],
+        dataExport: [plan.voice ? `The narration text is sent to ${plan.voice} to make the voice.` : null, plan.pictures ? `The picture descriptions are sent to ${plan.pictures}.` : null].filter(Boolean).join(' ') || null,
+      };
+    },
+    auditView: (i) => ({ scenes: i.scenes.length, format: i.format, captions: i.captions }),
+    async execute(i, ctx) {
+      const { projectId, ...board } = i;
+      const r = await d.faceless(board, { ...(projectId ? { projectId } : {}), signal: ctx.signal }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { projectId: r.projectId, durationSec: r.duration, scenes: r.scenes, pictures: r.pictures, voice: r.voice, timeline: s.describe(r.projectId).slice(0, 6000) };
+    },
+  });
+
   const exportVideo = defineCapability({
     id: 'studio.export',
     version: '1.0.0',
@@ -655,7 +699,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

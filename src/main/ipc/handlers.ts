@@ -472,6 +472,9 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { cuts: r.plan.cuts.length, seconds: r.plan.seconds, byReason, notes: r.plan.notes };
     },
     'studio:punchIn': async ({ id, scale }) => ({ points: (await s.studio.punchIn(id, { ...(scale ? { scale } : {}) }).catch(studioErr)).points }),
+    // The user's own click in Studio, after the page showed what is made and sent where.
+    'studio:faceless': async (board) => s.facelessCreate(board).catch(studioErr),
+    'studio:facelessPlan': (board) => s.facelessPlan(board),
     'studio:soundEffect': ({ id, kind, at }) => {
       try {
         const { asset } = s.studio.soundEffect(id, kind);

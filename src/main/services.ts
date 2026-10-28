@@ -1,6 +1,7 @@
 import { StudioError, StudioService, type ProbeResult, type RenderJob } from './studio/studioService';
 import type { CaptionLine, Word as CaptionWord } from './studio/captions';
-import type { TextStyle } from '../shared/studio';
+import { projectDuration, type TextStyle } from '../shared/studio';
+import { facelessOps, lookOps, pictureSize, type SceneMedia, type Storyboard } from '../shared/studioFaceless';
 import { KeoAccount } from './cloud/account';
 import { ProviderError } from './providers/types';
 import { pictureCapabilities } from './capabilities/pictures';
@@ -137,6 +138,8 @@ export interface ServiceDeps {
   pickVideo?: (what: 'template' | 'clips_folder' | 'music') => Promise<string | null>;
   /** Keo Studio's picker for videos, pictures and sound (the user chooses; several files). */
   pickMedia?: () => Promise<string[]>;
+  /** A test voice for the faceless creator (the app uses Keo Cloud or OpenAI). */
+  studioNarrate?: (text: string, voice: string, signal: AbortSignal) => Promise<{ audio: Uint8Array; mimeType: string }>;
   /** The user's Videos folder (finished videos go to Videos\Keo). */
   videosDir?: string;
   /** IMAP and SMTP for the email account (tests inject fakes; no test reaches a mail server). */
@@ -297,9 +300,13 @@ export class Services {
 
   /** A test transcriber (tests only); the app uses OpenAI or Keo Cloud. */
   private readonly videoTranscribe: ServiceDeps['videoTranscribe'];
+  private readonly studioNarrate: ServiceDeps['studioNarrate'];
+  private readonly studioRoot: string;
 
   constructor(d: ServiceDeps) {
     this.videoTranscribe = d.videoTranscribe;
+    this.studioNarrate = d.studioNarrate;
+    this.studioRoot = path.join(d.profile.userData, 'studio');
     this.profile = d.profile;
     this.log = d.logger ?? new Logger(d.profile.logsDir, d.logEcho ?? false);
     this.db = openDatabase(d.profile.dbFile);
@@ -472,7 +479,7 @@ export class Services {
       ...(d.liveChatTiming ?? {}),
     });
     this.studio = new StudioService({
-      dir: path.join(d.profile.userData, 'studio'),
+      dir: this.studioRoot,
       log: this.log,
       exportsDir: () => this.videoOutputRoot(),
       ...(d.studioJob ? { sendJob: d.studioJob } : {}),
@@ -678,6 +685,9 @@ export class Services {
         },
         captions: (projectId, o) => this.studioCaptions(projectId, o),
         transcribe: (projectId, o) => this.studioTranscribe(projectId, o),
+        facelessReady: () => (this.studioNarrator('female') ? null : 'Faceless videos need a voice: the user signs in to their Keo account, or adds an OpenAI API key in Settings → Providers.'),
+        facelessPlan: (board) => this.facelessPlan(board),
+        faceless: (board, o) => this.facelessCreate(board, o),
         // Keo's own output (made pictures, documents, exported videos).
         keoMade: (file) => isInside(file, this.keoOutputRoot(d)) || isInside(file, this.videoOutputRoot()),
       }),
@@ -1256,6 +1266,127 @@ export class Services {
       return { destination: 'OpenAI', words: async (wav, signal) => (await this.providers.openai.transcribeWords(wav, signal, { language })).map((w) => ({ text: w.word, start: w.start, end: w.end })) };
     if (this.account.signedIn()) return { destination: 'Keo Cloud', text: (wav, signal) => this.account.transcribe(wav, language, signal) };
     return null;
+  }
+
+  /**
+   * Who reads a faceless video's narration: Keo's voice (Keo account) for female/male, else OpenAI
+   * with the user's own key (any OpenAI voice name); null when neither is there.
+   */
+  private studioDir(): string {
+    return this.studioRoot;
+  }
+
+  studioNarrator(voice: string): { destination: string; speak: (text: string, signal: AbortSignal) => Promise<{ audio: Uint8Array; mimeType: string }> } | null {
+    if (this.studioNarrate) return { destination: 'the test voice', speak: (text, signal) => this.studioNarrate!(text, voice, signal) };
+    const keoVoice = voice === 'male' || voice === 'female' ? voice : null;
+    if (keoVoice && this.account.signedIn()) return { destination: 'Keo Cloud', speak: (text, signal) => this.account.speak(text, keoVoice, signal) };
+    if (this.secrets.has('openai')) {
+      const name = voice === 'female' ? 'nova' : voice === 'male' ? 'onyx' : voice;
+      return { destination: 'OpenAI', speak: async (text, signal) => ({ audio: await this.providers.openai.speak(text, this.settings.get().voice.openaiTtsModel, name, signal), mimeType: 'audio/mpeg' }) };
+    }
+    if (this.account.signedIn()) return { destination: 'Keo Cloud', speak: (text, signal) => this.account.speak(text, 'female', signal) };
+    return null;
+  }
+
+  /** What a faceless video will use and send (for the approval card and the Studio page). */
+  facelessPlan(board: Storyboard): { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null } {
+    const narrator = this.studioNarrator(board.voice);
+    const aiPictures = board.scenes.filter((s) => !s.picture || 'prompt' in s.picture).length;
+    const pictures = aiPictures ? (this.pictures.aiAvailable() ? (this.settings.get().pictures.aiSource !== 'keo' && this.secrets.has('openai') ? 'OpenAI' : 'Keo Cloud') : null) : null;
+    const reason = !narrator ? 'The voice needs your Keo account (sign in) or an OpenAI API key.' : aiPictures && !pictures ? 'Making pictures needs your Keo account (sign in) or an OpenAI API key — or use your own pictures for every scene.' : null;
+    return { voice: narrator?.destination ?? null, pictures, aiPictures, narrations: board.scenes.length, reason };
+  }
+
+  /**
+   * Makes a faceless video in Studio from a storyboard: a voice for every scene, a picture for every
+   * scene that has none (made with AI), then the whole timeline in one edit (and the colour look in
+   * a second). Progress shows as Keo's checklist in the Studio page.
+   */
+  async facelessCreate(board: Storyboard, o: { projectId?: string; signal?: AbortSignal } = {}): Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }> {
+    const signal = o.signal ?? new AbortController().signal;
+    const plan = this.facelessPlan(board);
+    if (plan.reason) throw new StudioError(plan.reason);
+    const narrator = this.studioNarrator(board.voice)!;
+    let p = o.projectId ? this.studio.open(o.projectId) : this.studio.create(board.title, board.format);
+    if (o.projectId && projectDuration(p) > 0) throw new StudioError('That project already has a timeline: make the faceless video in a new project.');
+    const id = p.id;
+    const steps: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> = [
+      { label: 'Write the voice-over', status: 'running', note: `0 of ${board.scenes.length}` },
+      { label: 'Make the pictures', status: plan.aiPictures ? 'pending' : 'skipped', ...(plan.aiPictures ? { note: `0 of ${plan.aiPictures}` } : {}) },
+      { label: 'Find where the voice speaks', status: 'pending' },
+      { label: 'Build scenes, motion and transitions', status: 'pending' },
+      { label: board.captions === 'none' ? 'Captions (off)' : 'Captions', status: board.captions === 'none' ? 'skipped' : 'pending' },
+      { label: board.music ? 'Music under the voice' : 'Music (none chosen)', status: board.music ? 'pending' : 'skipped' },
+    ];
+    const show = () => this.emit('studio:progress', { projectId: id, stage: 'checklist', steps: steps.map((s) => ({ ...s })) });
+    const step = (i: number, status: (typeof steps)[number]['status'], note?: string) => {
+      steps[i] = { label: steps[i]!.label, status, ...(note ? { note } : {}) };
+      show();
+    };
+    this.ui.showMain?.('studio');
+    show();
+    try {
+      const dir = path.join(this.studioDir(), 'faceless', id);
+      fs.mkdirSync(dir, { recursive: true });
+      // 1. The voice: three scenes at a time.
+      const voiceFiles: string[] = new Array(board.scenes.length);
+      let said = 0;
+      await inBatches(board.scenes, 3, async (scene, i) => {
+        if (signal.aborted) throw new StudioError('Stopped.');
+        const r = await narrator.speak(scene.narration, signal);
+        const ext = r.mimeType.includes('wav') ? 'wav' : r.mimeType.includes('mpeg') || r.mimeType.includes('mp3') ? 'mp3' : r.mimeType.includes('ogg') ? 'ogg' : 'm4a';
+        const file = path.join(dir, `voice-${String(i + 1).padStart(2, '0')}.${ext}`);
+        fs.writeFileSync(file, Buffer.from(r.audio));
+        voiceFiles[i] = file;
+        step(0, 'running', `${++said} of ${board.scenes.length}`);
+      });
+      step(0, 'done', `${board.scenes.length} scenes, ${narrator.destination}`);
+      // 2. The pictures the storyboard does not give: two at a time.
+      const pictureFiles: Array<string | null> = board.scenes.map(() => null);
+      if (plan.aiPictures) {
+        step(1, 'running', `0 of ${plan.aiPictures}`);
+        let made = 0;
+        const style = board.pictureStyle ? ` Style: ${board.pictureStyle}.` : '';
+        const todo = board.scenes.map((s, i) => ({ s, i })).filter(({ s }) => !s.picture || 'prompt' in s.picture);
+        await inBatches(todo, 2, async ({ s, i }) => {
+          if (signal.aborted) throw new StudioError('Stopped.');
+          const prompt = s.picture && 'prompt' in s.picture ? s.picture.prompt : `A picture for this moment of a video: ${s.narration}`;
+          const r = await this.pictures.generate(`${prompt}.${style} No text or letters in the picture.`, { name: `${board.title} scene ${i + 1}`, size: pictureSize(board.format), quality: this.settings.get().pictures.aiQuality, background: 'opaque' }, signal);
+          pictureFiles[i] = r.path;
+          step(1, 'running', `${++made} of ${plan.aiPictures}`);
+        });
+        step(1, 'done', `${plan.aiPictures} pictures, ${plan.pictures}`);
+      }
+      // Into the project (each file measured), then where each voice speaks (on this PC).
+      const imported = await this.studio.importFiles(id, [...voiceFiles, ...pictureFiles.filter((f): f is string => !!f)]);
+      if (imported.skipped.length) throw new StudioError(`Keo could not read some of what it made: ${imported.skipped.slice(0, 2).join('; ')}`);
+      step(2, 'running');
+      p = (await this.studio.analyzeSpeech(id, { signal })).project;
+      step(2, 'done');
+      const byPath = (f: string) => p.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(f).toLowerCase());
+      const media: SceneMedia[] = board.scenes.map((scene, i) => {
+        const voice = byPath(voiceFiles[i]!);
+        const picId = scene.picture && 'assetId' in scene.picture ? scene.picture.assetId : byPath(pictureFiles[i]!)?.id;
+        if (!voice || !picId || !p.assets.some((a) => a.id === picId && a.kind !== 'audio')) throw new StudioError(`Scene ${i + 1} has no picture or voice.`);
+        return { pictureId: picId, voiceId: voice.id, voiceSeconds: voice.duration, speech: voice.speech ?? [] };
+      });
+      // 3. The timeline in one edit.
+      step(3, 'running');
+      const sfx = board.soundEffects ? this.studio.soundEffect(id, 'whoosh').asset.id : undefined;
+      const built = facelessOps(this.studio.get(id), board, media, { ...(sfx ? { sfx } : {}) });
+      this.studio.edit(id, built.ops);
+      const look = lookOps(this.studio.get(id), board.look);
+      if (look.length) this.studio.edit(id, look);
+      step(3, 'done', `${board.scenes.length} scenes, ${built.duration.toFixed(1)} s`);
+      if (board.captions !== 'none') step(4, 'done', 'word by word, from the script');
+      if (board.music) step(5, 'done', 'quieter while the voice speaks');
+      this.audit.record({ kind: 'studio.faceless', decision: 'sent', detail: { scenes: board.scenes.length, pictures: plan.aiPictures, voice: narrator.destination, pictureSource: plan.pictures } });
+      return { projectId: id, duration: built.duration, scenes: board.scenes.length, pictures: plan.aiPictures, voice: narrator.destination };
+    } catch (e) {
+      const i = steps.findIndex((s) => s.status === 'running');
+      if (i >= 0) step(i, 'failed', e instanceof Error ? e.message.slice(0, 150) : 'failed');
+      throw e;
+    }
   }
 
   /** The spoken words of a Studio project's media (their sound goes to studioTranscriber's service). */
@@ -1981,4 +2112,16 @@ Edit it with studio__edit, check it with studio__look, export with studio__expor
 /** The user allowed showing pictures to this provider (Access → Screen-content export); the offline test provider needs no consent. */
 export function visionAllowed(providerId: string, st: Settings): boolean {
   return providerId === 'test' || !!st.permissions.visionExport[providerId as keyof Settings['permissions']['visionExport']];
+}
+
+/** Runs f over items, at most n at a time (stops at the first error). */
+async function inBatches<T>(items: T[], n: number, f: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      await f(items[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
 }
