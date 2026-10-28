@@ -1,3 +1,4 @@
+import { EditOp, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
 import { z } from 'zod';
 import type {
@@ -40,6 +41,8 @@ import { LINK_IDS } from './release';
  */
 const id = z.string().regex(/^[A-Za-z0-9_-]{6,64}$/, 'invalid id');
 const empty = z.object({}).strict();
+const studioProjectId = z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/);
+const studioAssetId = z.string().regex(/^as_[A-Za-z0-9]{4,24}$/);
 const text = (max: number) => z.string().max(max);
 
 export const ProviderIdSchema = z.enum(['keo', 'anthropic', 'openai', 'openrouter', 'local', 'test']);
@@ -122,6 +125,46 @@ export const invokeSchemas = {
   'account:refresh': empty,
   'account:upgrade': empty,
   'account:useLocal': empty,
+  'studio:list': empty,
+  'studio:create': z.object({ name: z.string().trim().min(1).max(120), format: z.enum(['vertical', 'landscape', 'square', 'portrait']).default('vertical') }).strict(),
+  'studio:get': z.object({ id: studioProjectId }).strict(),
+  'studio:open': z.object({ id: studioProjectId }).strict(),
+  'studio:delete': z.object({ id: studioProjectId }).strict(),
+  'studio:edit': z.object({ id: studioProjectId, ops: z.array(EditOp).min(1).max(200) }).strict(),
+  'studio:undo': z.object({ id: studioProjectId }).strict(),
+  'studio:redo': z.object({ id: studioProjectId }).strict(),
+  'studio:history': z.object({ id: studioProjectId }).strict(),
+  'studio:captions': z.object({ id: studioProjectId, maxWords: z.number().int().min(1).max(8).default(3) }).strict(),
+  'studio:captionSource': empty,
+  /** No paths: Keo opens a file picker. */
+  'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
+  'studio:export': z.object({ id: studioProjectId }).strict(),
+  'studio:current': empty,
+  'studio:videoTrack': z.object({ projectId: studioProjectId, assetId: studioAssetId }).strict(),
+  'studio:videoSamples': z.object({ projectId: studioProjectId, assetId: studioAssetId, time: z.number().min(0).max(86400).optional(), from: z.number().int().min(0).optional(), count: z.number().int().min(1).max(240) }).strict(),
+  'studio:exportBegin': z
+    .object({
+      exportId: z.string().regex(/^ex_[0-9a-f]{12}$/),
+      projectId: studioProjectId,
+      video: z.object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), avcC: z.instanceof(Uint8Array) }).strict(),
+      audio: z.object({ codec: z.enum(['aac', 'opus']), sampleRate: z.number().int().min(8000).max(192000), channels: z.number().int().min(1).max(8), config: z.instanceof(Uint8Array) }).strict().nullable(),
+    })
+    .strict(),
+  'studio:exportChunk': z
+    .object({
+      exportId: z.string().regex(/^ex_[0-9a-f]{12}$/),
+      kind: z.enum(['video', 'audio']),
+      data: z.instanceof(Uint8Array).refine((b) => b.byteLength > 0 && b.byteLength <= 32 * 1024 * 1024, 'chunk size'),
+      timeUs: z.number().min(0),
+      durationUs: z.number().min(0),
+      key: z.boolean(),
+    })
+    .strict(),
+  'studio:exportEnd': z.object({ exportId: z.string().regex(/^ex_[0-9a-f]{12}$/) }).strict(),
+  'studio:exportAbort': z.object({ exportId: z.string().regex(/^ex_[0-9a-f]{12}$/) }).strict(),
+  'studio:exportProgress': z.object({ projectId: studioProjectId, stage: z.enum(['sound', 'video', 'saving']), done: z.number().min(0), total: z.number().min(0) }).strict(),
+  'studio:jobDone': z.object({ jobId: z.string().regex(/^job_[0-9a-f]{12}$/), result: z.unknown(), error: z.string().max(1000).nullable() }).strict(),
+  'studio:renderReady': empty,
   'picture:view': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
   'picture:open': z.object({ path: z.string().trim().min(3).max(1000), reveal: z.boolean().default(false) }).strict(),
   'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
@@ -379,6 +422,29 @@ export interface InvokeOutputs {
   'account:refresh': AccountStatus;
   'account:upgrade': { opened: boolean };
   'account:useLocal': { ok: true };
+  'studio:list': ProjectSummary[];
+  'studio:create': StudioProject;
+  'studio:get': StudioProject;
+  'studio:open': StudioProject;
+  'studio:delete': { ok: true };
+  'studio:edit': { project: StudioProject; changes: string[] };
+  'studio:undo': StudioProject;
+  'studio:redo': StudioProject;
+  'studio:history': { undo: boolean; redo: boolean };
+  'studio:captions': { lines: number; words: number; exact: boolean };
+  'studio:captionSource': { destination: string | null; exact: boolean; reason: string | null };
+  'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
+  'studio:export': { started: true };
+  'studio:current': { id: string | null };
+  'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null;
+  'studio:videoSamples': { from: number; samples: Array<{ data: Uint8Array; time: number; duration: number; key: boolean }> };
+  'studio:exportBegin': { ok: true };
+  'studio:exportChunk': { ok: true };
+  'studio:exportEnd': { file: string; durationSec: number; frames: number; bytes: number };
+  'studio:exportAbort': { ok: true };
+  'studio:exportProgress': { ok: true };
+  'studio:jobDone': { ok: true };
+  'studio:renderReady': { ok: true };
   'picture:open': { opened: boolean };
   'chat:retry': { accepted: true };
   'chat:cancel': { cancelled: boolean };

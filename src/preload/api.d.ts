@@ -24,6 +24,9 @@ export interface PushPayloads {
   'presence:level': { level: number; source: 'mic' | 'playback' | null };
   'account:changed': import('../shared/cloud').AccountStatus;
   'app:switching': { mode: 'account' | 'local' | 'signed-out' };
+  'studio:job': { jobId: string; job: import('../shared/studio').RenderJob };
+  'studio:changed': import('../shared/studio').Project;
+  'studio:progress': { projectId: string; stage: 'sound' | 'video' | 'saving' | 'done' | 'failed' | 'checklist'; done?: number; total?: number; file?: string; error?: string; steps?: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> };
 }
 
 /** Instructions from the main process to a window (never from page content). */

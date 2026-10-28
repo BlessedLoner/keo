@@ -16,6 +16,7 @@ import { ProjectsView } from './views/ProjectsView';
 import { SettingsView } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
 import { VisionView } from './views/VisionView';
+import { StudioView } from './views/StudioView';
 
 const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', key: '1' },
@@ -24,13 +25,14 @@ const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'memory', label: 'Memory', icon: 'memory', key: '3' },
   { id: 'projects', label: 'Projects', icon: 'projects', key: '4' },
   { id: 'vision', label: 'Vision', icon: 'vision', key: '5' },
+  { id: 'studio', label: 'Studio', icon: 'film', key: '9' },
   { id: 'capabilities', label: 'Access', icon: 'shield', key: '6' },
 ];
 
 export function App() {
   const app = useApp();
 
-  // Ctrl+0..8 navigation.
+  // Ctrl+0..9 navigation.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -116,6 +118,7 @@ export function App() {
         {app.view === 'projects' && <ProjectsView />}
         {app.view === 'vision' && <VisionView />}
         {app.view === 'capabilities' && <CapabilitiesView />}
+        {app.view === 'studio' && <StudioView />}
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>

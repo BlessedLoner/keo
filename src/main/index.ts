@@ -1,3 +1,8 @@
+import { Mp4Reader } from './studio/mp4';
+import { voicedSpans } from './studio/captions';
+import os from 'node:os';
+import type { RenderJob } from './studio/studioService';
+import { Readable } from 'node:stream';
 import { accountProfile, folderFor, openFolder, readState, sessionDir, setAsideLegacy, userIdOfToken, writeState, type AccountState } from './env/accounts';
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeImage, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
 import { UpdateService } from './updates/updateService';
@@ -74,6 +79,14 @@ function registerAppProtocol(): void {
   protocol.handle('app', async (request) => {
     const url = new URL(request.url);
     if (url.host !== 'keo') return new Response('Not found', { status: 404 });
+    // Keo Studio's media: only files that are in a project (or being measured), with seeking.
+    const media = /^\/media\/(pr_[A-Za-z0-9]{4,24})\/(as_[A-Za-z0-9]{4,24})$/.exec(url.pathname);
+    const probing = /^\/probe\/([0-9a-f]{24})$/.exec(url.pathname);
+    if (media || probing) {
+      const file = media ? (services?.studio.assetFile(media[1]!, media[2]!) ?? null) : (services?.studio.probeTarget(probing![1]!) ?? null);
+      if (!file) return new Response('Not found', { status: 404 });
+      return serveFile(file, request.headers.get('range'));
+    }
     const rel = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
     const file = path.normalize(path.join(RENDERER_DIR, rel));
     if (!file.startsWith(RENDERER_DIR + path.sep)) return new Response('Forbidden', { status: 403 });
@@ -89,6 +102,25 @@ function registerAppProtocol(): void {
   });
 }
 
+/** A file with HTTP range support (video elements seek with ranges). */
+async function serveFile(file: string, range: string | null): Promise<Response> {
+  const size = (await fs.promises.stat(file)).size;
+  const type = MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+  const headers: Record<string, string> = { 'content-type': type, 'accept-ranges': 'bytes', 'access-control-allow-origin': '*', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' };
+  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+  if (m && (m[1] || m[2])) {
+    let start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+    let end = m[1] && m[2] ? Number(m[2]) : size - 1;
+    end = Math.min(end, size - 1);
+    if (start > end || start >= size) return new Response(null, { status: 416, headers: { ...headers, 'content-range': `bytes */${size}` } });
+    start = Math.max(0, start);
+    const body = Readable.toWeb(fs.createReadStream(file, { start, end })) as unknown as ReadableStream;
+    return new Response(body, { status: 206, headers: { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) } });
+  }
+  const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream;
+  return new Response(body, { status: 200, headers: { ...headers, 'content-length': String(size) } });
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -101,6 +133,21 @@ const MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.flac': 'audio/flac',
 };
 
 // ---------------------------------------------------------------------------
@@ -184,9 +231,44 @@ function createWindow(show = true): BrowserWindow {
   });
   win.on('closed', () => {
     mainWindow = null;
+    // The hidden render window must never keep Keo running on its own.
+    if (renderWindow && !renderWindow.isDestroyed()) renderWindow.destroy();
   });
   void win.loadURL(DEV_URL ?? 'app://keo/index.html');
   return win;
+}
+
+/**
+ * Keo Studio's render window: hidden, made on first use; it exports videos and draws frames with
+ * the PC's video codecs. Jobs wait until it has loaded.
+ */
+let renderWindow: BrowserWindow | null = null;
+let renderReady: Promise<void> | null = null;
+let markRenderReady: (() => void) | null = null;
+function sendRenderJob(jobId: string, job: RenderJob): void {
+  if (!renderWindow || renderWindow.isDestroyed()) {
+    renderReady = new Promise<void>((res) => (markRenderReady = res));
+    renderWindow = new BrowserWindow({
+      show: false,
+      width: 480,
+      height: 360,
+      title: 'Keo renderer',
+      backgroundColor: '#000000',
+      webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, backgroundThrottling: false, devTools: false, spellcheck: false },
+    });
+    renderWindow.on('closed', () => {
+      renderWindow = null;
+      renderReady = null;
+    });
+    // Development builds: the render window's own messages (it has no visible console).
+    if (!app.isPackaged) renderWindow.webContents.on('console-message', (e) => log.info('studio.render_console', { level: e.level, message: String(e.message).slice(0, 300) }));
+    renderWindow.webContents.on('render-process-gone', (_e, d) => log.warn('studio.render_gone', { reason: d.reason }));
+    void renderWindow.loadURL(rendererUrl('#render'));
+  }
+  const win = renderWindow;
+  void renderReady!.then(() => {
+    if (!win.isDestroyed()) win.webContents.send('studio:job', { jobId, job });
+  });
 }
 
 function push(channel: string, payload: unknown): void {
@@ -370,6 +452,19 @@ function showMain(view?: string): void {
   else wc.send('presence:command', { type: 'navigate', view });
 }
 
+/** Windows' file picker for Keo Studio: videos, pictures and sound (several files). */
+async function pickStudioMedia(): Promise<string[]> {
+  const r = await dialog.showOpenDialog(mainWindow ?? undefined!, {
+    title: 'Add videos, pictures or sound',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Videos, pictures and sound', extensions: ['mp4', 'm4v', 'mov', 'webm', 'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'bmp', 'avif', 'mp3', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'flac'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return r.canceled ? [] : r.filePaths;
+}
+
 const rendererUrl = (hash: string) => `${DEV_URL ?? 'app://keo/index.html'}${hash}`;
 
 // ---------------------------------------------------------------------------
@@ -498,7 +593,8 @@ app.whenReady().then(() => {
       liveHandlers,
       {
         trustedOrigin: TRUSTED_ORIGIN,
-        roleOf: (id) => (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === id ? 'main' : (presenceWindows?.roleOf(id) ?? null)),
+        roleOf: (id) =>
+          mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === id ? 'main' : renderWindow && !renderWindow.isDestroyed() && renderWindow.webContents.id === id ? 'render' : (presenceWindows?.roleOf(id) ?? null),
       },
       log,
     );
@@ -511,6 +607,7 @@ app.whenReady().then(() => {
         sessionSecrets: opened.sessionSecrets,
         // Another account signed in, or signed out: start again on that account's own data.
         onAccountChange: (userId) => switchAccountFolder(userId ? { mode: 'account', userId } : { mode: 'signed-out', userId: null }),
+      studioJob: (jobId, job) => sendRenderJob(jobId, job),
         desktopBackend: new Win32Backend(profile.runtimeDir, log),
         captureSource: new ElectronWindowCapture(),
         imageTools: electronImageTools,
@@ -520,6 +617,7 @@ app.whenReady().then(() => {
         homeDir: app.getPath('home'),
         openPath: async (p) => (await shell.openPath(p)) === '',
         showInFolder: (p) => shell.showItemInFolder(p),
+        pickMedia: pickStudioMedia,
         pickVideo: async (what) => {
           const opts: OpenDialogOptions =
             what === 'clips_folder'
@@ -632,6 +730,7 @@ app.whenReady().then(() => {
           });
           return r.canceled ? [] : r.filePaths;
         },
+        pickMedia: pickStudioMedia,
         // The screen as the user sees it, with Keo's main window out of the way for a moment.
         screenshotBehindKeo: async () => {
           const w = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;
@@ -649,6 +748,7 @@ app.whenReady().then(() => {
         },
         relaunch: () => restartKeo(),
         useLocal: () => switchAccountFolder({ mode: 'local', userId: null }),
+      renderReady: () => markRenderReady?.(),
         openMain: (view) => showMain(view),
         showCommandBar: () => presenceWindows?.showCommandBar(),
         hideCommandBar: () => presenceWindows?.hideCommandBar(),
@@ -764,6 +864,103 @@ app.on('before-quit', (e) => {
 });
 
 /**
+ * Smoke: Keo Studio end to end with real codecs. A picture, a tone and animated text are exported
+ * to MP4; that MP4 is imported into a second project, edited (split, text, music) and exported
+ * again (exact decoding of real H.264); frames are rendered for Keo to look at.
+ */
+/** Test media for Studio checks: a colourful picture and a 2-second 440 Hz tone, in dir. */
+function studioSampleMedia(dir: string): { pic: string; tone: string } {
+  const W = 640;
+  const H = 360;
+  const px = Buffer.alloc(W * H * 4);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      px[i] = Math.round((x / W) * 255);
+      px[i + 1] = Math.round((y / H) * 255);
+      px[i + 2] = 200;
+      px[i + 3] = 255;
+    }
+  const pic = path.join(dir, 'picture.png');
+  fs.writeFileSync(pic, nativeImage.createFromBitmap(px, { width: W, height: H }).toPNG());
+  const rate = 48000;
+  const samples = rate * 2;
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write('RIFF', 0, 'latin1');
+  wav.writeUInt32LE(36 + samples * 2, 4);
+  wav.write('WAVEfmt ', 8, 'latin1');
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36, 'latin1');
+  wav.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i++) wav.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 9000), 44 + i * 2);
+  const tone = path.join(dir, 'tone.wav');
+  fs.writeFileSync(tone, wav);
+  return { pic, tone };
+}
+
+async function studioSmoke(): Promise<Record<string, unknown>> {
+  const s = services!;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keo-studio-smoke-'));
+  const out: Record<string, unknown> = {};
+  const { pic, tone } = studioSampleMedia(dir);
+
+  const a = s.studio.create('Studio smoke one', 'landscape');
+  const imported = await s.studio.importFiles(a.id, [pic, tone]);
+  out.imported = imported.added.map((x) => `${x.kind}:${x.width}x${x.height}:${x.duration}`);
+  const picAsset = imported.added.find((x) => x.kind === 'image');
+  const toneAsset = imported.added.find((x) => x.kind === 'audio');
+  if (!picAsset || !toneAsset) throw new Error(`import failed: ${JSON.stringify(imported.skipped)}`);
+  s.studio.edit(a.id, [
+    { op: 'set_project', width: 640, height: 360 },
+    { op: 'add_media', assetId: picAsset.id, duration: 2 },
+    { op: 'add_text', text: 'Keo Studio works', start: 0, duration: 2, animIn: 'words' },
+    { op: 'add_audio', assetId: toneAsset.id },
+  ]);
+  const first = await s.studio.exportVideo(a.id);
+  out.first = { frames: first.frames, durationSec: first.durationSec, bytes: first.bytes };
+  const firstAudio = Mp4Reader.open(first.file);
+  out.firstHasSound = !!firstAudio?.audio();
+  firstAudio?.close();
+  // The timeline's sound for captions: 16 kHz mono, the 2-second tone found as one stretch of sound.
+  const speech = await s.studio.speech(a.id);
+  out.speech = speech ? { rate: speech.rate, seconds: speech.samples.length / speech.rate, spans: voicedSpans(speech.samples, speech.rate) } : null;
+
+  const b = s.studio.create('Studio smoke two', 'vertical');
+  const again = await s.studio.importFiles(b.id, [first.file]);
+  const vid = again.added[0];
+  out.reimported = vid ? `${vid.kind}:${vid.width}x${vid.height}:${vid.duration}:${vid.hasAudio}` : null;
+  if (!vid) throw new Error('re-import failed');
+  const added = s.studio.edit(b.id, [
+    { op: 'set_project', width: 360, height: 640 },
+    { op: 'add_media', assetId: vid.id },
+    { op: 'add_text', text: 'Second pass', start: 0.2, duration: 1.4, animIn: 'pop', style: { glow: 20, color: '#FFD400' } },
+  ]);
+  const clip = added.project.tracks[0]!.clips[0]!;
+  s.studio.edit(b.id, [{ op: 'split', clip: clip.id, at: 1 }]);
+  const second = await s.studio.exportVideo(b.id);
+  out.second = { frames: second.frames, durationSec: second.durationSec };
+  const frames = await s.studio.frames(b.id, [0.5, 1.5], 180);
+  out.frames = frames.map((f) => {
+    const img = nativeImage.createFromBuffer(f.png);
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
+    return { width, height, centre: (bmp[at]! + bmp[at + 1]! + bmp[at + 2]!) / 3 };
+  });
+  for (const f of [first.file, second.file]) fs.rmSync(f, { force: true });
+  s.studio.delete(a.id);
+  s.studio.delete(b.id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  return out;
+}
+
+/**
  * Smoke (KEO_SMOKE_SWITCH=1): opening another data folder in place — no restart — leaves the
  * other folder's data behind and Keo answering in the same window.
  */
@@ -853,15 +1050,42 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
     ['memory', 'Memory'],
     ['projects', 'Projects'],
     ['access', 'Access'],
+    ['studio', 'Studio'],
     ['settings', 'Settings'],
     ['diagnostics', 'Diagnose'],
   ];
+  // A sample Studio project: a picture, a caption-style title and a tone.
+  if (services) {
+    const media = studioSampleMedia(fs.mkdtempSync(path.join(os.tmpdir(), 'keo-studio-shots-')));
+    const sp = services.studio.create('Summer promo', 'vertical');
+    const added = (await services.studio.importFiles(sp.id, [media.pic, media.tone])).added;
+    const pic = added.find((x) => x.kind === 'image');
+    const snd = added.find((x) => x.kind === 'audio');
+    if (pic && snd)
+      services.studio.edit(sp.id, [
+        { op: 'add_media', assetId: pic.id, duration: 6 },
+        { op: 'add_text', text: 'Keo makes videos', start: 0.2, duration: 4, animIn: 'words', style: { sizePct: 7, weight: 'black', color2: '#8B6BFF', glow: 18, glowColor: '#8B6BFF', uppercase: true } },
+        { op: 'add_audio', assetId: snd.id },
+      ]);
+  }
   for (const [name, label] of views) {
     await js(`document.querySelector('nav.rail button[title^="${label}"]')?.click();`);
     await wait(400);
     if (name === 'chat') await js(`[...document.querySelectorAll('.conv-item')].find(b => b.textContent.includes('Plan the week'))?.click();`);
     await wait(900);
+    if (name === 'studio') {
+      // The playhead at 2 seconds (the title is on screen there).
+      await wait(1200);
+      await js(`const r = document.querySelector('.tl-ruler'); const b = r?.getBoundingClientRect(); if (b) { r.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: b.left + 132 + 2 * 60 })); window.dispatchEvent(new PointerEvent('pointerup')); }`);
+      await wait(1000);
+    }
     fs.writeFileSync(path.join(dir, `${name}.png`), (await win.webContents.capturePage()).toPNG());
+    if (name === 'studio') {
+      // A text clip selected: the inspector shows its style and animation.
+      await js(`document.querySelector('.tl-clip.text')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 10 })); window.dispatchEvent(new PointerEvent('pointerup'));`);
+      await wait(900);
+      fs.writeFileSync(path.join(dir, 'studio-text.png'), (await win.webContents.capturePage()).toPNG());
+    }
     if (name === 'settings') {
       await js(`document.querySelector('section[aria-label="OpenRouter"]')?.scrollIntoView({ block: 'start' });`);
       await wait(500);
@@ -1196,6 +1420,11 @@ function runSmoke(win: BrowserWindow): void {
         )) as Record<string, unknown>;
       } catch (e) {
         result = { error: errorMessage(e) };
+      }
+      try {
+        result.studio = await studioSmoke();
+      } catch (e) {
+        result.studio = { error: errorMessage(e) };
       }
       try {
         result.presence = await presenceSmoke(process.env.KEO_SMOKE_SHOTS);

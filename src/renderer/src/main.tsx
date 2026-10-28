@@ -8,6 +8,7 @@ import { VideoApp } from './presence/VideoApp';
 import { PencilApp } from './presence/PencilApp';
 import { KeoModeApp } from './presence/KeoModeApp';
 import { MarksApp } from './presence/MarksApp';
+import { RenderApp } from './studio/RenderApp';
 import { UiProvider } from './components/ui';
 import { invoke, subscribe } from './lib/api';
 import { AppStateProvider } from './state/AppState';
@@ -31,7 +32,9 @@ subscribe('settings:changed', applyTheme);
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
     <UiProvider>
-      {route === '#companion' ? (
+      {route === '#render' ? (
+        <RenderApp />
+      ) : route === '#companion' ? (
         <CompanionApp />
       ) : route === '#command' ? (
         <CommandBarApp />

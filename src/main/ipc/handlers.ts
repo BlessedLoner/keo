@@ -1,3 +1,4 @@
+import { StudioError } from '../studio/studioService';
 import { CALENDAR_SCOPE, MAIL_SCOPE } from '../calendar/googleAuth';
 import type { AttachmentView } from '../../shared/ipc';
 import type { PreparedAttachment } from '../chat/attachments';
@@ -26,6 +27,8 @@ export interface HostHooks {
   showInFolder?(p: string): void;
   /** Windows' file picker for chat attachments (several files). */
   pickFiles?(): Promise<string[]>;
+  /** Windows' file picker for Keo Studio: videos, pictures and sound (several files). */
+  pickMedia?(): Promise<string[]>;
   /** A picture of the screen with Keo's own window out of the way. */
   screenshotBehindKeo?(): Promise<Buffer | null>;
   /** Sends to Keo's presence windows only (the bar, Keo mode). */
@@ -52,6 +55,8 @@ export interface HostHooks {
   relaunch(): void;
   /** Use Keo without a Keo account: start again on the local (own API keys) data. */
   useLocal?(): void;
+  /** Keo's render window has loaded and listens for jobs. */
+  renderReady?(): void;
   openMain?(view?: 'chat' | 'tasks' | 'settings' | 'call'): void;
   showCommandBar?(): void;
   hideCommandBar?(): void;
@@ -96,6 +101,15 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   });
   /** After signing in: Keo's own AI is used, unless the user already has a working provider. */
   const useKeoIfNothingElse = () => s.useKeoIfNothingElse();
+  /** Studio refusals reach the window as a plain message. */
+  const studioCall = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof StudioError) throw new KeoError('studio', e.message);
+      throw e;
+    }
+  };
   const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.email.address(), hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available(), viaGoogle: s.settings.get().email.useGoogle });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
@@ -420,6 +434,70 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       } catch (e) {
         throw new KeoError('account', (e as Error).message);
       }
+      return { ok: true as const };
+    },
+    'studio:list': () => s.studio.list(),
+    'studio:create': ({ name, format }) => s.studio.create(name, format),
+    'studio:get': ({ id }) => s.studio.get(id),
+    'studio:open': ({ id }) => s.studio.open(id),
+    'studio:delete': ({ id }) => {
+      s.studio.delete(id);
+      return { ok: true as const };
+    },
+    'studio:edit': ({ id, ops }) => studioCall(() => s.studio.edit(id, ops)),
+    'studio:undo': ({ id }) => studioCall(() => s.studio.undoEdit(id)),
+    'studio:redo': ({ id }) => studioCall(() => s.studio.redoEdit(id)),
+    'studio:history': ({ id }) => s.studio.canUndo(id),
+    // The user's own click in Studio (after the page showed where the sound goes).
+    'studio:captions': async ({ id, maxWords }) => {
+      const r = await s.studioCaptions(id, { maxWords }).catch((e: unknown) => {
+        throw e instanceof StudioError ? new KeoError('studio', e.message) : e;
+      });
+      return { lines: r.lines.length, words: r.words, exact: r.exact };
+    },
+    'studio:captionSource': () => {
+      const t = s.studioTranscriber();
+      return t ? { destination: t.destination, exact: !!t.words, reason: null } : { destination: null, exact: false, reason: 'Captions need speech-to-text: sign in to your Keo account, or add an OpenAI API key in Settings → Providers.' };
+    },
+    'studio:import': async ({ id, paths }) => {
+      const files = paths ?? (host.pickMedia ? await host.pickMedia() : []);
+      return s.studio.importFiles(id, files);
+    },
+    'studio:export': ({ id }) => {
+      // Runs in the background; progress and the result come as studio:progress.
+      void s.studio
+        .exportVideo(id)
+        .then((r) => s.emit('studio:progress', { projectId: id, stage: 'done', file: r.file }))
+        .catch((e: unknown) => s.emit('studio:progress', { projectId: id, stage: 'failed', error: e instanceof Error ? e.message : 'The export failed.' }));
+      return { started: true as const };
+    },
+    'studio:current': () => ({ id: s.studio.current }),
+    'studio:videoTrack': ({ projectId, assetId }) => s.studio.videoTrack(projectId, assetId),
+    'studio:videoSamples': ({ projectId, assetId, time, from, count }) => studioCall(() => s.studio.videoSamples(projectId, assetId, { ...(time !== undefined ? { time } : {}), ...(from !== undefined ? { from } : {}), count })),
+    'studio:exportBegin': ({ exportId, projectId, video, audio }) => {
+      s.studio.beginExport(exportId, projectId, { width: video.width, height: video.height, avcC: Buffer.from(video.avcC) }, audio ? { codec: audio.codec, sampleRate: audio.sampleRate, channels: audio.channels, config: Buffer.from(audio.config) } : null);
+      return { ok: true as const };
+    },
+    'studio:exportChunk': ({ exportId, kind, data, timeUs, durationUs, key }) => {
+      s.studio.exportChunk(exportId, kind, data, timeUs, durationUs, key);
+      return { ok: true as const };
+    },
+    'studio:exportEnd': ({ exportId }) => studioCall(() => s.studio.endExport(exportId)),
+    'studio:exportAbort': ({ exportId }) => {
+      s.studio.abortExport(exportId);
+      return { ok: true as const };
+    },
+    'studio:exportProgress': ({ projectId, stage, done, total }) => {
+      if (stage !== 'video' || done % 300 === 0) s.log.info('studio.export_progress', { stage, done, total });
+      s.emit('studio:progress', { projectId, stage, done, total });
+      return { ok: true as const };
+    },
+    'studio:jobDone': ({ jobId, result, error }) => {
+      s.studio.jobDone(jobId, result, error);
+      return { ok: true as const };
+    },
+    'studio:renderReady': () => {
+      host.renderReady?.();
       return { ok: true as const };
     },
     'account:useLocal': () => {
