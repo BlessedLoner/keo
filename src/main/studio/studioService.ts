@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
-import { applyEdits, describeProject, EditError, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, isAV, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -317,6 +317,33 @@ export class StudioService {
   }
 
   /** A few frames of the timeline as PNGs (for Keo to look at its own work). */
+  /**
+   * Frames of one media file of a project (not the timeline): for studying a template video.
+   * Drawn through a short-lived project of just that file, never shown in the Studio list.
+   */
+  async assetFrames(id: string, assetId: string, times: number[], width = 512): Promise<Array<{ time: number; png: Buffer }>> {
+    const p = this.get(id);
+    const a = p.assets.find((x) => x.id === assetId);
+    if (!a || a.kind === 'audio') throw new StudioError('That is not a video or picture of this project.');
+    const tmp = Project.parse({
+      ...newProject({ name: 'Template frames', rand: () => crypto.randomBytes(6).toString('hex').slice(0, 10) }),
+      width: Math.max(16, Math.round((a.width || 1080) / 2) * 2),
+      height: Math.max(16, Math.round((a.height || 1920) / 2) * 2),
+      assets: [a],
+    });
+    const withClip = applyEdits(tmp, [{ op: 'add_media', assetId: a.id, start: 0, duration: a.kind === 'image' ? 1 : Math.max(0.04, a.duration), fit: 'contain' }]).project;
+    const file = this.file(withClip.id);
+    fs.writeFileSync(file, JSON.stringify(withClip));
+    try {
+      const out: Array<{ time: number; png: Buffer }> = [];
+      const list = times.map((t) => Math.max(0, Math.min(t, Math.max(0, a.duration - 0.05))));
+      for (let i = 0; i < list.length; i += 6) out.push(...(await this.frames(withClip.id, list.slice(i, i + 6), width)));
+      return out;
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  }
+
   frames(id: string, times: number[], width = 540): Promise<Array<{ time: number; png: Buffer }>> {
     const p = this.get(id);
     const dur = projectDuration(p);
@@ -357,7 +384,7 @@ export class StudioService {
    */
   async analyzeSpeech(id: string, o: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ project: Project; analysed: number }> {
     let p = this.get(id);
-    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((t) => t.clips.some((c) => c.type !== 'text' && c.assetId === a.id))) : needsAnalysis(p, 'speech');
+    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((t) => t.clips.some((c) => isAV(c) && c.assetId === a.id))) : needsAnalysis(p, 'speech');
     for (const a of todo) {
       if (o.signal?.aborted) throw new StudioError('Stopped.');
       const s = await this.assetSound(id, a.id);
@@ -379,7 +406,7 @@ export class StudioService {
   ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean }> {
     let p = this.get(id);
     const exact = !!t.words;
-    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => c.type !== 'text' && c.assetId === a.id))) : needsAnalysis(p, 'words');
+    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id))) : needsAnalysis(p, 'words');
     let count = 0;
     for (const a of todo) {
       const sound = await this.assetSound(id, a.id);

@@ -1,4 +1,4 @@
-import { bridged, clipEnd, duckGain, projectDuration, timelineSpeech, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, duckGain, isAV, projectDuration, timelineSpeech, type MediaClip, type Project } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ExactSources, mediaUrl } from './media';
@@ -28,7 +28,7 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
-      if (c.type === 'text' || c.volume <= 0) continue;
+      if (!isAV(c) || c.volume <= 0) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
       parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, duck: c.type === 'audio' ? c.duck : null });

@@ -1,6 +1,7 @@
 import { Mp4Reader } from './studio/mp4';
 import { voicedSpans } from './studio/captions';
 import { LOOKS, type EditOp } from '../shared/studio';
+import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
 import os from 'node:os';
 import type { RenderJob } from './studio/studioService';
 import { Readable } from 'node:stream';
@@ -970,7 +971,35 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const thirdReader = Mp4Reader.open(third.file);
   out.third = { speech: speechSpans, cuts: cleaned.plan.cuts.length, frames: third.frames, durationSec: third.durationSec, sound: !!thirdReader?.audio() };
   thirdReader?.close();
-  for (const f of [first.file, second.file, third.file]) fs.rmSync(f, { force: true });
+  // Phase 3: motion design drawn and exported by the real render window — kinetic text, a counter,
+  // a lower third, an avatar in a circle, a phone mock-up, a glowing outline and keyframes.
+  const mo = s.studio.create('Studio smoke motion', 'vertical');
+  const moPic = (await s.studio.importFiles(mo.id, [pic])).added[0]!;
+  const moP = () => s.studio.get(mo.id);
+  s.studio.edit(mo.id, [{ op: 'set_project', width: 360, height: 640, background: '#0A0A12' }]);
+  const motionPresets: Array<[PresetId, PresetOptions]> = [
+    ['title', { at: 0, text: 'Big idea' }],
+    ['counter', { at: 0.4, text: '10,000 fans', y: 0.62 }],
+    ['lower-third', { at: 0.2, text: 'Keo Studio', subtext: 'Motion test' }],
+    ['avatar', { at: 0, assetId: moPic.id, y: 0.22 }],
+    ['neon-frame', { at: 0 }],
+    ['phone', { at: 1.2, duration: 0.8, assetId: moPic.id }],
+  ];
+  for (const [id, o] of motionPresets) s.studio.edit(mo.id, presetOps(moP(), id, { duration: 2, ...o }));
+  s.studio.edit(mo.id, [{ op: 'add_shape', shape: 'star', start: 0, duration: 2, style: { width: 0.2, height: 0.11, fill: '#FFD400', glow: 20, glowColor: '#FFD400' }, transform: { x: 0.85, y: 0.1 }, keys: { rotation: [{ at: 0, value: 0, ease: 'linear' }, { at: 2, value: 180, ease: 'linear' }] }, loop: { kind: 'pulse', amount: 0.5, period: 1 } }]);
+  const moFrames = await s.studio.frames(mo.id, [0.15, 1, 1.6], 180);
+  // Frames change over time (things move), and the middle of the frame is not empty.
+  const stats = moFrames.map((f) => {
+    const img = nativeImage.createFromBuffer(f.png);
+    const bmp = img.toBitmap();
+    let sum = 0;
+    for (let i = 0; i < bmp.length; i += 4) sum += bmp[i]! + bmp[i + 1]! + bmp[i + 2]!;
+    return Math.round(sum / (bmp.length / 4) / 3);
+  });
+  const moOut = await s.studio.exportVideo(mo.id);
+  out.motion = { frames: moOut.frames, brightness: stats, layers: moP().tracks.reduce((n, t) => n + t.clips.length, 0) };
+  for (const f of [first.file, second.file, third.file, moOut.file]) fs.rmSync(f, { force: true });
+  s.studio.delete(mo.id);
   s.studio.delete(a.id);
   s.studio.delete(b.id);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -1081,9 +1110,16 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
     if (pic && snd)
       services.studio.edit(sp.id, [
         { op: 'add_media', assetId: pic.id, duration: 6 },
-        { op: 'add_text', text: 'Keo makes videos', start: 0.2, duration: 4, animIn: 'words', style: { sizePct: 7, weight: 'black', color2: '#8B6BFF', glow: 18, glowColor: '#8B6BFF', uppercase: true } },
+        { op: 'add_text', text: 'Keo makes videos', start: 0.2, duration: 4, animIn: 'words', style: { sizePct: 7, weight: 'black', color2: '#8B6BFF', glow: 18, glowColor: '#8B6BFF', uppercase: true }, transform: { y: 0.46 } },
         { op: 'add_audio', assetId: snd.id },
       ]);
+    if (pic) {
+      const now = () => services!.studio.get(sp.id);
+      services.studio.edit(sp.id, presetOps(now(), 'lower-third', { at: 0.5, duration: 5, text: 'Ada Obi', subtext: 'Founder · Keo' }));
+      services.studio.edit(sp.id, presetOps(now(), 'counter', { at: 0.3, duration: 5, text: '10,000 creators', y: 0.66 }));
+      services.studio.edit(sp.id, presetOps(now(), 'avatar', { at: 0.2, duration: 5, assetId: pic.id, y: 0.2 }));
+      services.studio.edit(sp.id, presetOps(now(), 'progress-bar', { at: 0, duration: 6 }));
+    }
   }
   for (const [name, label] of views) {
     await js(`document.querySelector('nav.rail button[title^="${label}"]')?.click();`);

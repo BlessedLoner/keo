@@ -87,6 +87,17 @@
 .insp-seg button.on { background: var(--accent-soft); color: var(--text); }
 .insp-check { display: flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--text-2); }
 .insp-tip { padding: 10px 12px 0; line-height: 1.5; margin: 0; }
+.insp-tip-inline { margin: 8px 0 0; line-height: 1.4; }
+.insp-num > span { display: flex; align-items: center; gap: 4px; }
+.key-btn { border: 0; background: none; color: var(--text-3); font-size: 10px; line-height: 1; padding: 1px 2px; cursor: pointer; border-radius: 3px; }
+.key-btn:hover { color: var(--text); background: var(--bg-hover); }
+.key-btn.on { color: #FFB020; }
+.key-btn.on.here { color: #FFD400; text-shadow: 0 0 6px rgba(255, 212, 0, 0.7); }
+.insp-num.keyed .input { border-color: rgba(255, 176, 32, 0.55); }
+.elements { padding-bottom: 12px; }
+.shape-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px; }
+.shape-row .btn { font-size: 14px; }
+.tl-clip.shape { background: linear-gradient(180deg, #b0476e, #8a2e52); }
 
 /* Tools row above the timeline */
 .studio-tools { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-top: 1px solid var(--line); background: var(--bg-elev); }

@@ -132,7 +132,8 @@ export function Timeline({
   };
 
   const label = (c: Clip) => {
-    if (c.type === 'text') return c.text;
+    if (c.type === 'text') return c.counter ? `${c.counter.prefix}${c.counter.to}${c.counter.suffix}` : c.text;
+    if (c.type === 'shape') return c.shape[0]!.toUpperCase() + c.shape.slice(1);
     return project.assets.find((a) => a.id === c.assetId)?.name ?? 'Media';
   };
 

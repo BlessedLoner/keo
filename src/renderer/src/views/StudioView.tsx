@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { FORMATS, clipEnd, findClip, projectDuration, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FORMATS, clipEnd, findClip, isAV, projectDuration, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -7,6 +7,8 @@ import { mediaUrl } from '../studio/media';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { Color, Num, Section } from '../studio/fields';
+import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -415,10 +417,11 @@ export function StudioView() {
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} />}
           {sel ? (
-            <Inspector key={sel.clip.id} project={project} clip={sel.clip} onEdit={edit} />
+            <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} />
           ) : (
             <>
               <Autopilot project={project} time={time} onEdit={edit} onBusy={(b) => b && setPlaying(false)} />
+              <ElementsPanel project={project} time={time} onEdit={edit} />
               <ProjectSettings project={project} onEdit={edit} />
             </>
           )}
@@ -570,52 +573,13 @@ function Checklist({ steps, onClose }: { steps: Step[]; onClose: () => void }) {
 
 // ---------------------------------------------------------------- inspector
 
-/** A number field that saves on Enter or when it loses focus. */
-function Num({ label, value, min, max, step = 0.1, onCommit, suffix }: { label: string; value: number; min?: number; max?: number; step?: number; onCommit: (v: number) => void; suffix?: string }) {
-  const [draft, setDraft] = useState(String(round(value)));
-  useEffect(() => setDraft(String(round(value))), [value]);
-  const commit = () => {
-    const n = Number(draft);
-    if (!Number.isFinite(n)) return setDraft(String(round(value)));
-    const v = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, n));
-    if (Math.abs(v - value) > 1e-6) onCommit(v);
-    else setDraft(String(round(value)));
-  };
-  return (
-    <label className="insp-num">
-      <span>{label}</span>
-      <input className="input" type="number" value={draft} min={min} max={max} step={step} onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
-      {suffix && <em>{suffix}</em>}
-    </label>
-  );
-}
-const round = (v: number) => Math.round(v * 1000) / 1000;
-
-function Color({ label, value, onCommit }: { label: string; value: string; onCommit: (v: string) => void }) {
-  return (
-    <label className="insp-color">
-      <span>{label}</span>
-      <input type="color" value={value.slice(0, 7)} onChange={(e) => onCommit(e.target.value.toUpperCase())} />
-    </label>
-  );
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="insp-section">
-      <h4>{title}</h4>
-      {children}
-    </div>
-  );
-}
-
-function Inspector({ project, clip, onEdit }: { project: Project; clip: Clip; onEdit: (ops: EditOp[]) => void }) {
+function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Clip; time: number; onEdit: (ops: EditOp[]) => void }) {
   const set = (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => onEdit([{ op: 'set', clip: clip.id, ...patch }]);
-  const asset = clip.type !== 'text' ? project.assets.find((a) => a.id === clip.assetId) : undefined;
+  const asset = isAV(clip) ? project.assets.find((a) => a.id === clip.assetId) : undefined;
   return (
     <div className="inspector">
       <div className="studio-pane-head">
-        <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
+        <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
       </div>
       {asset && <p className="small muted insp-name">{asset.name}</p>}
       <Section title="Timing">
@@ -623,7 +587,7 @@ function Inspector({ project, clip, onEdit }: { project: Project; clip: Clip; on
           <Num label="Start" value={clip.start} min={0} suffix="s" onCommit={(v) => onEdit([{ op: 'move', clip: clip.id, start: v }])} />
           <Num label="Length" value={clip.duration} min={0.04} suffix="s" onCommit={(v) => onEdit([{ op: 'trim', clip: clip.id, duration: v }])} />
           {clip.type === 'media' && asset?.kind === 'video' && <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />}
-          {clip.type !== 'text' && (
+          {isAV(clip) && (
             <>
               <Num label="Fade in" value={clip.fadeIn} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeIn: v })} />
               <Num label="Fade out" value={clip.fadeOut} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeOut: v })} />
@@ -661,15 +625,14 @@ function Inspector({ project, clip, onEdit }: { project: Project; clip: Clip; on
               ))}
             </div>
           )}
-          <div className="insp-grid">
-            <Num label="X" value={clip.transform.x * 100} step={1} suffix="%" onCommit={(v) => set({ transform: { x: v / 100 } })} />
-            <Num label="Y" value={clip.transform.y * 100} step={1} suffix="%" onCommit={(v) => set({ transform: { y: v / 100 } })} />
-            <Num label="Scale" value={clip.transform.scale * 100} min={1} max={2000} step={5} suffix="%" onCommit={(v) => set({ transform: { scale: v / 100 } })} />
-            <Num label="Rotate" value={clip.transform.rotation} step={1} suffix="°" onCommit={(v) => set({ transform: { rotation: v } })} />
-            <Num label="Opacity" value={clip.transform.opacity * 100} min={0} max={100} step={5} suffix="%" onCommit={(v) => set({ transform: { opacity: v / 100 } })} />
-          </div>
+          <PositionFields clip={clip} time={time} fps={project.fps} set={set} />
+          <p className="small muted insp-tip-inline">◆ animates a value: move the playhead, change the value, and Keo makes the in-between.</p>
         </Section>
       )}
+      {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
+      {clip.type === 'media' && <FrameFields clip={clip} set={set} />}
+      {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
+      {clip.type !== 'audio' && <MotionFields clip={clip} set={set} />}
     </div>
   );
 }
@@ -788,6 +751,12 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
               <option value="blur-in">Blur in</option>
               <option value="typewriter">Typewriter</option>
               <option value="words">Word by word</option>
+              <option value="letters">Letter by letter</option>
+              <option value="drop">Drop (bounce)</option>
+              <option value="wave">Wave</option>
+              <option value="zoom">Zoom</option>
+              <option value="wipe">Wipe</option>
+              <option value="glitch">Glitch</option>
             </select>
           </label>
           <label className="insp-num">
@@ -798,6 +767,8 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
               <option value="pop">Pop</option>
               <option value="slide-down">Slide down</option>
               <option value="blur-out">Blur out</option>
+              <option value="zoom">Zoom</option>
+              <option value="wipe">Wipe</option>
             </select>
           </label>
           <Num label="Seconds" value={clip.animSeconds} min={0} max={5} step={0.05} suffix="s" onCommit={(v) => set({ animSeconds: v })} />

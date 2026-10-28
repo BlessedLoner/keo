@@ -134,6 +134,7 @@ check('studio: edits and exports real H.264 again (exact decoding)', st.second?.
 check('studio: the timeline sound is mixed for captions (speech found)', st.speech?.rate === 16000 && Math.abs(st.speech.seconds - 2) < 0.05 && st.speech.spans?.length === 1 && st.speech.spans[0].start < 0.1 && st.speech.spans[0].end > 1.9, st.error ?? JSON.stringify(st.speech));
 check('studio: a video’s own sound is analysed for speech', Array.isArray(st.third?.speech) && st.third.speech.length >= 1 && st.third.speech[0].start < 0.2, st.error ?? JSON.stringify(st.third));
 check('studio: voice clean-up, loudness, colour, push-in and a sound effect export', st.third?.frames >= 55 && st.third?.frames <= 61 && st.third?.sound === true, st.error ?? JSON.stringify(st.third));
+check('studio: motion design draws, moves and exports (presets, shapes, keyframes)', st.motion?.frames >= 70 && st.motion?.frames <= 73 && st.motion?.layers === 11 && Array.isArray(st.motion?.brightness) && st.motion.brightness.every((b) => b > 8) && new Set(st.motion.brightness).size > 1, st.error ?? JSON.stringify(st.motion));
 check('studio: frames for Keo to look at are drawn', Array.isArray(st.frames) && st.frames.length === 2 && st.frames.every((f) => f.width === 180 && f.centre > 20), st.error ?? JSON.stringify(st.frames));
 
 // Switching to another data folder happens in place: same window, same process, other data.

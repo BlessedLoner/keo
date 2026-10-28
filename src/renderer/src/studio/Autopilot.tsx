@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LOOKS, needsAnalysis, type EditOp, type LookId, type Project } from '@shared/studio';
+import { isAV, LOOKS, needsAnalysis, type EditOp, type LookId, type Project } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
@@ -20,7 +20,7 @@ function musicClips(p: Project): string[] {
 function voiceClips(p: Project): string[] {
   const music = new Set(musicClips(p));
   return p.tracks.flatMap((t) =>
-    t.clips.filter((c) => c.type !== 'text' && !music.has(c.id) && !/effect/i.test(t.name) && p.assets.find((a) => a.id === c.assetId)?.hasAudio).map((c) => c.id),
+    t.clips.filter((c) => isAV(c) && !music.has(c.id) && !/effect/i.test(t.name) && p.assets.find((a) => a.id === c.assetId)?.hasAudio).map((c) => c.id),
   );
 }
 
@@ -31,7 +31,7 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
   const media = project.tracks.flatMap((t) => t.clips.filter((c) => c.type === 'media'));
   const voices = voiceClips(project);
   const music = musicClips(project);
-  const voiceOn = voices.length > 0 && voices.every((id) => project.tracks.some((t) => t.clips.some((c) => c.id === id && c.type !== 'text' && c.voice)));
+  const voiceOn = voices.length > 0 && voices.every((id) => project.tracks.some((t) => t.clips.some((c) => c.id === id && isAV(c) && c.voice)));
   const duckOn = music.length > 0 && music.every((id) => project.tracks.some((t) => t.clips.some((c) => c.id === id && c.type === 'audio' && c.duck !== null)));
   const look = (() => {
     const first = media.find((c) => c.type === 'media')?.color;

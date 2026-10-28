@@ -81,8 +81,47 @@ export const Asset = z
 export type Asset = z.infer<typeof Asset>;
 
 /** How text comes in and goes out (Phase 1 set; more styles come with motion design). */
-export const TextAnimIn = z.enum(['none', 'fade', 'pop', 'slide-up', 'typewriter', 'blur-in', 'words']);
-export const TextAnimOut = z.enum(['none', 'fade', 'pop', 'slide-down', 'blur-out']);
+export const TextAnimIn = z.enum(['none', 'fade', 'pop', 'slide-up', 'typewriter', 'blur-in', 'words', 'letters', 'drop', 'zoom', 'wipe', 'glitch', 'wave']);
+export const TextAnimOut = z.enum(['none', 'fade', 'pop', 'slide-down', 'blur-out', 'zoom', 'wipe']);
+
+// ---------------------------------------------------------------- motion (any visible layer)
+
+/** How a keyframe's value is reached from the keyframe before (hold: jumps at the keyframe). */
+export const Ease = z.enum(['linear', 'in', 'out', 'in-out', 'back', 'elastic', 'bounce', 'hold']);
+export type Ease = z.infer<typeof Ease>;
+/** A keyframe: at `at` seconds into the clip the property is `value`. */
+export const Key = z.object({ at: Sec, value: z.number().min(-10000).max(10000), ease: Ease.default('in-out') }).strict();
+export type Key = z.infer<typeof Key>;
+/**
+ * The properties keyframes animate: x, y (fractions of the frame, like the position), scale,
+ * scaleX, scaleY (1 = normal), rotation (degrees), opacity (0..1), blur (percent of the frame
+ * height). A keyframed property replaces the clip's own value.
+ */
+export const KEY_PROPS = ['x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'opacity', 'blur'] as const;
+export type KeyProp = (typeof KEY_PROPS)[number];
+export const Keys = z.object(Object.fromEntries(KEY_PROPS.map((k) => [k, z.array(Key).max(300).optional()])) as Record<KeyProp, z.ZodOptional<z.ZodArray<typeof Key>>>).strict();
+export type Keys = z.infer<typeof Keys>;
+
+/** How a layer comes in or goes out (wipes and iris reveal it through a moving edge). */
+export const MOTIONS = ['fade', 'slide-left', 'slide-right', 'slide-up', 'slide-down', 'zoom-in', 'zoom-out', 'pop', 'spin', 'blur', 'whip', 'flash', 'wipe-left', 'wipe-right', 'wipe-up', 'wipe-down', 'iris'] as const;
+export const Entrance = z.object({ kind: z.enum(MOTIONS), seconds: z.number().min(0.05).max(5).default(0.45) }).strict();
+export type Entrance = z.infer<typeof Entrance>;
+/** A movement that repeats while the layer is on screen. */
+export const Loop = z.object({ kind: z.enum(['float', 'pulse', 'shake', 'spin', 'sway', 'flicker']), amount: z.number().min(0).max(1).default(0.3), period: z.number().min(0.1).max(30).default(2) }).strict();
+export type Loop = z.infer<typeof Loop>;
+const Motion = { keys: Keys.optional(), enter: Entrance.optional(), exit: Entrance.optional(), loop: Loop.optional() };
+
+/** A number that counts up (or down) while the text is in (like "0 → 10,000 followers"). */
+export const Counter = z
+  .object({ from: z.number().min(-1e12).max(1e12), to: z.number().min(-1e12).max(1e12), decimals: z.number().int().min(0).max(4).default(0), prefix: z.string().max(20).default(''), suffix: z.string().max(40).default(''), separator: z.boolean().default(true), seconds: z.number().min(0.1).max(60).optional() })
+  .strict();
+export type Counter = z.infer<typeof Counter>;
+
+/** A video or picture shown in a shape (rounded corners, a circle for avatars). */
+export const Mask = z.object({ shape: z.enum(['rounded', 'circle']), radius: z.number().min(0).max(0.5).default(0.08) }).strict();
+export type Mask = z.infer<typeof Mask>;
+/** Shown inside a device: a phone, a browser window or a floating card. */
+export const DeviceFrame = z.enum(['phone', 'browser', 'card']);
 
 export const TextStyle = z
   .object({
@@ -135,9 +174,55 @@ export const MediaClip = z
     zooms: z.array(Zoom).max(400).optional(),
     /** Voice clean-up on this clip's sound (low rumble cut, clearer voice, even loudness). */
     voice: z.boolean().default(false),
+    mask: Mask.optional(),
+    frame: DeviceFrame.optional(),
+    /** A drop shadow under the layer (0: none). */
+    shadow: z.number().min(0).max(60).default(0),
+    ...Motion,
   })
   .strict();
 export type MediaClip = z.infer<typeof MediaClip>;
+
+// ---------------------------------------------------------------- elements (shapes)
+
+export const ShapeKind = z.enum(['rect', 'circle', 'ring', 'line', 'arrow', 'star', 'triangle']);
+export type ShapeKind = z.infer<typeof ShapeKind>;
+export const ShapeStyle = z
+  .object({
+    /** Size as fractions of the frame's width and height. */
+    width: z.number().min(0.001).max(4).default(0.5),
+    height: z.number().min(0.001).max(4).default(0.1),
+    /** Corner rounding of rectangles (0..0.5 of the shorter side). */
+    radius: z.number().min(0).max(0.5).default(0.12),
+    fill: Hex.nullable().default('#FFFFFF'),
+    /** A second colour: a gradient at `angle` degrees. */
+    fill2: Hex.nullable().default(null),
+    angle: z.number().min(-360).max(360).default(90),
+    stroke: Hex.nullable().default(null),
+    /** Outline thickness in thousandths of the frame height. */
+    strokeWidth: z.number().min(0).max(100).default(8),
+    glow: z.number().min(0).max(80).default(0),
+    glowColor: Hex.default('#FFFFFF'),
+    shadow: z.number().min(0).max(60).default(0),
+    /** Lines, rings and outlines draw themselves on while the layer comes in. */
+    draw: z.boolean().default(false),
+  })
+  .strict();
+export type ShapeStyle = z.infer<typeof ShapeStyle>;
+
+export const ShapeClip = z
+  .object({
+    id: Id,
+    type: z.literal('shape'),
+    start: Sec,
+    duration: z.number().min(0.04).max(24 * 3600),
+    shape: ShapeKind,
+    style: ShapeStyle.prefault({}),
+    transform: Transform.prefault({}),
+    ...Motion,
+  })
+  .strict();
+export type ShapeClip = z.infer<typeof ShapeClip>;
 
 export const TextClip = z
   .object({
@@ -156,6 +241,9 @@ export const TextClip = z
     words: z.array(z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict()).max(400).optional(),
     /** Captions: the word being spoken is drawn in this colour. */
     highlight: Hex.nullable().default(null),
+    counter: Counter.optional(),
+    keys: Keys.optional(),
+    loop: Loop.optional(),
   })
   .strict();
 export type TextClip = z.infer<typeof TextClip>;
@@ -177,8 +265,10 @@ export const AudioClip = z
   .strict();
 export type AudioClip = z.infer<typeof AudioClip>;
 
-export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip]);
+export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip]);
 export type Clip = z.infer<typeof Clip>;
+/** Clips with media behind them (video, picture or sound). */
+export const isAV = (c: Clip): c is MediaClip | AudioClip => c.type === 'media' || c.type === 'audio';
 
 export const TrackKind = z.enum(['video', 'text', 'audio']);
 export type TrackKind = z.infer<typeof TrackKind>;
@@ -252,6 +342,9 @@ export const LOOKS = {
 } as const satisfies Record<string, ColorGrade>;
 export type LookId = keyof typeof LOOKS;
 
+/** The overlay track elements go on by default. */
+export const GRAPHICS_TRACK = 'Graphics';
+
 /** The text track auto-captions go on (made on top of the others when missing). */
 export const CAPTIONS_TRACK = 'Captions';
 /** Short-form caption look: bold white words with an outline; the spoken word lights up. */
@@ -282,6 +375,13 @@ export const EditOp = z.discriminatedUnion('op', [
       fit: z.enum(['cover', 'contain']).optional(),
       transform: TransformPatch.optional(),
       zooms: z.array(Zoom).max(400).optional(),
+      mask: Mask.optional(),
+      frame: DeviceFrame.optional(),
+      shadow: z.number().min(0).max(60).optional(),
+      keys: Keys.optional(),
+      enter: Entrance.optional(),
+      exit: Entrance.optional(),
+      loop: Loop.optional(),
     })
     .strict(),
   z
@@ -295,6 +395,10 @@ export const EditOp = z.discriminatedUnion('op', [
       transform: TransformPatch.optional(),
       animIn: TextAnimIn.optional(),
       animOut: TextAnimOut.optional(),
+      animSeconds: z.number().min(0).max(5).optional(),
+      counter: Counter.optional(),
+      keys: Keys.optional(),
+      loop: Loop.optional(),
     })
     .strict(),
   z
@@ -341,6 +445,34 @@ export const EditOp = z.discriminatedUnion('op', [
       zooms: z.array(Zoom).max(400).nullable().optional(),
       voice: z.boolean().optional(),
       duck: z.number().min(-40).max(0).nullable().optional(),
+      /** Keyframes per property (each list replaces that property's keyframes; null or [] removes them). */
+      keys: z.partialRecord(z.enum(KEY_PROPS), z.array(Key).max(300).nullable()).optional(),
+      enter: Entrance.nullable().optional(),
+      exit: Entrance.nullable().optional(),
+      loop: Loop.nullable().optional(),
+      mask: Mask.nullable().optional(),
+      frame: DeviceFrame.nullable().optional(),
+      shadow: z.number().min(0).max(60).optional(),
+      counter: Counter.nullable().optional(),
+      shapeStyle: ShapeStyle.partial().optional(),
+      shape: ShapeKind.optional(),
+    })
+    .strict(),
+  /** An element (shape) on an overlay track: by default the Graphics track, made above the videos when missing. */
+  z
+    .object({
+      op: z.literal('add_shape'),
+      shape: ShapeKind,
+      start: Sec,
+      duration: z.number().min(0.04).max(3600),
+      track: TrackRef.optional(),
+      trackName: z.string().trim().min(1).max(60).optional(),
+      style: ShapeStyle.partial().optional(),
+      transform: TransformPatch.optional(),
+      keys: Keys.optional(),
+      enter: Entrance.optional(),
+      exit: Entrance.optional(),
+      loop: Loop.optional(),
     })
     .strict(),
   /** Captions: one text clip per line with its words' times, on the Captions track (made if missing; replace: its old captions go). */
@@ -403,7 +535,7 @@ function voiceClips(p: Project): Array<{ clip: MediaClip | AudioClip; asset: Ass
   for (const t of p.tracks) {
     if (t.muted) continue;
     for (const c of t.clips) {
-      if (c.type === 'text' || c.volume <= 0 || (c.type === 'audio' && c.duck !== null)) continue;
+      if (!isAV(c) || c.volume <= 0 || (c.type === 'audio' && c.duck !== null)) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (a && a.hasAudio && a.kind !== 'image') out.push({ clip: c, asset: a });
     }
@@ -516,6 +648,18 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
  * what is kept.
  */
 function shiftInto(c: Clip, by: number, length: number): void {
+  if (c.type !== 'audio' && c.keys) {
+    // Each keyframed property: its value at the new start, then the keyframes after it.
+    const keys: Keys = {};
+    for (const k of KEY_PROPS) {
+      const list = c.keys[k];
+      if (!list?.length) continue;
+      const later = list.filter((x) => x.at > by + 1e-6 && x.at <= by + length + 1e-6).map((x) => ({ ...x, at: round(x.at - by) }));
+      const next = list.find((x) => x.at > by + length + 1e-6);
+      keys[k] = [{ at: 0, value: round(keyValue(list, by)), ease: 'hold' as const }, ...later, ...(next ? [{ ...next, at: round(next.at - by) }] : [])];
+    }
+    c.keys = keys;
+  }
   if (c.type === 'text' && c.words) {
     c.words = c.words.filter((w) => w.end > by + 1e-6 && w.start < by + length).map((w) => ({ ...w, start: round(Math.max(0, w.start - by)), end: round(Math.max(0, w.end - by)) }));
     if (!c.words.length) delete c.words;
@@ -534,6 +678,50 @@ function shiftInto(c: Clip, by: number, length: number): void {
 }
 
 const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+
+/** Easing curves: progress 0..1 to 0..1 (back and elastic overshoot a little). */
+export const EASES: Record<Ease, (p: number) => number> = {
+  linear: (p) => p,
+  in: (p) => p * p * p,
+  out: (p) => 1 - Math.pow(1 - p, 3),
+  'in-out': easeInOut,
+  back: (p) => {
+    const c = 1.70158;
+    return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+  },
+  elastic: (p) => (p === 0 || p === 1 ? p : Math.pow(2, -10 * p) * Math.sin((p * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1),
+  bounce: (x) => {
+    const n = 7.5625;
+    const d = 2.75;
+    if (x < 1 / d) return n * x * x;
+    if (x < 2 / d) {
+      const y = x - 1.5 / d;
+      return n * y * y + 0.75;
+    }
+    if (x < 2.5 / d) {
+      const y = x - 2.25 / d;
+      return n * y * y + 0.9375;
+    }
+    const y = x - 2.625 / d;
+    return n * y * y + 0.984375;
+  },
+  hold: (p) => (p >= 1 ? 1 : 0),
+};
+
+/** A keyframed value at rt seconds into the clip (before the first keyframe: its value). */
+export function keyValue(keys: Key[], rt: number): number {
+  if (!keys.length) return 0;
+  if (rt <= keys[0]!.at) return keys[0]!.value;
+  for (let i = 1; i < keys.length; i++) {
+    const b = keys[i]!;
+    if (rt < b.at) {
+      const a = keys[i - 1]!;
+      const p = (rt - a.at) / Math.max(1e-6, b.at - a.at);
+      return a.value + (b.value - a.value) * EASES[b.ease](Math.min(1, Math.max(0, p)));
+    }
+  }
+  return keys.at(-1)!.value;
+}
 /** Seconds a smooth zoom takes to reach its keyframe. */
 const ZOOM_EASE = 0.45;
 
@@ -558,6 +746,13 @@ export function zoomAt(zooms: Zoom[] | undefined, rt: number): { scale: number; 
   if (z.ease !== 'smooth') return { scale: z.scale, x: z.x, y: z.y };
   const p = easeInOut(clamp01((rt - z.at) / ZOOM_EASE));
   return { scale: prev.scale + (z.scale - prev.scale) * p, x: prev.x + (z.x - prev.x) * p, y: prev.y + (z.y - prev.y) * p };
+}
+
+/** Keyframe lists sorted by time. */
+function sortKeys(keys: Keys): Keys {
+  const out: Keys = {};
+  for (const k of KEY_PROPS) if (keys[k]?.length) out[k] = [...keys[k]!].sort((a, b) => a.at - b.at).map((x) => ({ ...x, at: round(x.at) }));
+  return out;
 }
 
 /** Overlapping or touching ranges joined, sorted. */
@@ -598,6 +793,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
     p.tracks.push(t);
     return t;
   };
+  /** A new track on top of the others. */
+  const addTrack = (kind: TrackKind, name: string): Track => {
+    const t: Track = { id: rid('tr', rand), kind, name, hidden: false, muted: false, clips: [] };
+    p.tracks.push(t);
+    return t;
+  };
   const endOf = (t: Track) => t.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
   const get = (id: string) => {
     const f = findClip(p, id);
@@ -605,7 +806,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
     return f;
   };
   const sourceLeft = (c: Clip) => {
-    if (c.type === 'text') return Infinity;
+    if (!isAV(c)) return Infinity;
     const a = asset(c.assetId);
     if (a.kind === 'image') return Infinity;
     return (a.duration - c.in) / (c.type === 'media' ? c.speed : 1);
@@ -629,15 +830,38 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const max = a.kind === 'image' ? Infinity : a.duration - inn;
         const duration = round(Math.min(op.duration ?? (a.kind === 'image' ? 3 : max), max));
         if (duration < 0.04) throw new EditError(`${a.name} has nothing left after ${inn}s.`);
-        const c = MediaClip.parse({ id: rid('cl', rand), type: 'media', assetId: a.id, start: round(start), duration, in: round(inn), ...(op.fit ? { fit: op.fit } : {}), transform: op.transform ?? {}, ...(op.zooms?.length ? { zooms: [...op.zooms].sort((x, y) => x.at - y.at) } : {}) });
+        const c = MediaClip.parse({ id: rid('cl', rand), type: 'media', assetId: a.id, start: round(start), duration, in: round(inn), ...(op.fit ? { fit: op.fit } : {}), transform: op.transform ?? {}, ...(op.zooms?.length ? { zooms: [...op.zooms].sort((x, y) => x.at - y.at) } : {}),
+          ...(op.mask ? { mask: op.mask } : {}),
+          ...(op.frame ? { frame: op.frame } : {}),
+          ...(op.shadow !== undefined ? { shadow: op.shadow } : {}),
+          ...(op.keys ? { keys: sortKeys(op.keys) } : {}),
+          ...(op.enter ? { enter: op.enter } : {}),
+          ...(op.exit ? { exit: op.exit } : {}),
+          ...(op.loop ? { loop: op.loop } : {}),
+        });
         t.clips.push(c);
         sortClips(t);
         changes.push(`Added ${a.name} at ${round(start)}s for ${duration}s (${c.id}).`);
         break;
       }
       case 'add_text': {
-        const t = track(op.track, 'text');
-        const c = TextClip.parse({ id: rid('cl', rand), type: 'text', start: round(op.start), duration: round(op.duration), text: op.text, style: op.style ?? {}, transform: op.transform ?? {}, ...(op.animIn ? { animIn: op.animIn } : {}), ...(op.animOut ? { animOut: op.animOut } : {}) });
+        // Text goes on the Text track by default (not Graphics or Captions).
+        const t = op.track ? track(op.track, 'text') : (p.tracks.find((x) => x.kind === 'text' && x.name === 'Text') ?? p.tracks.find((x) => x.kind === 'text' && x.name !== GRAPHICS_TRACK && x.name !== CAPTIONS_TRACK) ?? addTrack('text', 'Text'));
+        const c = TextClip.parse({
+          id: rid('cl', rand),
+          type: 'text',
+          start: round(op.start),
+          duration: round(op.duration),
+          text: op.text,
+          style: op.style ?? {},
+          transform: op.transform ?? {},
+          ...(op.animIn ? { animIn: op.animIn } : {}),
+          ...(op.animOut ? { animOut: op.animOut } : {}),
+          ...(op.animSeconds !== undefined ? { animSeconds: op.animSeconds } : {}),
+          ...(op.counter ? { counter: op.counter } : {}),
+          ...(op.keys ? { keys: sortKeys(op.keys) } : {}),
+          ...(op.loop ? { loop: op.loop } : {}),
+        });
         t.clips.push(c);
         sortClips(t);
         changes.push(`Added text “${op.text.slice(0, 40)}” at ${c.start}s (${c.id}).`);
@@ -681,7 +905,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (op.trimStart) {
           const d = op.trimStart;
           if (d >= c.duration - 0.04) throw new EditError(`Trimming ${d}s would remove all of ${c.id}.`);
-          if (c.type !== 'text') {
+          if (isAV(c)) {
             const rate = c.type === 'media' ? c.speed : 1;
             const nextIn = c.in + d * rate;
             if (nextIn < -1e-6) throw new EditError(`${c.id} cannot start earlier than its source does.`);
@@ -709,9 +933,9 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         second.id = rid('cl', rand);
         second.start = round(op.at);
         second.duration = round(c.duration - first);
-        if (second.type !== 'text') second.in = round(second.in + first * (second.type === 'media' ? second.speed : 1));
-        if (second.type !== 'text') second.fadeIn = 0;
-        if (c.type !== 'text') c.fadeOut = 0;
+        if (isAV(second)) second.in = round(second.in + first * (second.type === 'media' ? second.speed : 1));
+        if (isAV(second)) second.fadeIn = 0;
+        if (isAV(c)) c.fadeOut = 0;
         c.duration = first;
         shiftInto(second, first, second.duration);
         shiftInto(c, 0, first);
@@ -761,7 +985,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           (c as MediaClip | TextClip).transform = Transform.parse({ ...(c as MediaClip | TextClip).transform, ...op.transform });
         }
         if (op.volume !== undefined) {
-          only('volume', c.type !== 'text');
+          only('volume', isAV(c));
           (c as MediaClip | AudioClip).volume = op.volume;
         }
         if (op.speed !== undefined) {
@@ -775,7 +999,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         }
         for (const k of ['fadeIn', 'fadeOut'] as const)
           if (op[k] !== undefined) {
-            only('fades', c.type !== 'text');
+            only('fades', isAV(c));
             (c as MediaClip | AudioClip)[k] = op[k]!;
           }
         if (op.fit) {
@@ -800,15 +1024,88 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           else m.zooms = [...op.zooms].filter((z) => z.at <= m.duration + 1e-6).sort((a, b) => a.at - b.at).map((z) => ({ ...z, at: round(z.at) }));
         }
         if (op.voice !== undefined) {
-          only('sound', c.type !== 'text');
+          only('sound', isAV(c));
           (c as MediaClip | AudioClip).voice = op.voice;
         }
         if (op.duck !== undefined) {
           only('music ducking (only sound clips on an audio track)', c.type === 'audio');
           (c as AudioClip).duck = op.duck;
         }
+        if (op.keys) {
+          only('keyframes', c.type !== 'audio');
+          const v = c as MediaClip | TextClip | ShapeClip;
+          const keys: Keys = { ...(v.keys ?? {}) };
+          for (const [k, list] of Object.entries(op.keys) as Array<[KeyProp, Key[] | null]>) {
+            if (!list?.length) delete keys[k];
+            else keys[k] = [...list].sort((a, b) => a.at - b.at).map((x) => ({ ...x, at: round(x.at) }));
+          }
+          if (Object.keys(keys).length) v.keys = keys;
+          else delete v.keys;
+        }
+        for (const k of ['enter', 'exit'] as const)
+          if (op[k] !== undefined) {
+            only(k === 'enter' ? 'entrance (use animIn for text)' : 'exit (use animOut for text)', c.type === 'media' || c.type === 'shape');
+            const v = c as MediaClip | ShapeClip;
+            if (op[k] === null) delete v[k];
+            else v[k] = op[k]!;
+          }
+        if (op.loop !== undefined) {
+          only('loop', c.type !== 'audio');
+          const v = c as MediaClip | TextClip | ShapeClip;
+          if (op.loop === null) delete v.loop;
+          else v.loop = op.loop;
+        }
+        for (const k of ['mask', 'frame'] as const)
+          if (op[k] !== undefined) {
+            only(k === 'mask' ? 'mask' : 'device frame', c.type === 'media');
+            const m = c as MediaClip;
+            if (op[k] === null) delete m[k];
+            else (m[k] as unknown) = op[k];
+          }
+        if (op.shadow !== undefined) {
+          only('shadow (for shapes use shapeStyle.shadow, for text style.shadow)', c.type === 'media');
+          (c as MediaClip).shadow = op.shadow;
+        }
+        if (op.counter !== undefined) {
+          only('counter', c.type === 'text');
+          const tc = c as TextClip;
+          if (op.counter === null) delete tc.counter;
+          else tc.counter = op.counter;
+        }
+        if (op.shapeStyle || op.shape) {
+          only('shape', c.type === 'shape');
+          const sc = c as ShapeClip;
+          if (op.shape) sc.shape = op.shape;
+          if (op.shapeStyle) sc.style = ShapeStyle.parse({ ...sc.style, ...op.shapeStyle });
+        }
         sortClips(f.track);
         changes.push(`Changed ${c.id}.`);
+        break;
+      }
+      case 'add_shape': {
+        let t = op.trackName && !op.track ? p.tracks.find((x) => x.kind === 'text' && x.name === op.trackName) : op.track ? track(op.track, 'text') : p.tracks.find((x) => x.kind === 'text' && x.name === GRAPHICS_TRACK);
+        if (!t) {
+          // Graphics sit above the videos, under text and captions.
+          t = { id: rid('tr', rand), kind: 'text', name: op.trackName ?? GRAPHICS_TRACK, hidden: false, muted: false, clips: [] };
+          const firstText = p.tracks.findIndex((x) => x.kind === 'text');
+          p.tracks.splice(firstText < 0 ? p.tracks.length : firstText, 0, t);
+        }
+        const c = ShapeClip.parse({
+          id: rid('cl', rand),
+          type: 'shape',
+          start: round(op.start),
+          duration: round(op.duration),
+          shape: op.shape,
+          style: op.style ?? {},
+          transform: op.transform ?? {},
+          ...(op.keys ? { keys: sortKeys(op.keys) } : {}),
+          ...(op.enter ? { enter: op.enter } : {}),
+          ...(op.exit ? { exit: op.exit } : {}),
+          ...(op.loop ? { loop: op.loop } : {}),
+        });
+        t.clips.push(c);
+        sortClips(t);
+        changes.push(`Added a ${op.shape} at ${c.start}s on ${t.name} (${c.id}).`);
         break;
       }
       case 'add_captions': {
@@ -903,7 +1200,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (before >= 0.04) {
             const a = structuredClone(c);
             a.duration = round(before);
-            if (a.type !== 'text') a.fadeOut = 0;
+            if (isAV(a)) a.fadeOut = 0;
             shiftInto(a, 0, a.duration);
             out.push(a);
           }
@@ -913,7 +1210,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
             const skipped = op.to - c.start;
             b.start = round(op.from);
             b.duration = round(after);
-            if (b.type !== 'text') {
+            if (isAV(b)) {
               b.in = round(b.in + skipped * (b.type === 'media' ? b.speed : 1));
               b.fadeIn = 0;
             }
@@ -928,6 +1225,19 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
   }
 }
 
+/** Motion and look of a layer, briefly (for describeProject). */
+function motionNote(c: MediaClip | TextClip | ShapeClip): string {
+  const parts: string[] = [];
+  if (c.type !== 'text' && c.enter) parts.push(`in ${c.enter.kind}`);
+  if (c.type !== 'text' && c.exit) parts.push(`out ${c.exit.kind}`);
+  if (c.loop) parts.push(`loop ${c.loop.kind}`);
+  const keyed = c.keys ? KEY_PROPS.filter((k) => c.keys?.[k]?.length) : [];
+  if (keyed.length) parts.push(`keyframes ${keyed.join('/')}`);
+  if (c.type === 'media' && c.mask) parts.push(`${c.mask.shape} mask`);
+  if (c.type === 'media' && c.frame) parts.push(`in a ${c.frame}`);
+  return parts.length ? ` [${parts.join(', ')}]` : '';
+}
+
 /** A short text view of the timeline, for Keo to read. */
 export function describeProject(p: Project): string {
   const lines = [`${p.name}: ${p.width}x${p.height}, ${p.fps} fps, ${projectDuration(p)}s.`, `Media: ${p.assets.map((a) => `${a.id} ${a.name} (${a.kind}${a.kind !== 'image' ? `, ${round(a.duration)}s` : ''}${a.hasAudio ? ', sound' : ''})`).join('; ') || 'none'}.`];
@@ -935,10 +1245,11 @@ export function describeProject(p: Project): string {
     lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}:`);
     for (const c of t.clips) {
       const span = `${round(c.start)}–${round(clipEnd(c))}s`;
-      if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}`);
+      if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}${c.counter ? ` counter ${c.counter.from}→${c.counter.to}` : ''}${motionNote(c)}`);
+      else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
       else {
         const a = p.assets.find((x) => x.id === c.assetId);
-        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}`);
+        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
     }
   });

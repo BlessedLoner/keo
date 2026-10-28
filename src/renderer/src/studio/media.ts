@@ -1,4 +1,4 @@
-import { bridged, clipEnd, duckGain, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
+import { bridged, clipEnd, duckGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, type Drawable, type SourceProvider } from './engine';
 import { voiceChain } from './sound';
@@ -92,7 +92,7 @@ export class PreviewSources implements SourceProvider {
     const activeSounds = new Set<string>();
     for (const tr of p.tracks) {
       for (const c of tr.clips) {
-        if (c.type === 'text' || t < c.start || t >= clipEnd(c)) continue;
+        if (!isAV(c) || t < c.start || t >= clipEnd(c)) continue;
         const a = p.assets.find((x) => x.id === c.assetId);
         if (!a || a.kind === 'image') continue;
         const target = c.type === 'media' ? sourceTime(c, a, t) : Math.min(a.duration, c.in + (t - c.start));

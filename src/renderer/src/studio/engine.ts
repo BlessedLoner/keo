@@ -1,4 +1,7 @@
-import { clipEnd, zoomAt, type Asset, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { clipEnd, EASES, zoomAt, type Asset, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
+import { clipReveal, placeLayer } from './motion';
+import { drawDevice, drawNotch, drawShape } from './shapes';
 
 /**
  * Keo Studio's picture engine: draws the project as it looks at one moment. The Studio preview and
@@ -44,8 +47,8 @@ export function fadeAt(c: { start: number; duration: number; fadeIn: number; fad
 }
 
 /** The visible clips at time t, bottom layer first. */
-export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip> {
-  const out: Array<MediaClip | TextClip> = [];
+export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip> {
+  const out: Array<MediaClip | TextClip | ShapeClip> = [];
   for (const tr of p.tracks) {
     if (tr.hidden || tr.kind === 'audio') continue;
     for (const c of tr.clips) if (c.type !== 'audio' && t >= c.start - 1e-6 && t < clipEnd(c) - 1e-6) out.push(c);
@@ -67,20 +70,50 @@ export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, 
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a) continue;
       const src = sources.frame(c, a, sourceTime(c, a, t));
-      if (src) drawMedia(ctx, c, src, fadeAt(c, t), t - c.start, W, H);
-    } else drawText(ctx, c, t, W, H);
+      if (src) drawMedia(ctx, c, src, fadeAt(c, t), t, W, H);
+    } else if (c.type === 'shape') drawShape(ctx, c, motionAt(c, t, H), W, H);
+    else drawText(ctx, c, t, W, H);
   }
   ctx.restore();
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, rt: number, W: number, H: number): void {
+/** Where a picture of w×h goes: its drawn size, and (cover) the part of it that is shown. */
+function fitBox(fit: MediaClip['fit'], w: number, h: number, bw: number, bh: number): { dw: number; dh: number } {
+  const k = fit === 'cover' ? Math.max(bw / w, bh / h) : Math.min(bw / w, bh / h);
+  return { dw: w * k, dh: h * k };
+}
+
+function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number): void {
   const { w, h } = sizeOf(src);
-  const k = c.fit === 'cover' ? Math.max(W / w, H / h) : Math.min(W / w, H / h);
-  const tr = c.transform;
-  const dw = w * k * tr.scale;
-  const dh = h * k * tr.scale;
+  const rt = t - c.start;
+  const m = motionAt(c, t, H);
+  // The layer's box: the frame (or, in a device, the device's screen), at the layer's scale.
+  let bw = W;
+  let bh = H;
+  if (c.frame === 'phone') {
+    bh = H * 0.78;
+    bw = (bh * 9) / 19.5;
+  } else if (c.frame === 'browser' || c.frame === 'card') {
+    const f = fitBox('contain', w, h, W * 0.82, H * 0.7);
+    bw = f.dw;
+    bh = f.dh;
+  }
+  const inDevice = !!c.frame;
+  const fit = inDevice ? (c.frame === 'phone' ? 'cover' : 'contain') : c.fit;
+  let { dw, dh } = fitBox(fit, w, h, bw, bh);
+  // A circle mask shows a square of the picture (avatars).
+  if (c.mask?.shape === 'circle' && !inDevice) {
+    // The circle's size depends only on the frame and the layer's scale, whatever the photo's shape.
+    const side = Math.min(W, H);
+    bw = side;
+    bh = side;
+    ({ dw, dh } = fitBox('cover', w, h, side, side));
+  }
+  // The visible box (media drawn larger than it is cut to it).
+  const vw = inDevice || c.mask ? bw : dw;
+  const vh = inDevice || c.mask ? bh : dh;
   ctx.save();
-  ctx.globalAlpha = clamp(tr.opacity * fade);
+  ctx.globalAlpha = clamp(m.opacity * fade);
   // Punch-ins: the whole layer is scaled around the zoom's centre point of the frame.
   const z = zoomAt(c.zooms, rt);
   if (z.scale !== 1) {
@@ -88,18 +121,50 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
     ctx.scale(z.scale, z.scale);
     ctx.translate(-z.x * W, -z.y * H);
   }
-  ctx.translate(tr.x * W, tr.y * H);
-  if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
+  placeLayer(ctx, m, W, H);
+  clipReveal(ctx, m, vw * 1.2, vh * 1.2);
   ctx.imageSmoothingQuality = 'high';
+  let radius = 0;
+  if (c.frame) radius = drawDevice(ctx, c.frame, vw, vh, H);
+  if (c.mask && !inDevice) radius = c.mask.shape === 'circle' ? vw / 2 : Math.min(vw, vh) * c.mask.radius;
+  const shaped = inDevice || !!c.mask;
+  if (c.shadow > 0 && !inDevice) {
+    // A drop shadow of the layer's shape.
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = (c.shadow / 40) * H * 0.05;
+    ctx.shadowOffsetY = (c.shadow / 160) * H * 0.05;
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
+    ctx.fill();
+    ctx.restore();
+  }
+  if (shaped) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
+    ctx.clip();
+  }
   const g = c.color;
-  if (g && (g.exposure || g.contrast || g.saturation)) ctx.filter = `brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`;
+  const filters: string[] = [];
+  if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
+  if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
+  if (filters.length) ctx.filter = filters.join(' ');
   ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
   ctx.filter = 'none';
+  if (m.flash > 0) {
+    ctx.save();
+    ctx.globalAlpha = clamp(m.flash) * m.opacity;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(-vw / 2, -vh / 2, vw, vh);
+    ctx.restore();
+  }
   if (g?.temperature) {
     // Warmer or cooler: an orange or blue wash, blended softly into the picture.
     ctx.save();
     ctx.globalCompositeOperation = 'soft-light';
-    ctx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * tr.opacity * fade);
+    ctx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * m.opacity * fade);
     ctx.fillStyle = g.temperature > 0 ? '#FF8A1E' : '#1E7BFF';
     ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
     ctx.restore();
@@ -112,8 +177,11 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
     ctx.fillStyle = v;
     ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
   }
+  if (shaped) ctx.restore();
+  if (c.frame === 'phone') drawNotch(ctx, vw, vh);
   ctx.restore();
 }
+
 
 interface Word {
   text: string;
@@ -160,7 +228,9 @@ function phases(c: TextClip, t: number): { pin: number; pout: number } {
 export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, W: number, H: number): void {
   const st = c.style;
   const px = (st.sizePct / 100) * H;
-  const text = st.uppercase ? c.text.toUpperCase() : c.text;
+  const raw = c.counter ? counterText(c.counter, t - c.start, c.duration) : c.text;
+  const text = st.uppercase ? raw.toUpperCase() : raw;
+  const m: MotionState = motionAt(c, t, H);
   ctx.save();
   ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
   ctx.textBaseline = 'alphabetic';
@@ -172,12 +242,21 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   const { pin, pout } = phases(c, t);
 
   // Whole-block animation (position, scale, opacity, blur).
-  let alpha = c.transform.opacity;
-  let scale = c.transform.scale;
+  let alpha = m.opacity;
+  let scale = 1;
   let dy = 0;
-  let blur = 0;
+  let blur = m.blur;
+  let wipe = 1;
   const e = easeOut(pin);
   switch (c.animIn) {
+    case 'zoom':
+      scale *= 1 + (1 - e) * 1.4;
+      blur += (1 - e) * px * 0.25;
+      alpha *= e;
+      break;
+    case 'wipe':
+      wipe = Math.min(wipe, EASES['in-out'](pin));
+      break;
     case 'fade':
       alpha *= e;
       break;
@@ -199,6 +278,13 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   }
   const o = easeOut(pout);
   switch (c.animOut) {
+    case 'zoom':
+      scale *= 1 + (1 - o) * 0.6;
+      alpha *= o;
+      break;
+    case 'wipe':
+      wipe = Math.min(wipe, EASES['in-out'](pout));
+      break;
     case 'fade':
       alpha *= o;
       break;
@@ -222,9 +308,15 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     return;
   }
 
-  ctx.translate(c.transform.x * W, c.transform.y * H + dy);
-  if (c.transform.rotation) ctx.rotate((c.transform.rotation * Math.PI) / 180);
-  ctx.scale(scale, scale);
+  ctx.translate(m.x * W, m.y * H + dy);
+  if (m.rotation) ctx.rotate((m.rotation * Math.PI) / 180);
+  ctx.scale(scale * m.scaleX, scale * m.scaleY);
+  if (wipe < 1) {
+    // Revealed from the left (in) or hidden to the right (out) through a moving edge.
+    ctx.beginPath();
+    ctx.rect(-blockW / 2 - px, -blockH / 2 - px, (blockW + px * 2) * wipe, blockH + px * 2);
+    ctx.clip();
+  }
 
   // How much of the text shows (typewriter), and each word's own reveal (words / timed captions).
   const totalChars = text.replace(/\s+/g, '').length;
@@ -254,6 +346,56 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     return g;
   };
 
+  const perLetter = c.animIn === 'letters' || c.animIn === 'drop' || c.animIn === 'wave';
+  const letterCount = Math.max(1, text.replace(/\s+/g, '').length);
+  const letterSeconds = Math.max(0.12, c.animSeconds);
+  const letterStagger = Math.min(0.07, (Math.max(0.2, c.animSeconds) * 1.5) / letterCount);
+  // Glitch: while coming in, words jump sideways and split into red and cyan copies.
+  const glitch = c.animIn === 'glitch' && pin < 1 ? 1 - pin : 0;
+  /** Draws a piece of text with the style's glow, shadow and outline. */
+  const paint = (str: string, x: number, y: number, color: string | CanvasGradient, a: number, b: number, seed: number) => {
+    ctx.save();
+    ctx.globalAlpha = clamp(a);
+    if (b > 0.3) ctx.filter = `blur(${b.toFixed(1)}px)`;
+    let gx = 0;
+    if (glitch > 0) {
+      const jitter = Math.sin(rt * 47 + seed * 13.7);
+      gx = jitter > 0.3 ? jitter * px * 0.18 * glitch : 0;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = clamp(a * 0.8);
+      ctx.fillStyle = '#FF2A55';
+      ctx.fillText(str, x + gx + px * 0.06 * glitch, y);
+      ctx.fillStyle = '#2AE5FF';
+      ctx.fillText(str, x + gx - px * 0.06 * glitch, y);
+      ctx.restore();
+    }
+    if (st.glow > 0) {
+      ctx.shadowColor = st.glowColor;
+      ctx.shadowBlur = (st.glow * px) / 30;
+      ctx.fillStyle = color;
+      ctx.fillText(str, x + gx, y);
+      ctx.fillText(str, x + gx, y);
+    }
+    if (st.shadow > 0) {
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = (st.shadow * px) / 40;
+      ctx.shadowOffsetY = (st.shadow * px) / 160;
+    } else {
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+    }
+    if (st.outline > 0) {
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = (st.outline * px) / 30;
+      ctx.strokeStyle = st.outlineColor;
+      ctx.strokeText(str, x + gx, y);
+      ctx.shadowColor = 'transparent';
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(str, x + gx, y);
+    ctx.restore();
+  };
   let chars = 0;
   lines.forEach((line, li) => {
     const y = top + li * lineH;
@@ -276,41 +418,41 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
         if (left <= 0) break;
         if (left < word.length) word = word.slice(0, left);
       }
+      const firstLetter = chars;
       chars += w.text.length;
       const r = wordReveal(w.index);
       if (r <= 0) continue;
-      const wa = alpha * easeOut(r);
-      const wb = blur + (1 - easeOut(r)) * px * 0.3;
-      const x = x0 + w.x;
-      ctx.save();
-      ctx.globalAlpha = clamp(wa);
-      if (wb > 0.3) ctx.filter = `blur(${wb.toFixed(1)}px)`;
       const color = c.highlight && spoken(w.index) ? c.highlight : null;
-      if (st.glow > 0) {
-        ctx.shadowColor = st.glowColor;
-        ctx.shadowBlur = (st.glow * px) / 30;
-        ctx.fillStyle = color ?? fill;
-        ctx.fillText(word, x, y);
-        ctx.fillText(word, x, y);
+      const x = x0 + w.x;
+      if (!perLetter) {
+        paint(word, x, y, color ?? fill, alpha * easeOut(r), blur + (1 - easeOut(r)) * px * 0.3, w.index);
+        continue;
       }
-      if (st.shadow > 0) {
-        ctx.shadowColor = 'rgba(0,0,0,0.55)';
-        ctx.shadowBlur = (st.shadow * px) / 40;
-        ctx.shadowOffsetY = (st.shadow * px) / 160;
-      } else {
-        ctx.shadowColor = 'transparent';
-        ctx.shadowBlur = 0;
+      // Letter by letter: each letter has its own moment, a little after the one before.
+      for (let i = 0; i < word.length; i++) {
+        const ch = word[i]!;
+        const gi = firstLetter + i;
+        const lp = clamp((rt - gi * letterStagger) / letterSeconds);
+        if (lp <= 0 && c.animIn !== 'wave') continue;
+        const lx = x + ctx.measureText(word.slice(0, i)).width;
+        let la = alpha;
+        let lb = blur;
+        let ly: number;
+        if (c.animIn === 'letters') {
+          la *= easeOut(lp);
+          lb += (1 - easeOut(lp)) * px * 0.4;
+          ly = (1 - easeOut(lp)) * px * 0.35;
+        } else if (c.animIn === 'drop') {
+          la *= clamp(lp * 4);
+          ly = -(1 - EASES.bounce(lp)) * px * 1.6;
+        } else {
+          // wave: letters rise in with a little overshoot, then keep a gentle wave going.
+          la *= clamp(lp * 3);
+          ly = -(1 - EASES.back(lp)) * px * 0.7 + Math.sin(rt * 4 - gi * 0.55) * px * 0.045;
+        }
+        if (la <= 0.001) continue;
+        paint(ch, lx, y + ly, color ?? fill, la, lb, w.index);
       }
-      if (st.outline > 0) {
-        ctx.lineJoin = 'round';
-        ctx.lineWidth = (st.outline * px) / 30;
-        ctx.strokeStyle = st.outlineColor;
-        ctx.strokeText(word, x, y);
-        ctx.shadowColor = 'transparent';
-      }
-      ctx.fillStyle = color ?? fill;
-      ctx.fillText(word, x, y);
-      ctx.restore();
     }
   });
   ctx.restore();
