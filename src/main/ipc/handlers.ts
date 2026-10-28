@@ -1,3 +1,4 @@
+import { CALENDAR_SCOPE, MAIL_SCOPE } from '../calendar/googleAuth';
 import type { AttachmentView } from '../../shared/ipc';
 import type { PreparedAttachment } from '../chat/attachments';
 import type { AppInfo } from '../../shared/domain';
@@ -95,10 +96,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   });
   /** After signing in: Keo's own AI is used, unless the user already has a working provider. */
   const useKeoIfNothingElse = () => s.useKeoIfNothingElse();
-  const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.settings.get().email.address, hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available() });
+  const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.email.address(), hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available(), viaGoogle: s.settings.get().email.useGoogle });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
-    return { clientId: s.settings.get().calendar.googleClientId, builtIn: !!s.builtinGoogle, builtInId: s.builtinGoogle?.id ?? null, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
+    return { clientId: s.settings.get().calendar.googleClientId, builtIn: !!s.builtinGoogle, builtInId: s.builtinGoogle?.id ?? null, hasClientSecret: s.secrets.has('google_client_secret'), signedIn: s.googleAuth.signedIn(), signingIn: s.googleAuth.signingIn(), googleEmail: s.googleAuth.email(), calendarAllowed: s.googleAuth.hasScope(CALENDAR_SCOPE), mailAllowed: s.googleAuth.hasScope(MAIL_SCOPE), signedInAt: at ? new Date(at).toISOString() : null, secretStorage: s.secrets.available() };
   };
   const webStatus = () => {
     const st = s.settings.get();
@@ -614,7 +615,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const accountChanged = before.address.toLowerCase() !== account.address.toLowerCase() || before.imapHost !== account.imapHost || before.smtpHost !== account.smtpHost;
       if (!password && (!s.secrets.has('email_password') || accountChanged)) throw new KeoError('password_needed', 'Enter the app password for this account.');
       if (password) s.secrets.set('email_password', password);
-      s.settings.update({ email: account });
+      // An account with its own app password replaces Gmail through the Google sign-in.
+      s.settings.update({ email: { ...account, useGoogle: false } });
       s.email.reset();
       s.log.info('email.account_saved', { provider: account.provider, passwordChanged: !!password });
       s.audit.record({ kind: 'permission.setting', decision: 'email.account_connected', detail: { provider: account.provider } });
@@ -636,11 +638,14 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.log.info('calendar.client_secret_set', { stored: !!secret });
       return calendarStatus();
     },
-    'calendar:signIn': async () => {
+    'calendar:signIn': async ({ mail }) => {
       try {
-        await s.googleAuth.signIn();
+        const r = await s.googleAuth.signIn({ mail: !!mail });
+        // Gmail allowed: email goes through this Google sign-in from now on (no app password).
+        if (r.mail && r.email) s.settings.update({ email: { useGoogle: true, provider: 'gmail', address: r.email } });
         s.audit.record({ kind: 'permission.setting', decision: 'calendar.google_signed_in' });
-        return { ok: true, message: 'Google Calendar is connected.' };
+        const what = r.mail && r.calendar ? 'Gmail and Google Calendar are' : r.mail ? 'Gmail is' : 'Google Calendar is';
+        return { ok: true, message: `${what} connected${r.email ? ` (${r.email})` : ''}.${mail && !r.mail ? ' Gmail was not allowed on Google’s page, so email still needs its own setup.' : ''}` };
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : 'Google did not complete the sign-in.' };
       }
@@ -651,6 +656,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'calendar:signOut': async () => {
       await s.googleAuth.signOut();
+      if (s.settings.get().email.useGoogle) s.settings.update({ email: { useGoogle: false } });
       s.audit.record({ kind: 'permission.setting', decision: 'calendar.google_signed_out' });
       return calendarStatus();
     },

@@ -208,6 +208,7 @@ export const pushChannels = [
   'schedule:changed',
   'presence:level',
   'account:changed',
+  'app:switching',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

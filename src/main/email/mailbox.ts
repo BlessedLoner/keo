@@ -25,6 +25,8 @@ export interface RawMessage {
 export interface MailAccount extends EmailServers {
   address: string;
   password: string;
+  /** Gmail with "Sign in with Google": an OAuth access token instead of the password (XOAUTH2). */
+  accessToken?: string;
 }
 
 /**
@@ -51,7 +53,7 @@ export const imapConnector: MailConnector = async (a, signal) => {
     host: a.imapHost,
     port: a.imapPort,
     secure: a.imapSecure,
-    auth: { user: a.address, pass: a.password },
+    auth: a.accessToken ? { user: a.address, accessToken: a.accessToken } : { user: a.address, pass: a.password },
     logger: false,
     emitLogs: false,
     disableAutoIdle: true,

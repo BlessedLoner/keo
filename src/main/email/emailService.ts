@@ -45,6 +45,8 @@ const BODY_CHARS = 6000;
 export interface EmailServiceDeps {
   settings: () => Settings;
   password: () => string | null;
+  /** Gmail with the user's Google sign-in (Settings → Email & calendar → Sign in with Google). */
+  google?: { email(): string | null; mailAllowed(): boolean; accessToken(): Promise<string> };
   connect?: MailConnector;
   sender?: MailSender;
   log: Logger;
@@ -86,6 +88,10 @@ export class EmailService {
   /** Why email cannot be used now, or null. */
   unavailable(): string | null {
     const e = this.d.settings().email;
+    if (e.useGoogle) {
+      if (!this.d.google?.mailAllowed() || !this.d.google.email()) return 'Gmail is not connected. The user can choose Sign in with Google in Settings → Email & calendar.';
+      return null;
+    }
     if (!e.address || !e.imapHost || !e.smtpHost) return 'No email account is connected. The user can connect one in Settings → Email & calendar (an app password is needed).';
     if (!this.d.password()) return 'The email app password is missing. The user can add it again in Settings → Email & calendar.';
     return null;
@@ -96,23 +102,26 @@ export class EmailService {
   }
 
   address(): string {
-    return this.d.settings().email.address;
+    const e = this.d.settings().email;
+    return (e.useGoogle ? this.d.google?.email() : null) ?? e.address;
   }
 
   fromHeader(): { address: string; name: string } {
-    const e = this.d.settings().email;
-    return { address: e.address, name: e.displayName };
+    return { address: this.address(), name: this.d.settings().email.displayName };
   }
 
-  private account(): MailAccount {
+  private async account(): Promise<MailAccount> {
     const why = this.unavailable();
     if (why) throw new Error(why);
     const e = this.d.settings().email;
+    // Gmail with the Google sign-in: Google's own servers, a fresh access token, no password.
+    if (e.useGoogle)
+      return { address: this.address(), password: '', accessToken: await this.d.google!.accessToken(), imapHost: 'imap.gmail.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.gmail.com', smtpPort: 465, smtpSecure: true };
     return { address: e.address, password: this.d.password()!, imapHost: e.imapHost, imapPort: e.imapPort, imapSecure: e.imapSecure, smtpHost: e.smtpHost, smtpPort: e.smtpPort, smtpSecure: e.smtpSecure };
   }
 
   private async session<T>(signal: AbortSignal, fn: (c: MailConnection) => Promise<T>): Promise<T> {
-    const c = await this.connect(this.account(), signal);
+    const c = await this.connect(await this.account(), signal);
     try {
       return await fn(c);
     } finally {
@@ -220,7 +229,7 @@ export class EmailService {
 
   /** Sends exactly the composed message. Recipients for SMTP are To + Cc + Bcc. */
   async send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; raw: Buffer }> {
-    const account = this.account();
+    const account = await this.account();
     const { raw, messageId } = await composeMessage(m);
     const r = await this.sender.send(account, { from: account.address, to: uniq([...m.to, ...m.cc, ...m.bcc]) }, raw);
     this.d.log.info('email.sent', { recipients: m.to.length + m.cc.length + m.bcc.length, accepted: r.accepted.length, rejected: r.rejected.length, invite: !!m.ics });
@@ -234,7 +243,7 @@ export class EmailService {
   async test(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
     try {
       const unread = await this.session(signal, (c) => c.search('inbox', { unseen: true }));
-      await this.sender.verify(this.account());
+      await this.sender.verify(await this.account());
       this.lastTestOk = true;
       return { ok: true, message: `Connected. ${unread.length} unread message(s) in the inbox, and the outgoing server accepted the login. Nothing was sent.` };
     } catch (e) {

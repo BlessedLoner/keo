@@ -49,6 +49,9 @@ export function App() {
   // Keo opens on the sign-in screen until the user signs in to their Keo account, unless they
   // chose their own API key (Settings → Providers → Advanced) or this is the dev test provider.
   const account = useAccount();
+  // Opening another account's data (sign-in, sign-out): the window reloads on it in a moment.
+  const [switching, setSwitching] = useState<null | 'account' | 'local' | 'signed-out'>(null);
+  useEffect(() => subscribe('app:switching', (p) => setSwitching(p.mode)), []);
   const settingsLoaded = !!app.settings.data;
   const showSignIn = settingsLoaded && !!account && !account.signedIn && !app.settings.data?.ui.ownKeys && app.settings.data?.activeProvider !== 'test';
   // First run: show the welcome until it is finished or skipped. An installation that already has a
@@ -116,7 +119,16 @@ export function App() {
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>
-      {showSignIn && <SignInGate />}
+      {switching ? (
+        <div className="signin switching" role="status" aria-live="polite">
+          <div className="switching-box">
+            <span className="spinner" />
+            <span>{switching === 'signed-out' ? 'Signing out…' : 'Opening your Keo…'}</span>
+          </div>
+        </div>
+      ) : (
+        showSignIn && <SignInGate />
+      )}
       {showWelcome && <Onboarding onDone={() => setWelcomeClosed(true)} />}
     </div>
   );

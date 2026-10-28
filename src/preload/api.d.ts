@@ -23,6 +23,7 @@ export interface PushPayloads {
   /** The real voice level (microphone or playback), relayed from the main window to Keo's bar and Keo mode. */
   'presence:level': { level: number; source: 'mic' | 'playback' | null };
   'account:changed': import('../shared/cloud').AccountStatus;
+  'app:switching': { mode: 'account' | 'local' | 'signed-out' };
 }
 
 /** Instructions from the main process to a window (never from page content). */

@@ -23,9 +23,87 @@ function LinkButton({ id, children }: { id: LinkId; children: string }) {
 export function EmailCalendarSettings({ s, patch }: { s: Settings; patch: Patch }) {
   return (
     <>
+      <GoogleOneClick s={s} />
       <EmailAccount s={s} patch={patch} />
       <GoogleCalendarCard s={s} patch={patch} />
     </>
+  );
+}
+
+/**
+ * One click for Gmail and Google Calendar: Google's own sign-in page in the browser, one consent
+ * for both, no app passwords. Keo still asks before sending any email or changing the calendar.
+ */
+function GoogleOneClick({ s }: { s: Settings }) {
+  const ui = useUi();
+  const [st, setSt] = useState<CalendarStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; message: string } | null>(null);
+  const load = () => void invoke('calendar:status').then(setSt, (err) => ui.error(errText(err)));
+  useEffect(load, [ui, s.calendar.googleClientId, s.email.useGoogle]);
+  // Keo's own Google connection (installed Keo), or the user's own client that is set up below.
+  const own = !!s.calendar.googleClientId && s.calendar.googleClientId !== st?.builtInId;
+  const ready = !!st && (st.builtIn || own);
+  const signIn = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      setNote(await invoke('calendar:signIn', { mail: true }));
+    } catch (err) {
+      setNote({ ok: false, message: errText(err) });
+    } finally {
+      setBusy(false);
+      load();
+    }
+  };
+  const signedIn = !!st?.signedIn;
+  return (
+    <section className="card" aria-label="Google">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Gmail and Google Calendar</h2>
+        {signedIn && st?.mailAllowed && <span className="chip ok">Gmail</span>}
+        {signedIn && st?.calendarAllowed && <span className="chip ok">Calendar</span>}
+      </div>
+      {signedIn ? (
+        <p className="small">
+          Connected as <strong>{st?.googleEmail ?? 'your Google account'}</strong>.{' '}
+          {st?.mailAllowed ? 'Keo can read your Gmail and send email for you (always asking first).' : 'Gmail is not connected — sign in again and allow Gmail to use it without an app password.'}{' '}
+          {st?.calendarAllowed ? 'Keo can see and add calendar events (asking before changes).' : ''}
+        </p>
+      ) : (
+        <p className="muted small">One click: sign in with Google in your browser and allow Gmail and Calendar. No app passwords or setup. Keo always asks before sending an email or changing your calendar, and never sees your Google password.</p>
+      )}
+      {!st?.builtIn && !own && (
+        <p className="small" style={{ color: 'var(--warn, #ffb547)' }}>
+          This copy of Keo has no built-in Google connection (the installed Keo has it). Set up your own Google client in the Google Calendar card below, or add it to .env.local for test builds.
+        </p>
+      )}
+      <div className="row">
+        {(!signedIn || !st?.mailAllowed) && (
+          <button className="btn primary" disabled={busy || !ready} onClick={() => void signIn()}>
+            {busy ? <span className="spinner" /> : <Icon name="key" size={14} />} {busy ? 'Waiting for Google in your browser…' : 'Sign in with Google'}
+          </button>
+        )}
+        {busy && (
+          <button className="btn ghost" onClick={() => void invoke('calendar:cancelSignIn').finally(load)}>
+            Cancel
+          </button>
+        )}
+        {signedIn && (
+          <button
+            className="btn ghost"
+            onClick={() =>
+              void invoke('calendar:signOut')
+                .then(() => setNote(null))
+                .finally(load)
+            }
+          >
+            Sign out of Google
+          </button>
+        )}
+      </div>
+      {note && <p className={`small ${note.ok ? 'muted' : ''}`} style={note.ok ? undefined : { color: 'var(--danger, #ff5d6c)' }}>{note.message}</p>}
+    </section>
   );
 }
 
@@ -90,7 +168,18 @@ function AppPasswordGuide({ provider }: { provider: EmailProvider }) {
   );
 }
 
+/** With Gmail through Google, the app-password form waits behind "use another account". */
 function EmailAccount({ s, patch }: { s: Settings; patch: Patch }) {
+  if (!s.email.useGoogle) return <EmailAccountForm s={s} patch={patch} />;
+  return (
+    <details style={{ margin: '0 0 14px' }}>
+      <summary className="small muted">Use another email account instead (Outlook, Yahoo, iCloud, others — with an app password)</summary>
+      <EmailAccountForm s={s} patch={patch} />
+    </details>
+  );
+}
+
+function EmailAccountForm({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [status, setStatus] = useState<EmailStatus | null>(null);
   const e = s.email;
@@ -255,7 +344,21 @@ function EmailAccount({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
+/** With Keo's own Google connection, the calendar card is only the advanced own-client option. */
 function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
+  const [st, setSt] = useState<CalendarStatus | null>(null);
+  useEffect(() => void invoke('calendar:status').then(setSt, () => undefined), [s.calendar.googleClientId]);
+  const own = !!s.calendar.googleClientId && s.calendar.googleClientId !== st?.builtInId;
+  if (!st?.builtIn || own) return <GoogleCalendarSetup s={s} patch={patch} />;
+  return (
+    <details style={{ margin: '0 0 14px' }}>
+      <summary className="small muted">Advanced: use your own Google Cloud client instead of Keo’s</summary>
+      <GoogleCalendarSetup s={s} patch={patch} />
+    </details>
+  );
+}
+
+function GoogleCalendarSetup({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
   const [status, setStatus] = useState<CalendarStatus | null>(null);
   const [clientId, setClientId] = useState(s.calendar.googleClientId);

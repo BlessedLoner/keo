@@ -2,8 +2,10 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import type { Logger } from '../logging/logger';
 
-/** Only the calendar's events: no Gmail, contacts or profile. */
+/** The calendar's events (no contacts or files). */
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+/** Gmail over IMAP/SMTP with the Google sign-in instead of an app password (read and send). */
+export const MAIL_SCOPE = 'https://mail.google.com/';
 
 export const GOOGLE_ENDPOINTS = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -19,6 +21,8 @@ export interface GoogleTokens {
   /** When the user signed in (ms since epoch). */
   obtainedAt: number;
   scope: string;
+  /** The Google account's email address (asked for together with Gmail). */
+  email?: string;
 }
 
 export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
@@ -92,11 +96,25 @@ export class GoogleAuth {
     return this.d.load()?.obtainedAt ?? null;
   }
 
+  /** Whether the user allowed this (Gmail, Calendar). */
+  hasScope(scope: string): boolean {
+    return (this.d.load()?.scope ?? '').split(' ').includes(scope);
+  }
+
+  /** The signed-in Google account's address, if Google told it. */
+  email(): string | null {
+    return this.d.load()?.email ?? null;
+  }
+
   cancelSignIn(): void {
     this.pending?.abort();
   }
 
-  async signIn(): Promise<void> {
+  /**
+   * "Sign in with Google": Calendar, and with `mail` also Gmail (one consent page for both).
+   * Returns what the user allowed.
+   */
+  async signIn(opts: { mail?: boolean } = {}): Promise<{ calendar: boolean; mail: boolean; email: string | null }> {
     const clientId = this.d.clientId();
     if (!clientId) throw new Error('Add your Google OAuth client ID first (see the setup steps).');
     this.pending?.abort();
@@ -112,7 +130,8 @@ export class GoogleAuth {
         client_id: clientId,
         redirect_uri: listener.redirectUri,
         response_type: 'code',
-        scope: CALENDAR_SCOPE,
+        scope: [CALENDAR_SCOPE, ...(opts.mail ? [MAIL_SCOPE, 'openid', 'email'] : [])].join(' '),
+        include_granted_scopes: 'true',
         code_challenge: challenge,
         code_challenge_method: 'S256',
         state,
@@ -129,9 +148,14 @@ export class GoogleAuth {
       if (!r.ok) throw new Error(tokenError(j));
       const t = tokensFrom(j, null, this.now());
       if (!t.refreshToken) throw new Error('Google did not return a lasting sign-in. Remove Keo from your Google account’s third-party access and sign in again.');
-      if (!t.scope.split(' ').includes(CALENDAR_SCOPE)) throw new Error('Keo was not given access to your calendar events (the box on Google’s consent page was not ticked). Sign in again and allow calendar access.');
+      const granted = t.scope.split(' ');
+      const calendar = granted.includes(CALENDAR_SCOPE);
+      const mail = granted.includes(MAIL_SCOPE);
+      if (!calendar && !mail)
+        throw new Error(opts.mail ? 'Keo was not given access to Gmail or your calendar (the boxes on Google’s consent page were not ticked). Sign in again and allow access.' : 'Keo was not given access to your calendar events (the box on Google’s consent page was not ticked). Sign in again and allow calendar access.');
       this.d.save(t);
-      this.d.log.info('calendar.signed_in', {});
+      this.d.log.info('calendar.signed_in', { calendar, mail });
+      return { calendar, mail, email: t.email ?? null };
     } catch (e) {
       if (ac.signal.aborted) throw new Error('Sign-in was cancelled or took too long.', { cause: e });
       throw e;
@@ -200,7 +224,19 @@ function tokensFrom(j: Record<string, unknown>, prev: GoogleTokens | null, now: 
     expiresAt: now + expires * 1000,
     obtainedAt: prev?.obtainedAt ?? now,
     scope: typeof j.scope === 'string' ? j.scope : (prev?.scope ?? ''),
+    ...((emailOfIdToken(j.id_token) ?? prev?.email) ? { email: (emailOfIdToken(j.id_token) ?? prev?.email)! } : {}),
   };
+}
+
+/** The address in Google's ID token (it came straight from Google over TLS, so it is not re-verified here). */
+function emailOfIdToken(t: unknown): string | null {
+  if (typeof t !== 'string') return null;
+  try {
+    const p = JSON.parse(Buffer.from((t.split('.')[1] ?? '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) as { email?: unknown; email_verified?: unknown };
+    return typeof p.email === 'string' && p.email_verified !== false ? p.email.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 export function tokenError(j: Record<string, unknown>): string {

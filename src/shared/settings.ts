@@ -343,6 +343,8 @@ export const SettingsSchema = z
     email: z
       .object({
         provider: z.enum(['gmail', 'outlook', 'yahoo', 'icloud', 'custom']).default('gmail'),
+        /** Gmail through "Sign in with Google" (no app password); the address is the Google account's. */
+        useGoogle: z.boolean().default(false),
         address: z.string().trim().max(254).regex(/^([^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+)?$/, 'Invalid email address').default(''),
         displayName: z.string().trim().max(120).default(''),
         imapHost: z.string().trim().max(253).regex(/^[A-Za-z0-9.-]*$/, 'Invalid host').default(''),

@@ -44,6 +44,8 @@ export interface Plan {
   daily_tokens: number;
   max_tier: number;
   features: Record<string, unknown>;
+  /** What the plan may cost per day in AI charges (US$), whichever models are used; null: no cap. */
+  daily_cost_usd?: number | null;
 }
 export interface ModelRow {
   id: string;
@@ -66,6 +68,8 @@ interface Usage {
   web_searches: number;
   images: number;
   voice_seconds: number;
+  /** What today's AI calls cost (US$, as OpenRouter charged). */
+  cost_usd: number;
 }
 /** What one call adds to the user's day. */
 interface Added {
@@ -134,7 +138,8 @@ export class Supabase {
   }
 
   plans(): Promise<Plan[]> {
-    return cached('plans', 60_000, () => this.rest<Plan[]>('plans?select=id,name,daily_requests,daily_tokens,max_tier,features&order=sort'));
+    // select=* so a database without the newer columns (daily_cost_usd) still works.
+    return cached('plans', 60_000, () => this.rest<Plan[]>('plans?select=*&order=sort'));
   }
 
   models(): Promise<ModelRow[]> {
@@ -146,7 +151,7 @@ export class Supabase {
     const rows = await this.rest<Array<Partial<Usage>>>(`usage_daily?user_id=eq.${encodeURIComponent(userId)}&day=eq.${day}&select=*`);
     const r = rows[0] ?? {};
     const n = (v: unknown) => Number(v) || 0;
-    return { requests: n(r.requests), input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens), web_searches: n(r.web_searches), images: n(r.images), voice_seconds: n(r.voice_seconds) };
+    return { requests: n(r.requests), input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens), web_searches: n(r.web_searches), images: n(r.images), voice_seconds: n(r.voice_seconds), cost_usd: n(r.cost_usd) };
   }
 
   async addUsage(userId: string, day: string, u: Added): Promise<void> {
@@ -191,10 +196,34 @@ async function account(req: Request, db: Supabase, now: number): Promise<Account
   return { user, plan, usage: await db.usage(user.id, day), day, billing };
 }
 
+/** Today's spending cap reached (bigger models use it up faster than small ones). */
+function overBudget(a: Account): boolean {
+  const cap = Number(a.plan.daily_cost_usd);
+  return cap > 0 && a.usage.cost_usd >= cap;
+}
+
 function overLimit(a: Account): Response | null {
-  if (a.usage.requests >= a.plan.daily_requests || a.usage.input_tokens + a.usage.output_tokens >= a.plan.daily_tokens)
+  if (a.usage.requests >= a.plan.daily_requests || a.usage.input_tokens + a.usage.output_tokens >= a.plan.daily_tokens || overBudget(a))
     return fail(429, `You’ve used today’s ${a.plan.name} allowance. It resets at midnight UTC — or upgrade your plan for more.`, 'daily_limit', 'plan_limit');
   return null;
+}
+
+/**
+ * Claude models: mark Keo's long, unchanging start of each request (instructions and tool list)
+ * for caching, so the following steps read it at a fraction of the price.
+ */
+export function withPromptCache(upstream: string, body: Record<string, unknown>): Record<string, unknown> {
+  if (!upstream.startsWith('anthropic/') || !Array.isArray(body.messages)) return body;
+  let marked = false;
+  const messages = (body.messages as Array<Record<string, unknown>>).map((m) => {
+    if (marked || m.role !== 'system') return m;
+    marked = true;
+    const parts = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : Array.isArray(m.content) ? [...(m.content as Array<Record<string, unknown>>)] : null;
+    if (!parts?.length) return m;
+    parts[parts.length - 1] = { ...parts[parts.length - 1], cache_control: { type: 'ephemeral' } };
+    return { ...m, content: parts };
+  });
+  return { ...body, messages };
 }
 
 /** Reads usage (and OpenRouter's cost) from a finished completion. */
@@ -214,6 +243,7 @@ export function allowance(plan: Plan, f: Feature): number {
 
 /** Refuses a feature the plan does not include, or whose daily allowance is used up. */
 function featureRefused(a: Account, f: Feature): Response | null {
+  if (overBudget(a)) return fail(429, `You’ve used today’s ${a.plan.name} allowance. It resets at midnight UTC — or upgrade your plan for more.`, 'daily_limit', 'plan_limit');
   const max = allowance(a.plan, f);
   const used = f === 'web_search' ? a.usage.web_searches : f === 'images' ? a.usage.images : a.usage.voice_seconds / 60;
   if (max === 0) return fail(403, `${FEATURE_NAME[f]} is not in the ${a.plan.name} plan. Upgrade your Keo plan to use it.`, 'feature_not_in_plan', 'plan_limit');
@@ -560,7 +590,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       const stream = body.stream === true;
       const maxOut = Math.min(Number(body.max_tokens ?? body.max_completion_tokens ?? model.max_output_tokens) || model.max_output_tokens, model.max_output_tokens);
       const upstreamBody = {
-        ...body,
+        ...withPromptCache(model.upstream, body),
         model: model.upstream,
         max_tokens: maxOut,
         max_completion_tokens: undefined,

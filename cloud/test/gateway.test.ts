@@ -229,6 +229,25 @@ describe('Keo Cloud gateway', () => {
     expect((await w.call('/v1/speech', { token: 'tok-ana', body: { text: 'More' } })).status).toBe(429);
   });
 
+  it('stops at the plan’s daily spending cap, whichever models used it up', async () => {
+    (w.plans[0] as Record<string, unknown>).daily_cost_usd = 0.05;
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost: 0, cost_usd: 0.051 } as never);
+    const r = await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } });
+    expect(r.status).toBe(429);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe('daily_limit');
+    expect((await w.call('/v1/search', { token: 'tok-ana', body: { query: 'x' } })).status).toBe(429);
+    expect(w.upstream).toHaveLength(0);
+  });
+
+  it('marks the instructions for caching on Claude models only', async () => {
+    const { withPromptCache } = await import('../src/gateway');
+    const body = { messages: [{ role: 'system', content: 'Long Keo instructions' }, { role: 'user', content: 'hi' }] };
+    const claude = withPromptCache('anthropic/claude-sonnet-5.5', body) as { messages: Array<{ content: unknown }> };
+    expect(claude.messages[0]!.content).toEqual([{ type: 'text', text: 'Long Keo instructions', cache_control: { type: 'ephemeral' } }]);
+    expect(claude.messages[1]!.content).toBe('hi');
+    expect(withPromptCache('openai/gpt-6-luna', body)).toBe(body);
+  });
+
   it('serves the page the account emails open, without needing a sign-in', async () => {
     const r = await w.call('/account');
     expect(r.status).toBe(200);

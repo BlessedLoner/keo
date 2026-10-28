@@ -36,7 +36,7 @@ import { calendarCapabilities } from './capabilities/calendar';
 import { EmailService } from './email/emailService';
 import type { MailConnector } from './email/mailbox';
 import type { MailSender } from './email/smtp';
-import { GoogleAuth, GOOGLE_ENDPOINTS, type FetchLike, type GoogleTokens } from './calendar/googleAuth';
+import { GoogleAuth, GOOGLE_ENDPOINTS, MAIL_SCOPE, type FetchLike, type GoogleTokens } from './calendar/googleAuth';
 import { GoogleCalendar } from './calendar/googleCalendar';
 import { VideoStudio } from './video/studio';
 import { locateFfmpeg, ProcessRunner, type FfmpegRunner } from './video/ffmpeg';
@@ -460,6 +460,7 @@ export class Services {
     this.email = new EmailService({
       settings: getSettings,
       password: () => this.secrets.get('email_password'),
+      google: { email: () => this.googleAuth.email(), mailAllowed: () => this.googleAuth.hasScope(MAIL_SCOPE), accessToken: () => this.googleAuth.accessToken() },
       ...(d.mailConnect ? { connect: d.mailConnect } : {}),
       ...(d.mailSender ? { sender: d.mailSender } : {}),
       log: this.log,

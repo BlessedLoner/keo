@@ -215,7 +215,8 @@ export const invokeSchemas = {
   'calendar:status': empty,
   /** Empty removes it. */
   'calendar:setClientSecret': z.object({ secret: z.string().trim().max(200) }).strict(),
-  'calendar:signIn': empty,
+  /** Sign in with Google: Calendar, and with `mail` also Gmail. */
+  'calendar:signIn': z.object({ mail: z.boolean().optional() }).strict().optional().default({}),
   'calendar:cancelSignIn': empty,
   'calendar:signOut': empty,
 
@@ -532,6 +533,8 @@ export interface EmailStatus {
   address: string;
   hasPassword: boolean;
   secretStorage: boolean;
+  /** Gmail through the Google sign-in (no app password). */
+  viaGoogle: boolean;
 }
 
 /** Google Calendar sign-in state (never the tokens or the client secret). */
@@ -545,6 +548,10 @@ export interface CalendarStatus {
   hasClientSecret: boolean;
   signedIn: boolean;
   signingIn: boolean;
+  /** The signed-in Google account and what it allowed. */
+  googleEmail: string | null;
+  calendarAllowed: boolean;
+  mailAllowed: boolean;
   /** When the user signed in (ISO), for the 7-day "Testing" limit hint. */
   signedInAt: string | null;
   secretStorage: boolean;

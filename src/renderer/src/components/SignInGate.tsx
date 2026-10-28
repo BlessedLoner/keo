@@ -6,8 +6,23 @@ import '../styles/signin.css';
 import { useAccount, useAuthForm } from './AccountPanel';
 import { Icon } from './Icon';
 
-/** The intro plays once per run of Keo (signing out later goes straight to the form). */
-let introSeen = false;
+/** The intro plays once per run of Keo (signing out later goes straight to the form, even after the window reloads). */
+const INTRO_KEY = 'keo-intro-seen';
+let introSeen = (() => {
+  try {
+    return sessionStorage.getItem(INTRO_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+const markIntroSeen = () => {
+  introSeen = true;
+  try {
+    sessionStorage.setItem(INTRO_KEY, '1');
+  } catch {
+    /* not needed to work */
+  }
+};
 
 const reduceMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -38,7 +53,7 @@ export function SignInGate() {
       return;
     }
     const done = () => {
-      introSeen = true;
+      markIntroSeen();
       setPhase('form');
     };
     v.addEventListener('ended', done);
@@ -56,7 +71,7 @@ export function SignInGate() {
   }, [phase]);
 
   const skip = () => {
-    introSeen = true;
+    markIntroSeen();
     setPhase('form');
   };
   // Keo without a Keo account has its own data (not this sign-in screen's): Keo starts again on it.

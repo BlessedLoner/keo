@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CALENDAR_SCOPE, type FetchLike, type GoogleTokens } from '../src/main/calendar/googleAuth';
+import { CALENDAR_SCOPE, MAIL_SCOPE, type FetchLike, type GoogleTokens } from '../src/main/calendar/googleAuth';
+import { FakeMailServer, FakeSender } from './fakeMail';
 import { freeSlots } from '../src/main/calendar/googleCalendar';
 import { makeHarness, type Harness } from './helpers';
 
@@ -26,6 +27,11 @@ class FakeGoogle {
   revoked = false;
   tokenCalls: Array<Record<string, string>> = [];
   revokes: string[] = [];
+  /** What the user allows on Google's consent page, and the account's address (for Gmail). */
+  grantScope = CALENDAR_SCOPE;
+  idTokenEmail: string | null = null;
+  /** The scopes Keo asked for. */
+  askedScope = '';
   api: Array<{ method: string; url: URL; body: unknown }> = [];
   events: Array<Record<string, unknown>> = [
     { id: 'evt1', summary: 'Dentist', start: { dateTime: '2026-10-26T09:00:00Z' }, end: { dateTime: '2026-10-26T10:00:00Z' } },
@@ -42,12 +48,13 @@ class FakeGoogle {
       if (p.grant_type === 'authorization_code') {
         const ok = p.code === this.code && p.redirect_uri === this.redirectUri && b64url(crypto.createHash('sha256').update(p.code_verifier ?? '').digest()) === this.challenge;
         if (!ok) return res(400, { error: 'invalid_grant' });
-        return res(200, { access_token: this.access, expires_in: 3599, refresh_token: this.refresh, scope: CALENDAR_SCOPE, token_type: 'Bearer' });
+        const idToken = this.idTokenEmail ? `h.${b64url(Buffer.from(JSON.stringify({ email: this.idTokenEmail, email_verified: true })))}.s` : undefined;
+        return res(200, { access_token: this.access, expires_in: 3599, refresh_token: this.refresh, scope: this.grantScope, token_type: 'Bearer', ...(idToken ? { id_token: idToken } : {}) });
       }
       if (p.grant_type === 'refresh_token') {
         if (this.revoked || p.refresh_token !== this.refresh) return res(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' });
         this.access = `ya29.fake-access-token-refreshed-${String(++this.n).padStart(8, '0')}`;
-        return res(200, { access_token: this.access, expires_in: 3599, scope: CALENDAR_SCOPE, token_type: 'Bearer' });
+        return res(200, { access_token: this.access, expires_in: 3599, scope: this.grantScope, token_type: 'Bearer' });
       }
       return res(400, { error: 'unsupported_grant_type' });
     }
@@ -89,7 +96,8 @@ class FakeGoogle {
     const q = u.searchParams;
     expect(q.get('client_id')).toBe(this.clientId);
     expect(q.get('response_type')).toBe('code');
-    expect(q.get('scope')).toBe(CALENDAR_SCOPE);
+    this.askedScope = q.get('scope') ?? '';
+    expect(this.askedScope.split(' ')).toContain(CALENDAR_SCOPE);
     expect(q.get('code_challenge_method')).toBe('S256');
     expect(q.get('access_type')).toBe('offline');
     expect(q.get('client_secret')).toBeNull();
@@ -115,9 +123,9 @@ afterEach(async () => {
 
 const BUILTIN = { id: '9999-keo-builtin.apps.googleusercontent.com', secret: 'GOCSPX-fake-builtin-secret' };
 
-function setup(o: { signIn?: 'allow' | 'deny'; clientId?: string; builtin?: boolean } = {}) {
+function setup(o: { signIn?: 'allow' | 'deny'; clientId?: string; builtin?: boolean; mail?: { server: FakeMailServer; sender: FakeSender } } = {}) {
   const g = new FakeGoogle();
-  h = makeHarness({ deps: { googleFetch: g.fetch, googleEndpoints: ENDPOINTS, calendarApi: API, openBrowser: g.browser(o.signIn ?? 'allow'), ...(o.builtin ? { googleClient: BUILTIN } : {}) } });
+  h = makeHarness({ deps: { googleFetch: g.fetch, googleEndpoints: ENDPOINTS, calendarApi: API, openBrowser: g.browser(o.signIn ?? 'allow'), ...(o.builtin ? { googleClient: BUILTIN } : {}), ...(o.mail ? { mailConnect: o.mail.server.connector, mailSender: o.mail.sender } : {}) } });
   h.services.settings.update({ calendar: { googleClientId: o.clientId ?? CLIENT_ID } });
   h.services.secrets.set('google_client_secret', CLIENT_SECRET);
   return g;
@@ -354,5 +362,44 @@ describe('sign-in errors', () => {
     expect(tokenError({ error: 'invalid_request', error_description: 'client_secret is missing.' })).toMatch(/needs the client secret too/);
     expect(tokenError({ error: 'invalid_client' })).toMatch(/client ID/);
     expect(tokenError({ error: 'access_denied', error_description: 'The user denied access' })).toBe('Google refused the sign-in: The user denied access.');
+  });
+});
+
+describe('Gmail with Sign in with Google', () => {
+  it('one sign-in connects Gmail and Calendar: Google’s servers, an access token, no app password', async () => {
+    const server = new FakeMailServer();
+    const sender = new FakeSender();
+    const g = setup({ mail: { server, sender } });
+    g.grantScope = `${CALENDAR_SCOPE} ${MAIL_SCOPE} openid email`;
+    g.idTokenEmail = 'Ana@Gmail.com';
+    const { createHandlers } = await import('../src/main/ipc/handlers');
+    const handlers = createHandlers(h.services, { appInfo: () => ({ name: 'Keo', version: '0', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const r = await handlers['calendar:signIn']({ mail: true });
+    expect(r).toMatchObject({ ok: true });
+    expect(r.message).toMatch(/Gmail and Google Calendar are connected \(ana@gmail\.com\)/);
+    expect(g.askedScope.split(' ')).toEqual(expect.arrayContaining([CALENDAR_SCOPE, MAIL_SCOPE, 'openid', 'email']));
+    // No app password anywhere, yet email works.
+    expect(h.services.secrets.get('email_password')).toBeNull();
+    expect(h.services.settings.get().email).toMatchObject({ useGoogle: true, address: 'ana@gmail.com' });
+    expect(h.services.email.connected()).toBe(true);
+    server.add('inbox', ['From: Bob <bob@example.test>', 'To: ana@gmail.com', 'Subject: Lunch?', 'Message-ID: <l1@example.test>', 'Date: Mon, 26 Oct 2026 09:00:00 +0000', '', 'Tomorrow at 1?'].join(String.fromCharCode(13, 10)));
+    const mail = await h.services.email.listNew({ limit: 5, unreadOnly: true }, new AbortController().signal);
+    expect(mail.map((m) => m.subject)).toEqual(['Lunch?']);
+    const login = server.logins.at(-1)!;
+    expect(login).toMatchObject({ address: 'ana@gmail.com', imapHost: 'imap.gmail.com', accessToken: g.access, password: '' });
+    // Signing out of Google turns Gmail-through-Google off again.
+    await handlers['calendar:signOut']({});
+    expect(h.services.settings.get().email.useGoogle).toBe(false);
+    expect(h.services.email.connected()).toBe(false);
+  });
+
+  it('says so when Gmail was not allowed on Google’s page, and keeps the calendar', async () => {
+    const g = setup();
+    g.grantScope = CALENDAR_SCOPE;
+    const { createHandlers } = await import('../src/main/ipc/handlers');
+    const handlers = createHandlers(h.services, { appInfo: () => ({ name: 'Keo', version: '0', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, pickExecutable: async () => null, relaunch: () => undefined });
+    const r = await handlers['calendar:signIn']({ mail: true });
+    expect(r.message).toMatch(/Google Calendar is connected.*Gmail was not allowed/);
+    expect(h.services.settings.get().email.useGoogle).toBe(false);
   });
 });

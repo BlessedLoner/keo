@@ -409,14 +409,56 @@ function openAccountFolder(): { profile: ProfileInfo; sessionSecrets: SecretStor
   return { profile: accountProfile(profile, folder.dir, accountState), sessionSecrets };
 }
 
-/** Saves the new mode and, if its folder is another one, starts Keo again on it. */
+/** The current account's IPC handlers; calls are routed through liveHandlers so they can change. */
+let currentHandlers: ReturnType<typeof createHandlers> | null = null;
+const liveHandlers = new Proxy({} as ReturnType<typeof createHandlers>, {
+  get: (_t, k) => (currentHandlers as Record<string | symbol, unknown> | null)?.[k],
+  has: (_t, k) => !!currentHandlers && k in currentHandlers,
+});
+/** Start the services (and the companion, shortcuts, wake word) on the current account's folder. */
+let startServices: () => void = () => undefined;
+let startPresence: () => void = () => undefined;
+let switching = false;
+
+/** Saves the new mode and, if its folder is another one, opens it in place. */
 function switchAccountFolder(next: AccountState): void {
   const same = folderFor(next) === folderFor(accountState);
   writeState(profile.userData, next);
   accountState = next;
   if (same) return;
   log.info('app.switch_account_folder', { mode: next.mode });
-  setTimeout(restartKeo, 400);
+  // After the current call has answered the window.
+  setTimeout(() => void switchInPlace(), 120);
+}
+
+/**
+ * Opens another account's data without restarting Keo, like any signed-in desktop app: the
+ * window shows "Opening…", this account's services and extra windows close (saving everything),
+ * the new account's start, and the window reloads on them.
+ */
+async function switchInPlace(): Promise<void> {
+  if (switching) return;
+  switching = true;
+  push('app:switching', { mode: accountState.mode });
+  try {
+    presenceWindows?.shutdown();
+    presenceWindows = null;
+    const old = services;
+    currentHandlers = null;
+    services = null;
+    await old?.shutdown().catch((e: unknown) => log.warn('app.switch_shutdown', { error: errorMessage(e) }));
+    startServices();
+    if (!SMOKE && !E2E_DESKTOP) startPresence();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+    else mainWindow = createWindow();
+    log.info('app.account_opened', { mode: accountState.mode });
+  } catch (e) {
+    // Never leave Keo half-switched: start again on the new folder.
+    log.error('app.switch_failed', { error: errorMessage(e) });
+    restartKeo();
+  } finally {
+    switching = false;
+  }
 }
 
 /** Set while this (development) Keo hands over to a new one and waits for it. */
@@ -451,211 +493,210 @@ app.whenReady().then(() => {
   try {
     registerAppProtocol();
     hardenSession();
-    const opened = openAccountFolder();
-    services = new Services({
-      profile: opened.profile,
-      cipher,
-      sessionSecrets: opened.sessionSecrets,
-      // Another account signed in, or signed out: start again on that account's own data.
-      onAccountChange: (userId) => switchAccountFolder(userId ? { mode: 'account', userId } : { mode: 'signed-out', userId: null }),
-      desktopBackend: new Win32Backend(profile.runtimeDir, log),
-      captureSource: new ElectronWindowCapture(),
-      imageTools: electronImageTools,
-      clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
-      documentsDir: app.getPath('documents'),
-      videosDir: app.getPath('videos'),
-      homeDir: app.getPath('home'),
-      openPath: async (p) => (await shell.openPath(p)) === '',
-      showInFolder: (p) => shell.showItemInFolder(p),
-      pickVideo: async (what) => {
-        const opts: OpenDialogOptions =
-          what === 'clips_folder'
-            ? { title: 'Choose the folder with your clips', properties: ['openDirectory'] }
-            : what === 'music'
-              ? { title: 'Choose a music file (your own or licensed)', properties: ['openFile'], filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'wma'] }] }
-              : { title: 'Choose the template video', properties: ['openFile'], filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'wmv', 'mts', '3gp'] }] };
-        const r = await dialog.showOpenDialog(opts);
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      renderReport: (html, kind) => renderReport(html, kind),
-      convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
-      windowsSpeak: (text) => windowsSpeak(text),
-      captureScreen: () => captureScreen(),
-      pictureNormalize: async (file) => {
-        const img = nativeImage.createFromPath(file);
-        return img.isEmpty() ? null : img.toPNG();
-      },
-      attachmentImages: {
-        // Any picture as a JPEG the model can see (at most maxSide) and a small thumbnail.
-        prepare: async (bytes, mime, maxSide) => {
-          let img = /^image\/(webp|avif|gif)$/.test(mime) ? nativeImage.createFromBuffer(await convertImage(bytes, mime, maxSide)) : nativeImage.createFromBuffer(bytes);
-          if (img.isEmpty()) throw new Error('unreadable picture');
-          const { width, height } = img.getSize();
-          const k = Math.min(1, maxSide / Math.max(width, height));
-          if (k < 1) img = img.resize({ width: Math.round(width * k), height: Math.round(height * k), quality: 'good' });
-          const t = Math.min(1, 240 / Math.max(width, height));
-          const thumb = img.resize({ width: Math.max(1, Math.round(width * t)), height: Math.max(1, Math.round(height * t)), quality: 'good' });
-          return { jpeg: img.toJPEG(86), thumb: thumb.toJPEG(76) };
-        },
-      },
-      testProvider: TEST_PROVIDER ? new TestProvider() : null,
-      logger: log,
-      // "Sign in with Google" opens Google's own page in the user's browser (https only).
-      openBrowser: async (url) => {
-        if (!url.startsWith('https://accounts.google.com/')) throw new Error('Not a Google sign-in page.');
-        await shell.openExternal(url);
-      },
-    });
-    services.setPush(push);
-    const svcForUpdates = services;
-    // Installed builds only: a development run has no installer to update.
-    autoUpdate = new AutoUpdate(
-      app.isPackaged ? autoUpdater : null,
-      () => svcForUpdates.settings.get().updates.check,
-      log,
-      (st) => push('update:changed', st),
-      (version) => svcForUpdates.ui.notify('Keo update ready', `Keo ${version} is downloaded. It installs when you close Keo, or choose “Restart to update”.`),
-    );
-    // Keo often runs for days in the background: look again every few hours (the check itself is at most daily).
-    setInterval(() => void autoUpdate?.check(), 6 * 60 * 60 * 1000).unref();
-    const handlers = createHandlers(services, {
-      appInfo: () => ({
-        name: 'Keo',
-        version: app.getVersion(),
-        electron: process.versions.electron,
-        chrome: process.versions.chrome,
-        node: process.versions.node,
-        platform: `${process.platform} ${process.arch}`,
-        packaged: app.isPackaged,
-        testProviderEnabled: TEST_PROVIDER,
-      }),
-      openPath: async (p) => (await shell.openPath(p)) === '',
-      displays: () => {
-        const main = screen.getPrimaryDisplay().id;
-        return screen.getAllDisplays().map((d) => ({ width: d.size.width, height: d.size.height, scale: d.scaleFactor, primary: d.id === main }));
-      },
-      openExternal: (url) => shell.openExternal(url),
-      copyText: (text) => clipboard.writeText(text),
-      // Installed builds only (a development run would always look outdated).
-      checkUpdate: async (force) => {
-        if (!app.isPackaged && !force) return null;
-        const [info, download] = await Promise.all([updates.check(force), autoUpdate!.check(force)]);
-        return { ...info, download };
-      },
-      installUpdate: () => autoUpdate?.install() ?? false,
-      pickSaveFile: async (defaultName) => {
-        const r = await dialog.showSaveDialog(mainWindow ?? undefined!, { title: 'Export projects and workflows', defaultPath: defaultName, filters: [{ name: 'Keo export', extensions: ['json'] }] });
-        return r.canceled ? null : (r.filePath ?? null);
-      },
-      pickOpenFile: async () => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import projects and workflows', properties: ['openFile'], filters: [{ name: 'Keo export', extensions: ['json'] }] });
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      hideResults: () => presenceWindows?.hideResults(),
-      hideVideo: () => presenceWindows?.hideVideo(),
-      pickFfmpeg: async () => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose ffmpeg.exe (ffprobe.exe must be in the same folder)', properties: ['openFile'], filters: [{ name: 'ffmpeg', extensions: ['exe'] }] });
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      currentMarks: () => presenceWindows?.currentMarks() ?? null,
-      pickWakeModel: async () => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      pickFolder: async (title) => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title, properties: ['openDirectory', 'createDirectory'] });
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      showInFolder: (p) => shell.showItemInFolder(p),
-      pickFiles: async () => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, {
-          title: 'Attach photos or files',
-          properties: ['openFile', 'multiSelections'],
-          filters: [
-            { name: 'Photos and documents', extensions: ['png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'bmp', 'avif', 'pdf', 'docx', 'pptx', 'txt', 'md', 'csv', 'json', 'html', 'xml', 'log', 'js', 'ts', 'tsx', 'py', 'java', 'cs', 'cpp', 'c', 'go', 'rs', 'sql', 'css', 'yaml', 'yml'] },
-            { name: 'All files', extensions: ['*'] },
-          ],
-        });
-        return r.canceled ? [] : r.filePaths;
-      },
-      // The screen as the user sees it, with Keo's main window out of the way for a moment.
-      screenshotBehindKeo: async () => {
-        const w = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;
-        w?.setOpacity(0);
-        try {
-          await new Promise((res) => setTimeout(res, 260));
-          return (await captureScreen()).png;
-        } finally {
-          w?.setOpacity(1);
-        }
-      },
-      pickExecutable: async () => {
-        const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
-        return r.canceled ? null : (r.filePaths[0] ?? null);
-      },
-      relaunch: () => restartKeo(),
-      useLocal: () => switchAccountFolder({ mode: 'local', userId: null }),
-      openMain: (view) => showMain(view),
-      showCommandBar: () => presenceWindows?.showCommandBar(),
-      hideCommandBar: () => presenceWindows?.hideCommandBar(),
-      hideCompanion: () => presenceWindows?.syncCompanion(),
-      broadcastPresence: (channel, payload) => presenceWindows?.broadcast(channel, payload),
-      setCompanionInteractive: (b) => presenceWindows?.setCompanionInteractive(b),
-      companionDrag: (phase) => presenceWindows?.companionDrag(phase),
-      shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
-      voiceShortcutStatus: () => presenceWindows?.voiceShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
-      pencilShortcutStatus: () => presenceWindows?.pencilShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
-      quit: () => app.quit(),
-    });
-    const svc = services;
-    presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
-    svc.desktop.stepAside = () => presenceWindows?.stepAsideResults();
-    svc.ui = {
-      showCommandBar: () => presenceWindows?.showCommandBar(),
-      showMain: (view) => showMain(view),
-      // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
-      ensureVoiceWindow: () => ensureVoiceWindow(),
-      showResults: () => presenceWindows?.showResults(),
-      showVideo: () => presenceWindows?.showVideo(),
-      showPencil: (bounds) => presenceWindows?.showPencil(bounds),
-      hidePencil: () => presenceWindows?.hidePencil(),
-      showKeoMode: () => presenceWindows?.showKeoMode(),
-      showMarks: (bounds, marks, seconds) => presenceWindows?.showMarks(bounds, marks, seconds),
-      hideKeoMode: () => presenceWindows?.hideKeoMode(),
-      keoModeOpen: () => !!presenceWindows?.keoMode,
-      mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
-      notify: (title, body, view = 'tasks') => {
-        if (!Notification.isSupported()) return;
-        const n = new Notification({ title, body: body.slice(0, 240), silent: false });
-        n.on('click', () => showMain(view));
-        n.show();
-      },
-    };
     registerIpc(
       ipcMain,
-      handlers,
+      liveHandlers,
       {
         trustedOrigin: TRUSTED_ORIGIN,
         roleOf: (id) => (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === id ? 'main' : (presenceWindows?.roleOf(id) ?? null)),
       },
       log,
     );
-    // Keo without a Keo account (own API keys): no sign-in screen in this folder.
-    if (accountState.mode === 'local' && !services.settings.get().ui.ownKeys) services.settings.update({ ui: { ownKeys: true } });
-    const recovered = services.start();
-    log.info('app.ready', { profile: profile.profile, ...recovered.recovery, interruptedMessages: recovered.interruptedMessages, secretStorage: cipher.isAvailable() });
-    mainWindow = createWindow();
-    if (E2E_DESKTOP && !app.isPackaged) {
-      const out = process.env.KEO_E2E_OUT ?? path.join(profile.userData, 'e2e-desktop.json');
-      void import('./devtools/e2eDesktop').then(({ runDesktopE2E }) =>
-        runDesktopE2E(svc, { electronPath: process.execPath, fixtureDir: path.join(__dirname, '../../tests/fixtures/fake-whatsapp'), outFile: out, workDir: profile.userData }).finally(() => app.quit()),
-      );
-    } else if (SMOKE) {
-      runSmoke(mainWindow);
-    } else {
+    // Everything that belongs to one account's data: made again when another account opens.
+    startServices = () => {
+      const opened = openAccountFolder();
+      services = new Services({
+        profile: opened.profile,
+        cipher,
+        sessionSecrets: opened.sessionSecrets,
+        // Another account signed in, or signed out: start again on that account's own data.
+        onAccountChange: (userId) => switchAccountFolder(userId ? { mode: 'account', userId } : { mode: 'signed-out', userId: null }),
+        desktopBackend: new Win32Backend(profile.runtimeDir, log),
+        captureSource: new ElectronWindowCapture(),
+        imageTools: electronImageTools,
+        clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
+        documentsDir: app.getPath('documents'),
+        videosDir: app.getPath('videos'),
+        homeDir: app.getPath('home'),
+        openPath: async (p) => (await shell.openPath(p)) === '',
+        showInFolder: (p) => shell.showItemInFolder(p),
+        pickVideo: async (what) => {
+          const opts: OpenDialogOptions =
+            what === 'clips_folder'
+              ? { title: 'Choose the folder with your clips', properties: ['openDirectory'] }
+              : what === 'music'
+                ? { title: 'Choose a music file (your own or licensed)', properties: ['openFile'], filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'wma'] }] }
+                : { title: 'Choose the template video', properties: ['openFile'], filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'wmv', 'mts', '3gp'] }] };
+          const r = await dialog.showOpenDialog(opts);
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        renderReport: (html, kind) => renderReport(html, kind),
+        convertImage: (bytes, mime, side) => convertImage(bytes, mime, side),
+        windowsSpeak: (text) => windowsSpeak(text),
+        captureScreen: () => captureScreen(),
+        pictureNormalize: async (file) => {
+          const img = nativeImage.createFromPath(file);
+          return img.isEmpty() ? null : img.toPNG();
+        },
+        attachmentImages: {
+          // Any picture as a JPEG the model can see (at most maxSide) and a small thumbnail.
+          prepare: async (bytes, mime, maxSide) => {
+            let img = /^image\/(webp|avif|gif)$/.test(mime) ? nativeImage.createFromBuffer(await convertImage(bytes, mime, maxSide)) : nativeImage.createFromBuffer(bytes);
+            if (img.isEmpty()) throw new Error('unreadable picture');
+            const { width, height } = img.getSize();
+            const k = Math.min(1, maxSide / Math.max(width, height));
+            if (k < 1) img = img.resize({ width: Math.round(width * k), height: Math.round(height * k), quality: 'good' });
+            const t = Math.min(1, 240 / Math.max(width, height));
+            const thumb = img.resize({ width: Math.max(1, Math.round(width * t)), height: Math.max(1, Math.round(height * t)), quality: 'good' });
+            return { jpeg: img.toJPEG(86), thumb: thumb.toJPEG(76) };
+          },
+        },
+        testProvider: TEST_PROVIDER ? new TestProvider() : null,
+        logger: log,
+        // "Sign in with Google" opens Google's own page in the user's browser (https only).
+        openBrowser: async (url) => {
+          if (!url.startsWith('https://accounts.google.com/')) throw new Error('Not a Google sign-in page.');
+          await shell.openExternal(url);
+        },
+      });
+      services.setPush(push);
+      // Installed builds only: a development run has no installer to update (made once; it reads the current account's settings).
+      if (!autoUpdate) {
+        autoUpdate = new AutoUpdate(
+          app.isPackaged ? autoUpdater : null,
+          () => services?.settings.get().updates.check ?? false,
+          log,
+          (st) => push('update:changed', st),
+          (version) => services?.ui.notify('Keo update ready', `Keo ${version} is downloaded. It installs when you close Keo, or choose “Restart to update”.`),
+        );
+        // Keo often runs for days in the background: look again every few hours (the check itself is at most daily).
+        setInterval(() => void autoUpdate?.check(), 6 * 60 * 60 * 1000).unref();
+      }
+      const handlers = createHandlers(services, {
+        appInfo: () => ({
+          name: 'Keo',
+          version: app.getVersion(),
+          electron: process.versions.electron,
+          chrome: process.versions.chrome,
+          node: process.versions.node,
+          platform: `${process.platform} ${process.arch}`,
+          packaged: app.isPackaged,
+          testProviderEnabled: TEST_PROVIDER,
+        }),
+        openPath: async (p) => (await shell.openPath(p)) === '',
+        displays: () => {
+          const main = screen.getPrimaryDisplay().id;
+          return screen.getAllDisplays().map((d) => ({ width: d.size.width, height: d.size.height, scale: d.scaleFactor, primary: d.id === main }));
+        },
+        openExternal: (url) => shell.openExternal(url),
+        copyText: (text) => clipboard.writeText(text),
+        // Installed builds only (a development run would always look outdated).
+        checkUpdate: async (force) => {
+          if (!app.isPackaged && !force) return null;
+          const [info, download] = await Promise.all([updates.check(force), autoUpdate!.check(force)]);
+          return { ...info, download };
+        },
+        installUpdate: () => autoUpdate?.install() ?? false,
+        pickSaveFile: async (defaultName) => {
+          const r = await dialog.showSaveDialog(mainWindow ?? undefined!, { title: 'Export projects and workflows', defaultPath: defaultName, filters: [{ name: 'Keo export', extensions: ['json'] }] });
+          return r.canceled ? null : (r.filePath ?? null);
+        },
+        pickOpenFile: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import projects and workflows', properties: ['openFile'], filters: [{ name: 'Keo export', extensions: ['json'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        hideResults: () => presenceWindows?.hideResults(),
+        hideVideo: () => presenceWindows?.hideVideo(),
+        pickFfmpeg: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose ffmpeg.exe (ffprobe.exe must be in the same folder)', properties: ['openFile'], filters: [{ name: 'ffmpeg', extensions: ['exe'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        currentMarks: () => presenceWindows?.currentMarks() ?? null,
+        pickWakeModel: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose your trained wake word (.ppn for Windows)', properties: ['openFile'], filters: [{ name: 'Porcupine wake word', extensions: ['ppn'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        pickFolder: async (title) => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title, properties: ['openDirectory', 'createDirectory'] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        showInFolder: (p) => shell.showItemInFolder(p),
+        pickFiles: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, {
+            title: 'Attach photos or files',
+            properties: ['openFile', 'multiSelections'],
+            filters: [
+              { name: 'Photos and documents', extensions: ['png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'bmp', 'avif', 'pdf', 'docx', 'pptx', 'txt', 'md', 'csv', 'json', 'html', 'xml', 'log', 'js', 'ts', 'tsx', 'py', 'java', 'cs', 'cpp', 'c', 'go', 'rs', 'sql', 'css', 'yaml', 'yml'] },
+              { name: 'All files', extensions: ['*'] },
+            ],
+          });
+          return r.canceled ? [] : r.filePaths;
+        },
+        // The screen as the user sees it, with Keo's main window out of the way for a moment.
+        screenshotBehindKeo: async () => {
+          const w = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;
+          w?.setOpacity(0);
+          try {
+            await new Promise((res) => setTimeout(res, 260));
+            return (await captureScreen()).png;
+          } finally {
+            w?.setOpacity(1);
+          }
+        },
+        pickExecutable: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Choose an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        relaunch: () => restartKeo(),
+        useLocal: () => switchAccountFolder({ mode: 'local', userId: null }),
+        openMain: (view) => showMain(view),
+        showCommandBar: () => presenceWindows?.showCommandBar(),
+        hideCommandBar: () => presenceWindows?.hideCommandBar(),
+        hideCompanion: () => presenceWindows?.syncCompanion(),
+        broadcastPresence: (channel, payload) => presenceWindows?.broadcast(channel, payload),
+        setCompanionInteractive: (b) => presenceWindows?.setCompanionInteractive(b),
+        companionDrag: (phase) => presenceWindows?.companionDrag(phase),
+        shortcutStatus: () => presenceWindows?.shortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+        voiceShortcutStatus: () => presenceWindows?.voiceShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+        pencilShortcutStatus: () => presenceWindows?.pencilShortcutStatus() ?? { accelerator: '', enabled: false, registered: false, error: 'Not started.' },
+        quit: () => app.quit(),
+      });
+      const svc = services;
+      presenceWindows = new PresenceWindows(svc, log, rendererUrl, path.join(__dirname, '../preload/index.js'), showMain);
+      svc.desktop.stepAside = () => presenceWindows?.stepAsideResults();
+      svc.ui = {
+        showCommandBar: () => presenceWindows?.showCommandBar(),
+        showMain: (view) => showMain(view),
+        // Windows notification (no focus change); clicking it opens Keo on the Tasks view.
+        ensureVoiceWindow: () => ensureVoiceWindow(),
+        showResults: () => presenceWindows?.showResults(),
+        showVideo: () => presenceWindows?.showVideo(),
+        showPencil: (bounds) => presenceWindows?.showPencil(bounds),
+        hidePencil: () => presenceWindows?.hidePencil(),
+        showKeoMode: () => presenceWindows?.showKeoMode(),
+        showMarks: (bounds, marks, seconds) => presenceWindows?.showMarks(bounds, marks, seconds),
+        hideKeoMode: () => presenceWindows?.hideKeoMode(),
+        keoModeOpen: () => !!presenceWindows?.keoMode,
+        mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+        notify: (title, body, view = 'tasks') => {
+          if (!Notification.isSupported()) return;
+          const n = new Notification({ title, body: body.slice(0, 240), silent: false });
+          n.on('click', () => showMain(view));
+          n.show();
+        },
+      };
+      currentHandlers = handlers;
+      // Keo without a Keo account (own API keys): no sign-in screen in this folder.
+      if (accountState.mode === 'local' && !services.settings.get().ui.ownKeys) services.settings.update({ ui: { ownKeys: true } });
+      const recovered = services.start();
+      log.info('app.ready', { profile: profile.profile, ...recovered.recovery, interruptedMessages: recovered.interruptedMessages, secretStorage: cipher.isAvailable() });
+    };
+    // Companion, shortcuts and wake word for the current account's settings.
+    startPresence = () => {
       // Desktop presence: companion, global shortcut and (if enabled) wake word.
-      presenceWindows.syncCompanion();
-      presenceWindows.syncShortcut();
+      presenceWindows?.syncCompanion();
+      presenceWindows?.syncShortcut();
+      const svc = services!;
       void svc.wake.apply();
       let lastShortcut = JSON.stringify(svc.settings.get().shortcuts);
       let lastCompanion = JSON.stringify({ e: svc.settings.get().companion.enabled, t: svc.settings.get().companion.alwaysOnTop });
@@ -677,6 +718,18 @@ app.whenReady().then(() => {
           presenceWindows?.onDisplaysChanged();
         }
       });
+    };
+    startServices();
+    mainWindow = createWindow();
+    if (E2E_DESKTOP && !app.isPackaged) {
+      const out = process.env.KEO_E2E_OUT ?? path.join(profile.userData, 'e2e-desktop.json');
+      void import('./devtools/e2eDesktop').then(({ runDesktopE2E }) =>
+        runDesktopE2E(services!, { electronPath: process.execPath, fixtureDir: path.join(__dirname, '../../tests/fixtures/fake-whatsapp'), outFile: out, workDir: profile.userData }).finally(() => app.quit()),
+      );
+    } else if (SMOKE) {
+      runSmoke(mainWindow);
+    } else {
+      startPresence();
       screen.on('display-removed', () => presenceWindows?.onDisplaysChanged());
       screen.on('display-metrics-changed', () => presenceWindows?.onDisplaysChanged());
     }
@@ -709,6 +762,45 @@ app.on('before-quit', (e) => {
       app.quit();
     });
 });
+
+/**
+ * Smoke (KEO_SMOKE_SWITCH=1): opening another data folder in place — no restart — leaves the
+ * other folder's data behind and Keo answering in the same window.
+ */
+function smokeSwitch(win: BrowserWindow, out: string | undefined): void {
+  const js = (code: string) => win.webContents.executeJavaScript(`(async () => { const call = async (ch, input) => { const r = await window.keo.invoke(ch, input); if (!r.ok) throw new Error(r.error.message); return r.value; }; ${code} })()`);
+  const result: Record<string, unknown> = { pid: process.pid };
+  const finish = () => {
+    log.info('smoke.result', { keys: Object.keys(result).length });
+    if (out) fs.writeFileSync(out, JSON.stringify(result, null, 2));
+    app.quit();
+  };
+  win.webContents.once('did-finish-load', () => {
+    setTimeout(async () => {
+      try {
+        await js(`await call('conversations:create', { title: 'before the switch' }); await call('account:useLocal', {});`);
+        result.windowId = win.id;
+        win.webContents.once('did-finish-load', () => {
+          setTimeout(async () => {
+            try {
+              Object.assign(
+                result,
+                await js(`return { titles: (await call('conversations:list', {})).map((c) => c.title), ownKeys: (await call('settings:get', {})).ui.ownKeys };`),
+                { sameWindow: !win.isDestroyed() && result.windowId === win.id, mode: accountState.mode },
+              );
+            } catch (e) {
+              result.error = errorMessage(e);
+            }
+            finish();
+          }, 1500);
+        });
+      } catch (e) {
+        result.error = errorMessage(e);
+        finish();
+      }
+    }, 1500);
+  });
+}
 
 /**
  * Development-only visual review (KEO_SMOKE_SHOTS=<dir>, never in packaged
@@ -1066,6 +1158,7 @@ async function presenceSmoke(shots: string | undefined): Promise<Record<string, 
 // ---------------------------------------------------------------------------
 function runSmoke(win: BrowserWindow): void {
   const out = process.env.KEO_SMOKE_OUT;
+  if (process.env.KEO_SMOKE_SWITCH === '1') return smokeSwitch(win, out);
   win.webContents.once('did-finish-load', () => {
     setTimeout(async () => {
       let result: Record<string, unknown>;

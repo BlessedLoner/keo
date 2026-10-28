@@ -6,3 +6,5 @@ release/
 .keo-test-profile*/
 *.tsbuildinfo
 .video-preview/
+.env.local
+.env

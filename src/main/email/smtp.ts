@@ -74,7 +74,7 @@ function transportOptions(a: MailAccount) {
     secure: a.smtpSecure,
     // Port 587 starts plain and must upgrade to TLS; never send the password in the clear.
     requireTLS: !a.smtpSecure,
-    auth: { user: a.address, pass: a.password },
+    auth: a.accessToken ? { type: 'OAuth2', user: a.address, accessToken: a.accessToken } : { user: a.address, pass: a.password },
     logger: false,
     debug: false,
     connectionTimeout: 20000,

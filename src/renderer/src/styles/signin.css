@@ -10,6 +10,21 @@
   font-family: inherit;
 }
 
+/* Between accounts: a calm black screen while the next account's Keo opens. */
+.signin.switching {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.switching-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #cfcfcf;
+  font-size: 15px;
+  animation: signin-in 400ms ease both;
+}
+
 /* The window can still be moved by its top strip (Windows draws its buttons on the right). */
 .signin-drag {
   position: absolute;

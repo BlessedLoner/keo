@@ -17,9 +17,9 @@ const electron = require('electron');
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'keo-smoke-'));
 
-function launch(run) {
+function launch(run, extra = {}) {
   const out = path.join(profile, `smoke-${run}.json`);
-  const env = { ...process.env, KEO_SMOKE: '1', KEO_ENABLE_TEST_PROVIDER: '1', KEO_USER_DATA_DIR: profile, KEO_SMOKE_OUT: out };
+  const env = { ...process.env, KEO_SMOKE: '1', KEO_ENABLE_TEST_PROVIDER: '1', KEO_USER_DATA_DIR: profile, KEO_SMOKE_OUT: out, ...extra };
   // A parent Electron-based tool may set this; it would make Electron run as plain Node.
   delete env.ELECTRON_RUN_AS_NODE;
   // A manual live send (KEO_LIVE_RESULTS_SEND) happens once, in the first run only.
@@ -124,6 +124,12 @@ check('presence: no orphan windows after shutdown', p.noPresenceWindowsAfterShut
 
 const b = launch(2);
 check('conversations persist across restart', b.conversationCount === (p.conversationsAfter ?? a.conversationCount) + 1, `${p.conversationsAfter ?? a.conversationCount} -> ${b.conversationCount}`);
+
+// Switching to another data folder happens in place: same window, same process, other data.
+const s = launch(3, { KEO_SMOKE_SWITCH: '1' });
+check('switching accounts: no restart, same window', s.sameWindow === true && !s.error, s.error ?? s.sameWindow);
+check('switching accounts: the other folder’s chats stay behind', Array.isArray(s.titles) && !s.titles.includes('before the switch'), JSON.stringify(s.titles));
+check('switching accounts: Keo answers on the new folder', s.mode === 'local' && s.ownKeys === true, `${s.mode} ${s.ownKeys}`);
 
 const logDir = path.join(profile, 'logs');
 const logs = fs.readdirSync(logDir).map((f) => fs.readFileSync(path.join(logDir, f), 'utf8')).join('\n');
