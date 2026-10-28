@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
-import { applyEdits, describeProject, EditError, isAV, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, isAV, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -64,6 +64,19 @@ export class StudioService {
   private readonly readers = new Map<string, Mp4Reader | null>();
   private readonly jobs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly exports = new Map<string, { writer: Mp4Writer; file: string; projectId: string }>();
+  /** The export running for each project (to stop it). */
+  private readonly running = new Map<string, string>();
+
+  /** Stops a project's running export (the render window stops at the next frame; nothing is saved). */
+  cancelExport(id: string): boolean {
+    const exportId = this.running.get(id);
+    if (!exportId || !this.d.sendJob) return false;
+    this.d.sendJob(`job_${crypto.randomBytes(6).toString('hex')}`, { kind: 'cancel', exportId });
+    return true;
+  }
+
+  /** File names the user chose for exports that are running. */
+  private readonly exportNames = new Map<string, string>();
   /** The project open in the Studio page (Keo's tools act on it unless they name another). */
   current: string | null = null;
 
@@ -501,11 +514,18 @@ export class StudioService {
   // ---------------------------------------------------------------- exporting
 
   /** Renders the project into a new MP4 in Videos\Keo. */
-  async exportVideo(id: string): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+  async exportVideo(id: string, opts: Partial<ExportOptions> = {}): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
     const p = this.get(id);
     if (projectDuration(p) < 0.1) throw new StudioError('The timeline is empty: add clips, pictures or text first.');
+    const o = ExportOptions.parse(opts);
     const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
-    const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId }, 6 * 60 * 60 * 1000);
+    if (o.name) this.exportNames.set(exportId, o.name);
+    this.running.set(id, exportId);
+    const size = { ...exportSize(p, o), quality: o.quality };
+    const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId, size }, 6 * 60 * 60 * 1000).finally(() => {
+      this.exportNames.delete(exportId);
+      if (this.running.get(id) === exportId) this.running.delete(id);
+    });
     this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames });
     return r;
   }
@@ -516,7 +536,7 @@ export class StudioService {
     const dir = this.d.exportsDir();
     fs.mkdirSync(dir, { recursive: true });
     // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
-    const base = p.name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
+    const base = (this.exportNames.get(exportId) ?? p.name).replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
     let file = path.join(dir, `${base}.mp4`);
     for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).mp4`);
     this.exports.set(exportId, { writer: new Mp4Writer(file, video, audio), file, projectId });

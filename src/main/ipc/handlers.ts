@@ -497,10 +497,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const files = paths ?? (host.pickMedia ? await host.pickMedia() : []);
       return s.studio.importFiles(id, files);
     },
-    'studio:export': ({ id }) => {
+    'studio:exportCancel': ({ id }) => ({ cancelled: s.studio.cancelExport(id) }),
+    'studio:export': ({ id, options }) => {
       // Runs in the background; progress and the result come as studio:progress.
       void s.studio
-        .exportVideo(id)
+        .exportVideo(id, options ?? {})
         .then((r) => s.emit('studio:progress', { projectId: id, stage: 'done', file: r.file }))
         .catch((e: unknown) => s.emit('studio:progress', { projectId: id, stage: 'failed', error: e instanceof Error ? e.message : 'The export failed.' }));
       return { started: true as const };

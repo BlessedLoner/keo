@@ -1,5 +1,5 @@
 import { Storyboard } from './studioFaceless';
-import { EditOp, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
+import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
 import { z } from 'zod';
 import type {
@@ -149,7 +149,8 @@ export const invokeSchemas = {
   'studio:soundEffect': z.object({ id: studioProjectId, kind: z.enum(['whoosh', 'pop', 'click', 'ding', 'riser', 'boom', 'swipe']), at: z.number().min(0).max(86400) }).strict(),
   /** No paths: Keo opens a file picker. */
   'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
-  'studio:export': z.object({ id: studioProjectId }).strict(),
+  'studio:export': z.object({ id: studioProjectId, options: ExportOptions.partial().optional() }).strict(),
+  'studio:exportCancel': z.object({ id: studioProjectId }).strict(),
   'studio:current': empty,
   'studio:videoTrack': z.object({ projectId: studioProjectId, assetId: studioAssetId }).strict(),
   'studio:videoSamples': z.object({ projectId: studioProjectId, assetId: studioAssetId, time: z.number().min(0).max(86400).optional(), from: z.number().int().min(0).optional(), count: z.number().int().min(1).max(240) }).strict(),
@@ -454,6 +455,7 @@ export interface InvokeOutputs {
   'studio:facelessPlan': { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };
+  'studio:exportCancel': { cancelled: boolean };
   'studio:current': { id: string | null };
   'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null;
   'studio:videoSamples': { from: number; samples: Array<{ data: Uint8Array; time: number; duration: number; key: boolean }> };

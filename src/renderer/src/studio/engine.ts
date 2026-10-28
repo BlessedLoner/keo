@@ -35,6 +35,7 @@ function sizeOf(src: Drawable): { w: number; h: number } {
 /** Where in its source a media clip is at timeline time t. */
 export function sourceTime(c: MediaClip, asset: Asset, t: number): number {
   if (asset.kind === 'image') return 0;
+  if (c.freeze) return Math.max(0, Math.min(asset.duration, c.in));
   return Math.max(0, Math.min(asset.duration, c.in + (t - c.start) * c.speed));
 }
 

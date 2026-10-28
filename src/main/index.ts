@@ -1057,7 +1057,17 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   // Phase 4: a faceless video from a three-scene script, built and exported for real.
   const fl = await s.facelessCreate(Storyboard.parse({ title: 'Studio smoke faceless', format: 'square', look: 'warm', scenes: scenesFromScript('Did you know the sea makes air?\n[title: Sea air]\n\nTiny plants do it.\n\nSay thanks.') }));
   s.studio.edit(fl.projectId, [{ op: 'set_project', width: 320, height: 320 }]);
-  const flOut = await s.studio.exportVideo(fl.projectId);
+  // Export choices: 240p at 24 fps, named; and an export the user stops.
+  const flOut = await s.studio.exportVideo(fl.projectId, { resolution: '720', fps: 24, quality: 'standard', name: 'Smoke faceless 720' });
+  const flSize = Mp4Reader.open(flOut.file);
+  out.exportChoices = { width: flSize?.video()?.width, height: flSize?.video()?.height, frames: flOut.frames, seconds: flOut.durationSec, named: path.basename(flOut.file) };
+  flSize?.close();
+  const stopping = s.studio.exportVideo(fl.projectId).then(
+    () => 'finished',
+    (e: unknown) => errorMessage(e),
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  out.stopped = { asked: s.studio.cancelExport(fl.projectId), result: await stopping };
   const flReader = Mp4Reader.open(flOut.file);
   const flP = s.studio.get(fl.projectId);
   out.faceless = { scenes: fl.scenes, durationSec: flOut.durationSec, frames: flOut.frames, sound: !!flReader?.audio(), captions: flP.tracks.find((t) => t.name === 'Captions')?.clips.length ?? 0, voice: flP.tracks.find((t) => t.name === 'Voice')?.clips.length ?? 0 };
@@ -1212,6 +1222,14 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
       await wait(3500);
       fs.writeFileSync(path.join(dir, 'studio-keo.png'), (await win.webContents.capturePage()).toPNG());
+      // The Text styles in the library, and the Export window.
+      await js(`[...document.querySelectorAll('.bin-tabs button')].find((b) => b.textContent.trim() === 'Text')?.click();`);
+      await wait(500);
+      await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('Export'))?.click();`);
+      await wait(600);
+      fs.writeFileSync(path.join(dir, 'studio-export.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('.export-dialog button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(300);
       // The faceless creator with the example script.
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('New'))?.click();`);
       await wait(500);

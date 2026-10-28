@@ -22,6 +22,7 @@ export function Timeline({
   project,
   time,
   selected,
+  selectedIds,
   onSelect,
   onTime,
   onEdit,
@@ -32,7 +33,9 @@ export function Timeline({
   project: Project;
   time: number;
   selected: string | null;
-  onSelect: (id: string | null) => void;
+  /** All selected clips (several with Shift or Ctrl + click). */
+  selectedIds?: string[];
+  onSelect: (id: string | null, add?: boolean) => void;
   onTime: (t: number) => void;
   onEdit: (ops: EditOp[]) => void;
   zoom: number;
@@ -101,6 +104,16 @@ export function Timeline({
       if (d.kind === 'move') {
         if (Math.abs(d.dx) < 2 && d.targetTrack === d.track.id) return;
         const start = snap(d.clip.start + sec, d.clip.id);
+        const group = (selectedIds ?? []).filter((id) => id !== d.clip.id);
+        if (group.length && selectedIds?.includes(d.clip.id) && d.targetTrack === d.track.id) {
+          // The selected clips move together, by the same amount.
+          const delta = start - d.clip.start;
+          const all = project.tracks.flatMap((t) => t.clips);
+          const minStart = Math.min(...all.filter((c) => selectedIds.includes(c.id)).map((c) => c.start));
+          const shift = Math.max(delta, -minStart);
+          onEdit(all.filter((c) => selectedIds.includes(c.id)).map((c) => ({ op: 'move' as const, clip: c.id, start: Math.max(0, c.start + shift) })));
+          return;
+        }
         onEdit([{ op: 'move', clip: d.clip.id, start, ...(d.targetTrack !== d.track.id ? { track: d.targetTrack } : {}) }]);
       } else if (d.kind === 'trim-start') {
         const start = snap(d.clip.start + sec, d.clip.id);
@@ -208,9 +221,14 @@ export function Timeline({
             style={{ height: ROW_H[t.kind] * Math.max(1, lanesOf(t).count) }}
             data-track={t.id}
             onDragOver={(e) => {
-              if (e.dataTransfer.types.includes('application/x-keo-asset')) e.preventDefault();
+              if (e.dataTransfer.types.includes('application/x-keo-asset') || e.dataTransfer.types.includes('application/x-keo-text')) e.preventDefault();
             }}
             onDrop={(e) => {
+              if (e.dataTransfer.types.includes('application/x-keo-text')) {
+                e.preventDefault();
+                onEdit([{ op: 'add_text', text: 'Your text', start: snap(timeAt(e.clientX), ''), duration: 3, ...(t.kind === 'text' ? { track: t.id } : {}) }]);
+                return;
+              }
               const assetId = e.dataTransfer.getData('application/x-keo-asset');
               const asset = project.assets.find((a) => a.id === assetId);
               if (!asset) return;
@@ -246,11 +264,15 @@ export function Timeline({
               return (
                 <div
                   key={c.id}
-                  className={`tl-clip ${c.type} ${selected === c.id ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''}`}
+                  className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''}`}
                   style={{ left: LABEL_W + w.left, width: w.width, top: 4 + lane * ROW_H[t.kind], height: ROW_H[t.kind] - 8, bottom: 'auto' }}
                   title={`${label(c)} · ${c.start.toFixed(2)}s–${clipEnd(c).toFixed(2)}s`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
+                    if (e.shiftKey || e.ctrlKey) {
+                      onSelect(c.id, true);
+                      return;
+                    }
                     onSelect(c.id);
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     const edge = e.clientX - r.left < 7 ? 'trim-start' : r.right - e.clientX < 7 ? 'trim-end' : 'move';

@@ -1,4 +1,4 @@
-import { bridged, clipEnd, duckGain, isAV, projectDuration, timelineSpeech, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, duckGain, isAV, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ExactSources, mediaUrl } from './media';
@@ -159,10 +159,10 @@ async function encoderWorks(config: VideoEncoderConfig, w: number, h: number): P
   });
 }
 
-async function videoEncoderConfig(w: number, h: number, fps: number): Promise<VideoEncoderConfig> {
+async function videoEncoderConfig(w: number, h: number, fps: number, bpp = 0.16): Promise<VideoEncoderConfig> {
   // Constrained Baseline first (no B-frames). The software encoder first: hardware encoders can
   // stop answering in Keo's hidden render window (seen on Intel/Windows), the software one does not.
-  const bitrate = Math.round(w * h * fps * 0.16);
+  const bitrate = Math.round(w * h * fps * bpp);
   const tried: string[] = [];
   for (const hardwareAcceleration of ['prefer-software', 'prefer-hardware'] as const) {
     for (const codec of ['avc1.42e033', 'avc1.42e02a', 'avc1.4d0033', 'avc1.640033']) {
@@ -187,10 +187,17 @@ function stalls<T>(p: Promise<T>, message: string): Promise<T> {
 }
 
 /** Renders the whole project into an MP4 (the main process writes the file). */
-export async function runExport(p: Project, exportId: string, progress: Progress, cancelled: () => boolean): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
-  const W = even(p.width);
-  const H = even(p.height);
-  const fps = p.fps;
+export async function runExport(
+  p: Project,
+  exportId: string,
+  progress: Progress,
+  cancelled: () => boolean,
+  size?: { width: number; height: number; fps: number; quality: ExportQuality },
+): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+  const W = even(size?.width ?? p.width);
+  const H = even(size?.height ?? p.height);
+  const fps = size?.fps ?? p.fps;
+  const bpp = QUALITY_BPP[size?.quality ?? 'high'];
   const total = Math.max(1, Math.ceil(projectDuration(p) * fps - 1e-6));
   progress({ stage: 'sound', done: 0, total });
   const mixed = await mixAudio(p, { loudness: true });
@@ -201,7 +208,7 @@ export async function runExport(p: Project, exportId: string, progress: Progress
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext('2d', { alpha: false }) as unknown as CanvasRenderingContext2D;
   const sources = new ExactSources(p.id);
-  const config = await videoEncoderConfig(W, H, fps);
+  const config = await videoEncoderConfig(W, H, fps, bpp);
   console.info(`export: video encoder ${config.codec} ${config.hardwareAcceleration} ${config.latencyMode} ${W}x${H}@${fps}`);
   let begun: Promise<unknown> | null = null;
   let failed: Error | null = null;

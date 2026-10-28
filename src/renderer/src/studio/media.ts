@@ -123,7 +123,7 @@ export class PreviewSources implements SourceProvider {
           if (playing && this.audioCtx?.state === 'suspended') void this.audioCtx.resume();
         } else el.volume = Math.min(1, level);
         el.playbackRate = rate;
-        if (playing) {
+        if (playing && !(c.type === 'media' && c.freeze)) {
           if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
           if (el.paused) void el.play().catch(() => undefined);
         } else {

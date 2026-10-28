@@ -10,13 +10,19 @@ import { assetWav, probe, renderFrames, runExport, speechWav } from './exporter'
 export function RenderApp() {
   useEffect(() => {
     let cancelled = false;
+    // Exports the user stopped.
+    const stopped = new Set<string>();
     const off = subscribe('studio:job', (msg) => {
+      if (msg.job.kind === 'cancel') {
+        stopped.add(msg.job.exportId);
+        return;
+      }
       void (async () => {
         console.info(`render job ${msg.job.kind}`);
         try {
           let result: unknown;
           if (msg.job.kind === 'probe') result = await probe(msg.job.url);
-          else {
+          else if (msg.job.kind !== 'cancel') {
             const p = (await invoke('studio:get', { id: msg.job.projectId })) as Project;
             if (msg.job.kind === 'frames') result = await renderFrames(p, msg.job.times, msg.job.width);
             else if (msg.job.kind === 'audio') result = await speechWav(p, msg.job.sampleRate);
@@ -27,7 +33,8 @@ export function RenderApp() {
                 p,
                 exportId,
                 (pr) => void invoke('studio:exportProgress', { projectId: p.id, ...pr }).catch(() => undefined),
-                () => cancelled,
+                () => cancelled || stopped.has(exportId),
+                msg.job.size,
               );
             }
           }

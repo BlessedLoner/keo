@@ -174,6 +174,8 @@ export const MediaClip = z
     zooms: z.array(Zoom).max(400).optional(),
     /** Voice clean-up on this clip's sound (low rumble cut, clearer voice, even loudness). */
     voice: z.boolean().default(false),
+    /** A still: the frame at `in` held for the whole clip (no sound). */
+    freeze: z.boolean().optional(),
     mask: Mask.optional(),
     frame: DeviceFrame.optional(),
     /** A drop shadow under the layer (0: none). */
@@ -317,11 +319,38 @@ export interface ProjectSummary {
 
 /** A job for Keo's render window: an export, frames for Keo to look at, or measuring a file. */
 export type RenderJob =
-  | { kind: 'export'; projectId: string; exportId: string }
+  | { kind: 'export'; projectId: string; exportId: string; size?: { width: number; height: number; fps: number; quality: ExportQuality } }
   | { kind: 'frames'; projectId: string; times: number[]; width: number }
   | { kind: 'probe'; url: string }
   | { kind: 'audio'; projectId: string; sampleRate: number }
+  | { kind: 'cancel'; exportId: string }
   | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number };
+
+/** Export choices: the shorter side in pixels (or the project's own size), frame rate, quality, file name. */
+export const ExportQuality = z.enum(['standard', 'high', 'best']);
+export type ExportQuality = z.infer<typeof ExportQuality>;
+export const ExportOptions = z
+  .object({
+    resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project'),
+    fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
+    quality: ExportQuality.default('high'),
+    name: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+export type ExportOptions = z.infer<typeof ExportOptions>;
+
+/** The pixel size and frame rate an export with these options has (even numbers, the project's shape). */
+export function exportSize(p: { width: number; height: number; fps: number }, o: Pick<ExportOptions, 'resolution' | 'fps'>): { width: number; height: number; fps: number } {
+  const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
+  const fps = o.fps === 'project' ? p.fps : o.fps;
+  if (o.resolution === 'project') return { width: even(p.width), height: even(p.height), fps };
+  const short = Number(o.resolution);
+  const k = short / Math.min(p.width, p.height);
+  return { width: even(p.width * k), height: even(p.height * k), fps };
+}
+
+/** Bits per pixel per frame for each quality (H.264). */
+export const QUALITY_BPP: Record<ExportQuality, number> = { standard: 0.09, high: 0.16, best: 0.26 };
 
 export const FORMATS = {
   vertical: { width: 1080, height: 1920, label: 'Vertical 9:16 (TikTok, Reels, Shorts)' },
@@ -419,6 +448,10 @@ export const EditOp = z.discriminatedUnion('op', [
   /** Trim a clip's start (keeps its end where it is) and/or its length. */
   z.object({ op: z.literal('trim'), clip: ClipRef, trimStart: z.number().min(-3600).max(3600).optional(), duration: z.number().min(0.04).optional() }).strict(),
   z.object({ op: z.literal('split'), clip: ClipRef, at: Sec }).strict(),
+  /** A video's sound as its own clip on an audio track (the video itself goes quiet), to move or edit apart. */
+  z.object({ op: z.literal('detach_audio'), clip: ClipRef }).strict(),
+  /** Holds a video's frame at `at` for `duration` seconds; what comes after on its track moves later. */
+  z.object({ op: z.literal('freeze'), clip: ClipRef, at: Sec, duration: z.number().min(0.1).max(60).default(2) }).strict(),
   /** A copy of a clip (default: right after it, on the same track). */
   z.object({ op: z.literal('duplicate'), clip: ClipRef, start: At.optional(), track: TrackRef.optional() }).strict(),
   /** Delete a clip; ripple: later clips on its track move left to close the gap. */
@@ -924,6 +957,54 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         }
         sortClips(f.track);
         changes.push(`Trimmed ${c.id}: ${c.start}s for ${c.duration}s.`);
+        break;
+      }
+      case 'detach_audio': {
+        const f = get(op.clip);
+        const c = f.clip;
+        if (c.type !== 'media') throw new EditError(`${c.id} is not a video.`);
+        const a = asset(c.assetId);
+        if (!a.hasAudio || a.kind !== 'video') throw new EditError(`${a.name} has no sound to detach.`);
+        if (c.speed !== 1) throw new EditError('Detach the sound before changing the speed (set the speed back to 1×).');
+        if (c.volume === 0) throw new EditError(`The sound of ${c.id} is already off or detached.`);
+        let t = p.tracks.find((x) => x.kind === 'audio' && x.name === 'Detached audio');
+        if (!t) {
+          t = { id: rid('tr', rand), kind: 'audio', name: 'Detached audio', hidden: false, muted: false, clips: [] };
+          p.tracks.push(t);
+        }
+        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice });
+        t.clips.push(s);
+        sortClips(t);
+        c.volume = 0;
+        changes.push(`Detached the sound of ${c.id} (${s.id}).`);
+        break;
+      }
+      case 'freeze': {
+        const f = get(op.clip);
+        const c = f.clip;
+        if (c.type !== 'media' || asset(c.assetId).kind !== 'video') throw new EditError(`${c.id} is not a video.`);
+        if (op.at < c.start - 1e-6 || op.at > clipEnd(c) + 1e-6) throw new EditError(`${op.at}s is not inside ${c.id}.`);
+        const d = round(op.duration);
+        const at = round(op.at);
+        const frameAt = round(c.in + (at - c.start) * c.speed);
+        // Everything on this track after the frame moves later to make room.
+        for (const o of f.track.clips) if (o.id !== c.id && o.start >= at - 1e-6) o.start = round(o.start + d);
+        let after: Clip | null = null;
+        if (at > c.start + 0.04 && at < clipEnd(c) - 0.04) {
+          after = structuredClone(c);
+          after.id = rid('cl', rand);
+          after.start = round(at + d);
+          after.duration = round(clipEnd(c) - at);
+          (after as MediaClip).in = frameAt;
+          (after as MediaClip).fadeIn = 0;
+          shiftInto(after, at - c.start, after.duration);
+          c.duration = round(at - c.start);
+          c.fadeOut = 0;
+        } else if (at <= c.start + 0.04) c.start = round(c.start + d);
+        const still = MediaClip.parse({ ...structuredClone(c), id: rid('cl', rand), start: at, duration: d, in: frameAt, speed: 1, volume: 0, fadeIn: 0, fadeOut: 0, freeze: true, zooms: undefined, keys: undefined, enter: undefined, exit: undefined });
+        f.track.clips.push(still, ...(after ? [after] : []));
+        sortClips(f.track);
+        changes.push(`Froze the frame at ${at}s for ${d}s (${still.id}).`);
         break;
       }
       case 'duplicate': {

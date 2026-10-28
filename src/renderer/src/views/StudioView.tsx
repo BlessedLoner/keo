@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, clipEnd, findClip, isAV, projectDuration, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { FORMATS, clipEnd, findClip, isAV, projectDuration, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
-import { mediaUrl } from '../studio/media';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { MediaBin } from '../studio/Bin';
+import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
@@ -36,7 +37,16 @@ export function StudioView() {
   const [loading, setLoading] = useState(true);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  // The selected clips (Shift or Ctrl + click adds more); the last one is the one the inspector shows.
+  const [selection, setSelection] = useState<string[]>([]);
+  const selected = selection.at(-1) ?? null;
+  const setSelected = useCallback((id: string | null) => setSelection(id ? [id] : []), []);
+  const pick = useCallback((id: string | null, add?: boolean) => {
+    if (!id) return setSelection([]);
+    setSelection((s) => (add ? (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]) : s.includes(id) && s.length > 1 ? [...s.filter((x) => x !== id), id] : [id]));
+  }, []);
+  const selectionRef = useRef<string[]>([]);
+  selectionRef.current = selection;
   const [zoom, setZoom] = useState(60);
   const [history, setHistory] = useState({ undo: false, redo: false });
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -44,6 +54,7 @@ export function StudioView() {
   const [creating, setCreating] = useState(false);
   const [captioning, setCaptioning] = useState(false);
   const [faceless, setFaceless] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [tlHeight, setTlHeight] = useState(() => {
     try {
@@ -73,9 +84,9 @@ export function StudioView() {
   const focusId = project?.id ?? null;
   useEffect(() => {
     if (!focusId || playing) return;
-    const t = setTimeout(() => void invoke('studio:focus', { id: focusId, time: Math.max(0, time), selected: selected ? [selected] : [] }).catch(() => undefined), 400);
+    const t = setTimeout(() => void invoke('studio:focus', { id: focusId, time: Math.max(0, time), selected: selection }).catch(() => undefined), 400);
     return () => clearTimeout(t);
-  }, [focusId, time, selected, playing]);
+  }, [focusId, time, selection, playing]);
   const projectRef = useRef<Project | null>(null);
   projectRef.current = project;
 
@@ -221,7 +232,6 @@ export function StudioView() {
       ui.error(errText(e));
     }
   };
-  const addText = () => void edit([{ op: 'add_text', text: 'Your text', start: time, duration: 3 }]);
 
   const splitAtPlayhead = useCallback(() => {
     const p = projectRef.current;
@@ -237,11 +247,12 @@ export function StudioView() {
 
   const deleteSelected = useCallback(
     (ripple: boolean) => {
-      if (!selected) return;
+      const ids = selectionRef.current;
+      if (!ids.length) return;
       setSelected(null);
-      void edit([{ op: 'delete', clip: selected, ripple }]);
+      void edit(ids.map((clip) => ({ op: 'delete' as const, clip, ripple })));
     },
-    [edit, selected],
+    [edit, setSelected],
   );
 
   // Keyboard: Space play, S split, Delete, Ctrl+Z / Ctrl+Y, arrows a frame, Home/End.
@@ -277,7 +288,10 @@ export function StudioView() {
       else if (e.key === 'Escape') setSelected(null);
       else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
         e.preventDefault();
-        void edit([{ op: 'duplicate', clip: selectedRef.current }]);
+        void edit(selectionRef.current.map((clip) => ({ op: 'duplicate' as const, clip })));
+      } else if (e.ctrlKey && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        setSelection(p.tracks.flatMap((t) => t.clips.map((c) => c.id)));
       } else if (e.ctrlKey && (e.key === 'c' || e.key === 'C') && selectedRef.current) {
         e.preventDefault();
         clipboard.current = selectedRef.current;
@@ -295,15 +309,16 @@ export function StudioView() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, splitAtPlayhead, deleteSelected, edit, ui]);
+  }, [undo, redo, splitAtPlayhead, deleteSelected, edit, ui, setSelected]);
 
-  const exportVideo = async () => {
+  const exportVideo = async (options: Partial<ExportOptions>) => {
     if (!project) return;
     if (projectDuration(project) === 0) return ui.error('Add something to the timeline first.');
+    setExporting(false);
     setPlaying(false);
     setProgress({ stage: 'sound' });
     try {
-      await invoke('studio:export', { id: project.id });
+      await invoke('studio:export', { id: project.id, options });
     } catch (e) {
       setProgress({ stage: 'failed', error: errText(e) });
     }
@@ -439,68 +454,12 @@ export function StudioView() {
         <button className="btn icon sm ghost" onClick={() => void removeProject()} title="Delete this project">
           <Icon name="trash" size={15} />
         </button>
-        <button className="btn primary sm" disabled={progress?.stage === 'sound' || progress?.stage === 'video' || progress?.stage === 'saving'} onClick={() => void exportVideo()}>
+        <button className="btn primary sm" disabled={progress?.stage === 'sound' || progress?.stage === 'video' || progress?.stage === 'saving'} onClick={() => (projectDuration(project) === 0 ? ui.error('Add something to the timeline first.') : setExporting(true))}>
           <Icon name="download" size={14} /> Export
         </button>
       </header>
       <div className="studio-main">
-        <aside className="studio-bin">
-          <div className="studio-pane-head">
-            <span>Media</span>
-            <button className="btn sm" onClick={() => void importMedia()}>
-              <Icon name="plus" size={13} /> Add
-            </button>
-          </div>
-          <div className="bin-list">
-            {project.assets.length === 0 && <p className="small muted bin-hint">Add videos, pictures or music. Drag them onto the timeline, or double-click to add at the playhead.</p>}
-            {project.assets.map((a) => (
-              <div
-                key={a.id}
-                className="bin-item"
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('application/x-keo-asset', a.id);
-                  e.dataTransfer.effectAllowed = 'copy';
-                }}
-                onDoubleClick={() => addAsset(a)}
-                title={`${a.name} — double-click to add at the playhead`}
-              >
-                <AssetThumb projectId={project.id} asset={a} />
-                <div className="bin-info">
-                  <span className="bin-name">{a.name}</span>
-                  <span className="small muted">
-                    {a.kind}
-                    {a.duration ? ` · ${fmtDur(a.duration)}` : ''}
-                    {a.width ? ` · ${a.width}×${a.height}` : ''}
-                  </span>
-                </div>
-                <button className="btn icon sm ghost" onClick={() => addAsset(a)} title="Add at the playhead">
-                  <Icon name="plus" size={13} />
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="studio-pane-head">
-            <span>Add</span>
-          </div>
-          <div className="bin-tools">
-            <button className="btn sm" disabled={captioning || duration === 0} onClick={() => void autoCaptions()} title="Turn the speech into word-by-word captions">
-              {captioning ? <span className="spinner tiny" /> : <Icon name="text" size={13} />} {captioning ? 'Captioning…' : 'Auto captions'}
-            </button>
-            <button className="btn sm" onClick={addText}>
-              <Icon name="text" size={13} /> Text
-            </button>
-            <button className="btn sm" onClick={() => void addMusic()} title="Background music, quieter under speech">
-              <Icon name="music" size={13} /> Music
-            </button>
-            <button className="btn sm" onClick={() => void edit([{ op: 'add_track', kind: 'video' }])}>
-              <Icon name="film" size={13} /> Video track
-            </button>
-            <button className="btn sm" onClick={() => void edit([{ op: 'add_track', kind: 'audio' }])}>
-              <Icon name="music" size={13} /> Audio track
-            </button>
-          </div>
-        </aside>
+        <MediaBin project={project} time={time} onImport={() => void importMedia()} onAddAsset={addAsset} onEdit={edit} onMusic={() => void addMusic()} onCaptions={() => void autoCaptions()} captioning={captioning} />
         <section className="studio-stage">
           <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} />
           <div className="studio-transport">
@@ -542,7 +501,7 @@ export function StudioView() {
             ))}
           </div>
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
-          {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} />}
+          {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} />}
           {sideTab === 'keo' && <StudioKeo project={project} />}
           {sideTab === 'tools' && (
             <>
@@ -578,6 +537,20 @@ export function StudioView() {
         <button className="btn sm ghost" disabled={!selected} onClick={() => deleteSelected(true)} title="Delete and close the gap (Shift+Delete)">
           Ripple delete
         </button>
+        <button className="btn sm ghost" disabled={!selection.length} onClick={() => void edit(selection.map((clip) => ({ op: 'duplicate' as const, clip })))} title="Duplicate (Ctrl+D)">
+          Duplicate
+        </button>
+        {sel?.clip.type === 'media' && project.assets.find((a) => a.id === (sel.clip as { assetId: string }).assetId)?.kind === 'video' && (
+          <>
+            <button className="btn sm ghost" disabled={time < sel.clip.start || time > sel.clip.start + sel.clip.duration} onClick={() => void edit([{ op: 'freeze', clip: sel.clip.id, at: time, duration: 2 }])} title="Hold the frame at the playhead for 2 seconds">
+              Freeze frame
+            </button>
+            <button className="btn sm ghost" disabled={sel.clip.volume === 0} onClick={() => void edit([{ op: 'detach_audio', clip: sel.clip.id }])} title="Put this video's sound on its own track">
+              Detach audio
+            </button>
+          </>
+        )}
+        {selection.length > 1 && <span className="chip">{selection.length} selected</span>}
         <div className="spacer" />
         <span className="small muted">Zoom</span>
         <input type="range" min={8} max={240} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" />
@@ -586,7 +559,8 @@ export function StudioView() {
         project={project}
         time={time}
         selected={selected}
-        onSelect={setSelected}
+        selectedIds={selection}
+        onSelect={pick}
         onTime={(t) => {
           setPlaying(false);
           setTime(t);
@@ -596,22 +570,13 @@ export function StudioView() {
         onZoom={setZoom}
         height={tlHeight}
       />
+      {exporting && <ExportDialog project={project} onClose={() => setExporting(false)} onExport={(o) => void exportVideo(o)} />}
     </div>
   );
 }
 
 function listProjects() {
   return invoke('studio:list', {});
-}
-
-function AssetThumb({ projectId, asset }: { projectId: string; asset: Asset }) {
-  if (asset.kind === 'image') return <img className="bin-thumb" src={mediaUrl(projectId, asset.id)} alt="" draggable={false} />;
-  if (asset.kind === 'video') return <video className="bin-thumb" src={`${mediaUrl(projectId, asset.id)}#t=0.5`} muted preload="metadata" draggable={false} />;
-  return (
-    <span className="bin-thumb audio">
-      <Icon name="music" size={18} />
-    </span>
-  );
 }
 
 function NewProject({ onCreate, onFaceless, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onCancel?: () => void }) {
@@ -659,7 +624,7 @@ function NewProject({ onCreate, onFaceless, onCancel }: { onCreate: (name: strin
   );
 }
 
-function ExportCard({ progress, onClose }: { progress: Progress; onClose: () => void }) {
+function ExportCard({ progress, onClose, onStop }: { progress: Progress; onClose: () => void; onStop: () => void }) {
   const running = progress.stage === 'sound' || progress.stage === 'video' || progress.stage === 'saving';
   const pct = progress.total ? Math.round(((progress.done ?? 0) / progress.total) * 100) : 0;
   return (
@@ -678,6 +643,9 @@ function ExportCard({ progress, onClose }: { progress: Progress; onClose: () => 
           <div className="studio-bar-track">
             <div className="studio-bar-fill" style={{ width: `${progress.stage === 'video' ? pct : progress.stage === 'saving' ? 100 : 4}%` }} />
           </div>
+          <button className="btn sm ghost" onClick={onStop}>
+            <Icon name="stop" size={12} /> Stop
+          </button>
         </>
       )}
       {progress.stage === 'done' && (
