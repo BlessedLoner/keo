@@ -110,6 +110,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       throw e;
     }
   };
+  /** For promise chains: a Studio refusal as a plain message, anything else as it is. */
+  const studioErr = (e: unknown): never => {
+    if (e instanceof StudioError) throw new KeoError('studio', e.message);
+    throw e;
+  };
   const emailStatus = () => ({ connected: s.email.connected(), loginRefused: s.email.lastTestOk === false, address: s.email.address(), hasPassword: s.secrets.has('email_password'), secretStorage: s.secrets.available(), viaGoogle: s.settings.get().email.useGoogle });
   const calendarStatus = () => {
     const at = s.googleAuth.obtainedAt();
@@ -454,6 +459,27 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
         throw e instanceof StudioError ? new KeoError('studio', e.message) : e;
       });
       return { lines: r.lines.length, words: r.words, exact: r.exact };
+    },
+    // The user's own click in Studio, after the page showed where the sound goes.
+    'studio:transcribe': async ({ id }) => {
+      const r = await s.studioTranscribe(id).catch(studioErr);
+      return { words: r.words, exact: r.exact };
+    },
+    'studio:cleanup': async ({ id, dryRun, ...o }) => {
+      const r = dryRun ? { plan: await s.studio.planCleanup(id, o).catch(studioErr) } : await s.studio.cleanup(id, o).catch(studioErr);
+      const byReason: Record<string, number> = {};
+      for (const c of r.plan.cuts) byReason[c.reason] = (byReason[c.reason] ?? 0) + 1;
+      return { cuts: r.plan.cuts.length, seconds: r.plan.seconds, byReason, notes: r.plan.notes };
+    },
+    'studio:punchIn': async ({ id, scale }) => ({ points: (await s.studio.punchIn(id, { ...(scale ? { scale } : {}) }).catch(studioErr)).points }),
+    'studio:soundEffect': ({ id, kind, at }) => {
+      try {
+        const { asset } = s.studio.soundEffect(id, kind);
+        s.studio.edit(id, [{ op: 'add_audio', assetId: asset.id, trackName: 'Effects', start: at, volume: 0.6 }]);
+      } catch (e) {
+        studioErr(e);
+      }
+      return { ok: true as const };
     },
     'studio:captionSource': () => {
       const t = s.studioTranscriber();

@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { EditOp, FORMATS, projectDuration, TextStyle, type FormatId, type Project } from '../../shared/studio';
+import { EditOp, FORMATS, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project } from '../../shared/studio';
+import { captionLines } from '../studio/captions';
+import { SFX, type SfxKind } from '../studio/sfx';
 import { Mp4Reader } from '../studio/mp4';
 import { kindOfFile, StudioError, type StudioService } from '../studio/studioService';
 import { errorMessage } from '../util/errors';
@@ -29,6 +31,9 @@ export interface StudioToolDeps {
   userTexts: (conversationId: string) => string[];
   /** Where captions' sound goes (null: no speech-to-text available). */
   captionSource: () => { destination: string; exact: boolean } | null;
+  transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean }>;
+  /** Files Keo made itself (its own output folders): usable as media without the user naming them. */
+  keoMade: (file: string) => boolean;
   captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
@@ -56,8 +61,9 @@ function state(s: StudioService, p: Project) {
 const State = z.object({ projectId: z.string(), durationSec: z.number(), timeline: z.string(), history: z.object({ undo: z.boolean(), redo: z.boolean() }) });
 
 const OPS_HELP =
-  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track, fit, transform}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; delete {clip, ripple}; cut_range {from, to} (removes that time from every track and closes the gap: use it for silences, filler words and retakes); set {clip, text, style, transform, volume, speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight}; add_track {kind}; set_track {track, hidden, muted, name}; delete_track {track}; set_project {name, width, height, fps, background}. ' +
-  'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, typewriter, blur-in, words (word by word); out: fade, pop, slide-down, blur-out. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Later tracks are drawn on top.';
+  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck}; add_track {kind, name}; set_track {track, hidden, muted, name}; delete_track {track}; set_project {name, width, height, fps, background, loudness}. ' +
+  'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, typewriter, blur-in, words (word by word); out: fade, pop, slide-down, blur-out. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Later tracks are drawn on top. ' +
+  'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
 
 export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   const s = d.studio;
@@ -67,7 +73,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Open Keo Studio',
     description:
-      'Open a Keo Studio project (the video editor inside Keo, where the user can watch and edit along) or create a new one, and show it to the user. Returns the timeline: media ids (as_…), tracks (tr_…) and clips (cl_…) with their times. Use Studio for any video the user wants made or edited in Keo; then add media (studio__add_media) and edit (studio__edit).',
+      'Open a Keo Studio project (the video editor inside Keo, where the user can watch and edit along) or create a new one, and show it to the user. Returns the timeline: media ids (as_…), tracks (tr_…) and clips (cl_…) with their times. Use Studio for any video the user wants made or edited in Keo; then add media (studio__add_media) and edit (studio__edit). A talking-head edit, step by step with studio__checklist (the user can stop you after any step): clean up pauses (studio__clean_up), transcribe (studio__transcript), cut fillers and retakes (studio__clean_up), polish the sound (studio__sound), colour (studio__color), captions (studio__captions), punch-ins (studio__punch_in), B-roll and music (studio__add_media + studio__edit), sound effects (studio__sound_effect); look at frames (studio__look) before exporting.',
     input: z
       .object({
         projectId: ProjectId.optional(),
@@ -315,6 +321,211 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const simple = (o: { id: string; title: string; description: string; summary: string }) => ({
+    id: o.id,
+    version: '1.0.0',
+    title: o.title,
+    description: o.description,
+    risk: 'low' as const,
+    approval: 'never' as const,
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'One edit of the Studio project in Keo’s own folder; it can be undone.',
+    autonomy: () => ({ tier: 'routine' as const }),
+    preview: () => ({ summary: o.summary, target: null, consequences: [], dataExport: null }),
+  });
+
+  const transcript = defineCapability({
+    id: 'studio.transcript',
+    version: '1.0.0',
+    title: 'Transcribe the video',
+    description:
+      'Turn the speech in the Studio timeline into text with times (speech-to-text; transcripts are kept, so later calls send nothing unless force). Use it to find retakes and bad takes, to place B-roll, music and sound effects at the right words, and before cleaning up filler words. Returns the phrases with their timeline times.',
+    input: z.object({ projectId: ProjectId.optional(), force: z.boolean().default(false) }).strict(),
+    output: z.object({ words: z.number(), exactTiming: z.boolean(), phrases: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })), truncated: z.boolean() }),
+    risk: 'low',
+    // The video's sound leaves the PC (to the speech-to-text service): the user approves.
+    approval: 'always',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 60 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Read-only for the timeline: the words are kept with the media.',
+    unavailableReason: () => (d.captionSource() ? null : 'Transcripts need speech-to-text: the user signs in to their Keo account, or adds an OpenAI API key in Settings → Providers.'),
+    autonomy: () => ({ tier: 'important', reason: 'the video’s sound is sent to a speech-to-text service' }),
+    preview: () => ({ summary: 'Transcribe the video’s speech', target: null, consequences: [], dataExport: `The video’s sound is sent to ${d.captionSource()?.destination ?? 'the speech-to-text service'} to turn the speech into text.` }),
+    auditView: (i) => ({ force: i.force }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.transcribe(p.id, { force: i.force, signal: ctx.signal }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      const words = timelineWords(s.get(p.id));
+      const phrases = captionLines(words, { maxWords: 14, maxChars: 90 }).map((l) => ({ start: l.start, end: l.end, text: l.text }));
+      let size = 0;
+      const shown = phrases.filter((ph) => (size += ph.text.length + 24) < 14000);
+      return { words: words.length, exactTiming: r.exact, phrases: shown, truncated: shown.length < phrases.length };
+    },
+  });
+
+  const cleanUp = defineCapability({
+    ...simple({
+      id: 'studio.clean_up',
+      title: 'Clean up the talking',
+      description:
+        'Cut the dead air out of a talking video: long pauses (found on this PC from the sound), filler words ("um", "uh") and retakes (a phrase started again: the earlier take goes, the last stays). Fillers and retakes need the transcript (studio__transcript) first. dryRun lists what would be cut without cutting. All cuts are one edit (one undo); captions, B-roll and music move with the cuts.',
+      summary: 'Clean up the video’s pauses, fillers and retakes',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        silences: z.boolean().default(true),
+        fillers: z.boolean().default(false),
+        retakes: z.boolean().default(false),
+        minSilence: z.number().min(0.25).max(5).default(0.6).describe('Only pauses longer than this are shortened (seconds)'),
+        keep: z.number().min(0).max(1).default(0.15).describe('Pause kept before and after speech (seconds); 0.08–0.12 feels fast, 0.2–0.3 calm'),
+        dryRun: z.boolean().default(false),
+      })
+      .strict(),
+    output: z.object({ cut: z.boolean(), cuts: z.number(), seconds: z.number(), durationSec: z.number(), byReason: z.record(z.string(), z.number()), examples: z.array(z.string()), notes: z.array(z.string()) }),
+    timeoutMs: 30 * 60_000,
+    auditView: (i) => ({ silences: i.silences, fillers: i.fillers, retakes: i.retakes, dryRun: i.dryRun }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      const opts = { silences: i.silences, fillers: i.fillers, retakes: i.retakes, minSilence: i.minSilence, keep: i.keep, signal: ctx.signal };
+      const go = async () => (i.dryRun ? { plan: await s.planCleanup(p.id, opts), project: s.get(p.id) } : await s.cleanup(p.id, opts));
+      const r = await go().catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      const byReason: Record<string, number> = {};
+      for (const c of r.plan.cuts) byReason[c.reason] = (byReason[c.reason] ?? 0) + 1;
+      const examples = r.plan.cuts
+        .filter((c) => c.text)
+        .slice(0, 8)
+        .map((c) => `${c.reason} at ${c.from.toFixed(1)}s: “${c.text!.slice(0, 80)}”`);
+      return { cut: !i.dryRun && r.plan.cuts.length > 0, cuts: r.plan.cuts.length, seconds: r.plan.seconds, durationSec: projectDuration(r.project), byReason, examples, notes: r.plan.notes };
+    },
+  });
+
+  const punch = defineCapability({
+    ...simple({
+      id: 'studio.punch_in',
+      title: 'Add punch-ins',
+      description:
+        'Make a talking-head video feel edited: at each new phrase the shot jumps between normal and a closer framing (like a second camera). x, y: the centre to zoom on (the face; default a little above the middle — check with studio__look and adjust). Replaces earlier punch-ins on those clips. For one zoom at one moment, use studio__edit set {clip, zooms}.',
+      summary: 'Add punch-ins to the talking head',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        scale: z.number().min(1.03).max(1.6).default(1.15),
+        x: z.number().min(0).max(1).optional(),
+        y: z.number().min(0).max(1).optional(),
+        minGap: z.number().min(1).max(20).default(2.5).describe('Seconds at least between two jumps'),
+      })
+      .strict(),
+    output: z.object({ points: z.number(), timeline: z.string() }),
+    timeoutMs: 20 * 60_000,
+    auditView: (i) => ({ scale: i.scale }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.punchIn(p.id, { scale: i.scale, ...(i.x !== undefined ? { x: i.x } : {}), ...(i.y !== undefined ? { y: i.y } : {}), minGap: i.minGap, signal: ctx.signal }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { points: r.points, timeline: s.describe(p.id) };
+    },
+  });
+
+  const sound = defineCapability({
+    ...simple({
+      id: 'studio.sound',
+      title: 'Polish the sound',
+      description:
+        'Clean up voices (low rumble cut, less boom, clearer speech, gentle compression) on every clip that carries a voice, make the export as loud as social apps expect (about -14 LUFS, never clipping), and duck the music (sound clips on a track named Music, or the clips you name) under speech by duckDb. Leave out what should not change.',
+      summary: 'Polish the video’s sound',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        voice: z.boolean().optional(),
+        loudness: z.enum(['off', 'social']).optional(),
+        duckDb: z.number().min(-40).max(0).nullable().optional().describe('Music this many dB quieter under speech (-10 to -18 is usual; null: no ducking)'),
+        musicClips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(200).optional().describe('Which sound clips are music; default: those on a track named Music'),
+      })
+      .strict(),
+    output: State.extend({ changes: z.array(z.string()) }),
+    timeoutMs: 20 * 60_000,
+    auditView: (i) => ({ voice: i.voice ?? null, loudness: i.loudness ?? null, duck: i.duckDb ?? null }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      const ops: EditOp[] = [];
+      const music = new Set(i.musicClips ?? p.tracks.filter((t) => t.kind === 'audio' && /music/i.test(t.name)).flatMap((t) => t.clips.map((c) => c.id)));
+      for (const t of p.tracks)
+        for (const c of t.clips) {
+          if (c.type === 'text') continue;
+          const a = p.assets.find((x) => x.id === c.assetId);
+          if (!a?.hasAudio) continue;
+          if (music.has(c.id)) {
+            if (i.duckDb !== undefined) {
+              if (c.type !== 'audio') throw fail('not_music', `${c.id} is a video clip; only sound clips can be ducked.`);
+              ops.push({ op: 'set', clip: c.id, duck: i.duckDb });
+            }
+          } else if (i.voice !== undefined) ops.push({ op: 'set', clip: c.id, voice: i.voice });
+        }
+      if (i.loudness) ops.push({ op: 'set_project', loudness: i.loudness });
+      if (!ops.length) throw fail('nothing', i.duckDb !== undefined && !music.size ? 'There is no music to duck: put the music on an audio track named Music, or name its clips.' : 'There was nothing to change.');
+      // Ducking follows the speech: where people speak is found on this PC first.
+      if (i.duckDb !== undefined && i.duckDb !== null) await s.analyzeSpeech(p.id, { signal: ctx.signal });
+      const r = run(() => s.edit(p.id, ops));
+      return { ...state(s, r.project), changes: r.changes };
+    },
+  });
+
+  const color = defineCapability({
+    ...simple({
+      id: 'studio.color',
+      title: 'Colour the video',
+      description: `Give video clips and pictures a colour look: ${Object.keys(LOOKS).join(', ')} (or off). Default: every video clip and picture on the timeline. Then fine-tune any clip with studio__edit set {clip, color: {exposure, contrast, saturation, temperature, vignette}} (each -1..1, vignette 0..1). Look at a frame afterwards.`,
+      summary: 'Colour the video',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), look: z.enum([...(Object.keys(LOOKS) as [LookId, ...LookId[]]), 'off']), clips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(500).optional() }).strict(),
+    output: State.extend({ changes: z.array(z.string()) }),
+    timeoutMs: 30_000,
+    auditView: (i) => ({ look: i.look }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const want = i.clips ? new Set(i.clips) : null;
+      const ops: EditOp[] = p.tracks.flatMap((t) => t.clips.filter((c) => c.type === 'media' && (!want || want.has(c.id))).map((c) => ({ op: 'set' as const, clip: c.id, color: i.look === 'off' ? null : { ...LOOKS[i.look] } })));
+      if (!ops.length) throw fail('nothing', 'There are no video clips or pictures to colour.');
+      const r = run(() => s.edit(p.id, ops));
+      return { ...state(s, r.project), changes: [`Coloured ${ops.length} clip${ops.length === 1 ? '' : 's'}: ${i.look}.`] };
+    },
+  });
+
+  const effect = defineCapability({
+    ...simple({
+      id: 'studio.sound_effect',
+      title: 'Add sound effects',
+      description: `Add Keo’s own sound effects (${Object.keys(SFX).join(', ')}) at the given timeline seconds, on the Effects track: whoosh or swipe on a cut or B-roll coming in, pop or click when text or a sticker appears, ding for a highlight, riser before a reveal (place it so it ends at the reveal), boom on a big moment. Use them sparingly.`,
+      summary: 'Add sound effects',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), kind: z.enum(Object.keys(SFX) as [SfxKind, ...SfxKind[]]), at: z.array(z.number().min(0).max(86400)).min(1).max(100), volume: z.number().min(0).max(2).default(0.6) }).strict(),
+    output: State.extend({ changes: z.array(z.string()) }),
+    timeoutMs: 30_000,
+    auditView: (i) => ({ kind: i.kind, count: i.at.length }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const { asset } = run(() => s.soundEffect(p.id, i.kind));
+      const r = run(() => s.edit(p.id, i.at.map((t) => ({ op: 'add_audio' as const, assetId: asset.id, trackName: 'Effects', start: Math.max(0, t), volume: i.volume }))));
+      return { ...state(s, r.project), changes: r.changes };
+    },
+  });
+
   const exportVideo = defineCapability({
     id: 'studio.export',
     version: '1.0.0',
@@ -354,7 +565,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, captions, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */
@@ -362,7 +573,7 @@ function trusted(d: StudioToolDeps, p: string, ctx: CapabilityContext): string {
   if (!path.isAbsolute(p)) throw fail('not_absolute', `Give the full path of the file (like C:\\Users\\you\\Videos\\clip.mp4), or call studio__add_media without paths so the user can pick it. Nothing was added.`);
   const full = path.resolve(p);
   const texts = ctx.conversationId ? d.userTexts(ctx.conversationId) : [];
-  if (mentions(texts, full) || mentions(texts, p.trim()) || mentions(texts, path.basename(full))) return full;
+  if (d.keoMade(full) || mentions(texts, full) || mentions(texts, p.trim()) || mentions(texts, path.basename(full))) return full;
   throw fail('not_named', 'Keo adds only files the user named or picked. Call studio__add_media without paths so the user can pick them. Nothing was added.');
 }
 

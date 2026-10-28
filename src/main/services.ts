@@ -677,6 +677,9 @@ export class Services {
           return t ? { destination: t.destination, exact: !!t.words } : null;
         },
         captions: (projectId, o) => this.studioCaptions(projectId, o),
+        transcribe: (projectId, o) => this.studioTranscribe(projectId, o),
+        // Keo's own output (made pictures, documents, exported videos).
+        keoMade: (file) => isInside(file, this.keoOutputRoot(d)) || isInside(file, this.videoOutputRoot()),
       }),
       ...createCapabilities({
         outputRoot: () => (this.documentsDir ? path.join(this.documentsDir, 'Keo') : path.join(d.profile.userData, 'created')),
@@ -1253,6 +1256,15 @@ export class Services {
       return { destination: 'OpenAI', words: async (wav, signal) => (await this.providers.openai.transcribeWords(wav, signal, { language })).map((w) => ({ text: w.word, start: w.start, end: w.end })) };
     if (this.account.signedIn()) return { destination: 'Keo Cloud', text: (wav, signal) => this.account.transcribe(wav, language, signal) };
     return null;
+  }
+
+  /** The spoken words of a Studio project's media (their sound goes to studioTranscriber's service). */
+  async studioTranscribe(id: string, o: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ words: number; exact: boolean; destination: string }> {
+    const t = this.studioTranscriber();
+    if (!t) throw new StudioError('Transcripts need speech-to-text: sign in to your Keo account, or add an OpenAI API key in Settings → Providers.');
+    const r = await this.studio.transcribe(id, t, { ...(o.force ? { force: true } : {}), signal: o.signal ?? new AbortController().signal });
+    if (r.transcribed) this.audit.record({ kind: 'studio.transcribed', decision: 'sent', detail: { destination: t.destination, files: r.transcribed, words: r.words } });
+    return { words: r.words, exact: r.exact, destination: t.destination };
   }
 
   /** Auto-captions for a Studio project (the timeline's sound goes to studioTranscriber's service). */

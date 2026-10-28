@@ -70,6 +70,7 @@ function setup(): Setup {
           const s = h!.services.studio;
           if (job.kind === 'frames') s.jobDone(jobId, job.times.map((time) => ({ time, pngBase64: PNG_1PX })), null);
           // The timeline's sound: speech from 1 to 2 s and from 4 to 5 s.
+          else if (job.kind === 'asset_audio') s.jobDone(jobId, { wavBase64: wavOf(speechLike(8, [[1, 2], [4, 5]]), 16000).toString('base64') }, null);
           else if (job.kind === 'audio') s.jobDone(jobId, { wavBase64: wavOf(speechLike(8, [[1, 2], [4, 5]]), 16000).toString('base64') }, null);
           else s.jobDone(jobId, null, 'not in this test');
         }, 5);

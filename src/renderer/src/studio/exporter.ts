@@ -1,7 +1,8 @@
-import { clipEnd, projectDuration, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, duckGain, projectDuration, timelineSpeech, type MediaClip, type Project } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ExactSources, mediaUrl } from './media';
+import { normalize, voiceChain } from './sound';
 
 /**
  * Exporting and looking at frames, in Keo's render window: the same picture engine as the preview,
@@ -21,20 +22,21 @@ function bytes(d: ArrayBuffer | ArrayBufferView): Uint8Array<ArrayBuffer> {
 const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
-export async function mixAudio(p: Project): Promise<AudioBuffer | null> {
+export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; duck: number | null }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
       if (c.type === 'text' || c.volume <= 0) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, duck: c.type === 'audio' ? c.duck : null });
     }
   }
   if (!parts.length || dur <= 0) return null;
   const ctx = new OfflineAudioContext(2, Math.ceil(dur * SAMPLE_RATE), SAMPLE_RATE);
+  const speech = bridged(timelineSpeech(p));
   const decoded = new Map<string, AudioBuffer | null>();
   for (const part of parts) {
     if (!decoded.has(part.assetId)) {
@@ -58,10 +60,23 @@ export async function mixAudio(p: Project): Promise<AudioBuffer | null> {
       gain.gain.setValueAtTime(part.volume, Math.max(part.start, end - part.fadeOut));
       gain.gain.linearRampToValueAtTime(0, end);
     }
-    src.connect(gain).connect(ctx.destination);
+    let out: AudioNode = part.voice ? voiceChain(ctx, src) : src;
+    if (part.duck !== null && speech.length) {
+      // Music under speech: a gain curve sampled every 50 ms from the same rule the preview uses.
+      const duck = ctx.createGain();
+      const step = 0.05;
+      const n = Math.max(2, Math.ceil(part.duration / step) + 1);
+      const curve = new Float32Array(n);
+      for (let i = 0; i < n; i++) curve[i] = duckGain(speech, part.start + i * step, part.duck);
+      duck.gain.setValueCurveAtTime(curve, part.start, (n - 1) * step);
+      out = out.connect(duck);
+    }
+    out.connect(gain).connect(ctx.destination);
     src.start(part.start, part.in, part.duration * part.speed);
   }
-  return ctx.startRendering();
+  const mixed = await ctx.startRendering();
+  if (o.loudness && p.loudness === 'social') normalize(mixed, -14);
+  return mixed;
 }
 
 interface AudioOut {
@@ -178,7 +193,7 @@ export async function runExport(p: Project, exportId: string, progress: Progress
   const fps = p.fps;
   const total = Math.max(1, Math.ceil(projectDuration(p) * fps - 1e-6));
   progress({ stage: 'sound', done: 0, total });
-  const mixed = await mixAudio(p);
+  const mixed = await mixAudio(p, { loudness: true });
   console.info(`export: sound mixed (${mixed ? mixed.duration.toFixed(2) + 's' : 'silent'})`);
   const audio = mixed ? await encodeAudio(mixed) : null;
   console.info(`export: sound encoded (${audio ? audio.codec + ' ' + audio.chunks.length + ' packets' : 'none'})`);
@@ -289,7 +304,25 @@ export async function speechWav(p: Project, sampleRate: number): Promise<{ wavBa
   src.buffer = mixed;
   src.connect(ctx.destination);
   src.start();
-  const mono = (await ctx.startRendering()).getChannelData(0);
+  return wav16((await ctx.startRendering()).getChannelData(0), sampleRate);
+}
+
+/** One media file's own sound (all of it, before any edit) as 16-bit mono WAV, base64; null: no sound. */
+export async function assetWav(p: Project, assetId: string, sampleRate: number): Promise<{ wavBase64: string; seconds: number } | null> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || !a.hasAudio || a.kind === 'image') return null;
+  const bytes = await (await fetch(mediaUrl(p.id, a.id))).arrayBuffer();
+  // Decoding in a 16 kHz context resamples to 16 kHz; the channels are averaged.
+  const buf = await new OfflineAudioContext(1, 1, sampleRate).decodeAudioData(bytes);
+  const mono = new Float32Array(buf.length);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) mono[i]! += d[i]! / buf.numberOfChannels;
+  }
+  return wav16(mono, buf.sampleRate);
+}
+
+function wav16(mono: Float32Array, sampleRate: number): { wavBase64: string; seconds: number } {
   const bytes = new Uint8Array(44 + mono.length * 2);
   const v = new DataView(bytes.buffer);
   const text = (at: number, s: string) => [...s].forEach((ch, i) => v.setUint8(at + i, ch.charCodeAt(0)));

@@ -132,6 +132,8 @@ check('studio: exports picture + animated text + sound to MP4', st.first?.frames
 check('studio: re-imports its own MP4 (video with sound)', typeof st.reimported === 'string' && st.reimported.startsWith('video:640x360:') && st.reimported.endsWith(':true'), st.error ?? st.reimported);
 check('studio: edits and exports real H.264 again (exact decoding)', st.second?.frames >= 60 && st.second?.frames <= 61, st.error ?? JSON.stringify(st.second));
 check('studio: the timeline sound is mixed for captions (speech found)', st.speech?.rate === 16000 && Math.abs(st.speech.seconds - 2) < 0.05 && st.speech.spans?.length === 1 && st.speech.spans[0].start < 0.1 && st.speech.spans[0].end > 1.9, st.error ?? JSON.stringify(st.speech));
+check('studio: a video’s own sound is analysed for speech', Array.isArray(st.third?.speech) && st.third.speech.length >= 1 && st.third.speech[0].start < 0.2, st.error ?? JSON.stringify(st.third));
+check('studio: voice clean-up, loudness, colour, push-in and a sound effect export', st.third?.frames >= 55 && st.third?.frames <= 61 && st.third?.sound === true, st.error ?? JSON.stringify(st.third));
 check('studio: frames for Keo to look at are drawn', Array.isArray(st.frames) && st.frames.length === 2 && st.frames.every((f) => f.width === 180 && f.centre > 20), st.error ?? JSON.stringify(st.frames));
 
 // Switching to another data folder happens in place: same window, same process, other data.

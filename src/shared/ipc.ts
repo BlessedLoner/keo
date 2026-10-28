@@ -136,6 +136,12 @@ export const invokeSchemas = {
   'studio:history': z.object({ id: studioProjectId }).strict(),
   'studio:captions': z.object({ id: studioProjectId, maxWords: z.number().int().min(1).max(8).default(3) }).strict(),
   'studio:captionSource': empty,
+  'studio:transcribe': z.object({ id: studioProjectId }).strict(),
+  'studio:cleanup': z
+    .object({ id: studioProjectId, silences: z.boolean().default(false), fillers: z.boolean().default(false), retakes: z.boolean().default(false), minSilence: z.number().min(0.25).max(5).optional(), keep: z.number().min(0).max(1).optional(), dryRun: z.boolean().default(false) })
+    .strict(),
+  'studio:punchIn': z.object({ id: studioProjectId, scale: z.number().min(1.03).max(1.6).optional() }).strict(),
+  'studio:soundEffect': z.object({ id: studioProjectId, kind: z.enum(['whoosh', 'pop', 'click', 'ding', 'riser', 'boom', 'swipe']), at: z.number().min(0).max(86400) }).strict(),
   /** No paths: Keo opens a file picker. */
   'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
   'studio:export': z.object({ id: studioProjectId }).strict(),
@@ -433,6 +439,10 @@ export interface InvokeOutputs {
   'studio:history': { undo: boolean; redo: boolean };
   'studio:captions': { lines: number; words: number; exact: boolean };
   'studio:captionSource': { destination: string | null; exact: boolean; reason: string | null };
+  'studio:transcribe': { words: number; exact: boolean };
+  'studio:cleanup': { cuts: number; seconds: number; byReason: Record<string, number>; notes: string[] };
+  'studio:punchIn': { points: number };
+  'studio:soundEffect': { ok: true };
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };
   'studio:current': { id: string | null };

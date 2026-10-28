@@ -1,6 +1,7 @@
-import { clipEnd, type Asset, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, duckGain, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, type Drawable, type SourceProvider } from './engine';
+import { voiceChain } from './sound';
 
 /** A project's media file, served by Keo's own protocol (only media that is in the project). */
 export const mediaUrl = (projectId: string, assetId: string) => `app://keo/media/${projectId}/${assetId}`;
@@ -15,6 +16,10 @@ export class PreviewSources implements SourceProvider {
   private readonly videos = new Map<string, HTMLVideoElement>();
   private readonly sounds = new Map<string, HTMLAudioElement>();
   private readonly images = new Map<string, HTMLImageElement>();
+  /** Sound that goes through Keo's voice clean-up (once routed, an element stays in the graph). */
+  private audioCtx: AudioContext | null = null;
+  private readonly routes = new Map<HTMLMediaElement, { gain: GainNode; dry: GainNode; wet: GainNode }>();
+  private readonly speech = new WeakMap<Project, Span[]>();
 
   constructor(
     private readonly projectId: string,
@@ -57,8 +62,32 @@ export class PreviewSources implements SourceProvider {
     return v.readyState >= 2 ? v : null;
   }
 
+  private route(el: HTMLMediaElement, voice: boolean): GainNode {
+    let r = this.routes.get(el);
+    if (!r) {
+      const ctx = (this.audioCtx ??= new AudioContext());
+      const src = ctx.createMediaElementSource(el);
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      src.connect(dry).connect(gain);
+      voiceChain(ctx, src).connect(wet).connect(gain);
+      r = { gain, dry, wet };
+      this.routes.set(el, r);
+    }
+    r.dry.gain.value = voice ? 0 : 1;
+    r.wet.gain.value = voice ? 1 : 0;
+    return r.gain;
+  }
+
   /** Puts every clip's media where the playhead is (playing or paused). */
   sync(p: Project, t: number, playing: boolean): void {
+    let speech = this.speech.get(p);
+    if (!speech) {
+      speech = bridged(timelineSpeech(p));
+      this.speech.set(p, speech);
+    }
     const activeVideos = new Set<string>();
     const activeSounds = new Set<string>();
     for (const tr of p.tracks) {
@@ -86,7 +115,13 @@ export class PreviewSources implements SourceProvider {
         }
         const fade = Math.min(c.fadeIn > 0 ? Math.min(1, (t - c.start) / c.fadeIn) : 1, c.fadeOut > 0 ? Math.min(1, (clipEnd(c) - t) / c.fadeOut) : 1);
         el.muted = tr.muted || !a.hasAudio;
-        el.volume = Math.max(0, Math.min(1, c.volume * fade));
+        const duck = c.type === 'audio' && c.duck !== null ? duckGain(speech, t, c.duck) : 1;
+        const level = Math.max(0, c.volume * fade * duck);
+        if (c.voice || this.routes.has(el)) {
+          el.volume = 1;
+          this.route(el, c.voice).gain.value = Math.min(4, level);
+          if (playing && this.audioCtx?.state === 'suspended') void this.audioCtx.resume();
+        } else el.volume = Math.min(1, level);
         el.playbackRate = rate;
         if (playing) {
           if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
@@ -132,6 +167,9 @@ export class PreviewSources implements SourceProvider {
     this.videos.clear();
     this.sounds.clear();
     this.images.clear();
+    this.routes.clear();
+    void this.audioCtx?.close().catch(() => undefined);
+    this.audioCtx = null;
   }
 }
 

@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
-import { applyEdits, describeProject, EditError, newProject, Project, projectDuration, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
+import { planCleanup, punchIns, type CleanupPlan } from './cleanup';
+import { SFX, sfxWav, type SfxKind } from './sfx';
 import { keyBefore, Mp4Reader, Mp4Writer, type Mp4Track, type WriterAudio, type WriterVideo } from './mp4';
 
 /**
@@ -53,6 +55,8 @@ export function kindOfFile(file: string): AssetKind | null {
   const ext = path.extname(file).toLowerCase();
   return VIDEO_EXT.has(ext) ? 'video' : IMAGE_EXT.has(ext) ? 'image' : AUDIO_EXT.has(ext) ? 'audio' : null;
 }
+
+const round3 = (v: number) => Math.round(v * 1000) / 1000;
 
 export class StudioService {
   private readonly undo = new Map<string, Project[]>();
@@ -320,7 +324,7 @@ export class StudioService {
     return this.runJob<Array<{ time: number; pngBase64: string }>>({ kind: 'frames', projectId: id, times: list, width }, 120_000).then((r) => r.map((f) => ({ time: f.time, png: Buffer.from(f.pngBase64, 'base64') })));
   }
 
-  // ---------------------------------------------------------------- sound and captions
+  // ---------------------------------------------------------------- sound, speech and captions
 
   /** The timeline's sound, mixed as the export will hear it, as 16 kHz mono (null: no sound). */
   async speech(id: string): Promise<{ rate: number; samples: Int16Array } | null> {
@@ -329,43 +333,142 @@ export class StudioService {
     return r ? readWav(Buffer.from(r.wavBase64, 'base64')) : null;
   }
 
+  /** One media file's whole sound as 16 kHz mono (null: it has none). */
+  async assetSound(id: string, assetId: string): Promise<{ rate: number; samples: Int16Array } | null> {
+    const r = await this.runJob<{ wavBase64: string } | null>({ kind: 'asset_audio', projectId: id, assetId, sampleRate: 16000 }, 20 * 60_000);
+    return r ? readWav(Buffer.from(r.wavBase64, 'base64')) : null;
+  }
+
   /**
-   * Auto-captions: the speech in the timeline transcribed (exact word times when the service gives
-   * them, else spread over each stretch of speech) and laid out as caption lines on the Captions
-   * track, in one edit (one undo).
+   * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
+   * so the versions in their stacks get it too.
+   */
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact'>>): Project {
+    const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
+    for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
+    const next = Project.parse(fix(this.get(id)));
+    this.save(next);
+    return next;
+  }
+
+  /**
+   * Where people speak in each media file of the timeline (on this PC; nothing is sent anywhere).
+   * Media analysed before is skipped unless `force`.
+   */
+  async analyzeSpeech(id: string, o: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ project: Project; analysed: number }> {
+    let p = this.get(id);
+    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((t) => t.clips.some((c) => c.type !== 'text' && c.assetId === a.id))) : needsAnalysis(p, 'speech');
+    for (const a of todo) {
+      if (o.signal?.aborted) throw new StudioError('Stopped.');
+      const s = await this.assetSound(id, a.id);
+      p = this.learn(id, a.id, { speech: s ? voicedSpans(s.samples, s.rate) : [] });
+    }
+    if (todo.length) this.d.log.info('studio.speech_analysed', { files: todo.length });
+    return { project: p, analysed: todo.length };
+  }
+
+  /**
+   * The spoken words of each media file of the timeline (speech-to-text: the sound goes to the
+   * service `t` stands for). Exact word times when the service gives them; else each stretch of
+   * speech is transcribed on its own and its words spread over it.
+   */
+  async transcribe(
+    id: string,
+    t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
+    o: { force?: boolean; signal: AbortSignal; progress?: (done: number, total: number) => void },
+  ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean }> {
+    let p = this.get(id);
+    const exact = !!t.words;
+    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => c.type !== 'text' && c.assetId === a.id))) : needsAnalysis(p, 'words');
+    let count = 0;
+    for (const a of todo) {
+      const sound = await this.assetSound(id, a.id);
+      const spans = sound ? voicedSpans(sound.samples, sound.rate) : [];
+      const words: Word[] = [];
+      // Word times: pieces of up to 10 minutes (the service's file limit). Text only: short pieces.
+      const groups = sound ? pieces(spans, exact ? 600 : 14) : [];
+      let done = 0;
+      for (const g of groups) {
+        if (o.signal.aborted) throw new StudioError('Stopped.');
+        const from = g[0]!.start;
+        const to = g.at(-1)!.end;
+        const wav = wavOf(sound!.samples, sound!.rate, from, to);
+        if (t.words) {
+          for (const w of await t.words(wav, o.signal)) if (w.text.trim()) words.push({ text: w.text.trim().slice(0, 80), start: round3(from + w.start), end: round3(from + Math.max(w.start, w.end)) });
+        } else if (t.text) {
+          const text = (await t.text(wav, o.signal)).trim();
+          if (text) words.push(...spreadWords(text, g).map((w) => ({ ...w, text: w.text.slice(0, 80) })));
+        }
+        o.progress?.(++done, groups.length);
+      }
+      count += words.length;
+      p = this.learn(id, a.id, { speech: spans, words, wordsExact: exact });
+    }
+    if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length, words: count, exact });
+    return { project: p, transcribed: todo.length, words: count, exact };
+  }
+
+  /**
+   * Auto-captions: the timeline's speech (transcribed first where needed) laid out as caption lines
+   * on the Captions track, in one edit (one undo).
    */
   async captions(
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
     o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal; progress?: (done: number, total: number) => void },
   ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean }> {
-    const audio = await this.speech(id);
-    if (!audio) throw new StudioError('The timeline has no sound to caption.');
-    const spans = voicedSpans(audio.samples, audio.rate);
-    if (!spans.length) throw new StudioError('No speech was found in the timeline’s sound.');
-    const words: Word[] = [];
-    const exact = !!t.words;
-    // Word times: pieces of up to 10 minutes (the service's file limit). Text only: short pieces.
-    const groups = pieces(spans, exact ? 600 : 14);
-    let done = 0;
-    for (const g of groups) {
-      if (o.signal.aborted) throw new StudioError('Stopped.');
-      const from = g[0]!.start;
-      const to = g.at(-1)!.end;
-      const wav = wavOf(audio.samples, audio.rate, from, to);
-      if (t.words) {
-        for (const w of await t.words(wav, o.signal)) if (w.text.trim()) words.push({ text: w.text.trim(), start: from + w.start, end: from + w.end });
-      } else if (t.text) {
-        const text = (await t.text(wav, o.signal)).trim();
-        if (text) words.push(...spreadWords(text, g));
-      }
-      o.progress?.(++done, groups.length);
-    }
-    if (!words.length) throw new StudioError('The speech service heard no words in the timeline’s sound.');
+    if (projectDuration(this.get(id)) === 0) throw new StudioError('The timeline is empty: add a video with speech first.');
+    await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
+    const words = timelineWords(this.get(id));
+    if (!words.length) throw new StudioError('No spoken words were found in the timeline’s sound.');
     const lines = captionLines(words, { maxWords: o.maxWords ?? 3 });
     const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
-    this.d.log.info('studio.captions', { lines: lines.length, words: words.length, exact });
-    return { project: r.project, lines, words: words.length, exact };
+    this.d.log.info('studio.captions', { lines: lines.length, words: words.length });
+    return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact) };
+  }
+
+  // ---------------------------------------------------------------- talking-head autopilot
+
+  /** What a clean-up would cut (nothing changes). Speech is analysed first where needed (on this PC). */
+  async planCleanup(id: string, o: { silences?: boolean; fillers?: boolean; retakes?: boolean; minSilence?: number; keep?: number; signal?: AbortSignal }): Promise<CleanupPlan> {
+    if (o.silences) await this.analyzeSpeech(id, { ...(o.signal ? { signal: o.signal } : {}) });
+    return planCleanup(this.get(id), o);
+  }
+
+  /** Cuts what the clean-up found, in one edit (one undo). */
+  async cleanup(id: string, o: { silences?: boolean; fillers?: boolean; retakes?: boolean; minSilence?: number; keep?: number; signal?: AbortSignal }): Promise<{ project: Project; plan: CleanupPlan; changes: string[] }> {
+    const plan = await this.planCleanup(id, o);
+    if (!plan.cuts.length) return { project: this.get(id), plan, changes: [] };
+    const r = this.edit(id, [{ op: 'cut_ranges', ranges: plan.cuts.map((c) => ({ from: c.from, to: c.to })) }]);
+    this.d.log.info('studio.cleaned', { cuts: plan.cuts.length, seconds: plan.seconds });
+    return { project: r.project, plan, changes: r.changes };
+  }
+
+  /** Punch-ins on the talking head at new phrases (one edit). */
+  async punchIn(id: string, o: { scale?: number; x?: number; y?: number; minGap?: number; signal?: AbortSignal } = {}): Promise<{ project: Project; points: number }> {
+    await this.analyzeSpeech(id, { ...(o.signal ? { signal: o.signal } : {}) });
+    const { ops, points } = punchIns(this.get(id), o);
+    if (!ops.length) throw new StudioError('There is no talking-head video with speech on the bottom video track to punch in on.');
+    return { project: this.edit(id, ops).project, points };
+  }
+
+  /** One of Keo's own sound effects as media of the project (made once, in Keo's folder). */
+  soundEffect(id: string, kind: SfxKind): { project: Project; asset: Asset } {
+    const p = this.get(id);
+    const dir = path.join(this.d.dir, 'sfx');
+    const file = path.join(dir, `${kind}.wav`);
+    const have = p.assets.find((a) => path.resolve(a.path).toLowerCase() === file.toLowerCase());
+    if (have && fs.existsSync(file)) return { project: p, asset: have };
+    fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, sfxWav(kind));
+    if (have) return { project: p, asset: have };
+    const asset: Asset = { id: `as_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, kind: 'audio', path: file, name: `${SFX[kind].label} (Keo sound effect)`, duration: SFX[kind].seconds, width: 0, height: 0, hasAudio: true };
+    const stack = this.undo.get(id) ?? [];
+    stack.push(p);
+    this.undo.set(id, stack);
+    const next = Project.parse({ ...p, assets: [...p.assets, asset], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
+    this.save(next);
+    return { project: next, asset };
   }
 
   // ---------------------------------------------------------------- exporting

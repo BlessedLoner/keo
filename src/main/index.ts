@@ -1,5 +1,6 @@
 import { Mp4Reader } from './studio/mp4';
 import { voicedSpans } from './studio/captions';
+import { LOOKS, type EditOp } from '../shared/studio';
 import os from 'node:os';
 import type { RenderJob } from './studio/studioService';
 import { Readable } from 'node:stream';
@@ -953,7 +954,23 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
     const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
     return { width, height, centre: (bmp[at]! + bmp[at + 1]! + bmp[at + 2]!) / 3 };
   });
-  for (const f of [first.file, second.file]) fs.rmSync(f, { force: true });
+  // Phase 2 in the real render window: the video's own sound analysed, then voice clean-up,
+  // social loudness, a colour look, a slow push, a sound effect and pauses cut, exported again.
+  const analysed = await s.studio.analyzeSpeech(b.id);
+  const speechSpans = analysed.project.assets.find((x) => x.id === vid.id)?.speech ?? null;
+  const fx = s.studio.soundEffect(b.id, 'whoosh');
+  const now = s.studio.get(b.id);
+  const ops: EditOp[] = [{ op: 'set_project', loudness: 'social' }];
+  for (const c of now.tracks.flatMap((t) => t.clips))
+    if (c.type === 'media') ops.push({ op: 'set', clip: c.id, voice: true, color: { ...LOOKS.warm }, zooms: [{ at: 0, scale: 1, x: 0.5, y: 0.5, ease: 'cut' }, { at: c.duration, scale: 1.15, x: 0.5, y: 0.5, ease: 'ramp' }] });
+  ops.push({ op: 'add_audio', assetId: fx.asset.id, trackName: 'Effects', start: 0.3, volume: 0.6 });
+  s.studio.edit(b.id, ops);
+  const cleaned = await s.studio.cleanup(b.id, { silences: true });
+  const third = await s.studio.exportVideo(b.id);
+  const thirdReader = Mp4Reader.open(third.file);
+  out.third = { speech: speechSpans, cuts: cleaned.plan.cuts.length, frames: third.frames, durationSec: third.durationSec, sound: !!thirdReader?.audio() };
+  thirdReader?.close();
+  for (const f of [first.file, second.file, third.file]) fs.rmSync(f, { force: true });
   s.studio.delete(a.id);
   s.studio.delete(b.id);
   fs.rmSync(dir, { recursive: true, force: true });

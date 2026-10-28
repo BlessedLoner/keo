@@ -1,4 +1,4 @@
-import { clipEnd, type Asset, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { clipEnd, zoomAt, type Asset, type MediaClip, type Project, type TextClip } from '@shared/studio';
 
 /**
  * Keo Studio's picture engine: draws the project as it looks at one moment. The Studio preview and
@@ -67,13 +67,13 @@ export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, 
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a) continue;
       const src = sources.frame(c, a, sourceTime(c, a, t));
-      if (src) drawMedia(ctx, c, src, fadeAt(c, t), W, H);
+      if (src) drawMedia(ctx, c, src, fadeAt(c, t), t - c.start, W, H);
     } else drawText(ctx, c, t, W, H);
   }
   ctx.restore();
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, W: number, H: number): void {
+function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, rt: number, W: number, H: number): void {
   const { w, h } = sizeOf(src);
   const k = c.fit === 'cover' ? Math.max(W / w, H / h) : Math.min(W / w, H / h);
   const tr = c.transform;
@@ -81,10 +81,37 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
   const dh = h * k * tr.scale;
   ctx.save();
   ctx.globalAlpha = clamp(tr.opacity * fade);
+  // Punch-ins: the whole layer is scaled around the zoom's centre point of the frame.
+  const z = zoomAt(c.zooms, rt);
+  if (z.scale !== 1) {
+    ctx.translate(z.x * W, z.y * H);
+    ctx.scale(z.scale, z.scale);
+    ctx.translate(-z.x * W, -z.y * H);
+  }
   ctx.translate(tr.x * W, tr.y * H);
   if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
   ctx.imageSmoothingQuality = 'high';
+  const g = c.color;
+  if (g && (g.exposure || g.contrast || g.saturation)) ctx.filter = `brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`;
   ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+  ctx.filter = 'none';
+  if (g?.temperature) {
+    // Warmer or cooler: an orange or blue wash, blended softly into the picture.
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * tr.opacity * fade);
+    ctx.fillStyle = g.temperature > 0 ? '#FF8A1E' : '#1E7BFF';
+    ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  }
+  if (g?.vignette) {
+    const r = Math.hypot(dw, dh) / 2;
+    const v = ctx.createRadialGradient(0, 0, r * 0.45, 0, 0, r);
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, `rgba(0,0,0,${(g.vignette * 0.85).toFixed(3)})`);
+    ctx.fillStyle = v;
+    ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
+  }
   ctx.restore();
 }
 
@@ -203,16 +230,18 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   const totalChars = text.replace(/\s+/g, '').length;
   const shownChars = c.animIn === 'typewriter' ? Math.floor(pin * totalChars + 1e-6) : Infinity;
   const wordCount = lines.reduce((n, l) => n + l.words.length, 0);
+  // Caption word times are seconds from the clip's start.
+  const rt = t - c.start;
   const wordReveal = (wi: number): number => {
     if (c.animIn !== 'words') return 1;
     const timed = c.words?.[wi];
-    if (timed) return clamp((t - timed.start) / 0.22);
+    if (timed) return clamp((rt - timed.start) / 0.22);
     const stagger = Math.min(0.2, (Math.max(0.2, c.animSeconds) * 1.6) / Math.max(1, wordCount));
     return clamp((t - c.start - wi * stagger) / 0.25);
   };
   const spoken = (wi: number) => {
     const w = c.words?.[wi];
-    return !!w && t >= w.start && t < w.end;
+    return !!w && rt >= w.start && rt < w.end;
   };
 
   const top = -blockH / 2 + px * 0.85;

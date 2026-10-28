@@ -51,6 +51,18 @@
 .spinner.tiny { width: 10px; height: 10px; border-width: 1.5px; }
 
 .inspector { padding-bottom: 16px; }
+.autopilot { padding-bottom: 12px; }
+.auto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 12px; }
+.auto-grid .btn { justify-content: flex-start; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+.auto-grid .btn svg, .auto-sfx .btn svg { flex: none; }
+.auto-grid .btn.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.auto-row { padding: 10px 12px 0; margin: 0 !important; }
+.auto-sfx { display: flex; gap: 6px; align-items: center; }
+.auto-sfx .select { height: 28px; padding: 0 8px; font-size: 12.5px; flex: 1; }
+.auto-sfx .btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.insp-section .btn.ghost { margin-top: 6px; }
+.insp-section .insp-range + .insp-range { margin-top: 6px; }
+.insp-section .insp-check { margin-top: 8px; }
 .insp-name { padding: 0 12px; margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-section { padding: 6px 12px 10px; border-bottom: 1px solid var(--line); }
 .insp-section:last-child { border-bottom: 0; }

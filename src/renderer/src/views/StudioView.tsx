@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { FORMATS, clipEnd, findClip, projectDuration, type Asset, type Clip, type EditOp, type FormatId, type Project, type TextClip } from '@shared/studio';
+import { FORMATS, clipEnd, findClip, projectDuration, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
 import { mediaUrl } from '../studio/media';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
+import { Autopilot } from '../studio/Autopilot';
 import '../styles/studio.css';
 
 /**
@@ -145,6 +146,21 @@ export function StudioView() {
       ui.error(errText(e));
     } finally {
       setCaptioning(false);
+    }
+  };
+  const addMusic = async () => {
+    if (!project) return;
+    try {
+      const r = await invoke('studio:import', { id: project.id });
+      const songs = r.added.filter((a) => a.kind === 'audio');
+      if (!songs.length) {
+        if (r.added.length || r.skipped.length) ui.toast('Choose a music file (MP3, M4A, WAV…).', 'error');
+        return;
+      }
+      // Music goes under everything, quieter, and ducks while someone speaks.
+      await edit(songs.map((a) => ({ op: 'add_audio', assetId: a.id, trackName: 'Music', start: 0, volume: 0.3, duck: -14, ...(duration > 0 ? { duration: Math.min(a.duration, duration) } : {}) })));
+    } catch (e) {
+      ui.error(errText(e));
     }
   };
   const addText = () => void edit([{ op: 'add_text', text: 'Your text', start: time, duration: 3 }]);
@@ -359,6 +375,9 @@ export function StudioView() {
             <button className="btn sm" onClick={addText}>
               <Icon name="text" size={13} /> Text
             </button>
+            <button className="btn sm" onClick={() => void addMusic()} title="Background music, quieter under speech">
+              <Icon name="music" size={13} /> Music
+            </button>
             <button className="btn sm" onClick={() => void edit([{ op: 'add_track', kind: 'video' }])}>
               <Icon name="film" size={13} /> Video track
             </button>
@@ -395,7 +414,14 @@ export function StudioView() {
         <aside className="studio-side">
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} />}
-          {sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} onEdit={edit} /> : <ProjectSettings project={project} onEdit={edit} />}
+          {sel ? (
+            <Inspector key={sel.clip.id} project={project} clip={sel.clip} onEdit={edit} />
+          ) : (
+            <>
+              <Autopilot project={project} time={time} onEdit={edit} onBusy={(b) => b && setPlaying(false)} />
+              <ProjectSettings project={project} onEdit={edit} />
+            </>
+          )}
         </aside>
       </div>
       <div className="studio-tools">
@@ -612,8 +638,17 @@ function Inspector({ project, clip, onEdit }: { project: Project; clip: Clip; on
             <input type="range" min={0} max={200} defaultValue={Math.round(clip.volume * 100)} onPointerUp={(e) => set({ volume: Number((e.target as HTMLInputElement).value) / 100 })} onKeyUp={(e) => set({ volume: Number((e.target as HTMLInputElement).value) / 100 })} />
             <em>{Math.round(clip.volume * 100)}%</em>
           </label>
+          <label className="insp-check">
+            <input type="checkbox" checked={clip.voice} onChange={(e) => set({ voice: e.target.checked })} /> Enhance voice
+          </label>
+          {clip.type === 'audio' && (
+            <label className="insp-check">
+              <input type="checkbox" checked={clip.duck !== null} onChange={(e) => set({ duck: e.target.checked ? -14 : null })} /> Quieter while someone speaks (music)
+            </label>
+          )}
         </Section>
       )}
+      {clip.type === 'media' && <ColorFields clip={clip} set={set} />}
       {clip.type === 'text' && <TextFields clip={clip} set={set} />}
       {clip.type !== 'audio' && (
         <Section title="Position">
@@ -636,6 +671,43 @@ function Inspector({ project, clip, onEdit }: { project: Project; clip: Clip; on
         </Section>
       )}
     </div>
+  );
+}
+
+function ColorFields({ clip, set }: { clip: MediaClip; set: (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => void }) {
+  const g = clip.color ?? { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
+  const field = (k: keyof typeof g, label: string, min = -1) => (
+    <label className="insp-range" key={`${clip.id}-${k}-${g[k]}`}>
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min * 100}
+        max={100}
+        defaultValue={Math.round(g[k] * 100)}
+        onPointerUp={(e) => set({ color: { [k]: Number((e.target as HTMLInputElement).value) / 100 } })}
+        onKeyUp={(e) => set({ color: { [k]: Number((e.target as HTMLInputElement).value) / 100 } })}
+      />
+      <em>{Math.round(g[k] * 100)}</em>
+    </label>
+  );
+  return (
+    <Section title="Colour">
+      {field('exposure', 'Exposure')}
+      {field('contrast', 'Contrast')}
+      {field('saturation', 'Saturation')}
+      {field('temperature', 'Warmth')}
+      {field('vignette', 'Vignette', 0)}
+      {clip.color && (
+        <button className="btn sm ghost" onClick={() => set({ color: null })}>
+          Reset colour
+        </button>
+      )}
+      {!!clip.zooms?.length && (
+        <button className="btn sm ghost" onClick={() => set({ zooms: null })}>
+          Remove zooms ({clip.zooms.length})
+        </button>
+      )}
+    </Section>
   );
 }
 
