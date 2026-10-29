@@ -156,6 +156,7 @@ export const invokeSchemas = {
   /** A voice-over recorded in Studio (16-bit WAV), put on the Voice track at `at`. */
   'studio:saveRecording': z.object({ id: studioProjectId, wavBase64: z.string().min(100).max(64_000_000), at: z.number().min(0).max(86400) }).strict(),
   'studio:reframe': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
+  'studio:analyzeSpeech': z.object({ id: studioProjectId }).strict(),
   'studio:beatSync': z.object({ id: studioProjectId, every: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(2) }).strict(),
   'studio:current': empty,
   'studio:videoTrack': z.object({ projectId: studioProjectId, assetId: studioAssetId }).strict(),
@@ -449,7 +450,7 @@ export interface InvokeOutputs {
   'studio:edit': { project: StudioProject; changes: string[] };
   'studio:undo': StudioProject;
   'studio:redo': StudioProject;
-  'studio:history': { undo: boolean; redo: boolean };
+  'studio:history': { undo: boolean; redo: boolean; undoLabels: string[]; redoLabels: string[] };
   'studio:captions': { lines: number; words: number; exact: boolean };
   'studio:captionSource': { destination: string | null; exact: boolean; reason: string | null };
   'studio:transcribe': { words: number; exact: boolean };
@@ -464,6 +465,7 @@ export interface InvokeOutputs {
   'studio:export': { started: true };
   'studio:exportCancel': { cancelled: boolean };
   'studio:beatSync': { placed: number; bpm: number | null };
+  'studio:analyzeSpeech': { analysed: number };
   'studio:reframe': { points: number; axis: 'x' | 'y' };
   'studio:readAloud': { clip: string; seconds: number };
   'studio:saveRecording': { clip: string; seconds: number };

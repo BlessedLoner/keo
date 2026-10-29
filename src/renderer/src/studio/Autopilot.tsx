@@ -87,6 +87,12 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
     });
 
   const toggleVoice = () => run('voice', () => onEdit(voices.map((clip) => ({ op: 'set', clip, voice: !voiceOn }))));
+  const gateOn = voices.length > 0 && voices.every((id) => project.tracks.some((t) => t.clips.some((c) => c.id === id && isAV(c) && c.gate)));
+  const toggleGate = () =>
+    run('gate', async () => {
+      if (!gateOn) await invoke('studio:analyzeSpeech', { id: project.id });
+      await onEdit(voices.map((clip) => ({ op: 'set', clip, gate: gateOn ? null : -18 })));
+    });
   const toggleLoudness = () => run('loud', () => onEdit([{ op: 'set_project', loudness: project.loudness === 'social' ? 'off' : 'social' }]));
   const toggleDuck = () => run('duck', () => onEdit(music.map((clip) => ({ op: 'set', clip, duck: duckOn ? null : -14 }))));
   const setLook = (l: LookId | 'off') => run('look', () => onEdit(media.map((c) => ({ op: 'set', clip: c.id, color: l === 'off' ? null : { ...LOOKS[l] } }))));
@@ -113,6 +119,9 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
         </button>
         <button className={`btn sm ${voiceOn ? 'on' : ''}`} aria-pressed={voiceOn} disabled={working || !voices.length} onClick={() => void toggleVoice()} title="Clearer voice: rumble cut, less boom, gentle compression">
           <Icon name="mic" size={13} /> Enhance voice
+        </button>
+        <button className={`btn sm ${gateOn ? 'on' : ''}`} aria-pressed={gateOn} disabled={working || !voices.length} onClick={() => void toggleGate()} title="Background noise between sentences goes down">
+          <Icon name="mute" size={13} /> Quiet the gaps
         </button>
         <button className={`btn sm ${project.loudness === 'social' ? 'on' : ''}`} aria-pressed={project.loudness === 'social'} disabled={working} onClick={() => void toggleLoudness()} title="Export as loud as social apps expect (about -14 LUFS)">
           <Icon name="speaker" size={13} /> Social loudness

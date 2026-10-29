@@ -157,6 +157,12 @@ export type TextStyle = z.infer<typeof TextStyle>;
 
 const Fades = { fadeIn: z.number().min(0).max(30).default(0), fadeOut: z.number().min(0).max(30).default(0) };
 
+/** Green screen (chroma key) settings. */
+export const Chroma = z
+  .object({ color: Hex.default('#00FF00'), similarity: z.number().min(0).max(1).default(0.4), smoothness: z.number().min(0).max(1).default(0.25), spill: z.number().min(0).max(1).default(0.5) })
+  .strict();
+export type Chroma = z.infer<typeof Chroma>;
+
 /** Effects on a video or picture, each with its strength (0..1). */
 export const Effects = z
   .object({
@@ -280,12 +286,16 @@ export const MediaClip = z
     zooms: z.array(Zoom).max(400).optional(),
     /** Voice clean-up on this clip's sound (low rumble cut, clearer voice, even loudness). */
     voice: z.boolean().default(false),
+    /** Noise gate: this many dB quieter between the clip's own sentences (null: off). */
+    gate: z.number().min(-40).max(0).nullable().optional(),
     /** A still: the frame at `in` held for the whole clip (no sound). */
     freeze: z.boolean().optional(),
     /** How this clip takes over from the clip just before it on its track (both show during the change). */
     transition: Transition.optional(),
     /** Edges cut off the picture (fractions of its width and height). */
     crop: Crop.optional(),
+    /** Green screen: this colour made transparent (similarity, edge smoothness, spill removal 0..1). */
+    chroma: Chroma.optional(),
     /** Behind a picture that does not fill the frame: a blurred, darker copy of it fills the rest. */
     backdrop: z.enum(['blur']).optional(),
     /** Looks laid over the picture (film grain, VHS, glow, RGB split, light leak), each 0..1. */
@@ -377,6 +387,8 @@ export const AudioClip = z
     volume: z.number().min(0).max(4).default(1),
     ...Fades,
     voice: z.boolean().default(false),
+    /** Noise gate: this many dB quieter between the clip's own sentences (null: off). */
+    gate: z.number().min(-40).max(0).nullable().optional(),
     /** Music: this many dB quieter while someone speaks (null: never ducked). */
     duck: z.number().min(-40).max(0).nullable().default(null),
   })
@@ -597,6 +609,7 @@ export const EditOp = z.discriminatedUnion('op', [
       color: ColorGrade.partial().nullable().optional(),
       zooms: z.array(Zoom).max(400).nullable().optional(),
       voice: z.boolean().optional(),
+      gate: z.number().min(-40).max(0).nullable().optional(),
       duck: z.number().min(-40).max(0).nullable().optional(),
       /** Keyframes per property (each list replaces that property's keyframes; null or [] removes them). */
       keys: z.partialRecord(z.enum(KEY_PROPS), z.array(Key).max(300).nullable()).optional(),
@@ -612,6 +625,7 @@ export const EditOp = z.discriminatedUnion('op', [
       transition: Transition.nullable().optional(),
       crop: Crop.partial().nullable().optional(),
       backdrop: z.enum(['blur']).nullable().optional(),
+      chroma: Chroma.partial().nullable().optional(),
       /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
       effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
       /** A speed curve: points, a preset's name, or null for steady speed again. */
@@ -754,6 +768,38 @@ export function duckGain(speech: Span[], t: number, db: number): number {
       const down = t < s.start ? (s.start - t) / 0.25 : 0;
       const up = t > s.end ? (t - s.end) / 0.45 : 0;
       g = Math.min(g, low + (1 - low) * Math.max(down, up));
+    }
+  }
+  return g;
+}
+
+/** Where one clip's own sound has speech, on the timeline (from its media's speech analysis). */
+export function clipSpeech(p: Project, clip: MediaClip | AudioClip): Span[] {
+  const a = p.assets.find((x) => x.id === clip.assetId);
+  if (!a?.speech) return [];
+  const rate = clip.type === 'media' ? clip.speed : 1;
+  const srcEnd = clip.in + clip.duration * rate;
+  const out: Span[] = [];
+  for (const s of a.speech) {
+    const from = Math.max(s.start, clip.in);
+    const to = Math.min(s.end, srcEnd);
+    if (to > from) out.push({ start: clip.start + (from - clip.in) / rate, end: clip.start + (to - clip.in) / rate });
+  }
+  return out;
+}
+
+/**
+ * How loud a gated clip is at t (1 = full): full while its speech goes on (opening just before a
+ * sentence and closing a moment after it), `db` quieter in the gaps.
+ */
+export function gateGain(speech: Span[], t: number, db: number): number {
+  const low = Math.pow(10, db / 20);
+  let g = low;
+  for (const s of speech) {
+    if (t < s.start - 0.08) break;
+    if (t <= s.end + 0.25) {
+      const open = t < s.start ? 1 - (s.start - t) / 0.08 : t > s.end ? 1 - (t - s.end) / 0.25 : 1;
+      g = Math.max(g, low + (1 - low) * open);
     }
   }
   return g;
@@ -1229,6 +1275,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           delete m.speedCurve;
           m.duration = round(a.kind === 'image' ? m.duration : Math.max(0.04, sourceSeconds / op.speed));
         }
+        if (op.chroma !== undefined) {
+          only('green screen (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          if (op.chroma === null) delete m.chroma;
+          else m.chroma = Chroma.parse({ ...(m.chroma ?? {}), ...op.chroma });
+        }
         if (op.backdrop !== undefined) {
           only('backdrop (videos and pictures)', c.type === 'media');
           const m = c as MediaClip;
@@ -1291,6 +1343,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (op.voice !== undefined) {
           only('sound', isAV(c));
           (c as MediaClip | AudioClip).voice = op.voice;
+        }
+        if (op.gate !== undefined) {
+          only('noise gate', isAV(c));
+          const v = c as MediaClip | AudioClip;
+          if (op.gate === null) delete v.gate;
+          else v.gate = op.gate;
         }
         if (op.duck !== undefined) {
           only('music ducking (only sound clips on an audio track)', c.type === 'audio');

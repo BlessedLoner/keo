@@ -172,8 +172,20 @@ export class StudioService {
     if (stack.length > UNDO_DEPTH) stack.shift();
     this.undo.set(id, stack);
     this.redo.delete(id);
+    this.label(id, describeChanges(r.changes));
     this.save(r.project);
     return r;
+  }
+
+  /** What each step in the undo list did (in the same order as the undo stack). */
+  private readonly undoLabels = new Map<string, string[]>();
+  private readonly redoLabels = new Map<string, string[]>();
+  private label(id: string, text: string): void {
+    const l = this.undoLabels.get(id) ?? [];
+    l.push(text);
+    while (l.length > (this.undo.get(id)?.length ?? 0)) l.shift();
+    this.undoLabels.set(id, l);
+    this.redoLabels.delete(id);
   }
 
   undoEdit(id: string): Project {
@@ -183,6 +195,8 @@ export class StudioService {
     const r = this.redo.get(id) ?? [];
     r.push(this.get(id));
     this.redo.set(id, r);
+    const done = this.undoLabels.get(id)?.pop();
+    this.redoLabels.set(id, [...(this.redoLabels.get(id) ?? []), done ?? 'A change']);
     this.save(prev);
     return prev;
   }
@@ -193,12 +207,18 @@ export class StudioService {
     const u = this.undo.get(id) ?? [];
     u.push(this.get(id));
     this.undo.set(id, u);
+    const again = this.redoLabels.get(id)?.pop();
+    this.undoLabels.set(id, [...(this.undoLabels.get(id) ?? []), again ?? 'A change']);
     this.save(next);
     return next;
   }
 
-  canUndo(id: string): { undo: boolean; redo: boolean } {
-    return { undo: !!this.undo.get(id)?.length, redo: !!this.redo.get(id)?.length };
+  canUndo(id: string): { undo: boolean; redo: boolean; undoLabels: string[]; redoLabels: string[] } {
+    const u = this.undo.get(id)?.length ?? 0;
+    const labels = this.undoLabels.get(id) ?? [];
+    // Steps made before labels existed (or by imports) show as "A change".
+    const undoLabels = [...Array.from({ length: Math.max(0, u - labels.length) }, () => 'A change'), ...labels].slice(-u || 0);
+    return { undo: u > 0, redo: !!this.redo.get(id)?.length, undoLabels: undoLabels.reverse().slice(0, 20), redoLabels: [...(this.redoLabels.get(id) ?? [])].reverse().slice(0, 20) };
   }
 
   /** Adds files from this PC to the project (each once), measuring them first. */
@@ -226,6 +246,7 @@ export class StudioService {
     const stack = this.undo.get(id) ?? [];
     stack.push(p);
     this.undo.set(id, stack);
+    this.label(id, 'Added media');
     const next = Project.parse({ ...p, assets: [...p.assets, ...added], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
     this.save(next);
     this.d.log.info('studio.imported', { files: added.length, skipped: skipped.length });
@@ -602,6 +623,7 @@ export class StudioService {
     const stack = this.undo.get(id) ?? [];
     stack.push(p);
     this.undo.set(id, stack);
+    this.label(id, 'Added media');
     const next = Project.parse({ ...p, assets: [...p.assets, asset], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
     this.save(next);
     return { project: next, asset };
@@ -674,4 +696,11 @@ export class StudioService {
     }
     this.jobs.clear();
   }
+}
+
+/** A short name for an edit in the undo list. */
+function describeChanges(changes: string[]): string {
+  if (!changes.length) return 'A change';
+  const first = changes[0]!.replace(/\s*\((cl|tr|as)_[A-Za-z0-9]+\)/g, '').replace(/\.$/, '');
+  return changes.length > 1 ? `${first.slice(0, 50)} (+${changes.length - 1} more)` : first.slice(0, 70);
 }

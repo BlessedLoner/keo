@@ -13,7 +13,7 @@ import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
-import { CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
+import { ChromaFields, CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -50,7 +50,9 @@ export function StudioView() {
   const selectionRef = useRef<string[]>([]);
   selectionRef.current = selection;
   const [zoom, setZoom] = useState(60);
-  const [history, setHistory] = useState({ undo: false, redo: false });
+  const [history, setHistory] = useState<{ undo: boolean; redo: boolean; undoLabels: string[]; redoLabels: string[] }>({ undo: false, redo: false, undoLabels: [], redoLabels: [] });
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [creating, setCreating] = useState(false);
@@ -288,6 +290,7 @@ export function StudioView() {
       } else if (e.key === 'Home') setTime(0);
       else if (e.key === 'End') setTime(projectDuration(p));
       else if (e.key === 'Escape') setSelected(null);
+      else if (e.key === '?') setHelpOpen((v) => !v);
       else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
         e.preventDefault();
         void edit(selectionRef.current.map((clip) => ({ op: 'duplicate' as const, clip })));
@@ -462,10 +465,38 @@ export function StudioView() {
           {project.width}×{project.height} · {project.fps} fps · {fmtDur(duration)}
         </span>
         <div className="spacer" />
-        <button className="btn icon sm ghost" disabled={!history.undo} onClick={() => void undo()} title="Undo (Ctrl+Z)">
+        <button className="btn icon sm ghost" onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">
+          ?
+        </button>
+        <button className="btn icon sm ghost" disabled={!history.undo} onClick={() => void undo()} title={history.undoLabels[0] ? `Undo: ${history.undoLabels[0]} (Ctrl+Z)` : 'Undo (Ctrl+Z)'}>
           <Icon name="undo" size={15} />
         </button>
-        <button className="btn icon sm ghost" disabled={!history.redo} onClick={() => void redo()} title="Redo (Ctrl+Y)">
+        <span className="history-wrap">
+          <button className="btn sm ghost" disabled={!history.undo} onClick={() => setHistoryOpen((v) => !v)} title="Every change, newest first: go back to any of them">
+            History
+          </button>
+          {historyOpen && (
+            <div className="history-menu" onMouseLeave={() => setHistoryOpen(false)}>
+              {history.undoLabels.map((l, i) => (
+                <button
+                  key={i}
+                  onClick={() =>
+                    void (async () => {
+                      setHistoryOpen(false);
+                      // Back to just before this change.
+                      for (let k = 0; k <= i; k++) await undo();
+                    })()
+                  }
+                  title="Undo back to before this change"
+                >
+                  <span className="hist-n">{i + 1}</span> {l}
+                </button>
+              ))}
+              {!history.undoLabels.length && <span className="small muted">Nothing to undo.</span>}
+            </div>
+          )}
+        </span>
+        <button className="btn icon sm ghost" disabled={!history.redo} onClick={() => void redo()} title={history.redoLabels[0] ? `Redo: ${history.redoLabels[0]} (Ctrl+Y)` : 'Redo (Ctrl+Y)'}>
           <Icon name="redo" size={15} />
         </button>
         <button className="btn icon sm ghost" onClick={() => void removeProject()} title="Delete this project">
@@ -587,6 +618,7 @@ export function StudioView() {
         onZoom={setZoom}
         height={tlHeight}
       />
+      {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
       {exporting && <ExportDialog project={project} onClose={() => setExporting(false)} onExport={(o) => void exportVideo(o)} />}
     </div>
   );
@@ -790,6 +822,7 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
       {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
+      {clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
       {clip.type === 'media' && <EffectsFields clip={clip} set={set} />}
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
       {clip.type !== 'audio' && <MotionFields clip={clip} set={set} />}
@@ -951,6 +984,49 @@ function CurveGraph({ points }: { points: SpeedPoint[] }) {
       <line x1={0} x2={W} y1={H / 2} y2={H / 2} className="mid" />
       <path d={path} />
     </svg>
+  );
+}
+
+const SHORTCUTS: Array<[string, string]> = [
+  ['Space', 'Play / pause'],
+  ['J / K / L', 'Back 2 s / pause / play'],
+  ['← / →', 'One frame back / forward (Shift: one second)'],
+  ['Home / End', 'To the start / end'],
+  ['S', 'Split at the playhead'],
+  ['Delete', 'Delete the selected clips (Shift: and close the gap)'],
+  ['Ctrl + D', 'Duplicate'],
+  ['Ctrl + C / V', 'Copy / paste at the playhead'],
+  ['Ctrl + A', 'Select every clip'],
+  ['Shift / Ctrl + click', 'Select more clips'],
+  ['Ctrl + Z / Y', 'Undo / redo'],
+  ['+ / −, Ctrl + wheel', 'Zoom the timeline'],
+  ['Esc', 'Select nothing'],
+  ['?', 'This list'],
+];
+
+function ShortcutsSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-back" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal export-dialog">
+        <h3>Keyboard shortcuts</h3>
+        <dl className="shortcuts">
+          {SHORTCUTS.map(([k, v]) => (
+            <div key={k}>
+              <dt>
+                <kbd>{k}</kbd>
+              </dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="small muted">On the picture: click a layer to pick it, drag to move, drag the corner to resize, drag the round handle to rotate (Shift: 15° steps).</p>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

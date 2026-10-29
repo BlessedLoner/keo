@@ -1102,6 +1102,29 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const raOut = await s.studioReadAloud(fl.projectId, raText.id, 'female');
   out.readAloud = { seconds: raOut.seconds, start: s.studio.get(fl.projectId).tracks.flatMap((t) => t.clips).find((c) => c.id === raOut.clip)?.start };
   s.studio.delete(fl.projectId);
+  // Green screen: a pure green picture over a red background is keyed away (the frame shows red).
+  const greenPx = Buffer.alloc(64 * 64 * 4);
+  for (let i = 0; i < greenPx.length; i += 4) {
+    greenPx[i] = 0;
+    greenPx[i + 1] = 255;
+    greenPx[i + 2] = 0;
+    greenPx[i + 3] = 255;
+  }
+  const greenFile = path.join(dir, 'green.png');
+  fs.writeFileSync(greenFile, nativeImage.createFromBitmap(greenPx, { width: 64, height: 64 }).toPNG());
+  const gs = s.studio.create('Studio smoke green', 'square');
+  const gsPic = (await s.studio.importFiles(gs.id, [greenFile])).added[0]!;
+  const gsClip = s.studio.edit(gs.id, [{ op: 'set_project', width: 240, height: 240, background: '#FF0000' }, { op: 'add_media', assetId: gsPic.id, start: 0, duration: 1 }]).project.tracks[0]!.clips[0]!;
+  const pixel = async () => {
+    const f = (await s.studio.frames(gs.id, [0.5], 120))[0]!;
+    const bmp = nativeImage.createFromBuffer(f.png).toBitmap();
+    const at = (60 * 120 + 60) * 4;
+    return { b: bmp[at]!, g: bmp[at + 1]!, r: bmp[at + 2]! };
+  };
+  const beforeKey = await pixel();
+  s.studio.edit(gs.id, [{ op: 'set', clip: gsClip.id, chroma: { color: '#00FF00' } }]);
+  out.chroma = { before: beforeKey, after: await pixel() };
+  s.studio.delete(gs.id);
   // A speed curve, exported for real (on a copy of the second project).
   const sc = s.studio.duplicate(b.id);
   const scClip = s.studio.get(sc.id).tracks.flatMap((t) => t.clips).find((c) => c.type === 'media')!;

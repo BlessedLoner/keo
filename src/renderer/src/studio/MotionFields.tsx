@@ -127,6 +127,46 @@ export function MotionFields({ clip, set }: { clip: Visual; set: (p: SetPatch) =
   );
 }
 
+/** Green screen: remove a colour (green or blue) from a video or picture. */
+export function ChromaFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
+  const k = clip.chroma;
+  const slider = (key: 'similarity' | 'smoothness' | 'spill', label: string) => (
+    <label className="insp-range" key={`${clip.id}-${key}-${k?.[key]}`}>
+      <span>{label}</span>
+      <input type="range" min={0} max={100} defaultValue={Math.round((k?.[key] ?? 0) * 100)} onPointerUp={(e) => set({ chroma: { [key]: Number((e.target as HTMLInputElement).value) / 100 } })} onKeyUp={(e) => set({ chroma: { [key]: Number((e.target as HTMLInputElement).value) / 100 } })} />
+      <em>{Math.round((k?.[key] ?? 0) * 100)}</em>
+    </label>
+  );
+  return (
+    <Section title="Green screen">
+      <div className="insp-seg" role="radiogroup" aria-label="Remove colour">
+        {(
+          [
+            [null, 'Off'],
+            ['#00FF00', 'Green'],
+            ['#0047FF', 'Blue'],
+          ] as const
+        ).map(([color, label]) => {
+          const on = color === null ? !k : k?.color.toUpperCase() === color;
+          return (
+            <button key={label} role="radio" aria-checked={on} className={on ? 'on' : ''} onClick={() => set({ chroma: color === null ? null : { color } })}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {k && (
+        <>
+          <Color label="Colour to remove" value={k.color} onCommit={(v) => set({ chroma: { color: v } })} />
+          {slider('similarity', 'Strength')}
+          {slider('smoothness', 'Edge softness')}
+          {slider('spill', 'Remove green glow')}
+        </>
+      )}
+    </Section>
+  );
+}
+
 /** Effects over the picture, each with a strength. */
 export function EffectsFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
   const fx = clip.effects ?? {};

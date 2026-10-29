@@ -1,6 +1,7 @@
 import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type Asset, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
+import { chromaKey } from './chroma';
 import { drawEffects } from './effects';
 import { drawDevice, drawNotch, drawShape } from './shapes';
 
@@ -145,8 +146,12 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
   return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number, role?: { as: 'out' | 'in'; p: number; kind: Transition['kind'] }): void {
-  const full = sizeOf(src);
+function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawable, fade: number, t: number, W: number, H: number, role?: { as: 'out' | 'in'; p: number; kind: Transition['kind'] }): void {
+  const full = sizeOf(original);
+  // Green screen: the keyed picture (same size) is drawn instead of the original.
+  const keyed = c.chroma ? chromaKey(original, full.w, full.h, c.chroma) : null;
+  const src: Drawable = keyed ? (keyed as unknown as Drawable) : original;
+  const kx = keyed ? keyed.width / full.w : 1;
   // Cropped: only the part inside the crop is drawn (and sized).
   const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
   const sx = full.w * cr.left;
@@ -204,7 +209,7 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
     ctx.save();
     ctx.filter = `blur(${Math.round(H * 0.035)}px) brightness(0.7) saturate(1.15)`;
     const grow = 1.12;
-    if (c.crop) ctx.drawImage(src, sx, sy, w, h, W / 2 - (cover.dw * grow) / 2, H / 2 - (cover.dh * grow) / 2, cover.dw * grow, cover.dh * grow);
+    if (c.crop) ctx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, W / 2 - (cover.dw * grow) / 2, H / 2 - (cover.dh * grow) / 2, cover.dw * grow, cover.dh * grow);
     else ctx.drawImage(src, W / 2 - (cover.dw * grow) / 2, H / 2 - (cover.dh * grow) / 2, cover.dw * grow, cover.dh * grow);
     ctx.restore();
   }
@@ -245,7 +250,7 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
   if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
   if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
   if (filters.length) ctx.filter = filters.join(' ');
-  const paint = (cx: CanvasRenderingContext2D) => (c.crop ? cx.drawImage(src, sx, sy, w, h, -dw / 2, -dh / 2, dw, dh) : cx.drawImage(src, -dw / 2, -dh / 2, dw, dh));
+  const paint = (cx: CanvasRenderingContext2D) => (c.crop ? cx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, -dw / 2, -dh / 2, dw, dh) : cx.drawImage(src, -dw / 2, -dh / 2, dw, dh));
   paint(ctx);
   ctx.filter = 'none';
   if (c.effects) drawEffects(ctx, c.effects, src, paint, -(shaped ? vw : dw) / 2, -(shaped ? vh : dh) / 2, shaped ? vw : dw, shaped ? vh : dh, t, H);

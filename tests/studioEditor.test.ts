@@ -128,3 +128,35 @@ describe('Speed curves, backdrop and effects', () => {
     expect(videos(a)[0]!.backdrop).toBeUndefined();
   });
 });
+
+describe('Green screen and quiet the gaps', () => {
+  it('green screen settings merge, and null removes them', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    let a = applyEdits(p, [{ op: 'set', clip: id, chroma: { color: '#00FF00' } }], { rand }).project;
+    expect(videos(a)[0]!.chroma).toEqual({ color: '#00FF00', similarity: 0.4, smoothness: 0.25, spill: 0.5 });
+    a = applyEdits(a, [{ op: 'set', clip: id, chroma: { similarity: 0.6 } }], { rand }).project;
+    expect(videos(a)[0]!.chroma?.similarity).toBe(0.6);
+    a = applyEdits(a, [{ op: 'set', clip: id, chroma: null }], { rand }).project;
+    expect(videos(a)[0]!.chroma).toBeUndefined();
+  });
+
+  it('the gate opens for the clip’s own speech and closes in the gaps', async () => {
+    const { clipSpeech, gateGain } = await import('../src/shared/studio');
+    const p = withClip();
+    const withSpeech = { ...p, assets: [{ ...vid, speech: [{ start: 2, end: 3 }, { start: 6, end: 7 }] }] };
+    const c = videos(withSpeech)[0]!;
+    // The clip starts 1 s into its video: speech at 1–2 s and 5–6 s on the timeline.
+    const spans = clipSpeech(withSpeech, c);
+    expect(spans).toEqual([
+      { start: 1, end: 2 },
+      { start: 5, end: 6 },
+    ]);
+    const low = Math.pow(10, -18 / 20);
+    expect(gateGain(spans, 1.5, -18)).toBe(1);
+    expect(gateGain(spans, 3.5, -18)).toBeCloseTo(low, 5);
+    expect(gateGain(spans, 2.1, -18)).toBeGreaterThan(low);
+    const gated = applyEdits(p, [{ op: 'set', clip: c.id, gate: -18 }], { rand }).project;
+    expect(videos(gated)[0]!.gate).toBe(-18);
+  });
+});

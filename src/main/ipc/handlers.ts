@@ -503,6 +503,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     // The user's own click in Studio.
     'studio:readAloud': async ({ id, clip, voice }) => s.studioReadAloud(id, clip, voice).catch(studioErr),
     'studio:saveRecording': async ({ id, wavBase64, at }) => s.studio.saveRecording(id, Buffer.from(wavBase64, 'base64'), at).catch(studioErr),
+    'studio:analyzeSpeech': async ({ id }) => ({ analysed: (await s.studio.analyzeSpeech(id).catch(studioErr)).analysed }),
     'studio:beatSync': async ({ id, every }) => {
       const r = await s.studio.beatCut(id, { every }).catch(studioErr);
       return { placed: r.placed, bpm: r.bpm };

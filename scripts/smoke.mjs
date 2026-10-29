@@ -142,6 +142,7 @@ check('studio: an export can be stopped', st.stopped?.asked === true && st.stopp
 check('studio: cut to the beat finds the beat in real decoded sound', st.beat?.placed === 3 && st.beat.lengths.every((l) => l > 0.85 && l < 1.15), st.error ?? JSON.stringify(st.beat));
 check('studio: read aloud puts a voice under the text', st.readAloud?.seconds > 0.5 && st.readAloud?.start === 0.5, st.error ?? JSON.stringify(st.readAloud));
 check('studio: a speed curve exports at its new length', st.speedCurve?.frames > 10 && Math.abs(st.speedCurve.seconds - st.speedCurve.expected) < 0.1, st.error ?? JSON.stringify(st.speedCurve));
+check('studio: green screen is keyed away on the graphics card', st.chroma?.before?.g > 200 && st.chroma?.before?.r < 60 && st.chroma?.after?.r > 200 && st.chroma?.after?.g < 60, st.error ?? JSON.stringify(st.chroma));
 check('studio: frames for Keo to look at are drawn', Array.isArray(st.frames) && st.frames.length === 2 && st.frames.every((f) => f.width === 180 && f.centre > 20), st.error ?? JSON.stringify(st.frames));
 
 // Switching to another data folder happens in place: same window, same process, other data.

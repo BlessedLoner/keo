@@ -72,3 +72,21 @@ describe('Studio projects', () => {
     expect(list[0]!.cover).toBeNull();
   });
 });
+
+describe('Undo history', () => {
+  it('names each change, newest first, and moves names between undo and redo', () => {
+    setup();
+    const s = h!.services.studio;
+    const p = s.create('History', 'vertical');
+    s.edit(p.id, [{ op: 'add_text', text: 'First', start: 0, duration: 2 }]);
+    s.edit(p.id, [{ op: 'add_text', text: 'Second', start: 2, duration: 2 }]);
+    let hist = s.canUndo(p.id);
+    expect(hist.undoLabels).toEqual(['Added text “Second” at 2s', 'Added text “First” at 0s']);
+    s.undoEdit(p.id);
+    hist = s.canUndo(p.id);
+    expect(hist.undoLabels).toEqual(['Added text “First” at 0s']);
+    expect(hist.redoLabels).toEqual(['Added text “Second” at 2s']);
+    s.redoEdit(p.id);
+    expect(s.canUndo(p.id).undoLabels[0]).toBe('Added text “Second” at 2s');
+  });
+});
