@@ -1,4 +1,4 @@
-import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span, type VoiceFx } from '@shared/studio';
+import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, volumeAt, type Asset, type MediaClip, type Project, type Span, type VoiceFx } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
 import { voiceChain, voiceFxChain } from './sound';
@@ -134,7 +134,7 @@ export class PreviewSources implements SourceProvider {
         const fade = Math.min(c.fadeIn > 0 ? Math.min(1, (t - c.start) / c.fadeIn) : 1, c.fadeOut > 0 ? Math.min(1, (clipEnd(c) - t) / c.fadeOut) : 1);
         el.muted = tr.muted || !a.hasAudio || outside;
         const duck = (c.type === 'audio' && c.duck !== null ? duckGain(speech, t, c.duck) : 1) * (c.gate ? gateGain(clipSpeech(p, c), t, c.gate) : 1);
-        const level = Math.max(0, c.volume * fade * duck);
+        const level = Math.max(0, volumeAt(c, t - c.start) * fade * duck);
         if (c.voice || c.voiceFx || this.routes.has(el)) {
           el.volume = 1;
           this.route(el, c.voice, c.voiceFx ?? null).gain.value = Math.min(4, level);

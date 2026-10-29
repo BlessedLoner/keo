@@ -289,6 +289,8 @@ export const MediaClip = z
     in: Sec.default(0),
     speed: z.number().min(0.1).max(8).default(1),
     volume: z.number().min(0).max(4).default(1),
+    /** Volume over the clip: keyframes (at: seconds into the clip, value 0..4) that replace `volume` while set. */
+    volumeKeys: z.array(Key).max(300).optional(),
     ...Fades,
     /** cover: fill the frame (cropping); contain: show all of it. */
     fit: z.enum(['cover', 'contain']).default('cover'),
@@ -404,6 +406,8 @@ export const AudioClip = z
     duration: z.number().min(0.04).max(24 * 3600),
     in: Sec.default(0),
     volume: z.number().min(0).max(4).default(1),
+    /** Volume over the clip: keyframes (at: seconds into the clip, value 0..4) that replace `volume` while set. */
+    volumeKeys: z.array(Key).max(300).optional(),
     ...Fades,
     voice: z.boolean().default(false),
     /** Noise gate: this many dB quieter between the clip's own sentences (null: off). */
@@ -628,6 +632,8 @@ export const EditOp = z.discriminatedUnion('op', [
       style: StylePatch.optional(),
       transform: TransformPatch.optional(),
       volume: z.number().min(0).max(4).optional(),
+      /** Volume keyframes (values 0..4); null or [] removes them. */
+      volumeKeys: z.array(Key).max(300).nullable().optional(),
       speed: z.number().min(0.1).max(8).optional(),
       fadeIn: z.number().min(0).max(30).optional(),
       fadeOut: z.number().min(0).max(30).optional(),
@@ -888,15 +894,14 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
  * what is kept.
  */
 function shiftInto(c: Clip, by: number, length: number): void {
+  if (isAV(c) && c.volumeKeys?.length) c.volumeKeys = shiftKeys(c.volumeKeys, by, length);
   if (c.type !== 'audio' && c.keys) {
     // Each keyframed property: its value at the new start, then the keyframes after it.
     const keys: Keys = {};
     for (const k of KEY_PROPS) {
       const list = c.keys[k];
       if (!list?.length) continue;
-      const later = list.filter((x) => x.at > by + 1e-6 && x.at <= by + length + 1e-6).map((x) => ({ ...x, at: round(x.at - by) }));
-      const next = list.find((x) => x.at > by + length + 1e-6);
-      keys[k] = [{ at: 0, value: round(keyValue(list, by)), ease: 'hold' as const }, ...later, ...(next ? [{ ...next, at: round(next.at - by) }] : [])];
+      keys[k] = shiftKeys(list, by, length);
     }
     c.keys = keys;
   }
@@ -915,6 +920,18 @@ function shiftInto(c: Clip, by: number, length: number): void {
     c.zooms = moved || after[0]?.ease === 'ramp' ? [{ at: 0, scale: round(now.scale), x: round(now.x), y: round(now.y), ease: 'cut' as const }, ...after] : after;
     if (!c.zooms.length) delete c.zooms;
   }
+}
+
+/** Keyframes of a clip that now starts `by` seconds later in its old self and lasts `length`. */
+function shiftKeys(list: Key[], by: number, length: number): Key[] {
+  const later = list.filter((x) => x.at > by + 1e-6 && x.at <= by + length + 1e-6).map((x) => ({ ...x, at: round(x.at - by) }));
+  const next = list.find((x) => x.at > by + length + 1e-6);
+  return [{ at: 0, value: round(keyValue(list, by)), ease: 'hold' as const }, ...later, ...(next ? [{ ...next, at: round(next.at - by) }] : [])];
+}
+
+/** A sound clip's volume `rt` seconds into it (its keyframes, else its volume). */
+export function volumeAt(c: { volume: number; volumeKeys?: Key[] | undefined }, rt: number): number {
+  return c.volumeKeys?.length ? Math.max(0, Math.min(4, keyValue(c.volumeKeys, rt))) : c.volume;
 }
 
 const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
@@ -1185,7 +1202,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           t = { id: rid('tr', rand), kind: 'audio', name: 'Detached audio', hidden: false, muted: false, clips: [] };
           p.tracks.push(t);
         }
-        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}) });
+        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}), ...(c.volumeKeys ? { volumeKeys: c.volumeKeys } : {}) });
         t.clips.push(s);
         sortClips(t);
         c.volume = 0;
@@ -1332,6 +1349,16 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (op.volume !== undefined) {
           only('volume', isAV(c));
           (c as MediaClip | AudioClip).volume = op.volume;
+        }
+        if (op.volumeKeys !== undefined) {
+          only('volume keyframes', isAV(c));
+          const v = c as MediaClip | AudioClip;
+          if (!op.volumeKeys?.length) delete v.volumeKeys;
+          else {
+            if (op.volumeKeys.some((k) => k.value < 0 || k.value > 4)) throw new EditError('Volume keyframes go from 0 (silent) to 4 (four times as loud).');
+            v.volumeKeys = [...op.volumeKeys].filter((k) => k.at <= v.duration + 1e-6).sort((a, b) => a.at - b.at).map((k) => ({ ...k, at: round(k.at) }));
+            if (!v.volumeKeys.length) delete v.volumeKeys;
+          }
         }
         if (op.speed !== undefined) {
           only('speed', c.type === 'media');
@@ -1685,7 +1712,7 @@ export function describeProject(p: Project): string {
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
       else {
         const a = p.assets.find((x) => x.id === c.assetId);
-        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
+        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
     }
   });

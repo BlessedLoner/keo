@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
-import { keyValue, MOTIONS, TRANSITIONS, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { keyValue, MOTIONS, TRANSITIONS, volumeAt, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -78,6 +78,26 @@ export function PositionFields({ clip, time, fps, set }: { clip: Visual; time: n
       <Num label="Blur" value={blur.value} min={0} max={20} step={0.5} suffix="%" onCommit={(v) => blur.commit(v)} keyframe={blur.keyframe} />
     </div>
   );
+}
+
+/** A sound clip's volume, with keyframes (◆) so it can rise and dip over the clip. */
+export function VolumeField({ clip, time, fps, set }: { clip: MediaClip | AudioClip; time: number; fps: number; set: (p: SetPatch) => void }) {
+  const rt = Math.max(0, Math.min(clip.duration, time - clip.start));
+  const inside = time >= clip.start - 1e-6 && time <= clip.start + clip.duration + 1e-6;
+  const frame = 1 / fps;
+  const keys = clip.volumeKeys;
+  const on = !!keys?.length;
+  const value = volumeAt(clip, rt);
+  const here = on && keys!.some((x) => Math.abs(x.at - rt) < frame / 2);
+  const commit = (v: number) => {
+    if (!on) return set({ volume: v });
+    // Animated: the value at the playhead becomes (or replaces) a keyframe.
+    const next: Key[] = keys!.filter((x) => Math.abs(x.at - rt) >= frame / 2);
+    next.push({ at: Math.round(rt * 1000) / 1000, value: v, ease: 'in-out' });
+    set({ volumeKeys: next.sort((a, b) => a.at - b.at) });
+  };
+  const onToggle = () => set({ volumeKeys: on ? null : [{ at: Math.round(rt * 1000) / 1000, value, ease: 'in-out' }] });
+  return <Num label="Volume" value={Math.round(value * 100)} min={0} max={400} step={5} suffix="%" onCommit={(v) => commit(v / 100)} keyframe={inside ? { on, here, onToggle } : undefined} />;
 }
 
 /** Entrance, exit (videos, pictures, shapes) and a loop (everything visible). */

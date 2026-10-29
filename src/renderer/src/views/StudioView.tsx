@@ -13,7 +13,7 @@ import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
-import { ChromaFields, CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
+import { ChromaFields, CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -834,11 +834,8 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       </Section>
       {(clip.type === 'audio' || (clip.type === 'media' && asset?.hasAudio)) && (
         <Section title="Sound">
-          <label className="insp-range">
-            <span>Volume</span>
-            <input type="range" min={0} max={200} defaultValue={Math.round(clip.volume * 100)} onPointerUp={(e) => set({ volume: Number((e.target as HTMLInputElement).value) / 100 })} onKeyUp={(e) => set({ volume: Number((e.target as HTMLInputElement).value) / 100 })} />
-            <em>{Math.round(clip.volume * 100)}%</em>
-          </label>
+          <VolumeField clip={clip} time={time} fps={project.fps} set={set} />
+          {clip.volumeKeys?.length ? <p className="small muted insp-tip-inline">◆ The volume changes over the clip: move the playhead and change it to add a point.</p> : null}
           <label className="insp-check">
             <input type="checkbox" checked={clip.voice} onChange={(e) => set({ voice: e.target.checked })} /> Enhance voice
           </label>

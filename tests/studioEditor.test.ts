@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEdits, describeProject, exportSize, newProject, projectDuration, type Asset, type AudioClip, type MediaClip, type Project } from '../src/shared/studio';
+import { applyEdits, describeProject, exportSize, volumeAt, newProject, projectDuration, type Asset, type AudioClip, type MediaClip, type Project } from '../src/shared/studio';
 
 let n = 0;
 const rand = () => `r${String(++n).padStart(7, '0')}`;
@@ -195,5 +195,28 @@ describe('Studio editing: mirror, blend, voice changer, locked tracks', () => {
       expect(() => applyEdits(locked, [op], { rand })).toThrow(/locked/);
     const open = applyEdits(locked, [{ op: 'set_track', track, locked: false }, { op: 'move', clip: id, start: 3 }], { rand }).project;
     expect(videos(open)[0]!.start).toBe(3);
+  });
+});
+
+describe('Studio editing: volume keyframes', () => {
+  it('the volume follows its keyframes, split keeps the curve, Keo sees it', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    const keys = [
+      { at: 0, value: 1, ease: 'linear' as const },
+      { at: 4, value: 0.2, ease: 'linear' as const },
+    ];
+    const a = applyEdits(p, [{ op: 'set', clip: id, volumeKeys: keys }], { rand }).project;
+    const c = videos(a)[0]!;
+    expect(volumeAt(c, 2)).toBeCloseTo(0.6);
+    expect(volumeAt(c, 6)).toBeCloseTo(0.2);
+    expect(describeProject(a)).toMatch(/volume keys 0s:1 4s:0.2/);
+    // Split at 2 s: the second part starts at the volume it was at there.
+    const b = applyEdits(a, [{ op: 'split', clip: id, at: 2 }], { rand }).project;
+    const second = videos(b)[1]!;
+    expect(volumeAt(second, 0)).toBeCloseTo(0.6);
+    expect(volumeAt(second, 2)).toBeCloseTo(0.2);
+    expect(() => applyEdits(p, [{ op: 'set', clip: id, volumeKeys: [{ at: 0, value: 9, ease: 'linear' }] }], { rand })).toThrow(/0 \(silent\) to 4/);
+    expect(videos(applyEdits(a, [{ op: 'set', clip: id, volumeKeys: null }], { rand }).project)[0]).not.toHaveProperty('volumeKeys');
   });
 });

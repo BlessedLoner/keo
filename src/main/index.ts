@@ -1028,7 +1028,7 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, fit: 'contain', backdrop: 'blur' });
   // Mirrored, blended and a voice changer on each half (the pitch shifter and the big hall).
   if (halves[0]) ops.push({ op: 'set', clip: halves[0].id, flipX: true, blend: 'screen', voiceFx: 'chipmunk' });
-  if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, flipY: true, voiceFx: 'hall' });
+  if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, flipY: true, voiceFx: 'hall', volumeKeys: [{ at: 0, value: 1, ease: 'in-out' }, { at: 0.5, value: 0.2, ease: 'in-out' }] });
   s.studio.edit(b.id, ops);
   const cleaned = await s.studio.cleanup(b.id, { silences: true });
   const third = await s.studio.exportVideo(b.id);

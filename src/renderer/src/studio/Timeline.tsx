@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { clipEnd, projectDuration, TRANSITIONS, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
+import { clipEnd, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useFilmstrip, useWaveform } from './thumbs';
 
@@ -439,6 +439,15 @@ const ClipBody = memo(function ClipBody({ projectId, clip, asset, width, pps, he
         <img key={i} src={tile.src} alt="" draggable={false} style={{ left: tile.x, height }} />
       ))}
       {wave && <canvas ref={canvas} className={clip.type === 'audio' ? 'tl-wave full' : 'tl-wave'} style={{ width: w, height: waveH }} />}
+      {clip.volumeKeys?.length ? (
+        // The volume over the clip: 100% halfway up, 200% and more at the top.
+        <svg className="tl-vol" width={w} height={height}>
+          <polyline points={Array.from({ length: Math.ceil(w / 4) + 1 }, (_, i) => {
+            const x = Math.min(w, i * 4);
+            return `${x},${(height - 2 - (Math.min(2, volumeAt(clip, x / pps)) / 2) * (height - 4)).toFixed(1)}`;
+          }).join(' ')} />
+        </svg>
+      ) : null}
       {clip.type === 'audio' &&
         asset?.beats
           ?.filter((b) => b >= clip.in && b <= clip.in + clip.duration)

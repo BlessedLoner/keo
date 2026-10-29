@@ -1,4 +1,4 @@
-import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project, type VoiceFx } from '@shared/studio';
+import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
@@ -24,14 +24,14 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; volumeKeys?: Key[]; fadeIn: number; fadeOut: number; voice: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
-      if (!isAV(c) || c.volume <= 0) continue;
+      if (!isAV(c) || (c.volume <= 0 && !c.volumeKeys?.some((k) => k.value > 0))) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, ...(c.volumeKeys?.length ? { volumeKeys: c.volumeKeys } : {}), fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
     }
   }
   if (!parts.length || dur <= 0) return null;
@@ -61,11 +61,24 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
     }
     const gain = ctx.createGain();
     const end = part.start + part.duration;
-    gain.gain.setValueAtTime(part.fadeIn > 0 ? 0 : part.volume, part.start);
-    if (part.fadeIn > 0) gain.gain.linearRampToValueAtTime(part.volume, part.start + part.fadeIn);
-    if (part.fadeOut > 0) {
-      gain.gain.setValueAtTime(part.volume, Math.max(part.start, end - part.fadeOut));
-      gain.gain.linearRampToValueAtTime(0, end);
+    if (part.volumeKeys) {
+      // Volume keyframes (with the fades): a gain curve sampled every 20 ms, as the preview hears it.
+      const step = 0.02;
+      const n = Math.max(2, Math.ceil(part.duration / step) + 1);
+      const curve = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const rt = (i / (n - 1)) * part.duration;
+        const fade = Math.min(part.fadeIn > 0 ? Math.min(1, rt / part.fadeIn) : 1, part.fadeOut > 0 ? Math.min(1, (part.duration - rt) / part.fadeOut) : 1);
+        curve[i] = volumeAt(part, rt) * Math.max(0, fade);
+      }
+      gain.gain.setValueCurveAtTime(curve, part.start, part.duration);
+    } else {
+      gain.gain.setValueAtTime(part.fadeIn > 0 ? 0 : part.volume, part.start);
+      if (part.fadeIn > 0) gain.gain.linearRampToValueAtTime(part.volume, part.start + part.fadeIn);
+      if (part.fadeOut > 0) {
+        gain.gain.setValueAtTime(part.volume, Math.max(part.start, end - part.fadeOut));
+        gain.gain.linearRampToValueAtTime(0, end);
+      }
     }
     let out: AudioNode = part.voice ? voiceChain(ctx, src) : src;
     if (part.fx) out = voiceFxChain(ctx, out, part.fx).out;
