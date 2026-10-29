@@ -29,6 +29,13 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
   const [busy, setBusy] = useState<string | null>(null);
   const [sfx, setSfx] = useState<(typeof SFX_KINDS)[number]>('whoosh');
   const [allCuts, setAllCuts] = useState<(typeof TRANSITIONS)[number]>('crossfade');
+  const [beatEvery, setBeatEvery] = useState<1 | 2 | 4>(2);
+  const hasMusic = project.tracks.some((t) => t.kind === 'audio' && t.clips.length > 0);
+  const beatSync = () =>
+    run('beat', async () => {
+      const r = await invoke('studio:beatSync', { id: project.id, every: beatEvery });
+      ui.toast(`Put ${r.placed} clip${r.placed === 1 ? '' : 's'} on the beat${r.bpm ? ` (${Math.round(r.bpm)} BPM)` : ''}.`, 'success');
+    });
   // Clips that start right where another clip ends on a video track (a cut).
   const cuts = project.tracks.flatMap((t) => (t.kind === 'video' ? t.clips.filter((c) => c.type === 'media' && t.clips.some((o) => o.id !== c.id && o.type === 'media' && Math.abs(o.start + o.duration - c.start) < 0.05)).map((c) => c.id) : []));
   const media = project.tracks.flatMap((t) => t.clips.filter((c) => c.type === 'media'));
@@ -129,6 +136,16 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
           {look === 'custom' && <option value="custom">Custom</option>}
         </select>
       </label>
+      <div className="auto-row auto-sfx">
+        <select className="select" value={beatEvery} onChange={(e) => setBeatEvery(Number(e.target.value) as 1 | 2 | 4)} aria-label="Beats per clip">
+          <option value={1}>Every beat</option>
+          <option value={2}>Every 2 beats</option>
+          <option value={4}>Every 4 beats</option>
+        </select>
+        <button className="btn sm" disabled={working || !hasMusic} onClick={() => void beatSync()} title={hasMusic ? 'Lay the clips on the music’s beat' : 'Add music first (Library → Audio → Add music)'}>
+          <Icon name="music" size={13} /> Cut to beat
+        </button>
+      </div>
       <div className="auto-row auto-sfx">
         <select className="select" value={allCuts} onChange={(e) => setAllCuts(e.target.value as typeof allCuts)} aria-label="Transition for every cut">
           {TRANSITIONS.map((k) => (

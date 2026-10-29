@@ -322,6 +322,7 @@ export function Timeline({
                   }}
                 >
                   {c.type !== 'text' && c.type !== 'shape' && <ClipBody projectId={project.id} clip={c} asset={project.assets.find((a) => a.id === c.assetId)} width={w.width} pps={pps} height={ROW_H[t.kind] - 8} />}
+                  {(c.type === 'media' || c.type === 'audio') && selected === c.id && <FadeHandles clip={c} pps={pps} onEdit={onEdit} />}
                   <span className="tl-clip-label">{label(c)}</span>
                 </div>
               );
@@ -398,6 +399,47 @@ const ClipBody = memo(function ClipBody({ projectId, clip, asset, width, pps, he
         <img key={i} src={tile.src} alt="" draggable={false} style={{ left: tile.x, height }} />
       ))}
       {wave && <canvas ref={canvas} className={clip.type === 'audio' ? 'tl-wave full' : 'tl-wave'} style={{ width: w, height: waveH }} />}
+      {clip.type === 'audio' &&
+        asset?.beats
+          ?.filter((b) => b >= clip.in && b <= clip.in + clip.duration)
+          .slice(0, 2000)
+          .map((b) => <span key={b} className="tl-beat" style={{ left: (b - clip.in) * pps }} />)}
     </div>
   );
 });
+
+/** Fade in / fade out: drag the dots at the clip's top corners; the shaded part fades. */
+function FadeHandles({ clip, pps, onEdit }: { clip: Extract<Clip, { type: 'media' | 'audio' }>; pps: number; onEdit: (ops: EditOp[]) => void }) {
+  const [live, setLive] = useState<{ fadeIn: number; fadeOut: number } | null>(null);
+  const fi = live?.fadeIn ?? clip.fadeIn;
+  const fo = live?.fadeOut ?? clip.fadeOut;
+  const max = Math.max(0, clip.duration / 2);
+  const drag = (which: 'fadeIn' | 'fadeOut', e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const x0 = e.clientX;
+    const v0 = clip[which];
+    let v = v0;
+    const move = (ev: PointerEvent) => {
+      const dx = (ev.clientX - x0) / pps;
+      v = Math.round(Math.max(0, Math.min(max, v0 + (which === 'fadeIn' ? dx : -dx))) * 100) / 100;
+      setLive({ fadeIn: which === 'fadeIn' ? v : clip.fadeIn, fadeOut: which === 'fadeOut' ? v : clip.fadeOut });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setLive(null);
+      if (Math.abs(v - v0) > 0.01) onEdit([{ op: 'set', clip: clip.id, [which]: v }]);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <>
+      {fi > 0 && <span className="tl-fade-area in" style={{ width: fi * pps }} />}
+      {fo > 0 && <span className="tl-fade-area out" style={{ width: fo * pps }} />}
+      <span className="tl-fade-dot" style={{ left: Math.max(2, fi * pps - 5) }} title={`Fade in: ${fi.toFixed(2)} s (drag)`} onPointerDown={(e) => drag('fadeIn', e)} />
+      <span className="tl-fade-dot" style={{ right: Math.max(2, fo * pps - 5) }} title={`Fade out: ${fo.toFixed(2)} s (drag)`} onPointerDown={(e) => drag('fadeOut', e)} />
+    </>
+  );
+}

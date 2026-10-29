@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, isAV, needsAnalysis, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { detectBeats } from '../video/ffmpeg';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, findClip, isAV, needsAnalysis, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -383,7 +384,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -465,6 +466,64 @@ export class StudioService {
     const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
     this.d.log.info('studio.captions', { lines: lines.length, words: words.length });
     return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact) };
+  }
+
+  // ---------------------------------------------------------------- music: beats
+
+  /** The music of a project: the sound clip named, else the first on a Music track, else the longest sound clip. */
+  musicClip(p: Project, clipId?: string): AudioClip | null {
+    const sounds = p.tracks.flatMap((t) => t.clips.filter((c): c is AudioClip => c.type === 'audio').map((c) => ({ c, music: /music/i.test(t.name) || c.duck !== null })));
+    if (clipId) return sounds.find((x) => x.c.id === clipId)?.c ?? null;
+    return sounds.find((x) => x.music)?.c ?? [...sounds].sort((a, b) => b.c.duration - a.c.duration)[0]?.c ?? null;
+  }
+
+  /** The beat of a sound file of the project (found on this PC once, then kept with the file). */
+  async analyzeBeats(id: string, assetId: string): Promise<{ beats: number[]; bpm: number | null }> {
+    const a = this.get(id).assets.find((x) => x.id === assetId);
+    if (!a || !a.hasAudio) throw new StudioError('That is not a sound file of this project.');
+    if (a.beats) return { beats: a.beats, bpm: a.bpm ?? null };
+    const s = await this.assetSound(id, assetId);
+    if (!s) throw new StudioError(`${a.name} has no sound.`);
+    const r = detectBeats(s.samples, s.rate);
+    // The steady beat when the music has one; else the hits (onsets).
+    const beats = (r.beats.length >= 4 ? r.beats : r.onsets).map((b) => Math.round(b * 1000) / 1000);
+    this.learn(id, assetId, { beats, bpm: r.bpm });
+    this.d.log.info('studio.beats', { beats: beats.length, bpm: r.bpm });
+    return { beats, bpm: r.bpm };
+  }
+
+  /**
+   * Cut to the beat: the clips (default: the bottom video track's, in order) laid one after another
+   * from the music's first beat, each lasting `every` beats. One edit (one undo).
+   */
+  async beatCut(id: string, o: { music?: string; every?: 1 | 2 | 4; clips?: string[] } = {}): Promise<{ project: Project; placed: number; bpm: number | null }> {
+    const p = this.get(id);
+    const m = this.musicClip(p, o.music);
+    if (!m) throw new StudioError('There is no music on the timeline: add a song first.');
+    const { beats, bpm } = await this.analyzeBeats(id, m.assetId);
+    // The music's beats on the timeline, inside the music clip.
+    const onTimeline = beats.map((b) => m.start + (b - m.in)).filter((t) => t >= m.start - 1e-6 && t <= m.start + m.duration + 1e-6);
+    if (onTimeline.length < 2) throw new StudioError('No clear beat was found in the music.');
+    const every = o.every ?? 2;
+    const base = p.tracks.find((t) => t.kind === 'video');
+    const clips = (o.clips ? o.clips.map((cid) => findClip(p, cid)?.clip) : (base?.clips ?? [])).filter((c): c is MediaClip => !!c && c.type === 'media').sort((a, b) => a.start - b.start);
+    if (!clips.length) throw new StudioError('There are no videos or pictures to cut to the beat.');
+    const ops: EditOp[] = [];
+    let placed = 0;
+    for (let i = 0; i < clips.length; i++) {
+      const a = onTimeline[i * every];
+      const b = onTimeline[(i + 1) * every];
+      if (a === undefined || b === undefined) break;
+      const c = clips[i]!;
+      const asset = p.assets.find((x) => x.id === c.assetId);
+      const room = asset?.kind === 'image' ? Infinity : ((asset?.duration ?? c.duration) - c.in) / c.speed;
+      ops.push({ op: 'trim', clip: c.id, duration: Math.max(0.1, Math.min(b - a, room)) }, { op: 'move', clip: c.id, start: a });
+      placed++;
+    }
+    if (!placed) throw new StudioError('The music is too short for these clips at this pace.');
+    const r = this.edit(id, ops);
+    this.d.log.info('studio.beat_cut', { placed, every });
+    return { project: r.project, placed, bpm };
   }
 
   // ---------------------------------------------------------------- talking-head autopilot

@@ -151,6 +151,8 @@ export const invokeSchemas = {
   'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
   'studio:export': z.object({ id: studioProjectId, options: ExportOptions.partial().optional() }).strict(),
   'studio:exportCancel': z.object({ id: studioProjectId }).strict(),
+  'studio:reframe': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
+  'studio:beatSync': z.object({ id: studioProjectId, every: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(2) }).strict(),
   'studio:current': empty,
   'studio:videoTrack': z.object({ projectId: studioProjectId, assetId: studioAssetId }).strict(),
   'studio:videoSamples': z.object({ projectId: studioProjectId, assetId: studioAssetId, time: z.number().min(0).max(86400).optional(), from: z.number().int().min(0).optional(), count: z.number().int().min(1).max(240) }).strict(),
@@ -456,6 +458,8 @@ export interface InvokeOutputs {
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };
   'studio:exportCancel': { cancelled: boolean };
+  'studio:beatSync': { placed: number; bpm: number | null };
+  'studio:reframe': { points: number; axis: 'x' | 'y' };
   'studio:current': { id: string | null };
   'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null;
   'studio:videoSamples': { from: number; samples: Array<{ data: Uint8Array; time: number; duration: number; key: boolean }> };

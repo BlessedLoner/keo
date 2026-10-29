@@ -76,6 +76,9 @@ export const Asset = z
     /** The spoken words with their source times (speech-to-text); exact: word times from the service. */
     words: z.array(SourceWord).max(80000).optional(),
     wordsExact: z.boolean().optional(),
+    /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
+    beats: z.array(Sec).max(20000).optional(),
+    bpm: z.number().min(20).max(400).nullable().optional(),
   })
   .strict();
 export type Asset = z.infer<typeof Asset>;

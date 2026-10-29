@@ -498,6 +498,11 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return s.studio.importFiles(id, files);
     },
     'studio:exportCancel': ({ id }) => ({ cancelled: s.studio.cancelExport(id) }),
+    'studio:reframe': async ({ id, clip }) => s.studioReframe(id, clip).catch(studioErr),
+    'studio:beatSync': async ({ id, every }) => {
+      const r = await s.studio.beatCut(id, { every }).catch(studioErr);
+      return { placed: r.placed, bpm: r.bpm };
+    },
     'studio:export': ({ id, options }) => {
       // Runs in the background; progress and the result come as studio:progress.
       void s.studio

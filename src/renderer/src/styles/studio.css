@@ -162,6 +162,11 @@
 .tl-body { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .tl-body img { position: absolute; top: 0; object-fit: cover; opacity: 0.9; border-right: 1px solid rgba(0, 0, 0, 0.35); }
 .tl-wave { position: absolute; left: 0; bottom: 0; }
+.tl-fade-dot { position: absolute; z-index: 2; top: 2px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 1px solid rgba(0, 0, 0, 0.6); cursor: ew-resize; }
+.tl-fade-area { position: absolute; top: 0; bottom: 0; z-index: 1; pointer-events: none; }
+.tl-fade-area.in { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.65), transparent); clip-path: polygon(0 0, 100% 0, 0 100%); }
+.tl-fade-area.out { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.65), transparent); clip-path: polygon(0 0, 100% 0, 100% 100%); }
+.tl-beat { position: absolute; bottom: 0; width: 2px; height: 6px; margin-left: -1px; background: #ffd400; border-radius: 1px; opacity: 0.9; }
 .tl-wave.full { top: 0; bottom: auto; }
 .tl-clip.media .tl-body::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 40%); }
 .tl-cut { position: absolute; z-index: 3; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.5); background: rgba(20, 20, 26, 0.9); color: #fff; font-size: 11px; line-height: 1; padding: 0; cursor: pointer; opacity: 0.55; }

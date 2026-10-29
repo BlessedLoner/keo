@@ -39,6 +39,7 @@ export interface StudioToolDeps {
   /** Why a faceless video cannot be made now (null: it can). */
   facelessReady: () => string | null;
   facelessPlan: (board: Storyboard) => { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
+  reframe: (projectId: string, clipId: string, o: { every?: number; signal: AbortSignal }) => Promise<{ points: number; axis: 'x' | 'y' }>;
   faceless: (board: Storyboard, o: { projectId?: string; signal: AbortSignal }) => Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }>;
   captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
   /** Shows Keo's step list in the Studio page. */
@@ -660,6 +661,55 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const beat = defineCapability({
+    ...simple({
+      id: 'studio.beat_sync',
+      title: 'Cut to the beat',
+      description:
+        'Lay the video clips and pictures one after another on the music’s beat (found on this PC): each lasts every=1, 2 or 4 beats from the music’s first beat. Default: the bottom video track’s clips in their order, and the music on the Music track. Great for montages and edits like templates; put the clips in the order you want first. One edit (one undo).',
+      summary: 'Cut the video to the beat',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), every: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(2), music: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/).optional(), clips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(500).optional() }).strict(),
+    output: State.extend({ placed: z.number(), bpm: z.number().nullable() }),
+    timeoutMs: 10 * 60_000,
+    auditView: (i) => ({ every: i.every }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.beatCut(p.id, { every: i.every, ...(i.music ? { music: i.music } : {}), ...(i.clips ? { clips: i.clips } : {}) }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), placed: r.placed, bpm: r.bpm };
+    },
+  });
+
+  const reframe = defineCapability({
+    id: 'studio.reframe',
+    version: '1.0.0',
+    title: 'Auto-reframe a clip',
+    description: 'Make a video that is wider (or taller) than the frame follow its main subject: Keo looks at a frame every `every` seconds and pans the clip so the subject stays in the middle (smooth position keyframes, never showing an edge). Use it after putting a landscape video in a vertical project. One edit.',
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), every: z.number().min(0.5).max(10).default(1.5) }).strict(),
+    output: z.object({ points: z.number(), axis: z.enum(['x', 'y']) }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 6 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'One edit of the Studio project; it can be undone.',
+    unavailableReason: () => d.visionBlocked(),
+    autonomy: () => ({ tier: 'routine' }),
+    preview: () => ({ summary: 'Reframe the clip to follow its subject', target: null, consequences: [], dataExport: `Up to 12 frames of the clip are sent to ${d.visionDestination()}.` }),
+    auditView: (i) => ({ every: i.every }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      return await d.reframe(p.id, i.clip, { every: i.every, signal: ctx.signal }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+    },
+  });
+
   const exportVideo = defineCapability({
     id: 'studio.export',
     version: '1.0.0',
@@ -708,7 +758,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

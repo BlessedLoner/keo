@@ -4,6 +4,7 @@ import { keyValue, MOTIONS, TRANSITIONS, type EditOp, type Key, type KeyProp, ty
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
+import { errText, invoke } from '../lib/api';
 import { Color, Num, Section } from './fields';
 
 /**
@@ -151,7 +152,20 @@ export function TransitionFields({ clip, hasBefore, set }: { clip: MediaClip; ha
 }
 
 /** Masks, device mock-ups and a shadow for videos and pictures. */
-export function FrameFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
+export function FrameFields({ clip, projectId, set }: { clip: MediaClip; projectId: string; set: (p: SetPatch) => void }) {
+  const ui = useUi();
+  const [reframing, setReframing] = useState(false);
+  const reframe = async () => {
+    setReframing(true);
+    try {
+      const r = await invoke('studio:reframe', { id: projectId, clip: clip.id });
+      ui.toast(`Following the subject: ${r.points} points across the clip.`, 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setReframing(false);
+    }
+  };
   return (
     <Section title="Frame">
       <div className="insp-grid">
@@ -175,6 +189,9 @@ export function FrameFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch)
         {clip.mask?.shape === 'rounded' && <Num label="Corners" value={clip.mask.radius * 100} min={0} max={50} step={1} suffix="%" onCommit={(v) => set({ mask: { ...clip.mask!, radius: v / 100 } })} />}
         <Num label="Shadow" value={clip.shadow} min={0} max={60} step={2} onCommit={(v) => set({ shadow: v })} />
       </div>
+      <button className="btn sm" style={{ marginTop: 10 }} disabled={reframing} onClick={() => void reframe()} title="Keo looks at the clip and pans it to keep the main subject in the middle (for a wide video in a tall frame)">
+        {reframing ? <span className="spinner tiny" /> : <Icon name="vision" size={13} />} {reframing ? 'Finding the subject…' : 'Auto-reframe (follow the subject)'}
+      </button>
       <h4 style={{ margin: '12px 0 8px' }}>Crop</h4>
       <div className="insp-grid">
         {(['left', 'right', 'top', 'bottom'] as const).map((k) => (

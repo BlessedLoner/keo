@@ -63,6 +63,8 @@ export const INVOKE_CHANNELS = [
   'studio:soundEffect',
   'studio:faceless',
   'studio:exportCancel',
+  'studio:beatSync',
+  'studio:reframe',
   'studio:focus',
   'studio:conversation',
   'studio:facelessPlan',

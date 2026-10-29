@@ -1058,6 +1058,24 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   });
   const moOut = await s.studio.exportVideo(mo.id);
   out.motion = { frames: moOut.frames, brightness: stats, layers: moP().tracks.reduce((n, t) => n + t.clips.length, 0) };
+  // Cut to the beat: a drum track (a click every half second) decoded in the render window.
+  const drumRate = 16000;
+  const drumPcm = new Int16Array(drumRate * 8);
+  for (let beat = 0; beat < 16; beat++) {
+    const at = Math.round((0.25 + beat * 0.5) * drumRate);
+    for (let i = 0; i < 800; i++) drumPcm[at + i] = Math.round(Math.sin(i * 0.9) * 26000 * Math.exp(-i / 200));
+  }
+  const drumFile = path.join(dir, 'drums.wav');
+  fs.writeFileSync(drumFile, wavOf(drumPcm, drumRate));
+  const bt = s.studio.create('Studio smoke beat', 'square');
+  const btMedia = (await s.studio.importFiles(bt.id, [drumFile, pic])).added;
+  const btSong = btMedia.find((x) => x.kind === 'audio')!;
+  const btPic = btMedia.find((x) => x.kind === 'image')!;
+  s.studio.edit(bt.id, [{ op: 'add_audio', assetId: btSong.id, trackName: 'Music', start: 0 }, ...[0, 1, 2].map(() => ({ op: 'add_media' as const, assetId: btPic.id, start: 'end' as const, duration: 3 }))]);
+  const btCut = await s.studio.beatCut(bt.id, { every: 2 });
+  const btClips = s.studio.get(bt.id).tracks[0]!.clips;
+  out.beat = { placed: btCut.placed, bpm: btCut.bpm, lengths: btClips.map((c) => Math.round(c.duration * 100) / 100) };
+  s.studio.delete(bt.id);
   // Phase 4: a faceless video from a three-scene script, built and exported for real.
   const fl = await s.facelessCreate(Storyboard.parse({ title: 'Studio smoke faceless', format: 'square', look: 'warm', scenes: scenesFromScript('Did you know the sea makes air?\n[title: Sea air]\n\nTiny plants do it.\n\nSay thanks.') }));
   s.studio.edit(fl.projectId, [{ op: 'set_project', width: 320, height: 320 }]);
