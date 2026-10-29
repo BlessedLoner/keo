@@ -221,3 +221,36 @@ describe('Smooth preview copies', () => {
     expect(sizes).toHaveLength(1);
   });
 });
+
+describe('Long video to shorts', () => {
+  it('makes each moment its own vertical project and leaves the long video alone', async () => {
+    const dir = tempDir('keo-shorts-');
+    const file = path.join(dir, 'podcast.mp4');
+    fs.writeFileSync(file, 'x');
+    h = makeHarness({ dir: path.join(dir, 'profile'), deps: { studioProbe: async () => ({ kind: 'video', duration: 20, width: 1920, height: 1080, hasAudio: true }) } });
+    const s = h.services.studio;
+    const p = s.create('Podcast 12', 'landscape');
+    const vid = (await s.importFiles(p.id, [file])).added[0]!;
+    s.edit(p.id, [
+      { op: 'add_media', assetId: vid.id, start: 0 },
+      { op: 'add_text', text: 'Caption at 3 s', start: 3, duration: 2 },
+      { op: 'add_text', text: 'Caption at 15 s', start: 15, duration: 2 },
+    ]);
+    const made = s.makeShorts(p.id, [{ from: 2, to: 8, title: 'The best part' }, { from: 14, to: 18 }]);
+    expect(made.map((m) => [m.name, m.seconds])).toEqual([
+      ['Podcast 12 — short 1: The best part', 6],
+      ['Podcast 12 — short 2', 4],
+    ]);
+    const one = s.get(made[0]!.projectId);
+    expect([one.width, one.height]).toEqual([1080, 1920]);
+    const clip = one.tracks.find((t) => t.kind === 'video')!.clips[0] as MediaClip;
+    expect(clip).toMatchObject({ start: 0, duration: 6, in: 2, fit: 'contain', backdrop: 'blur' });
+    const texts = one.tracks.filter((t) => t.kind === 'text').flatMap((t) => t.clips).map((c) => (c as { text: string }).text);
+    expect(texts.sort()).toEqual(['Caption at 3 s', 'The best part']);
+    // The long video is as it was, and a short starts with nothing to undo.
+    expect(s.get(p.id).width).toBe(1920);
+    expect(s.get(p.id).tracks.find((t) => t.kind === 'video')!.clips[0]!.duration).toBe(20);
+    expect(s.canUndo(made[0]!.projectId).undo).toBe(false);
+    expect(() => s.makeShorts(p.id, [{ from: 19.5, to: 30 }])).toThrow(/shorter than a second/);
+  });
+});

@@ -737,6 +737,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       })
       .strict(),
     output: z.object({ shorts: z.array(z.object({ projectId: z.string(), name: z.string(), seconds: z.number() })) }),
+    timeoutMs: 2 * 60_000,
     auditView: (i) => ({ moments: i.moments.length }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
