@@ -1095,6 +1095,11 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   out.faceless = { scenes: fl.scenes, durationSec: flOut.durationSec, frames: flOut.frames, sound: !!flReader?.audio(), captions: flP.tracks.find((t) => t.name === 'Captions')?.clips.length ?? 0, voice: flP.tracks.find((t) => t.name === 'Voice')?.clips.length ?? 0 };
   flReader?.close();
   fs.rmSync(flOut.file, { force: true });
+  // Read aloud: a text clip voiced (the smoke voice) and placed under it.
+  const ra = s.studio.edit(fl.projectId, [{ op: 'add_text', text: 'Read me aloud', start: 0.5, duration: 2 }]).project;
+  const raText = ra.tracks.flatMap((t) => t.clips).find((c) => c.type === 'text' && c.text === 'Read me aloud')!;
+  const raOut = await s.studioReadAloud(fl.projectId, raText.id, 'female');
+  out.readAloud = { seconds: raOut.seconds, start: s.studio.get(fl.projectId).tracks.flatMap((t) => t.clips).find((c) => c.id === raOut.clip)?.start };
   s.studio.delete(fl.projectId);
   for (const f of [first.file, second.file, third.file, moOut.file]) fs.rmSync(f, { force: true });
   s.studio.delete(mo.id);

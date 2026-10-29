@@ -6,6 +6,7 @@ import { errText, invoke, subscribe } from '../lib/api';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { ReadAloud } from '../studio/VoiceTools';
 import { MediaBin } from '../studio/Bin';
 import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
@@ -731,6 +732,11 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       )}
       {clip.type === 'media' && <ColorFields clip={clip} set={set} />}
       {clip.type === 'text' && <TextFields clip={clip} set={set} />}
+      {clip.type === 'text' && (
+        <Section title="Voice">
+          <ReadAloud projectId={project.id} clipId={clip.id} />
+        </Section>
+      )}
       {clip.type !== 'audio' && (
         <Section title="Position">
           {clip.type === 'media' && (

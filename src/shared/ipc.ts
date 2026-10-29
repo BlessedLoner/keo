@@ -151,6 +151,9 @@ export const invokeSchemas = {
   'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
   'studio:export': z.object({ id: studioProjectId, options: ExportOptions.partial().optional() }).strict(),
   'studio:exportCancel': z.object({ id: studioProjectId }).strict(),
+  'studio:readAloud': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), voice: z.string().regex(/^[a-z]{2,20}$/).default('female') }).strict(),
+  /** A voice-over recorded in Studio (16-bit WAV), put on the Voice track at `at`. */
+  'studio:saveRecording': z.object({ id: studioProjectId, wavBase64: z.string().min(100).max(64_000_000), at: z.number().min(0).max(86400) }).strict(),
   'studio:reframe': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
   'studio:beatSync': z.object({ id: studioProjectId, every: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(2) }).strict(),
   'studio:current': empty,
@@ -460,6 +463,8 @@ export interface InvokeOutputs {
   'studio:exportCancel': { cancelled: boolean };
   'studio:beatSync': { placed: number; bpm: number | null };
   'studio:reframe': { points: number; axis: 'x' | 'y' };
+  'studio:readAloud': { clip: string; seconds: number };
+  'studio:saveRecording': { clip: string; seconds: number };
   'studio:current': { id: string | null };
   'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null;
   'studio:videoSamples': { from: number; samples: Array<{ data: Uint8Array; time: number; duration: number; key: boolean }> };

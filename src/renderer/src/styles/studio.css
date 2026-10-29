@@ -45,6 +45,20 @@
 .sfx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px 10px; }
 .sfx-grid .btn { justify-content: flex-start; display: inline-flex; align-items: center; gap: 5px; }
 
+/* Voices and stickers */
+.read-aloud { display: flex; gap: 6px; align-items: center; }
+.read-aloud .select { height: 28px; padding: 0 8px; font-size: 12.5px; flex: 1; }
+.read-aloud .btn, .recorder .btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.recorder { display: flex; align-items: center; gap: 8px; width: 100%; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b4e; box-shadow: 0 0 8px #ff3b4e; animation: rec 1s ease-in-out infinite alternate; }
+@keyframes rec { from { opacity: 1; } to { opacity: 0.35; } }
+.rec-time { font: 12.5px/1 ui-monospace, Consolas, monospace; }
+.rec-meter { flex: 1; height: 6px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.rec-meter span { display: block; height: 100%; background: linear-gradient(90deg, #4ade80, #ffd400, #ff3b4e); transition: width 0.1s; }
+.emoji-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 0 10px 10px; }
+.emoji { height: 32px; font-size: 19px; border: 1px solid transparent; border-radius: 7px; background: transparent; cursor: pointer; font-family: 'Segoe UI Emoji', sans-serif; }
+.emoji:hover { background: var(--bg-hover); border-color: var(--line); }
+
 /* Preview */
 .studio-stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-inset); }
 .studio-preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 14px; overflow: hidden; }
@@ -166,6 +180,8 @@
 .tl-fade-area { position: absolute; top: 0; bottom: 0; z-index: 1; pointer-events: none; }
 .tl-fade-area.in { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.65), transparent); clip-path: polygon(0 0, 100% 0, 0 100%); }
 .tl-fade-area.out { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.65), transparent); clip-path: polygon(0 0, 100% 0, 100% 100%); }
+.tl-key { position: absolute; z-index: 2; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: #ffb020; border: 1px solid rgba(0, 0, 0, 0.6); transform: rotate(45deg); cursor: pointer; }
+.tl-key:hover { background: #ffd400; }
 .tl-beat { position: absolute; bottom: 0; width: 2px; height: 6px; margin-left: -1px; background: #ffd400; border-radius: 1px; opacity: 0.9; }
 .tl-wave.full { top: 0; bottom: auto; }
 .tl-clip.media .tl-body::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 40%); }

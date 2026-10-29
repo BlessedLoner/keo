@@ -323,6 +323,24 @@ export function Timeline({
                 >
                   {c.type !== 'text' && c.type !== 'shape' && <ClipBody projectId={project.id} clip={c} asset={project.assets.find((a) => a.id === c.assetId)} width={w.width} pps={pps} height={ROW_H[t.kind] - 8} />}
                   {(c.type === 'media' || c.type === 'audio') && selected === c.id && <FadeHandles clip={c} pps={pps} onEdit={onEdit} />}
+                  {c.type !== 'audio' &&
+                    !!c.keys &&
+                    [...new Set(Object.values(c.keys).flatMap((list) => (list ?? []).map((k) => k.at)))]
+                      .filter((at) => at <= c.duration + 1e-6)
+                      .slice(0, 200)
+                      .map((at) => (
+                        <span
+                          key={at}
+                          className="tl-key"
+                          style={{ left: at * pps }}
+                          title={`Keyframe at ${(c.start + at).toFixed(2)} s — click to go there`}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            onSelect(c.id);
+                            onTime(c.start + at);
+                          }}
+                        />
+                      ))}
                   <span className="tl-clip-label">{label(c)}</span>
                 </div>
               );

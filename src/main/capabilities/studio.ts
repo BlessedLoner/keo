@@ -40,6 +40,7 @@ export interface StudioToolDeps {
   facelessReady: () => string | null;
   facelessPlan: (board: Storyboard) => { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
   reframe: (projectId: string, clipId: string, o: { every?: number; signal: AbortSignal }) => Promise<{ points: number; axis: 'x' | 'y' }>;
+  readAloud: (projectId: string, clipId: string, voice: string, signal: AbortSignal) => Promise<{ clip: string; seconds: number }>;
   faceless: (board: Storyboard, o: { projectId?: string; signal: AbortSignal }) => Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }>;
   captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
   /** Shows Keo's step list in the Studio page. */
@@ -710,6 +711,35 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const readAloud = defineCapability({
+    id: 'studio.read_aloud',
+    version: '1.0.0',
+    title: 'Read a text aloud',
+    description: 'Turn a text clip into a voice-over: the text is read in a voice (Keo’s female or male voice, or an OpenAI voice name with the user’s own key) and put on the Voice track where the text starts.',
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), voice: z.string().regex(/^[a-z]{2,20}$/).default('female') }).strict(),
+    output: z.object({ clip: z.string(), seconds: z.number() }),
+    risk: 'low',
+    // The text goes to the voice service and uses the user's voice allowance: the user approves.
+    approval: 'always',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 3 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'One edit of the Studio project; it can be undone.',
+    unavailableReason: () => d.facelessReady(),
+    autonomy: () => ({ tier: 'important', reason: 'the text is sent to a voice service' }),
+    preview: () => ({ summary: 'Read the text aloud as a voice-over', target: null, consequences: ['Uses your plan’s voice time (or your own OpenAI account).'], dataExport: 'The text is sent to the voice service (Keo Cloud or OpenAI) to make the voice.' }),
+    auditView: (i) => ({ voice: i.voice }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      return await d.readAloud(p.id, i.clip, i.voice, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+    },
+  });
+
   const exportVideo = defineCapability({
     id: 'studio.export',
     version: '1.0.0',
@@ -758,7 +788,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, readAloud, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

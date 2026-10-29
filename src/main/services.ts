@@ -690,6 +690,7 @@ export class Services {
         facelessPlan: (board) => this.facelessPlan(board),
         faceless: (board, o) => this.facelessCreate(board, o),
         reframe: (projectId, clipId, o) => this.studioReframe(projectId, clipId, o),
+        readAloud: (projectId, clipId, voice, signal) => this.studioReadAloud(projectId, clipId, voice, signal),
         // Keo's own output (made pictures, documents, exported videos).
         keoMade: (file) => isInside(file, this.keoOutputRoot(d)) || isInside(file, this.videoOutputRoot()),
       }),
@@ -1462,6 +1463,33 @@ export class Services {
     if (s.picture && 'assetId' in s.picture) return null;
     const f = this.facelessIndex()[facelessKey(facelessPrompt(board, s), pictureSize(board.format))];
     return f && fs.existsSync(f) ? f : null;
+  }
+
+  /**
+   * Read aloud: a text clip spoken in a voice (Keo Cloud or OpenAI), put on the Voice track where the
+   * text starts. A text read before in that voice is not made again.
+   */
+  async studioReadAloud(id: string, clipId: string, voice = 'female', signal?: AbortSignal): Promise<{ clip: string; seconds: number }> {
+    const p = this.studio.get(id);
+    const f = findStudioClip(p, clipId);
+    if (!f || f.clip.type !== 'text') throw new StudioError('Pick a text clip to read aloud.');
+    const text = (f.clip.counter ? `${f.clip.counter.prefix}${f.clip.counter.to}${f.clip.counter.suffix}` : f.clip.text).trim();
+    const narrator = this.studioNarrator(voice);
+    if (!narrator) throw new StudioError('Reading aloud needs a voice: sign in to your Keo account, or add an OpenAI API key.');
+    let file = this.facelessCachedVoice(voice, text);
+    if (!file) {
+      const r = await narrator.speak(text, signal ?? new AbortController().signal);
+      const ext = r.mimeType.includes('wav') ? 'wav' : r.mimeType.includes('mpeg') || r.mimeType.includes('mp3') ? 'mp3' : r.mimeType.includes('ogg') ? 'ogg' : 'm4a';
+      file = path.join(this.facelessCacheDir(), `voice-${facelessKey(voice, text)}.${ext}`);
+      fs.writeFileSync(file, Buffer.from(r.audio));
+      this.audit.record({ kind: 'studio.read_aloud', decision: 'sent', detail: { destination: narrator.destination, chars: text.length } });
+    }
+    const imported = await this.studio.importFiles(id, [file]);
+    const asset = imported.project.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file!).toLowerCase());
+    if (!asset) throw new StudioError('Keo could not read the voice it made.');
+    const r = this.studio.edit(id, [{ op: 'add_audio', assetId: asset.id, trackName: 'Voice', start: f.clip.start }]);
+    const added = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
+    return { clip: added.id, seconds: asset.duration };
   }
 
   /**

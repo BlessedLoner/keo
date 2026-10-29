@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon';
 import { invoke } from '../lib/api';
 import { mediaUrl } from './media';
 import { useFilmstrip } from './thumbs';
+import { VoiceRecorder } from './VoiceTools';
 
 /**
  * The Studio's library on the left: the project's media (thumbnails, lengths, a moving preview
@@ -28,6 +29,9 @@ const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css: CSSPr
   { id: 'subtitle', label: 'Subtitle', sample: 'Subtitle', css: { fontSize: 14, color: '#fff', textShadow: '0 1px 3px #000' }, style: { sizePct: 3.6, weight: 'normal', shadow: 14 }, animIn: 'fade', y: 0.86 },
   { id: 'outline', label: 'Outline', sample: 'Outline', css: { fontWeight: 900, fontSize: 19, color: 'transparent', WebkitTextStroke: '1.5px #fff' }, style: { sizePct: 8, weight: 'black', color: '#00000000', outline: 4, outlineColor: '#FFFFFF', shadow: 0 }, animIn: 'drop' },
 ];
+
+/** Stickers: emoji drawn big, popping in and floating. */
+const EMOJI = ['🔥', '😂', '😍', '🤯', '👀', '💯', '✨', '🎉', '👍', '❤️', '😱', '🤔', '🙌', '💡', '⚡', '🚀', '⭐', '✅', '❌', '👇', '👉', '💰', '📈', '🎯'];
 
 const SFX = [
   { id: 'whoosh', label: 'Whoosh' },
@@ -108,6 +112,39 @@ export function MediaBin({
               {captioning ? <span className="spinner tiny" /> : <Icon name="text" size={13} />} {captioning ? 'Captioning…' : 'Auto captions'}
             </button>
           </div>
+          <div className="studio-pane-head">
+            <span>Stickers</span>
+          </div>
+          <div className="emoji-grid">
+            {EMOJI.map((e) => (
+              <button
+                key={e}
+                className="emoji"
+                title="Add this sticker at the playhead"
+                onClick={() =>
+                  void onEdit([
+                    {
+                      op: 'add_text',
+                      text: e,
+                      start: time,
+                      duration: 2.5,
+                      animIn: 'pop',
+                      animOut: 'pop',
+                      animSeconds: 0.35,
+                      style: { font: 'Segoe UI Emoji', sizePct: 14, weight: 'normal', shadow: 14 },
+                      transform: { x: 0.72, y: 0.3, rotation: -8 },
+                      loop: { kind: 'float', amount: 0.4, period: 2.4 },
+                    },
+                  ])
+                }
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+          <div className="studio-pane-head">
+            <span>Text styles</span>
+          </div>
           <div className="style-grid">
             {TEXT_STYLES.map((s) => (
               <button
@@ -133,6 +170,9 @@ export function MediaBin({
             <button className="btn sm primary" onClick={onMusic} title="Your own music file: it goes on the Music track, quieter while someone speaks">
               <Icon name="music" size={13} /> Add music
             </button>
+          </div>
+          <div className="bin-actions">
+            <VoiceRecorder projectId={project.id} time={time} />
           </div>
           {sounds.length > 0 && (
             <div className="bin-list">

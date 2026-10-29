@@ -468,6 +468,32 @@ export class StudioService {
     return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact) };
   }
 
+  // ---------------------------------------------------------------- voice-over recordings
+
+  /** A voice-over the user recorded in Studio: kept in Keo's folder and put on the Voice track at `at`. */
+  async saveRecording(id: string, wav: Buffer, at: number): Promise<{ clip: string; seconds: number }> {
+    this.get(id);
+    let seconds: number;
+    try {
+      const w = readWav(wav);
+      seconds = w.samples.length / w.rate;
+    } catch {
+      throw new StudioError('The recording could not be read.');
+    }
+    if (seconds < 0.2) throw new StudioError('The recording is too short.');
+    const dir = path.join(this.d.dir, 'recordings');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `voice-over ${new Date().toISOString().replace(/[:.]/g, '-')}.wav`);
+    fs.writeFileSync(file, wav);
+    const imported = await this.importFiles(id, [file]);
+    const asset = imported.added[0];
+    if (!asset) throw new StudioError('Keo could not read the recording.');
+    const r = this.edit(id, [{ op: 'add_audio', assetId: asset.id, trackName: 'Voice', start: at }]);
+    const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
+    this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
+    return { clip: clip.id, seconds: asset.duration };
+  }
+
   // ---------------------------------------------------------------- music: beats
 
   /** The music of a project: the sound clip named, else the first on a Music track, else the longest sound clip. */

@@ -140,6 +140,7 @@ check('studio: a faceless video is made from a script (voice, pictures, captions
 check('studio: export choices (720p, 24 fps, a file name)', st.exportChoices?.width === 720 && st.exportChoices?.height === 720 && st.exportChoices?.named === 'Smoke faceless 720.mp4' && Math.abs(st.exportChoices.frames - st.exportChoices.seconds * 24) <= 1, st.error ?? JSON.stringify(st.exportChoices));
 check('studio: an export can be stopped', st.stopped?.asked === true && st.stopped?.result !== 'finished', st.error ?? JSON.stringify(st.stopped));
 check('studio: cut to the beat finds the beat in real decoded sound', st.beat?.placed === 3 && st.beat.lengths.every((l) => l > 0.85 && l < 1.15), st.error ?? JSON.stringify(st.beat));
+check('studio: read aloud puts a voice under the text', st.readAloud?.seconds > 0.5 && st.readAloud?.start === 0.5, st.error ?? JSON.stringify(st.readAloud));
 check('studio: frames for Keo to look at are drawn', Array.isArray(st.frames) && st.frames.length === 2 && st.frames.every((f) => f.width === 180 && f.centre > 20), st.error ?? JSON.stringify(st.frames));
 
 // Switching to another data folder happens in place: same window, same process, other data.
