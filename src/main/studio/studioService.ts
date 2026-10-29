@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, findClip, isAV, needsAnalysis, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, findClip, isAV, needsAnalysis, sourceSpan, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 
 export type { ProjectSummary, RenderJob };
@@ -79,6 +79,8 @@ export class StudioService {
 
   /** File names the user chose for exports that are running. */
   private readonly exportNames = new Map<string, string>();
+  /** Exports that are Keo's own working files (a reversed copy): their folder and exact file name. */
+  private readonly exportTargets = new Map<string, string>();
   /** The project open in the Studio page (Keo's tools act on it unless they name another). */
   current: string | null = null;
 
@@ -498,7 +500,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'name'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -606,6 +608,62 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- reverse
+
+  /**
+   * Plays a video clip backwards: the part of the video it shows is made into a reversed copy once
+   * (picture and sound, frame by frame, in Keo's own folder) and the clip uses that copy, so the
+   * preview plays it smoothly. Reversing again goes back to the original. One edit (one undo).
+   */
+  async reverseClip(id: string, clipId: string): Promise<{ project: Project; seconds: number }> {
+    const p = this.get(id);
+    const f = findClip(p, clipId);
+    if (!f || f.clip.type !== 'media') throw new StudioError('That is not a video clip of this project.');
+    if (f.track.locked) throw new StudioError(`The track ${f.track.name} is locked: unlock it first.`);
+    const c = f.clip;
+    const a = p.assets.find((x) => x.id === c.assetId);
+    if (!a || a.kind !== 'video') throw new StudioError('Only videos can play backwards (a picture looks the same).');
+    if (c.freeze) throw new StudioError('A frozen frame looks the same backwards.');
+    const span = Math.round(Math.min(a.duration - c.in, sourceSpan(c, c.duration)) * 1000) / 1000;
+    if (span < 0.1) throw new StudioError('That clip is too short to reverse.');
+    // Reversing a reversed copy: back to the part of the original it was made from.
+    if (a.reverseOf) {
+      const orig = p.assets.find((x) => x.id === a.reverseOf!.assetId);
+      if (orig) {
+        const back = Math.max(0, a.reverseOf.in + (a.duration - c.in - span));
+        return { project: this.edit(id, [{ op: 'replace_media', clip: c.id, assetId: orig.id, in: Math.round(back * 1000) / 1000 }]).project, seconds: span };
+      }
+    }
+    const file = path.join(this.d.dir, 'made', `reversed-${a.id}-${Math.round(c.in * 1000)}-${Math.round(span * 1000)}.mp4`);
+    if (!fs.existsSync(file)) {
+      // A short-lived project of just that part of the video, played backwards, exported at full quality.
+      const width = Math.max(16, Math.round((a.width || 1080) / 2) * 2);
+      const height = Math.max(16, Math.round((a.height || 1920) / 2) * 2);
+      const tmp = Project.parse({ ...newProject({ name: `${a.name} reversed`, rand: () => crypto.randomBytes(6).toString('hex').slice(0, 10) }), width, height, fps: p.fps, background: '#000000', assets: [a] });
+      const made = applyEdits(tmp, [{ op: 'add_media', assetId: a.id, start: 0, duration: span, in: c.in, fit: 'contain' }]).project;
+      (made.tracks[0]!.clips[0] as MediaClip).reversed = true;
+      fs.writeFileSync(this.file(made.id), JSON.stringify(made));
+      const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
+      this.exportTargets.set(exportId, file);
+      try {
+        await this.runJob({ kind: 'export', projectId: made.id, exportId, size: { width, height, fps: p.fps, quality: 'best' } }, 2 * 60 * 60 * 1000);
+      } catch (e) {
+        fs.rmSync(file, { force: true });
+        throw e;
+      } finally {
+        this.exportTargets.delete(exportId);
+        fs.rmSync(this.file(made.id), { force: true });
+      }
+    }
+    const known = this.get(id).assets.find((x) => path.resolve(x.path).toLowerCase() === path.resolve(file).toLowerCase());
+    const copy = known ?? (await this.importFiles(id, [file])).added[0];
+    if (!copy) throw new StudioError('Keo could not read the reversed copy.');
+    if (!copy.reverseOf) this.learn(id, copy.id, { reverseOf: { assetId: a.id, in: c.in }, name: `${a.name} (reversed)` });
+    const r = this.edit(id, [{ op: 'replace_media', clip: c.id, assetId: copy.id, in: 0 }]);
+    this.d.log.info('studio.reversed', { seconds: span });
+    return { project: r.project, seconds: span };
   }
 
   // ---------------------------------------------------------------- shots inside a video
@@ -808,12 +866,13 @@ export class StudioService {
   /** The render window starts writing the export (its encoder told it the video's avcC). */
   beginExport(exportId: string, projectId: string, video: WriterVideo, audio: WriterAudio | null): void {
     const p = this.get(projectId);
-    const dir = this.d.exportsDir();
+    const target = this.exportTargets.get(exportId);
+    const dir = target ? path.dirname(target) : this.d.exportsDir();
     fs.mkdirSync(dir, { recursive: true });
     // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
     const base = (this.exportNames.get(exportId) ?? p.name).replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
-    let file = path.join(dir, `${base}.mp4`);
-    for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).mp4`);
+    let file = target ?? path.join(dir, `${base}.mp4`);
+    for (let n = 2; !target && fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).mp4`);
     this.exports.set(exportId, { writer: new Mp4Writer(file, video, audio), file, projectId });
   }
 

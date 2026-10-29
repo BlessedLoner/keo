@@ -515,6 +515,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'studio:readAloud': async ({ id, clip, voice }) => s.studioReadAloud(id, clip, voice).catch(studioErr),
     'studio:saveRecording': async ({ id, wavBase64, at }) => s.studio.saveRecording(id, Buffer.from(wavBase64, 'base64'), at).catch(studioErr),
     'studio:analyzeSpeech': async ({ id }) => ({ analysed: (await s.studio.analyzeSpeech(id).catch(studioErr)).analysed }),
+    'studio:reverse': async ({ id, clip }) => ({ seconds: (await s.studio.reverseClip(id, clip).catch(studioErr)).seconds }),
     'studio:splitScenes': async ({ id, clips }) => {
       const r = await s.studio.splitScenes(id, clips).catch(studioErr);
       return { splits: r.splits, clips: r.clips };

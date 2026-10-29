@@ -88,3 +88,58 @@ describe('Shot detection edge cases', () => {
     expect(refineCut([1, 1.1, 1.2], [RED, RED, RED])).toBe(1.2);
   });
 });
+
+describe('Reverse', () => {
+  it('makes a reversed copy once, uses it, and reversing again goes back to the original', async () => {
+    const dir = tempDir('keo-reverse-');
+    const file = path.join(dir, 'run.mp4');
+    const still = path.join(dir, 'still.png');
+    fs.writeFileSync(file, 'x');
+    fs.writeFileSync(still, 'x');
+    const exports: MediaClip[] = [];
+    h = makeHarness({
+      dir: path.join(dir, 'profile'),
+      deps: {
+        studioProbe: async (f) => (f.endsWith('.png') ? { kind: 'image', duration: 0, width: 1080, height: 1920, hasAudio: false } : { kind: 'video', duration: f.includes('reversed') ? 3 : 10, width: 1080, height: 1920, hasAudio: true }),
+        studioJob: (jobId, job) =>
+          setTimeout(() => {
+            if (job.kind !== 'export') return h!.services.studio.jobDone(jobId, null, 'not in this test');
+            // The render window would draw the short-lived project backwards into Keo's own folder.
+            const tmp = JSON.parse(fs.readFileSync(path.join(h!.dir, 'studio', `${job.projectId}.json`), 'utf8'));
+            const c = tmp.tracks[0].clips[0] as MediaClip;
+            exports.push(c);
+            const out = path.join(h!.dir, 'studio', 'made', `reversed-${c.assetId}-${Math.round(c.in * 1000)}-${Math.round(c.duration * 1000)}.mp4`);
+            fs.mkdirSync(path.dirname(out), { recursive: true });
+            fs.writeFileSync(out, 'x');
+            h!.services.studio.jobDone(jobId, { file: out, durationSec: 3, frames: 90, bytes: 1 }, null);
+          }, 2),
+      },
+    });
+    const s = h.services.studio;
+    const p = s.create('Rewind', 'vertical');
+    const [vid, pic] = (await s.importFiles(p.id, [file, still])).added;
+    s.edit(p.id, [
+      { op: 'add_media', assetId: vid!.id, start: 0, duration: 3, in: 1 },
+      { op: 'add_media', assetId: pic!.id, start: 3, duration: 2 },
+    ]);
+    const clipId = s.get(p.id).tracks[0]!.clips[0]!.id;
+    await s.reverseClip(p.id, clipId);
+    expect(exports).toHaveLength(1);
+    expect(exports[0]).toMatchObject({ reversed: true, in: 1, duration: 3 });
+    let now = s.get(p.id);
+    const c = now.tracks[0]!.clips[0] as MediaClip;
+    const copy = now.assets.find((a) => a.id === c.assetId)!;
+    expect(copy).toMatchObject({ name: 'run.mp4 (reversed)', reverseOf: { assetId: vid!.id, in: 1 } });
+    expect(c).toMatchObject({ start: 0, duration: 3, in: 0 });
+    // The short-lived project is gone.
+    expect(fs.readdirSync(path.join(h.dir, 'studio')).filter((n) => n.endsWith('.json'))).toHaveLength(1);
+    // Again: forwards, from the original.
+    await s.reverseClip(p.id, clipId);
+    now = s.get(p.id);
+    expect(now.tracks[0]!.clips[0]).toMatchObject({ assetId: vid!.id, in: 1 });
+    // And once more: the reversed copy is used again, nothing is made twice.
+    await s.reverseClip(p.id, clipId);
+    expect(exports).toHaveLength(1);
+    await expect(s.reverseClip(p.id, s.get(p.id).tracks[0]!.clips[1]!.id)).rejects.toThrow(/Only videos/);
+  });
+});

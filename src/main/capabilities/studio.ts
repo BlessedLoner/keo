@@ -722,6 +722,26 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const reverse = defineCapability({
+    ...simple({
+      id: 'studio.reverse',
+      title: 'Play a clip backwards',
+      description: 'Reverse a video clip (picture and sound): Keo makes a reversed copy of the part it shows on this PC and the clip uses it, keeping its place, motion and look. Reversing it again plays it forwards. Rewind effects: duplicate the clip first and reverse the copy. One edit (one undo).',
+      summary: 'Play the clip backwards',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
+    output: State.extend({ seconds: z.number() }),
+    timeoutMs: 60 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.reverseClip(p.id, i.clip).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), seconds: r.seconds };
+    },
+  });
+
   const reframe = defineCapability({
     id: 'studio.reframe',
     version: '1.0.0',
@@ -855,7 +875,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reframe, readAloud, template, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

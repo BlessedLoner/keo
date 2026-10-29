@@ -160,6 +160,7 @@ export const invokeSchemas = {
   'studio:saveRecording': z.object({ id: studioProjectId, wavBase64: z.string().min(100).max(64_000_000), at: z.number().min(0).max(86400) }).strict(),
   'studio:reframe': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
   'studio:analyzeSpeech': z.object({ id: studioProjectId }).strict(),
+  'studio:reverse': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
   'studio:splitScenes': z.object({ id: studioProjectId, clips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(500).optional() }).strict(),
   'studio:beatSync': z.object({ id: studioProjectId, every: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(2) }).strict(),
   'studio:current': empty,
@@ -473,6 +474,7 @@ export interface InvokeOutputs {
   'studio:exportCancel': { cancelled: boolean };
   'studio:beatSync': { placed: number; bpm: number | null };
   'studio:splitScenes': { splits: number; clips: number };
+  'studio:reverse': { seconds: number };
   'studio:analyzeSpeech': { analysed: number };
   'studio:reframe': { points: number; axis: 'x' | 'y' };
   'studio:readAloud': { clip: string; seconds: number };

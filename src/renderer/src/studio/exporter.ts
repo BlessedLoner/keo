@@ -24,14 +24,14 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; volumeKeys?: Key[]; fadeIn: number; fadeOut: number; voice: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; volumeKeys?: Key[]; fadeIn: number; fadeOut: number; voice: boolean; reversed?: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
       if (!isAV(c) || (c.volume <= 0 && !c.volumeKeys?.some((k) => k.value > 0))) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, ...(c.volumeKeys?.length ? { volumeKeys: c.volumeKeys } : {}), fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, ...(c.volumeKeys?.length ? { volumeKeys: c.volumeKeys } : {}), fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.type === 'media' && c.reversed ? { reversed: true } : {}), ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
     }
   }
   if (!parts.length || dur <= 0) return null;
@@ -47,8 +47,19 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
         decoded.set(part.assetId, null);
       }
     }
-    const buf = decoded.get(part.assetId);
-    if (!buf) continue;
+    const forward = decoded.get(part.assetId);
+    if (!forward) continue;
+    // Backwards: the sound reversed (once per file), played from the mirrored point.
+    let buf = forward;
+    if (part.reversed) {
+      const key = `${part.assetId}:reversed`;
+      if (!decoded.has(key)) {
+        const r = ctx.createBuffer(forward.numberOfChannels, forward.length, forward.sampleRate);
+        for (let ch = 0; ch < forward.numberOfChannels; ch++) r.getChannelData(ch).set(forward.getChannelData(ch).slice().reverse());
+        decoded.set(key, r);
+      }
+      buf = decoded.get(key)!;
+    }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = part.speed;
@@ -103,7 +114,8 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
       out = out.connect(g);
     }
     out.connect(gain).connect(ctx.destination);
-    src.start(part.start, part.in, part.curve ? part.duration * curveArea(part.curve, 0, 1) : part.duration * part.speed);
+    const span = part.curve ? part.duration * curveArea(part.curve, 0, 1) : part.duration * part.speed;
+    src.start(part.start, part.reversed ? Math.max(0, buf.duration - part.in - span) : part.in, span);
   }
   const mixed = await ctx.startRendering();
   if (o.loudness && p.loudness === 'social') normalize(mixed, -14);

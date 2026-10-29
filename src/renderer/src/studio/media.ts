@@ -297,12 +297,100 @@ export class ClipDecoder {
     throw new Error('The video decoder stopped answering.');
   }
 
+  /**
+   * Every frame from the one showing at `from` to the one showing at `to` (seconds), decoded once
+   * and copied out of the decoder (so it can keep decoding). For playing a stretch backwards.
+   */
+  async framesBetween(from: number, to: number): Promise<VideoFrame[]> {
+    this.start(from);
+    this.current?.close();
+    this.current = null;
+    const fromUs = Math.round(from * 1e6) + 500;
+    const toUs = Math.round(to * 1e6) + 500;
+    const out: VideoFrame[] = [];
+    let before: VideoFrame | null = null;
+    let done = false;
+    try {
+      for (let guard = 0; guard < 20000 && !done; guard++) {
+        if (this.failed) throw this.failed;
+        while (this.queue.length) {
+          const f = this.queue.shift()!;
+          if (f.timestamp <= fromUs) {
+            before?.close();
+            before = f;
+          } else if (f.timestamp > toUs) {
+            f.close();
+            done = true;
+            break;
+          } else {
+            out.push(await copyFrame(f));
+            f.close();
+          }
+        }
+        if (done || (this.ended && this.decoder!.decodeQueueSize === 0)) break;
+        if (!this.ended && this.decoder!.decodeQueueSize < 12) await this.feed();
+        else await new Promise((r) => setTimeout(r, 2));
+      }
+      if (before) out.unshift(await copyFrame(before));
+    } finally {
+      before?.close();
+      // The next frameAt starts again from a key frame.
+      this.lastAsked = Infinity;
+    }
+    return out;
+  }
+
   close(): void {
     this.decoder?.close();
     for (const f of this.queue) f.close();
     this.current?.close();
     this.queue = [];
     this.current = null;
+  }
+}
+
+/** A decoded frame copied into memory of its own (the decoder's frames are few and must go back). */
+async function copyFrame(f: VideoFrame): Promise<VideoFrame> {
+  try {
+    const data = new Uint8Array(f.allocationSize());
+    const layout = await f.copyTo(data);
+    const r = f.visibleRect;
+    return new VideoFrame(data, { format: f.format!, codedWidth: f.codedWidth, codedHeight: f.codedHeight, timestamp: f.timestamp, layout, displayWidth: f.displayWidth, displayHeight: f.displayHeight, ...(r ? { visibleRect: { x: r.x, y: r.y, width: r.width, height: r.height } } : {}), ...(f.duration !== null ? { duration: f.duration } : {}) });
+  } catch {
+    // A frame whose pixels cannot be read out directly: drawn onto a canvas of its own instead.
+    const c = new OffscreenCanvas(f.displayWidth, f.displayHeight);
+    c.getContext('2d')!.drawImage(f, 0, 0);
+    return new VideoFrame(c, { timestamp: f.timestamp });
+  }
+}
+
+/**
+ * A video played backwards, exactly: a second of frames at a time is decoded once (from the key
+ * frame before) and kept, then handed out last frame first.
+ */
+class BackwardFrames {
+  private cache: VideoFrame[] = [];
+  private lo = Infinity;
+  private hi = -Infinity;
+  constructor(private readonly decoder: ClipDecoder) {}
+
+  async frameAt(time: number): Promise<VideoFrame | null> {
+    if (!(time >= this.lo - 1e-4 && time <= this.hi + 1e-4)) {
+      for (const f of this.cache) f.close();
+      this.hi = time;
+      this.lo = Math.max(0, time - 1);
+      this.cache = await this.decoder.framesBetween(this.lo, this.hi);
+    }
+    const us = Math.round(time * 1e6) + 500;
+    let best: VideoFrame | null = null;
+    for (const f of this.cache) if (f.timestamp <= us) best = f;
+    return best ?? this.cache[0] ?? null;
+  }
+
+  close(): void {
+    for (const f of this.cache) f.close();
+    this.cache = [];
+    this.decoder.close();
   }
 }
 
@@ -342,7 +430,7 @@ export class ElementSeeker {
  * pictures once per media.
  */
 export class ExactSources implements SourceProvider {
-  private readonly decoders = new Map<string, ClipDecoder | ElementSeeker>();
+  private readonly decoders = new Map<string, ClipDecoder | ElementSeeker | BackwardFrames>();
   private readonly bitmaps = new Map<string, ImageBitmap>();
   private readonly ready = new Map<string, Drawable>();
 
@@ -366,7 +454,8 @@ export class ExactSources implements SourceProvider {
       }
       let d = this.decoders.get(c.id);
       if (!d) {
-        d = (await ClipDecoder.open(this.projectId, a.id)) ?? new ElementSeeker(mediaUrl(this.projectId, a.id));
+        const exact = await ClipDecoder.open(this.projectId, a.id);
+        d = exact ? (c.reversed ? new BackwardFrames(exact) : exact) : new ElementSeeker(mediaUrl(this.projectId, a.id));
         this.decoders.set(c.id, d);
       }
       const f = await d.frameAt(sourceTime(c, a, t));

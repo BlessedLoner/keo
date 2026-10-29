@@ -68,6 +68,7 @@ export const INVOKE_CHANNELS = [
   'studio:exportCancel',
   'studio:beatSync',
   'studio:splitScenes',
+  'studio:reverse',
   'studio:analyzeSpeech',
   'studio:reframe',
   'studio:readAloud',

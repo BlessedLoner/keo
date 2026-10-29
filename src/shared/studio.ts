@@ -89,6 +89,8 @@ export const Asset = z
     /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
     beats: z.array(Sec).max(20000).optional(),
     bpm: z.number().min(20).max(400).nullable().optional(),
+    /** A reversed copy Keo made: of which video, from where in it. */
+    reverseOf: z.object({ assetId: Id, in: Sec }).strict().optional(),
     /** Where the video changes shot (seconds into it), found on this PC once. */
     scenes: z.array(Sec).max(5000).optional(),
   })
@@ -312,6 +314,8 @@ export const MediaClip = z
     chroma: Chroma.optional(),
     /** Behind a picture that does not fill the frame: a blurred, darker copy of it fills the rest. */
     backdrop: z.enum(['blur']).optional(),
+    /** Played backwards. Keo uses it only to make a reversed copy of a video (a clip is reversed by using that copy). */
+    reversed: z.boolean().optional(),
     /** Mirrored left-right and/or upside down. */
     flipX: z.boolean().optional(),
     flipY: z.boolean().optional(),

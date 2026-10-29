@@ -54,6 +54,18 @@ export function StudioView() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [full, setFull] = useState(false);
+  const [reversing, setReversing] = useState(false);
+  const reverseClip = async (clip: string) => {
+    setReversing(true);
+    try {
+      const r = await invoke('studio:reverse', { id: project!.id, clip });
+      ui.toast(`Reversed ${r.seconds.toFixed(1)} s of video.`, 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setReversing(false);
+    }
+  };
   const [quality, setQuality] = useState(1);
   const [guideMode, setGuideMode] = useState<Guides>('none');
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -614,6 +626,9 @@ export function StudioView() {
           <>
             <button className="btn sm ghost" disabled={time < sel.clip.start || time > sel.clip.start + sel.clip.duration} onClick={() => void edit([{ op: 'freeze', clip: sel.clip.id, at: time, duration: 2 }])} title="Hold the frame at the playhead for 2 seconds">
               Freeze frame
+            </button>
+            <button className="btn sm ghost" disabled={reversing} onClick={() => void reverseClip(sel.clip.id)} title="Play this clip backwards (Keo makes a reversed copy on this PC; do it again to play forwards)">
+              {reversing ? <span className="spinner tiny" /> : null} {reversing ? 'Reversing…' : 'Reverse'}
             </button>
             <button className="btn sm ghost" disabled={sel.clip.volume === 0} onClick={() => void edit([{ op: 'detach_audio', clip: sel.clip.id }])} title="Put this video's sound on its own track">
               Detach audio

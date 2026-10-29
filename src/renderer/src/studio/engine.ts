@@ -38,6 +38,8 @@ function sizeOf(src: Drawable): { w: number; h: number } {
 export function sourceTime(c: MediaClip, asset: Asset, t: number): number {
   if (asset.kind === 'image') return 0;
   if (c.freeze) return Math.max(0, Math.min(asset.duration, c.in));
+  // Backwards: the clip's last frame first (a hair before each frame's end, so it is that frame).
+  if (c.reversed) return Math.max(c.in, Math.min(asset.duration, c.in + sourceSpan(c, c.duration) - sourceSpan(c, t - c.start) - 0.001));
   return Math.max(0, Math.min(asset.duration, c.in + sourceSpan(c, t - c.start)));
 }
 

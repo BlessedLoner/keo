@@ -1065,10 +1065,11 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   // Shot changes: a video made of two shots (the picture, then a red frame from 1.5 s), decoded
   // in the render window, split where the red starts.
   const sh = s.studio.create('Studio smoke shots', 'square');
-  const shPic = (await s.studio.importFiles(sh.id, [pic])).added[0]!;
+  const [shPic, shTone] = (await s.studio.importFiles(sh.id, [pic, tone])).added;
   s.studio.edit(sh.id, [
     { op: 'set_project', width: 320, height: 320 },
-    { op: 'add_media', assetId: shPic.id, start: 0, duration: 3 },
+    { op: 'add_media', assetId: shPic!.id, start: 0, duration: 3 },
+    { op: 'add_audio', assetId: shTone!.id, start: 0, duration: 2 },
     { op: 'add_shape', shape: 'rect', start: 1.5, duration: 1.5, style: { width: 1.2, height: 1.2, radius: 0, fill: '#FF0000' } },
   ]);
   const shFile = (await s.studio.exportVideo(sh.id)).file;
@@ -1076,6 +1077,24 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const scVid = (await s.studio.importFiles(scP.id, [shFile])).added[0]!;
   s.studio.edit(scP.id, [{ op: 'add_media', assetId: scVid.id, start: 0 }]);
   const scSplit = await s.studio.splitScenes(scP.id);
+  // Reverse: the same two-shot video played backwards (picture and sound) — red first, then the picture.
+  const rv = s.studio.create('Studio smoke reverse', 'square');
+  const rvVid = (await s.studio.importFiles(rv.id, [shFile])).added[0]!;
+  s.studio.edit(rv.id, [{ op: 'add_media', assetId: rvVid.id, start: 0 }]);
+  const rvClip = s.studio.get(rv.id).tracks[0]!.clips[0]!;
+  await s.studio.reverseClip(rv.id, rvClip.id);
+  const rvNow = s.studio.get(rv.id);
+  const rvCopy = rvNow.assets.find((x) => x.id === (rvNow.tracks[0]!.clips[0] as { assetId: string }).assetId)!;
+  const rvFrames = await s.studio.assetFrames(rv.id, rvCopy.id, [0.3, 2.7], 64);
+  const centre = (png: Buffer) => {
+    const img = nativeImage.createFromBuffer(png);
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
+    return { r: bmp[at + 2]!, g: bmp[at + 1]!, b: bmp[at]! };
+  };
+  out.reverse = { copy: rvCopy.name, duration: rvCopy.duration, sound: rvCopy.hasAudio, first: centre(rvFrames[0]!.png), last: centre(rvFrames[1]!.png) };
+  s.studio.delete(rv.id);
   out.shots = { scenes: s.studio.get(scP.id).assets[0]?.scenes ?? null, splits: scSplit.splits, starts: s.studio.get(scP.id).tracks[0]!.clips.map((c) => c.start) };
   // Cut to the beat: a drum track (a click every half second) decoded in the render window.
   const drumRate = 16000;

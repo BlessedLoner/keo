@@ -28,8 +28,8 @@ function launch(run, extra = {}) {
   const app = process.env.KEO_SMOKE_APP;
   const r = spawnSync(app ?? electron, app ? [] : [root], {
     env,
-    // Screenshot runs capture many windows and take longer; Studio's checks make real videos (about a minute).
-    timeout: process.env.KEO_LIVE_RESULTS_SEND ? 400_000 : process.env.KEO_SMOKE_SHOTS ? 300_000 : 180_000,
+    // Screenshot runs capture many windows and take longer; Studio's checks make real videos (about two minutes).
+    timeout: process.env.KEO_LIVE_RESULTS_SEND ? 400_000 : process.env.KEO_SMOKE_SHOTS ? 360_000 : 240_000,
     encoding: 'utf8',
   });
   if (!fs.existsSync(out)) {
@@ -137,6 +137,7 @@ check('studio: a video’s own sound is analysed for speech', Array.isArray(st.t
 check('studio: voice clean-up, voice changer, loudness, colour, push-in, mirror, blend, volume keyframes and a sound effect export', st.third?.frames >= 55 && st.third?.frames <= 61 && st.third?.sound === true, st.error ?? JSON.stringify(st.third));
 check('studio: motion design draws, moves and exports (presets, shapes, keyframes)', st.motion?.frames >= 70 && st.motion?.frames <= 73 && st.motion?.layers === 11 && Array.isArray(st.motion?.brightness) && st.motion.brightness.every((b) => b > 8) && new Set(st.motion.brightness).size > 1, st.error ?? JSON.stringify(st.motion));
 check('studio: a video is split where its shot changes (decoded on this PC)', st.shots?.splits === 1 && Array.isArray(st.shots?.scenes) && Math.abs(st.shots.scenes[0] - 1.5) <= 0.07 && Math.abs(st.shots.starts[1] - 1.5) <= 0.07, st.error ?? JSON.stringify(st.shots));
+check('studio: a clip plays backwards (reversed copy, picture and sound)', st.reverse?.sound === true && Math.abs(st.reverse?.duration - 3) < 0.1 && st.reverse.first.r > 200 && st.reverse.first.b < 60 && st.reverse.first.g < 60 && st.reverse.last.g > 80, st.error ?? JSON.stringify(st.reverse));
 check('studio: a faceless video is made from a script (voice, pictures, captions) and exported', st.faceless?.scenes === 3 && st.faceless?.voice === 3 && st.faceless?.captions >= 3 && st.faceless?.sound === true && st.faceless?.frames > 60, st.error ?? JSON.stringify(st.faceless));
 check('studio: export choices (720p, 24 fps, a file name)', st.exportChoices?.width === 720 && st.exportChoices?.height === 720 && st.exportChoices?.named === 'Smoke faceless 720.mp4' && Math.abs(st.exportChoices.frames - st.exportChoices.seconds * 24) <= 1, st.error ?? JSON.stringify(st.exportChoices));
 check('studio: an export can be stopped', st.stopped?.asked === true && st.stopped?.result !== 'finished', st.error ?? JSON.stringify(st.stopped));
