@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, clipEnd, findClip, isAV, projectDuration, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
 import { Preview } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
+import { ProjectGrid } from '../studio/ProjectGrid';
 import { ReadAloud } from '../studio/VoiceTools';
 import { MediaBin } from '../studio/Bin';
 import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
-import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
+import { CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -394,7 +395,22 @@ export function StudioView() {
   if (!project || creating) {
     return (
       <div className="view studio">
-        <NewProject onCreate={create} onFaceless={() => setFaceless(true)} onCancel={project ? () => setCreating(false) : undefined} />
+        <div className="studio-home">
+          <NewProject onCreate={create} onFaceless={() => setFaceless(true)} onCancel={project ? () => setCreating(false) : undefined} />
+          <ProjectGrid
+            projects={list}
+            current={project?.id ?? null}
+            onOpen={(id) => {
+              setCreating(false);
+              void openProject(id);
+            }}
+            onChanged={async () => {
+              const all = await listProjects().catch(() => list);
+              setList(all);
+              if (project && !all.some((x) => x.id === project.id)) setProject(null);
+            }}
+          />
+        </div>
       </div>
     );
   }
@@ -439,8 +455,8 @@ export function StudioView() {
           ))}
           {!list.some((p) => p.id === project.id) && <option value={project.id}>{project.name}</option>}
         </select>
-        <button className="btn sm" onClick={() => setCreating(true)} title="New project">
-          <Icon name="plus" size={14} /> New
+        <button className="btn sm" onClick={() => setCreating(true)} title="Your projects, or a new one">
+          <Icon name="plus" size={14} /> New / Projects
         </button>
         <span className="studio-meta">
           {project.width}×{project.height} · {project.fps} fps · {fmtDur(duration)}
@@ -704,7 +720,23 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
         <div className="insp-grid">
           <Num label="Start" value={clip.start} min={0} suffix="s" onCommit={(v) => onEdit([{ op: 'move', clip: clip.id, start: v }])} />
           <Num label="Length" value={clip.duration} min={0.04} suffix="s" onCommit={(v) => onEdit([{ op: 'trim', clip: clip.id, duration: v }])} />
-          {clip.type === 'media' && asset?.kind === 'video' && <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />}
+          {clip.type === 'media' && asset?.kind === 'video' && !clip.speedCurve && <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />}
+          {clip.type === 'media' && asset?.kind === 'video' && (
+            <label className="insp-num">
+              <span>Speed curve</span>
+              <select className="select" value={clip.speedCurve ? (Object.entries(SPEED_PRESETS).find(([, pts]) => JSON.stringify(pts) === JSON.stringify(clip.speedCurve))?.[0] ?? 'custom') : 'none'} onChange={(e) => set({ speedCurve: e.target.value === 'none' ? null : (e.target.value as keyof typeof SPEED_PRESETS) })}>
+                <option value="none">None (steady)</option>
+                <option value="montage">Montage</option>
+                <option value="hero">Hero (slow moment)</option>
+                <option value="bullet">Bullet time</option>
+                <option value="flash-in">Flash in</option>
+                <option value="flash-out">Flash out</option>
+                <option value="jump-cut">Jump cut</option>
+                {clip.speedCurve && !Object.values(SPEED_PRESETS).some((pts) => JSON.stringify(pts) === JSON.stringify(clip.speedCurve)) && <option value="custom">Custom</option>}
+              </select>
+            </label>
+          )}
+          {clip.type === 'media' && clip.speedCurve && <CurveGraph points={clip.speedCurve} />}
           {isAV(clip) && (
             <>
               <Num label="Fade in" value={clip.fadeIn} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeIn: v })} />
@@ -741,11 +773,14 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
         <Section title="Position">
           {clip.type === 'media' && (
             <div className="insp-seg" role="radiogroup" aria-label="Fit">
-              {(['cover', 'contain'] as const).map((f) => (
-                <button key={f} role="radio" aria-checked={clip.fit === f} className={clip.fit === f ? 'on' : ''} onClick={() => set({ fit: f })}>
-                  {f === 'cover' ? 'Fill frame' : 'Show all'}
-                </button>
-              ))}
+              {(['cover', 'contain', 'blur'] as const).map((f) => {
+                const on = f === 'blur' ? clip.fit === 'contain' && clip.backdrop === 'blur' : clip.fit === f && !(f === 'contain' && clip.backdrop === 'blur');
+                return (
+                  <button key={f} role="radio" aria-checked={on} className={on ? 'on' : ''} onClick={() => set(f === 'blur' ? { fit: 'contain', backdrop: 'blur' } : { fit: f, backdrop: null })}>
+                    {f === 'cover' ? 'Fill frame' : f === 'contain' ? 'Show all' : 'Show all + blur'}
+                  </button>
+                );
+              })}
             </div>
           )}
           <PositionFields clip={clip} time={time} fps={project.fps} set={set} />
@@ -755,6 +790,7 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
       {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
+      {clip.type === 'media' && <EffectsFields clip={clip} set={set} />}
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
       {clip.type !== 'audio' && <MotionFields clip={clip} set={set} />}
     </div>
@@ -899,6 +935,22 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
         </div>
       </Section>
     </>
+  );
+}
+
+/** A small picture of a speed curve (faster up, slower down; the line is normal speed). */
+function CurveGraph({ points }: { points: SpeedPoint[] }) {
+  const W = 220;
+  const H = 46;
+  const max = Math.max(2, ...points.map((p) => p.speed));
+  // A log scale, so slow and fast look as big as each other.
+  const y = (s: number) => H / 2 - (Math.log(s) / Math.log(max)) * (H / 2 - 3);
+  const path = Array.from({ length: 61 }, (_, i) => `${i ? 'L' : 'M'}${((i / 60) * W).toFixed(1)},${y(curveAt(points, i / 60)).toFixed(1)}`).join(' ');
+  return (
+    <svg className="curve-graph" viewBox={`0 0 ${W} ${H}`} aria-label="Speed curve">
+      <line x1={0} x2={W} y1={H / 2} y2={H / 2} className="mid" />
+      <path d={path} />
+    </svg>
   );
 }
 

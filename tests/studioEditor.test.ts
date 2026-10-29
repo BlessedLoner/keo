@@ -90,3 +90,41 @@ describe('Transitions and crop', () => {
     expect(() => applyEdits(p, [{ op: 'set', clip: id, crop: { left: 0.6 } }], { rand })).toThrow();
   });
 });
+
+describe('Speed curves, backdrop and effects', () => {
+  it('a speed curve keeps the same part of the source and splits without a jump', async () => {
+    const { curveArea, sourceSpan } = await import('../src/shared/studio');
+    let p = withClip();
+    const id = videos(p)[0]!.id;
+    // 8 s of source (from 1 s) on the hero curve.
+    p = applyEdits(p, [{ op: 'set', clip: id, speedCurve: 'hero' }], { rand }).project;
+    const c = videos(p)[0]!;
+    expect(c.speed).toBe(1);
+    expect(sourceSpan(c, c.duration)).toBeCloseTo(8, 2);
+    expect(c.duration).toBeCloseTo(8 / curveArea(c.speedCurve!, 0, 1), 2);
+    // Splitting: the second part starts exactly where the first one ends in the source.
+    const at = c.duration * 0.55;
+    const whereInSource = c.in + sourceSpan(c, at);
+    p = applyEdits(p, [{ op: 'split', clip: id, at }], { rand }).project;
+    const [a, b] = videos(p);
+    expect(b!.in).toBeCloseTo(whereInSource, 2);
+    expect(a!.in + sourceSpan(a!, a!.duration)).toBeCloseTo(whereInSource, 2);
+    expect(b!.in + sourceSpan(b!, b!.duration)).toBeCloseTo(9, 2);
+    // Back to steady speed: the same 8 s of source again.
+    const steady = applyEdits(withClip(), [{ op: 'set', clip: id, speedCurve: 'montage' }, { op: 'set', clip: id, speedCurve: null }], { rand }).project;
+    expect(videos(steady)[0]!.duration).toBeCloseTo(8, 2);
+    expect(() => applyEdits(p, [{ op: 'detach_audio', clip: a!.id }], { rand })).toThrow(/speed curve/);
+  });
+
+  it('backdrop and effects are clip settings', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    let a = applyEdits(p, [{ op: 'set', clip: id, fit: 'contain', backdrop: 'blur', effects: { grain: 0.4, vhs: 0.6 } }], { rand }).project;
+    expect(videos(a)[0]).toMatchObject({ fit: 'contain', backdrop: 'blur', effects: { grain: 0.4, vhs: 0.6 } });
+    a = applyEdits(a, [{ op: 'set', clip: id, effects: { grain: null, glow: 0.5 } }], { rand }).project;
+    expect(videos(a)[0]!.effects).toEqual({ vhs: 0.6, glow: 0.5 });
+    a = applyEdits(a, [{ op: 'set', clip: id, effects: null, backdrop: null }], { rand }).project;
+    expect(videos(a)[0]!.effects).toBeUndefined();
+    expect(videos(a)[0]!.backdrop).toBeUndefined();
+  });
+});

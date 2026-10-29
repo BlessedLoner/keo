@@ -131,6 +131,7 @@ export const invokeSchemas = {
   'studio:get': z.object({ id: studioProjectId }).strict(),
   'studio:open': z.object({ id: studioProjectId }).strict(),
   'studio:delete': z.object({ id: studioProjectId }).strict(),
+  'studio:duplicate': z.object({ id: studioProjectId }).strict(),
   'studio:edit': z.object({ id: studioProjectId, ops: z.array(EditOp).min(1).max(200) }).strict(),
   'studio:undo': z.object({ id: studioProjectId }).strict(),
   'studio:redo': z.object({ id: studioProjectId }).strict(),
@@ -444,6 +445,7 @@ export interface InvokeOutputs {
   'studio:get': StudioProject;
   'studio:open': StudioProject;
   'studio:delete': { ok: true };
+  'studio:duplicate': StudioProject;
   'studio:edit': { project: StudioProject; changes: string[] };
   'studio:undo': StudioProject;
   'studio:redo': StudioProject;

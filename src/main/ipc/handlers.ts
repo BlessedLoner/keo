@@ -445,6 +445,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'studio:create': ({ name, format }) => s.studio.create(name, format),
     'studio:get': ({ id }) => s.studio.get(id),
     'studio:open': ({ id }) => s.studio.open(id),
+    'studio:duplicate': ({ id }) => studioCall(() => s.studio.duplicate(id)),
     'studio:delete': ({ id }) => {
       s.studio.delete(id);
       return { ok: true as const };

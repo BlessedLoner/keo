@@ -127,6 +127,34 @@ export function MotionFields({ clip, set }: { clip: Visual; set: (p: SetPatch) =
   );
 }
 
+/** Effects over the picture, each with a strength. */
+export function EffectsFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
+  const fx = clip.effects ?? {};
+  const rows: Array<[keyof NonNullable<MediaClip['effects']>, string]> = [
+    ['grain', 'Film grain'],
+    ['vhs', 'VHS'],
+    ['glow', 'Glow'],
+    ['rgbSplit', 'RGB split'],
+    ['lightLeak', 'Light leak'],
+  ];
+  return (
+    <Section title="Effects">
+      {rows.map(([k, label]) => (
+        <label className="insp-range" key={`${clip.id}-${k}-${fx[k] ?? 0}`}>
+          <span>{label}</span>
+          <input type="range" min={0} max={100} defaultValue={Math.round((fx[k] ?? 0) * 100)} onPointerUp={(e) => set({ effects: { [k]: Number((e.target as HTMLInputElement).value) / 100 || null } })} onKeyUp={(e) => set({ effects: { [k]: Number((e.target as HTMLInputElement).value) / 100 || null } })} />
+          <em>{Math.round((fx[k] ?? 0) * 100)}</em>
+        </label>
+      ))}
+      {clip.effects && (
+        <button className="btn sm ghost" onClick={() => set({ effects: null })}>
+          Remove effects
+        </button>
+      )}
+    </Section>
+  );
+}
+
 /** How this clip takes over from the one before it on its track. */
 export function TransitionFields({ clip, hasBefore, set }: { clip: MediaClip; hasBefore: boolean; set: (p: SetPatch) => void }) {
   const tr = clip.transition;

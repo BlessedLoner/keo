@@ -1,4 +1,4 @@
-import { bridged, clipEnd, duckGain, isAV, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, curveArea, curveAt, duckGain, isAV, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ExactSources, mediaUrl } from './media';
@@ -24,14 +24,14 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; duck: number | null }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; duck: number | null; curve?: SpeedPoint[] }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
       if (!isAV(c) || c.volume <= 0) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, duck: c.type === 'audio' ? c.duck : null });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}) });
     }
   }
   if (!parts.length || dur <= 0) return null;
@@ -52,6 +52,13 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = part.speed;
+    if (part.curve) {
+      // A speed curve: the sound speeds up and slows down with the picture (20 steps a second).
+      const n = Math.max(2, Math.ceil(part.duration * 20) + 1);
+      const rates = new Float32Array(n);
+      for (let i = 0; i < n; i++) rates[i] = curveAt(part.curve, i / (n - 1));
+      src.playbackRate.setValueCurveAtTime(rates, part.start, part.duration);
+    }
     const gain = ctx.createGain();
     const end = part.start + part.duration;
     gain.gain.setValueAtTime(part.fadeIn > 0 ? 0 : part.volume, part.start);
@@ -72,7 +79,7 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
       out = out.connect(duck);
     }
     out.connect(gain).connect(ctx.destination);
-    src.start(part.start, part.in, part.duration * part.speed);
+    src.start(part.start, part.in, part.curve ? part.duration * curveArea(part.curve, 0, 1) : part.duration * part.speed);
   }
   const mixed = await ctx.startRendering();
   if (o.loudness && p.loudness === 'social') normalize(mixed, -14);

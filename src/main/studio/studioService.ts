@@ -96,7 +96,9 @@ export class StudioService {
       if (!/^pr_[A-Za-z0-9]+\.json$/.test(f)) continue;
       try {
         const p = Project.parse(JSON.parse(fs.readFileSync(path.join(this.d.dir, f), 'utf8')));
-        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0) });
+        const first = p.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media').sort((x, y) => x.start - y.start)[0];
+        const cover = (first?.type === 'media' ? p.assets.find((a) => a.id === first.assetId) : undefined) ?? p.assets.find((a) => a.kind !== 'audio') ?? null;
+        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined } : null });
       } catch {
         /* a damaged file is left alone */
       }
@@ -130,6 +132,15 @@ export class StudioService {
     const p = this.get(id);
     this.current = id;
     return p;
+  }
+
+  /** A copy of a project (its timeline and media list; the media files themselves are shared). */
+  duplicate(id: string): Project {
+    const p = this.get(id);
+    const copy = Project.parse({ ...structuredClone(p), id: `pr_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, name: `${p.name} (copy)`.slice(0, 120), createdAt: (this.d.now?.() ?? new Date()).toISOString(), updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
+    this.save(copy);
+    this.d.log.info('studio.duplicated', {});
+    return copy;
   }
 
   delete(id: string): void {

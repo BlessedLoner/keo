@@ -58,3 +58,17 @@ describe('Studio voices', () => {
     await expect(s.studio.saveRecording(p.id, Buffer.from('not a wav file at all, just text that is long enough'), 0)).rejects.toThrow(/could not be read/);
   });
 });
+
+describe('Studio projects', () => {
+  it('copies a project, and the list shows a cover picture', async () => {
+    setup();
+    const s = h!.services.studio;
+    const p = s.create('Original', 'vertical');
+    const copy = s.duplicate(p.id);
+    expect(copy.id).not.toBe(p.id);
+    expect(copy.name).toBe('Original (copy)');
+    const list = s.list();
+    expect(list.map((x) => x.name).sort()).toEqual(['Original', 'Original (copy)']);
+    expect(list[0]!.cover).toBeNull();
+  });
+});

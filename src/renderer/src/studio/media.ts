@@ -1,4 +1,4 @@
-import { bridged, clipEnd, duckGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
+import { bridged, clipEnd, curveAt, duckGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
 import { voiceChain } from './sound';
@@ -99,7 +99,8 @@ export class PreviewSources implements SourceProvider {
         const a = p.assets.find((x) => x.id === c.assetId);
         if (!a || a.kind === 'image') continue;
         const target = c.type === 'media' ? sourceTime(c, a, t) : Math.min(a.duration, c.in + (t - c.start));
-        const rate = c.type === 'media' ? c.speed : 1;
+        // With a speed curve the playback rate follows the curve (the element allows 1/16 to 16).
+        const rate = c.type === 'media' ? (c.speedCurve ? Math.max(0.0625, Math.min(16, curveAt(c.speedCurve, (t - c.start) / Math.max(0.01, c.duration)))) : c.speed) : 1;
         let el: HTMLMediaElement;
         if (c.type === 'media' && a.kind === 'video') {
           if (tr.hidden && (tr.muted || !a.hasAudio)) continue;

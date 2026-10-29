@@ -157,6 +157,98 @@ export type TextStyle = z.infer<typeof TextStyle>;
 
 const Fades = { fadeIn: z.number().min(0).max(30).default(0), fadeOut: z.number().min(0).max(30).default(0) };
 
+/** Effects on a video or picture, each with its strength (0..1). */
+export const Effects = z
+  .object({
+    grain: z.number().min(0).max(1).optional(),
+    vhs: z.number().min(0).max(1).optional(),
+    glow: z.number().min(0).max(1).optional(),
+    rgbSplit: z.number().min(0).max(1).optional(),
+    lightLeak: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+export type Effects = z.infer<typeof Effects>;
+
+/** A point of a speed curve: at fraction x of the clip, this speed (1 = normal). */
+export const SpeedPoint = z.object({ x: z.number().min(0).max(1), speed: z.number().min(0.1).max(10) }).strict();
+export type SpeedPoint = z.infer<typeof SpeedPoint>;
+
+/** Ready-made speed curves (like the ones short-form editors use). */
+export const SPEED_PRESETS: Record<'montage' | 'hero' | 'bullet' | 'flash-in' | 'flash-out' | 'jump-cut', SpeedPoint[]> = {
+  montage: [
+    { x: 0, speed: 1 },
+    { x: 0.25, speed: 3 },
+    { x: 0.5, speed: 0.4 },
+    { x: 0.75, speed: 3 },
+    { x: 1, speed: 1 },
+  ],
+  hero: [
+    { x: 0, speed: 1.4 },
+    { x: 0.35, speed: 1.4 },
+    { x: 0.45, speed: 0.2 },
+    { x: 0.65, speed: 0.2 },
+    { x: 0.75, speed: 1.4 },
+    { x: 1, speed: 1.4 },
+  ],
+  bullet: [
+    { x: 0, speed: 3 },
+    { x: 0.4, speed: 3 },
+    { x: 0.5, speed: 0.15 },
+    { x: 0.6, speed: 3 },
+    { x: 1, speed: 3 },
+  ],
+  'flash-in': [
+    { x: 0, speed: 6 },
+    { x: 0.3, speed: 1 },
+    { x: 1, speed: 1 },
+  ],
+  'flash-out': [
+    { x: 0, speed: 1 },
+    { x: 0.7, speed: 1 },
+    { x: 1, speed: 6 },
+  ],
+  'jump-cut': [
+    { x: 0, speed: 1 },
+    { x: 0.45, speed: 1 },
+    { x: 0.5, speed: 5 },
+    { x: 0.55, speed: 1 },
+    { x: 1, speed: 1 },
+  ],
+};
+
+/** The speed at fraction x of a curve (straight lines between its points). */
+export function curveAt(points: SpeedPoint[], x: number): number {
+  if (x <= points[0]!.x) return points[0]!.speed;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    if (x <= b.x) return a.speed + ((b.speed - a.speed) * (x - a.x)) / Math.max(1e-9, b.x - a.x);
+  }
+  return points.at(-1)!.speed;
+}
+
+/** The area under a curve from x0 to x1 (exact for straight segments). */
+export function curveArea(points: SpeedPoint[], x0: number, x1: number): number {
+  if (x1 <= x0) return 0;
+  const xs = [x0, ...points.map((p) => p.x).filter((x) => x > x0 && x < x1), x1];
+  let area = 0;
+  for (let i = 1; i < xs.length; i++) area += ((curveAt(points, xs[i - 1]!) + curveAt(points, xs[i]!)) / 2) * (xs[i]! - xs[i - 1]!);
+  return area;
+}
+
+/** The part of a curve from x0 to x1, stretched to 0..1. */
+export function subCurve(points: SpeedPoint[], x0: number, x1: number): SpeedPoint[] {
+  const span = Math.max(1e-6, x1 - x0);
+  const inner = points.filter((p) => p.x > x0 + 1e-6 && p.x < x1 - 1e-6).map((p) => ({ x: (p.x - x0) / span, speed: p.speed }));
+  return [{ x: 0, speed: curveAt(points, x0) }, ...inner, { x: 1, speed: curveAt(points, x1) }].map((p) => ({ x: Math.round(p.x * 10000) / 10000, speed: Math.round(p.speed * 1000) / 1000 }));
+}
+
+/** Seconds of the source a video clip shows in its first rt seconds (its speed, or its speed curve). */
+export function sourceSpan(c: { duration: number; speed: number; speedCurve?: SpeedPoint[] | undefined }, rt: number): number {
+  if (!c.speedCurve?.length) return rt * c.speed;
+  return c.duration * curveArea(c.speedCurve, 0, Math.max(0, Math.min(1, rt / Math.max(1e-6, c.duration))));
+}
+
 /** Edges cut off a video or picture: fractions of its width (left, right) and height (top, bottom). */
 export const Crop = z
   .object({ left: z.number().min(0).max(0.45).default(0), top: z.number().min(0).max(0.45).default(0), right: z.number().min(0).max(0.45).default(0), bottom: z.number().min(0).max(0.45).default(0) })
@@ -194,6 +286,12 @@ export const MediaClip = z
     transition: Transition.optional(),
     /** Edges cut off the picture (fractions of its width and height). */
     crop: Crop.optional(),
+    /** Behind a picture that does not fill the frame: a blurred, darker copy of it fills the rest. */
+    backdrop: z.enum(['blur']).optional(),
+    /** Looks laid over the picture (film grain, VHS, glow, RGB split, light leak), each 0..1. */
+    effects: Effects.optional(),
+    /** A speed curve over the clip (x: fraction of the clip); replaces `speed` while set. */
+    speedCurve: z.array(SpeedPoint).min(2).max(16).optional(),
     mask: Mask.optional(),
     frame: DeviceFrame.optional(),
     /** A drop shadow under the layer (0: none). */
@@ -333,6 +431,8 @@ export interface ProjectSummary {
   height: number;
   duration: number;
   clips: number;
+  /** The first video or picture (for a thumbnail), null when there is none. */
+  cover: Asset | null;
 }
 
 /** A job for Keo's render window: an export, frames for Keo to look at, or measuring a file. */
@@ -511,6 +611,11 @@ export const EditOp = z.discriminatedUnion('op', [
       shape: ShapeKind.optional(),
       transition: Transition.nullable().optional(),
       crop: Crop.partial().nullable().optional(),
+      backdrop: z.enum(['blur']).nullable().optional(),
+      /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
+      effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
+      /** A speed curve: points, a preset's name, or null for steady speed again. */
+      speedCurve: z.union([z.array(SpeedPoint).min(2).max(16), z.enum(['montage', 'hero', 'bullet', 'flash-in', 'flash-out', 'jump-cut'])]).nullable().optional(),
     })
     .strict(),
   /** An element (shape) on an overlay track: by default the Graphics track, made above the videos when missing. */
@@ -864,6 +969,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
     if (!isAV(c)) return Infinity;
     const a = asset(c.assetId);
     if (a.kind === 'image') return Infinity;
+    if (c.type === 'media' && c.speedCurve) return (a.duration - c.in) / Math.max(0.1, curveArea(c.speedCurve, 0, 1));
     return (a.duration - c.in) / (c.type === 'media' ? c.speed : 1);
   };
 
@@ -961,10 +1067,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const d = op.trimStart;
           if (d >= c.duration - 0.04) throw new EditError(`Trimming ${d}s would remove all of ${c.id}.`);
           if (isAV(c)) {
-            const rate = c.type === 'media' ? c.speed : 1;
-            const nextIn = c.in + d * rate;
+            const nextIn = c.in + (c.type === 'media' ? sourceSpan(c, d) : d);
             if (nextIn < -1e-6) throw new EditError(`${c.id} cannot start earlier than its source does.`);
             c.in = round(Math.max(0, nextIn));
+            if (c.type === 'media' && c.speedCurve) {
+              if (d < 0) throw new EditError('Remove the speed curve before making this clip start earlier.');
+              c.speedCurve = subCurve(c.speedCurve, d / c.duration, 1);
+            }
           }
           c.start = round(c.start + d);
           c.duration = round(c.duration - d);
@@ -973,6 +1082,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (op.duration !== undefined) {
           const max = sourceLeft(c);
           if (op.duration > max + 1e-6) throw new EditError(`${c.id} is only ${round(max)}s long from where it starts.`);
+          // Shorter: the curve ends where the clip now ends. Longer: the curve stretches.
+          if (c.type === 'media' && c.speedCurve && op.duration < c.duration) c.speedCurve = subCurve(c.speedCurve, 0, op.duration / c.duration);
           c.duration = round(op.duration);
         }
         sortClips(f.track);
@@ -985,7 +1096,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (c.type !== 'media') throw new EditError(`${c.id} is not a video.`);
         const a = asset(c.assetId);
         if (!a.hasAudio || a.kind !== 'video') throw new EditError(`${a.name} has no sound to detach.`);
-        if (c.speed !== 1) throw new EditError('Detach the sound before changing the speed (set the speed back to 1×).');
+        if (c.speed !== 1 || c.speedCurve) throw new EditError('Detach the sound before changing the speed (set the speed back to 1× with no speed curve).');
         if (c.volume === 0) throw new EditError(`The sound of ${c.id} is already off or detached.`);
         let t = p.tracks.find((x) => x.kind === 'audio' && x.name === 'Detached audio');
         if (!t) {
@@ -1004,6 +1115,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const c = f.clip;
         if (c.type !== 'media' || asset(c.assetId).kind !== 'video') throw new EditError(`${c.id} is not a video.`);
         if (op.at < c.start - 1e-6 || op.at > clipEnd(c) + 1e-6) throw new EditError(`${op.at}s is not inside ${c.id}.`);
+        if (c.speedCurve) throw new EditError('Remove the speed curve before freezing a frame of this clip.');
         const d = round(op.duration);
         const at = round(op.at);
         const frameAt = round(c.in + (at - c.start) * c.speed);
@@ -1047,7 +1159,11 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         second.id = rid('cl', rand);
         second.start = round(op.at);
         second.duration = round(c.duration - first);
-        if (isAV(second)) second.in = round(second.in + first * (second.type === 'media' ? second.speed : 1));
+        if (isAV(second)) second.in = round(second.in + (c.type === 'media' ? sourceSpan(c, first) : first));
+        if (c.type === 'media' && c.speedCurve && second.type === 'media') {
+          second.speedCurve = subCurve(c.speedCurve, first / c.duration, 1);
+          c.speedCurve = subCurve(c.speedCurve, 0, first / c.duration);
+        }
         if (isAV(second)) second.fadeIn = 0;
         if (isAV(c)) c.fadeOut = 0;
         c.duration = first;
@@ -1108,9 +1224,43 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const m = c as MediaClip;
           const a = asset(m.assetId);
           // The clip keeps the same part of its source: its length changes with the speed.
-          const sourceSeconds = m.duration * m.speed;
+          const sourceSeconds = sourceSpan(m, m.duration);
           m.speed = op.speed;
+          delete m.speedCurve;
           m.duration = round(a.kind === 'image' ? m.duration : Math.max(0.04, sourceSeconds / op.speed));
+        }
+        if (op.backdrop !== undefined) {
+          only('backdrop (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          if (op.backdrop === null) delete m.backdrop;
+          else m.backdrop = op.backdrop;
+        }
+        if (op.effects !== undefined) {
+          only('effects (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          const next: Record<string, number> = op.effects === null ? {} : { ...(m.effects ?? {}) };
+          if (op.effects) for (const [k, v] of Object.entries(op.effects)) if (v) next[k] = v;
+          else delete next[k];
+          if (Object.keys(next).length) m.effects = Effects.parse(next);
+          else delete m.effects;
+        }
+        if (op.speedCurve !== undefined) {
+          only('speed curve', c.type === 'media');
+          const m = c as MediaClip;
+          if (asset(m.assetId).kind !== 'video') throw new EditError('Speed curves are for videos.');
+          const sourceSeconds = sourceSpan(m, m.duration);
+          if (op.speedCurve === null) {
+            delete m.speedCurve;
+            m.speed = 1;
+            m.duration = round(Math.max(0.04, sourceSeconds));
+          } else {
+            const pts = (typeof op.speedCurve === 'string' ? SPEED_PRESETS[op.speedCurve] : [...op.speedCurve]).sort((p1, p2) => p1.x - p2.x);
+            if (pts[0]!.x !== 0 || pts.at(-1)!.x !== 1) throw new EditError('A speed curve starts at x 0 and ends at x 1.');
+            m.speedCurve = pts.map((p) => ({ ...p }));
+            m.speed = 1;
+            // The same part of the source, now on the curve.
+            m.duration = round(Math.max(0.04, sourceSeconds / curveArea(pts, 0, 1)));
+          }
         }
         for (const k of ['fadeIn', 'fadeOut'] as const)
           if (op[k] !== undefined) {
@@ -1327,6 +1477,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const after = end - op.to;
           if (before >= 0.04) {
             const a = structuredClone(c);
+            if (c.type === 'media' && c.speedCurve && a.type === 'media') a.speedCurve = subCurve(c.speedCurve, 0, before / c.duration);
             a.duration = round(before);
             if (isAV(a)) a.fadeOut = 0;
             shiftInto(a, 0, a.duration);
@@ -1339,8 +1490,9 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
             b.start = round(op.from);
             b.duration = round(after);
             if (isAV(b)) {
-              b.in = round(b.in + skipped * (b.type === 'media' ? b.speed : 1));
+              b.in = round(b.in + (c.type === 'media' ? sourceSpan(c, skipped) : skipped));
               b.fadeIn = 0;
+              if (c.type === 'media' && c.speedCurve && b.type === 'media') b.speedCurve = subCurve(c.speedCurve, skipped / c.duration, 1);
             }
             shiftInto(b, skipped, b.duration);
             if (b.type === 'media' && before >= 0.04) delete b.transition;

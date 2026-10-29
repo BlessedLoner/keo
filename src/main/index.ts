@@ -1,6 +1,6 @@
 import { Mp4Reader } from './studio/mp4';
 import { voicedSpans, wavOf } from './studio/captions';
-import { LOOKS, type EditOp } from '../shared/studio';
+import { LOOKS, projectDuration, type EditOp } from '../shared/studio';
 import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
 import { scenesFromScript, Storyboard } from '../shared/studioFaceless';
 import os from 'node:os';
@@ -1024,7 +1024,8 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   // A crossfade between the two halves of the split video, and the first half cropped.
   const halves = now.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media');
   if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, transition: { kind: 'crossfade', seconds: 0.5 } });
-  if (halves[0]) ops.push({ op: 'set', clip: halves[0].id, crop: { left: 0.1, right: 0.1 } });
+  if (halves[0]) ops.push({ op: 'set', clip: halves[0].id, crop: { left: 0.1, right: 0.1 }, effects: { grain: 0.5, vhs: 0.5, glow: 0.4, rgbSplit: 0.3, lightLeak: 0.4 } });
+  if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, fit: 'contain', backdrop: 'blur' });
   s.studio.edit(b.id, ops);
   const cleaned = await s.studio.cleanup(b.id, { silences: true });
   const third = await s.studio.exportVideo(b.id);
@@ -1101,6 +1102,14 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const raOut = await s.studioReadAloud(fl.projectId, raText.id, 'female');
   out.readAloud = { seconds: raOut.seconds, start: s.studio.get(fl.projectId).tracks.flatMap((t) => t.clips).find((c) => c.id === raOut.clip)?.start };
   s.studio.delete(fl.projectId);
+  // A speed curve, exported for real (on a copy of the second project).
+  const sc = s.studio.duplicate(b.id);
+  const scClip = s.studio.get(sc.id).tracks.flatMap((t) => t.clips).find((c) => c.type === 'media')!;
+  s.studio.edit(sc.id, [{ op: 'set', clip: scClip.id, speedCurve: 'montage' }]);
+  const scOut = await s.studio.exportVideo(sc.id);
+  out.speedCurve = { frames: scOut.frames, seconds: scOut.durationSec, expected: projectDuration(s.studio.get(sc.id)) };
+  fs.rmSync(scOut.file, { force: true });
+  s.studio.delete(sc.id);
   for (const f of [first.file, second.file, third.file, moOut.file]) fs.rmSync(f, { force: true });
   s.studio.delete(mo.id);
   s.studio.delete(a.id);
@@ -1249,6 +1258,12 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
       await wait(3500);
       fs.writeFileSync(path.join(dir, 'studio-keo.png'), (await win.webContents.capturePage()).toPNG());
+      // The projects screen.
+      await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('Projects'))?.click();`);
+      await wait(1500);
+      fs.writeFileSync(path.join(dir, 'studio-home.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('.studio-new button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(500);
       // The Text styles in the library, and the Export window.
       await js(`[...document.querySelectorAll('.bin-tabs button')].find((b) => b.textContent.trim() === 'Text')?.click();`);
       await wait(500);
