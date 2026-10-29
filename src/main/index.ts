@@ -1483,6 +1483,17 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
       await wait(3500);
       fs.writeFileSync(path.join(dir, 'studio-keo.png'), (await win.webContents.capturePage()).toPNG());
+      // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
+      await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(200);
+      await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
+      for (let i = 0; i < 40; i++) {
+        if (await js(`return !!document.querySelector('.keo-live-bar') && /Step 2/.test(document.querySelector('.keo-live-bar').textContent)`)) break;
+        await wait(100);
+      }
+      await wait(250);
+      fs.writeFileSync(path.join(dir, 'studio-live.png'), (await win.webContents.capturePage()).toPNG());
+      await wait(2500);
       // The projects screen.
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('Projects'))?.click();`);
       await wait(1500);

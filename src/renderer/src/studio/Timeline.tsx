@@ -38,6 +38,7 @@ export function Timeline({
   selectedIds,
   onSelect,
   onSelectMany,
+  keo,
   onTime,
   onEdit,
   zoom,
@@ -52,6 +53,8 @@ export function Timeline({
   onSelect: (id: string | null, add?: boolean) => void;
   /** Selects exactly these clips (the last one is shown in the inspector). */
   onSelectMany?: (ids: string[]) => void;
+  /** Keo's step being shown: its place (and range) on the timeline and what it does. */
+  keo?: { at: number; end?: number | undefined; label: string; kind: string } | null;
   onTime: (t: number) => void;
   onEdit: (ops: EditOp[]) => void;
   zoom: number;
@@ -72,6 +75,13 @@ export function Timeline({
   const dragRef = useRef<Drag | null>(null);
   dragRef.current = drag;
   const pps = zoom; // pixels per second
+  // Keo's step comes into view (the timeline scrolls to it).
+  useEffect(() => {
+    const el = area.current;
+    if (!keo || !el) return;
+    const x = LABEL_W + keo.at * pps;
+    if (x < el.scrollLeft + LABEL_W + 40 || x > el.scrollLeft + el.clientWidth - 80) el.scrollTo({ left: Math.max(0, x - LABEL_W - el.clientWidth / 3), behavior: 'smooth' });
+  }, [keo, pps]);
   const duration = Math.max(projectDuration(project), 10);
   const width = Math.ceil((duration + 8) * pps);
 
@@ -385,6 +395,14 @@ export function Timeline({
           </div>
         ))}
         <div className="tl-playhead" style={{ left: LABEL_W + time * pps }} />
+        {keo && (
+          <>
+            {keo.end !== undefined && keo.end > keo.at && <div className={`tl-keo-range ${keo.kind}`} style={{ left: LABEL_W + keo.at * pps, width: Math.max(2, (keo.end - keo.at) * pps) }} />}
+            <div className="tl-keo" style={{ left: LABEL_W + keo.at * pps }}>
+              <span className="tl-keo-tag">Keo · {keo.label}</span>
+            </div>
+          </>
+        )}
         {easeMenu && easeClip && easeClip.type !== 'audio' && easeClip.type !== 'adjust' && <EaseEditor clip={easeClip} at={easeMenu.at} x={easeMenu.x} y={easeMenu.y} onEdit={onEdit} onClose={() => setEaseMenu(null)} />}
         {cutMenu && (
           <div className="tl-menu" style={{ left: cutMenu.x, top: cutMenu.y }} onPointerDown={(e) => e.stopPropagation()}>

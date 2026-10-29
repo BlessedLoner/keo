@@ -985,7 +985,11 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, reframe, readAloud, template, exportVideo];
+  // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, reframe, readAloud, template, exportVideo].map((c) => ({
+    ...c,
+    execute: (i: never, ctx: never) => s.asKeo(() => (c.execute as (i: never, ctx: never) => unknown)(i, ctx), (i as { projectId?: string } | undefined)?.projectId),
+  })) as AnyCapability[];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

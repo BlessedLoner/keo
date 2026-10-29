@@ -71,6 +71,9 @@ export const INVOKE_CHANNELS = [
   'studio:reverse',
   'studio:cleanSound',
   'studio:previewCopies',
+  'studio:watch',
+  'studio:liveEdits',
+  'studio:skipShow',
   'studio:track',
   'studio:stabilize',
   'studio:analyzeSpeech',
@@ -259,6 +262,8 @@ export const pushChannels = [
   'studio:job',
   'studio:changed',
   'studio:progress',
+  'studio:keoAction',
+  'studio:show',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

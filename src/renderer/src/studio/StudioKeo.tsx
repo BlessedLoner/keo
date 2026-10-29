@@ -34,13 +34,20 @@ const OUTCOME_ICON: Record<ToolActivity['outcome'], string> = {
   proposed: '…',
 };
 
-export function StudioKeo({ project }: { project: Project }) {
+/** Keo's chat for this project (or, while Keo carries a task across projects, the chat it started in). */
+export function StudioKeo({ project, conversation }: { project: Project; conversation?: string | null }) {
   const ui = useUi();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [live, setLive] = useState<{ text: string; tools: ToolActivity[]; phase: string | null } | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [draft, setDraft] = useState('');
+  const [watchEdits, setWatchEdits] = useState(true);
+  useEffect(() => {
+    void invoke('studio:liveEdits', {})
+      .then((r) => setWatchEdits(r.on))
+      .catch(() => undefined);
+  }, []);
   const list = useRef<HTMLDivElement>(null);
   const convRef = useRef<string | null>(null);
   convRef.current = conversationId;
@@ -49,11 +56,15 @@ export function StudioKeo({ project }: { project: Project }) {
     setConversationId(null);
     setMessages([]);
     setLive(null);
+    if (conversation) {
+      setConversationId(conversation);
+      return;
+    }
     void invoke('studio:conversation', { id: project.id })
       .then((r) => setConversationId(r.conversationId))
       .catch((e) => ui.error(errText(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [project.id, conversation]);
 
   const loadMessages = useCallback(async () => {
     const id = convRef.current;
@@ -117,9 +128,16 @@ export function StudioKeo({ project }: { project: Project }) {
   const hasSpeech = project.assets.some((a) => a.hasAudio);
   const chips = CHIPS.filter((c) => !c.needs || (c.needs === 'media' ? hasMedia : hasSpeech));
   const busy = !!live;
+  const toggleWatch = async (on: boolean) => {
+    setWatchEdits(on);
+    setWatchEdits((await invoke('studio:liveEdits', { on }).catch(() => ({ on }))).on);
+  };
 
   return (
     <div className="studio-keo">
+      <label className="keo-watch" title="On: Keo edits on the timeline step by step while you watch (the playhead moves to each cut, split and caption). Off: Keo works out of sight and the finished edit appears at once.">
+        <input type="checkbox" checked={watchEdits} onChange={(e) => void toggleWatch(e.target.checked)} /> Watch Keo edit
+      </label>
       <div className="keo-list" ref={list}>
         {messages.length === 0 && !live && (
           <div className="keo-hello">

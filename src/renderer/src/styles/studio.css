@@ -74,9 +74,24 @@
 .preview-overlay .guide { position: absolute; background: #ff3df0; pointer-events: none; }
 .preview-overlay .guide.v { left: 50%; top: 0; bottom: 0; width: 1px; }
 .preview-overlay .guide.h { top: 50%; left: 0; right: 0; height: 1px; }
-.studio-transport { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 12px 10px; }
-.studio-transport .play { width: 38px; height: 38px; border-radius: 50%; background: var(--primary-bg); color: var(--primary-text); border-color: transparent; }
-.studio-time { font: 12.5px/1 ui-monospace, Consolas, monospace; color: var(--text); margin-left: 8px; min-width: 150px; }
+/* Transport: time on the left, play controls in the middle, preview options on the right. */
+.studio-transport { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 8px 14px 10px; }
+.studio-transport .tp-center { display: flex; align-items: center; gap: 6px; }
+.studio-transport .tp-right { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.studio-transport .play { width: 36px; height: 36px; padding: 0; border-radius: 50%; background: transparent; color: var(--text); border: 1.5px solid var(--line-strong); display: inline-flex; align-items: center; justify-content: center; }
+.studio-transport .play:hover:not(:disabled) { border-color: var(--text-2); background: var(--bg-hover); }
+.studio-time { font: 12.5px/1 ui-monospace, Consolas, monospace; color: var(--text); white-space: nowrap; }
+
+/* Watching Keo edit */
+.keo-watch { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; color: var(--text-2); border-bottom: 1px solid var(--line); cursor: pointer; }
+.tl-keo { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #b48cff; z-index: 6; pointer-events: none; box-shadow: 0 0 10px rgba(180, 140, 255, 0.8); transition: left 0.3s ease; }
+.tl-keo-tag { position: absolute; top: 22px; left: 6px; padding: 3px 8px; border-radius: 6px; background: #6d3fd6; color: #fff; font-size: 11.5px; font-weight: 600; white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
+.tl-keo-range { position: absolute; top: 18px; bottom: 0; z-index: 5; pointer-events: none; background: rgba(180, 140, 255, 0.18); border-left: 1px dashed #b48cff; border-right: 1px dashed #b48cff; animation: keo-pulse 0.9s ease-in-out infinite alternate; }
+.tl-keo-range.cut, .tl-keo-range.delete { background: rgba(255, 70, 90, 0.25); border-color: #ff4a5e; }
+@keyframes keo-pulse { from { opacity: 0.55; } to { opacity: 1; } }
+.keo-live-bar { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: linear-gradient(90deg, rgba(109, 63, 214, 0.35), rgba(109, 63, 214, 0.08)); border-top: 1px solid rgba(180, 140, 255, 0.4); font-size: 12.5px; }
+.keo-live-bar .dot { width: 8px; height: 8px; border-radius: 50%; background: #b48cff; animation: keo-pulse 0.7s ease-in-out infinite alternate; }
+.keo-live-bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Choosing what to follow (motion tracking) */
 .box-picker { position: absolute; inset: 0; z-index: 6; cursor: crosshair; background: rgba(0, 0, 0, 0.25); }
@@ -84,7 +99,7 @@
 .box-picker-box { position: absolute; border: 2px solid #ffd400; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none; }
 
 /* Preview options, full screen and safe zones */
-.preview-opt { width: auto; height: 26px; padding: 0 6px; font-size: 11.5px; }
+.studio-transport .select.preview-opt { width: auto; flex: none; min-width: 0; height: 28px; line-height: normal; padding: 0 22px 0 8px; font-size: 12px; }
 .studio-stage.fullscreen { position: fixed; inset: 0; z-index: 75; background: #000; }
 .safe-zones { position: absolute; inset: 0; pointer-events: none; }
 .safe-zones .zone { position: absolute; background: rgba(255, 61, 94, 0.22); border: 1px dashed rgba(255, 120, 140, 0.8); color: #ffd0d8; font-size: 10px; display: flex; align-items: center; justify-content: center; text-align: center; }

@@ -162,6 +162,9 @@ export const invokeSchemas = {
   'studio:analyzeSpeech': z.object({ id: studioProjectId }).strict(),
   'studio:track': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.01).max(1), h: z.number().min(0.01).max(1) }).strict() }).strict(),
   'studio:stabilize': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.7) }).strict(),
+  'studio:watch': z.object({ id: studioProjectId, on: z.boolean() }).strict(),
+  'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
+  'studio:skipShow': z.object({ id: studioProjectId }).strict(),
   'studio:previewCopies': z.object({ id: studioProjectId, assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200).optional() }).strict(),
   'studio:cleanSound': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.8) }).strict(),
   'studio:reverse': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
@@ -481,6 +484,9 @@ export interface InvokeOutputs {
   'studio:reverse': { seconds: number };
   'studio:cleanSound': { seconds: number };
   'studio:previewCopies': { made: number };
+  'studio:watch': { ok: true };
+  'studio:liveEdits': { on: boolean };
+  'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };
   'studio:stabilize': { points: number; zoom: number };
   'studio:analyzeSpeech': { analysed: number };

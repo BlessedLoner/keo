@@ -159,6 +159,75 @@ export function StudioView() {
       }),
     [refreshList, show],
   );
+  // Watching Keo edit: Keo's steps play on the timeline while this project is on screen.
+  const [keoStep, setKeoStep] = useState<{ at: number; end?: number | undefined; label: string; kind: string; index: number; total: number } | null>(null);
+  useEffect(() => {
+    if (!project?.id) return;
+    const id = project.id;
+    const tell = () => void invoke('studio:watch', { id, on: !document.hidden }).catch(() => undefined);
+    tell();
+    document.addEventListener('visibilitychange', tell);
+    return () => {
+      document.removeEventListener('visibilitychange', tell);
+      void invoke('studio:watch', { id, on: false }).catch(() => undefined);
+      setKeoStep(null);
+    };
+  }, [project?.id]);
+  useEffect(
+    () =>
+      subscribe('studio:keoAction', (a) => {
+        if (a.projectId !== projectRef.current?.id) return;
+        if (a.kind === 'done') return setKeoStep(null);
+        setPlaying(false);
+        setTime(a.at ?? 0);
+        setSelection(a.clips ?? []);
+        setKeoStep({ at: a.at ?? 0, end: a.end, label: a.label ?? 'Editing', kind: a.kind, index: a.index, total: a.total });
+      }),
+    [],
+  );
+  // Keo is about to work on another project (a short it made): it comes on screen, and the Keo
+  // panel stays on the same chat so the conversation carries on.
+  const [keoChat, setKeoChat] = useState<string | null>(null);
+  useEffect(
+    () =>
+      subscribe('studio:show', (m) => {
+        if (m.projectId === projectRef.current?.id) return;
+        const chat = keoConversation.current;
+        void invoke('studio:open', { id: m.projectId })
+          .then((p) => {
+            if (chat) setKeoChat(chat);
+            setPlaying(false);
+            setTime(0);
+            setSelection([]);
+            show(p);
+            refreshList();
+            ui.toast(`Keo is working on “${p.name}” now.`, 'info');
+          })
+          .catch(() => undefined);
+      }),
+    [show, refreshList, ui],
+  );
+  // When Keo's turn in this project's conversation ends, steps it did not finish stop spinning.
+  const keoConversation = useRef<string | null>(null);
+  useEffect(() => {
+    keoConversation.current = null;
+    if (!project?.id) return;
+    if (keoChat) {
+      keoConversation.current = keoChat;
+      return;
+    }
+    void invoke('studio:conversation', { id: project.id })
+      .then((r) => (keoConversation.current = r.conversationId))
+      .catch(() => undefined);
+  }, [project?.id, keoChat]);
+  useEffect(
+    () =>
+      subscribe('agent:event', (e) => {
+        if (e.type !== 'turn_finished' || e.conversationId !== keoConversation.current) return;
+        setSteps((list) => list?.map((s) => (s.status === 'running' || s.status === 'pending' ? { ...s, status: 'skipped', note: 'not done: Keo stopped before this step' } : s)) ?? null);
+      }),
+    [],
+  );
   useEffect(
     () =>
       subscribe('studio:progress', (m) => {
@@ -393,6 +462,7 @@ export function StudioView() {
   };
   const openProject = async (id: string) => {
     setPlaying(false);
+    setKeoChat(null);
     try {
       const p = await invoke('studio:open', { id });
       setTime(0);
@@ -559,6 +629,30 @@ export function StudioView() {
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
           <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
           <div className="studio-transport">
+            <span className="studio-time tp-left">
+              {fmtTime(time, project.fps)} <span className="muted">/ {fmtTime(duration, project.fps)}</span>
+            </span>
+            <div className="tp-center">
+            <button className="btn icon sm ghost" onClick={() => setTime(0)} title="To the start (Home)">
+              <Icon name="skipback" size={15} />
+            </button>
+            <button
+              className="btn icon play"
+              onClick={() => {
+                if (!playing && time >= duration - 0.01) setTime(0);
+                setPlaying((v) => !v);
+              }}
+              title="Play / pause (Space)"
+              aria-label={playing ? 'Pause' : 'Play'}
+              disabled={duration === 0}
+            >
+              <Icon name={playing ? 'pause' : 'play'} size={17} />
+            </button>
+            <button className="btn icon sm ghost" onClick={() => setTime(duration)} title="To the end (End)">
+              <Icon name="skipfwd" size={15} />
+            </button>
+            </div>
+            <div className="tp-right">
             <select className="select preview-opt" value={quality} onChange={(e) => setQuality(Number(e.target.value))} title="Preview quality: lower is smoother on slower PCs (the export is always full quality)">
               <option value={1}>Full</option>
               <option value={0.5}>Half</option>
@@ -571,29 +665,10 @@ export function StudioView() {
               <option value="shorts">Shorts safe zone</option>
               <option value="thirds">Thirds</option>
             </select>
-            <button className="btn icon sm ghost" onClick={() => setTime(0)} title="To the start (Home)">
-              <Icon name="skipback" size={15} />
-            </button>
-            <button
-              className="btn icon play"
-              onClick={() => {
-                if (!playing && time >= duration - 0.01) setTime(0);
-                setPlaying((v) => !v);
-              }}
-              title="Play / pause (Space)"
-              disabled={duration === 0}
-            >
-              <Icon name={playing ? 'pause' : 'play'} size={17} />
-            </button>
-            <button className="btn icon sm ghost" onClick={() => setTime(duration)} title="To the end (End)">
-              <Icon name="skipfwd" size={15} />
-            </button>
             <button className="btn icon sm ghost" onClick={() => setFull((v) => !v)} title={full ? 'Leave full screen (F or Esc)' : 'Full screen preview (F)'}>
               <Icon name={full ? 'x' : 'vision'} size={14} />
             </button>
-            <span className="studio-time">
-              {fmtTime(time, project.fps)} <span className="muted">/ {fmtTime(duration, project.fps)}</span>
-            </span>
+            </div>
           </div>
         </section>
         <aside className={`studio-side tab-${sideTab}`}>
@@ -613,7 +688,7 @@ export function StudioView() {
           </div>
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} />}
-          {sideTab === 'keo' && <StudioKeo project={project} />}
+          {sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} />}
           {sideTab === 'tools' && (
             <>
               <Autopilot project={project} time={time} onEdit={edit} onBusy={(b) => b && setPlaying(false)} />
@@ -698,6 +773,18 @@ export function StudioView() {
         <span className="small muted">Zoom</span>
         <input type="range" min={8} max={240} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" />
       </div>
+      {keoStep && (
+        <div className="keo-live-bar" role="status" aria-live="polite">
+          <span className="dot" />
+          <strong>Keo is editing</strong>
+          <span className="grow">
+            Step {keoStep.index} of {keoStep.total} · {keoStep.label}
+          </span>
+          <button className="btn sm ghost" onClick={() => void invoke('studio:skipShow', { id: project.id }).catch(() => undefined)} title="Show the rest of Keo's edit at once">
+            Skip to the end
+          </button>
+        </div>
+      )}
       <Timeline
         project={project}
         time={time}
@@ -705,6 +792,7 @@ export function StudioView() {
         selectedIds={selection}
         onSelect={pick}
         onSelectMany={setSelection}
+        keo={keoStep}
         onTime={(t) => {
           setPlaying(false);
           setTime(t);

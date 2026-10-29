@@ -6,6 +6,7 @@ import { detectBeats } from '../video/ffmpeg';
 import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
+import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -43,6 +44,12 @@ export interface StudioDeps {
   probe?: (file: string) => Promise<ProbeResult | null>;
   /** Something about a project changed (the Studio page shows it). */
   changed?: (p: Project) => void;
+  /** Watching Keo edit: the step Keo is about to make (the Studio moves the playhead there and points at it). */
+  keoAction?: (a: KeoAction & { projectId: string; index: number; total: number } | { projectId: string; kind: 'done'; index: number; total: number }) => void;
+  /** Brings a project on screen in Studio (Keo is about to work on it). */
+  showProject?: (projectId: string) => void;
+  /** Milliseconds before and after each shown step (tests use 0). */
+  livePace?: { before: number; after: number };
   now?: () => Date;
 }
 
@@ -160,13 +167,118 @@ export class StudioService {
     }
   }
 
-  private save(p: Project): void {
+  private save(p: Project, notify = true): void {
     const f = this.file(p.id);
     this.backup(p.id, f);
     const tmp = `${f}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(p));
     fs.renameSync(tmp, f);
-    this.d.changed?.(p);
+    if (notify) this.d.changed?.(p);
+  }
+
+  // ---------------------------------------------------------------- watching Keo edit
+
+  /** Keo's edits are shown step by step while someone watches the project in Studio (a setting). */
+  get liveEdits(): boolean {
+    try {
+      return (JSON.parse(fs.readFileSync(path.join(this.d.dir, 'prefs.json'), 'utf8')) as { liveEdits?: boolean }).liveEdits !== false;
+    } catch {
+      return true;
+    }
+  }
+  set liveEdits(on: boolean) {
+    fs.mkdirSync(this.d.dir, { recursive: true });
+    fs.writeFileSync(path.join(this.d.dir, 'prefs.json'), JSON.stringify({ liveEdits: on }));
+    if (!on) for (const id of this.shows.keys()) this.skipping.add(id);
+  }
+  /** Projects open on screen in Studio right now. */
+  private readonly watching = new Set<string>();
+  watch(id: string, on: boolean): void {
+    if (on) this.watching.add(id);
+    else {
+      this.watching.delete(id);
+      this.skipShow(id);
+    }
+  }
+  /** Inside a Keo tool call (its edits are Keo's). */
+  private keoDepth = 0;
+  private readonly shows = new Map<string, Promise<void>>();
+  private readonly skipping = new Set<string>();
+  /** Runs one of Keo's tool calls: while it is watched, its edits play step by step, and the call ends when the last step is shown. */
+  async asKeo<T>(fn: () => Promise<T> | T, projectId?: string): Promise<T> {
+    this.keoDepth++;
+    try {
+      // Keo works where the user can see it: another project is brought on screen first.
+      if (projectId && this.watching.size && !this.watching.has(projectId)) await this.bringOnScreen(projectId);
+      const r = await fn();
+      await Promise.all([...this.shows.values()]);
+      return r;
+    } finally {
+      this.keoDepth--;
+    }
+  }
+  /** Asks Studio to open a project and waits (up to 3 s) until it is on screen. */
+  private async bringOnScreen(projectId: string): Promise<void> {
+    if (!this.d.showProject || !fs.existsSync(this.file(projectId))) return;
+    this.current = projectId;
+    this.d.showProject(projectId);
+    for (let i = 0; i < 30 && !this.watching.has(projectId); i++) await new Promise((r) => setTimeout(r, 100));
+  }
+
+  /** Shows the rest of Keo's steps at once. */
+  skipShow(id: string): void {
+    if (this.shows.has(id)) this.skipping.add(id);
+  }
+  /** Keo's edit, step by step: each step's real result is shown after the playhead moves to it. */
+  private queueShow(id: string, before: Project, ops: EditOp[], rand: () => string): void {
+    const steps: Array<{ action: KeoAction; state: Project }> = [];
+    let cur = before;
+    for (const op of showSteps(ops)) {
+      try {
+        const s = applyEdits(cur, [op], { rand, ...(this.d.now ? { now: this.d.now() } : {}) });
+        steps.push({ action: actionOf(op, cur), state: s.project });
+        cur = s.project;
+      } catch {
+        // A step that cannot stand on its own: the rest is shown as the final result.
+        break;
+      }
+    }
+    // At most 30 steps on screen: long edits are shown in groups.
+    const per = Math.max(1, Math.ceil(steps.length / 30));
+    const shown: Array<{ action: KeoAction; state: Project }> = [];
+    for (let i = 0; i < steps.length; i += per) {
+      const group = steps.slice(i, i + per);
+      const first = group[0]!.action;
+      shown.push({ action: group.length > 1 ? { ...first, label: `${first.label} (and ${group.length - 1} more)`, clips: group.flatMap((g) => g.action.clips) } : first, state: group.at(-1)!.state });
+    }
+    const pace = this.d.livePace ?? { before: 450, after: 300 };
+    const wait = (ms: number) => (ms > 0 && !this.skipping.has(id) ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+    const run: Promise<void> = (this.shows.get(id) ?? Promise.resolve())
+      .then(async () => {
+        for (let i = 0; i < shown.length; i++) {
+          if (this.skipping.has(id)) break;
+          this.d.keoAction?.({ projectId: id, ...shown[i]!.action, index: i + 1, total: shown.length });
+          await wait(pace.before);
+          if (this.skipping.has(id)) break;
+          this.d.changed?.(shown[i]!.state);
+          await wait(pace.after);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.d.keoAction?.({ projectId: id, kind: 'done', index: shown.length, total: shown.length });
+        // The project as it really is now (the end of Keo's edit, or anything after it).
+        try {
+          this.d.changed?.(this.get(id));
+        } catch {
+          /* deleted meanwhile */
+        }
+        if (this.shows.get(id) === run) {
+          this.shows.delete(id);
+          this.skipping.delete(id);
+        }
+      });
+    this.shows.set(id, run);
   }
 
   create(name: string, format: FormatId = 'vertical'): Project {
@@ -245,9 +357,21 @@ export class StudioService {
   /** Applies edits (all or none), saves, and remembers the previous version for undo. */
   edit(id: string, ops: EditOp[]): { project: Project; changes: string[] } {
     const before = this.get(id);
+    // Keo's edit while the user watches: shown step by step (with the same new ids as the result).
+    const live = this.keoDepth > 0 && this.watching.has(id) && this.liveEdits;
+    if (!live) this.skipShow(id);
+    const made: string[] = [];
+    const fresh = () => crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10);
     let r: { project: Project; changes: string[] };
     try {
-      r = applyEdits(before, ops, { rand: () => crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10), ...(this.d.now ? { now: this.d.now() } : {}) });
+      r = applyEdits(before, ops, {
+        rand: () => {
+          const v = fresh();
+          made.push(v);
+          return v;
+        },
+        ...(this.d.now ? { now: this.d.now() } : {}),
+      });
     } catch (e) {
       if (e instanceof EditError) throw new StudioError(e.message);
       throw e;
@@ -258,7 +382,11 @@ export class StudioService {
     this.undo.set(id, stack);
     this.redo.delete(id);
     this.label(id, describeChanges(r.changes));
-    this.save(r.project);
+    this.save(r.project, !live);
+    if (live) {
+      let k = 0;
+      this.queueShow(id, before, ops, () => made[k++] ?? fresh());
+    }
     return r;
   }
 
@@ -282,6 +410,7 @@ export class StudioService {
   }
 
   undoEdit(id: string): Project {
+    this.skipShow(id);
     const stack = this.undo.get(id);
     const prev = stack?.pop();
     if (!prev) throw new StudioError('There is nothing to undo.');
@@ -295,6 +424,7 @@ export class StudioService {
   }
 
   redoEdit(id: string): Project {
+    this.skipShow(id);
     const next = this.redo.get(id)?.pop();
     if (!next) throw new StudioError('There is nothing to redo.');
     const u = this.undo.get(id) ?? [];
@@ -665,6 +795,11 @@ export class StudioService {
       out.push({ projectId: copy.id, name, seconds: Math.round(projectDuration(r.project) * 100) / 100 });
     });
     this.d.log.info('studio.shorts', { made: out.length });
+    // Made by Keo while the user watches: the first short comes on screen.
+    if (this.keoDepth > 0 && this.watching.size && out[0]) {
+      this.current = out[0].projectId;
+      this.d.showProject?.(out[0].projectId);
+    }
     return out;
   }
 

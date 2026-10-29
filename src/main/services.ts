@@ -486,6 +486,8 @@ export class Services {
       ...(d.studioJob ? { sendJob: d.studioJob } : {}),
       probe: (file) => (d.studioProbe ? d.studioProbe(file) : this.studio.probeInWindow(file)),
       changed: (p) => this.push('studio:changed', p),
+      keoAction: (a) => this.push('studio:keoAction', a),
+      showProject: (projectId) => this.push('studio:show', { projectId }),
     });
     this.email = new EmailService({
       settings: getSettings,

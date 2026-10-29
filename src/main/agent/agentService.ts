@@ -623,7 +623,14 @@ export class AgentService {
         let failedNow = false;
         for (const call of result.toolCalls) {
           if (call.name === LOAD_TOOLS) {
-            const want = parseLoad(call.input);
+            // Groups this conversation leaves out (the old video pipeline inside Studio) stay out.
+            const excluded = new Set(this.excludeGroups?.(conversationId) ?? []);
+            const asked = parseLoad(call.input);
+            const want = asked.filter((g) => !excluded.has(g));
+            if (asked.length && !want.length) {
+              results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'rejected', error: `Not available here: ${asked.join(', ')}. In Keo Studio, edit with the studio tools you already have (studio__edit, studio__clean_up, studio__captions and the rest).` }), isError: true });
+              continue;
+            }
             for (const g of want) groups.add(g);
             tools = buildTools();
             const now = tools.filter((t) => (want as string[]).includes(groupOf(t.name))).map((t) => t.name);

@@ -26,6 +26,10 @@ export interface PushPayloads {
   'app:switching': { mode: 'account' | 'local' | 'signed-out' };
   'studio:job': { jobId: string; job: import('../shared/studio').RenderJob };
   'studio:changed': import('../shared/studio').Project;
+  /** Watching Keo edit: the step Keo is about to make, or 'done' when its edit has been shown. */
+  /** Keo is about to work on this project: Studio opens it. */
+  'studio:show': { projectId: string };
+  'studio:keoAction': { projectId: string; kind: 'cut' | 'split' | 'trim' | 'move' | 'delete' | 'add' | 'captions' | 'change' | 'project' | 'done'; label?: string; at?: number; end?: number; clips?: string[]; index: number; total: number };
   'studio:progress': { projectId: string; stage: 'sound' | 'video' | 'saving' | 'done' | 'failed' | 'checklist'; done?: number; total?: number; file?: string; error?: string; steps?: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> };
 }
 

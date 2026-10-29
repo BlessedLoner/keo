@@ -523,6 +523,18 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const r = await s.studio.stabilize(id, clip, strength).catch(studioErr);
       return { points: r.points, zoom: r.zoom };
     },
+    'studio:watch': ({ id, on }) => {
+      s.studio.watch(id, on);
+      return { ok: true as const };
+    },
+    'studio:liveEdits': ({ on }) => {
+      if (on !== undefined) s.studio.liveEdits = on;
+      return { on: s.studio.liveEdits };
+    },
+    'studio:skipShow': ({ id }) => {
+      s.studio.skipShow(id);
+      return { ok: true as const };
+    },
     'studio:previewCopies': async ({ id, assets }) => ({ made: (await s.studio.makePreviewCopies(id, assets).catch(studioErr)).made }),
     'studio:cleanSound': async ({ id, clip, strength }) => ({ seconds: (await s.studio.cleanSound(id, clip, strength).catch(studioErr)).seconds }),
     'studio:reverse': async ({ id, clip }) => ({ seconds: (await s.studio.reverseClip(id, clip).catch(studioErr)).seconds }),
