@@ -78,6 +78,11 @@
 .studio-transport .play { width: 38px; height: 38px; border-radius: 50%; background: var(--primary-bg); color: var(--primary-text); border-color: transparent; }
 .studio-time { font: 12.5px/1 ui-monospace, Consolas, monospace; color: var(--text); margin-left: 8px; min-width: 150px; }
 
+/* Choosing what to follow (motion tracking) */
+.box-picker { position: absolute; inset: 0; z-index: 6; cursor: crosshair; background: rgba(0, 0, 0, 0.25); }
+.box-picker-tip { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); padding: 4px 10px; border-radius: 6px; background: rgba(0, 0, 0, 0.75); color: #fff; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.box-picker-box { position: absolute; border: 2px solid #ffd400; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none; }
+
 /* Preview options, full screen and safe zones */
 .preview-opt { width: auto; height: 26px; padding: 0 6px; font-size: 11.5px; }
 .studio-stage.fullscreen { position: fixed; inset: 0; z-index: 75; background: #000; }

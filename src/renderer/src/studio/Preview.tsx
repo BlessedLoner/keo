@@ -9,6 +9,44 @@ import { PreviewSources } from './media';
  * and rotated right on the picture (with guides that snap to the middle).
  */
 
+/** Drag a box on the preview (for choosing what to follow). */
+function BoxPicker({ onDone }: { onDone: (box: { x: number; y: number; w: number; h: number } | null) => void }) {
+  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const at = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return { x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)), y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) };
+  };
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onDone(null);
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onDone]);
+  const b = drag && { x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1), w: Math.abs(drag.x1 - drag.x0), h: Math.abs(drag.y1 - drag.y0) };
+  return (
+    <div
+      className="box-picker"
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        const p = at(e);
+        setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+      }}
+      onPointerMove={(e) => {
+        if (!drag) return;
+        const p = at(e);
+        setDrag({ ...drag, x1: p.x, y1: p.y });
+      }}
+      onPointerUp={() => {
+        if (b && b.w > 0.02 && b.h > 0.02) onDone(b);
+        setDrag(null);
+      }}
+    >
+      {!b && <span className="box-picker-tip">Drag a box around what to follow · Esc to cancel</span>}
+      {b && <span className="box-picker-box" style={{ left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` }} />}
+    </div>
+  );
+}
+
 export type Guides = 'none' | 'tiktok' | 'reels' | 'shorts' | 'thirds';
 
 /** Areas covered by each app's buttons and captions on a phone (fractions of a 9:16 frame). */
@@ -89,7 +127,10 @@ export function Preview({
   onEdit,
   quality = 1,
   guides = 'none',
+  pickBox,
 }: {
+  /** While set, dragging on the preview draws a box (fractions of the frame), handed over when let go (null: cancelled). */
+  pickBox?: (box: { x: number; y: number; w: number; h: number } | null) => void;
   /** Fewer pixels for smooth playback on slower PCs (1 = full). */
   quality?: number;
   /** Where social apps put their buttons and captions, or the rule of thirds. */
@@ -312,6 +353,7 @@ export function Preview({
       <div className="preview-frame" style={{ width: size.w || undefined, height: size.h || undefined }}>
         <canvas ref={canvas} aria-label="Video preview" />
         {guideMode !== 'none' && <SafeZones kind={guideMode} vertical={project.height > project.width} />}
+        {pickBox && <BoxPicker onDone={pickBox} />}
         {onSelect && !playing && (
           <div
             className="preview-overlay"

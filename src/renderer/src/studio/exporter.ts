@@ -1,5 +1,6 @@
 import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
 import { denoise } from '@shared/denoise';
+import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
 import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
@@ -518,4 +519,48 @@ export async function denoiseAsset(p: Project, assetId: string, strength: number
   const left = denoise(buf.getChannelData(0), { strength });
   const right = buf.numberOfChannels > 1 ? denoise(buf.getChannelData(1), { strength }) : left;
   return { base64: base64(wavStereo(left, right, buf.sampleRate)), seconds: buf.duration };
+}
+
+/**
+ * Motion in one video at `times` (seconds into the file, sorted), from small grey copies of its
+ * frames: where a box (fractions of the video) goes, or how far the whole picture moves from
+ * frame to frame (fractions of the video's width and height).
+ */
+export async function trackMotion(p: Project, assetId: string, times: number[], box: { x: number; y: number; w: number; h: number } | null): Promise<Array<{ x: number; y: number; lost?: boolean }>> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind !== 'video') throw new Error('That is not a video of this project.');
+  const W = 320;
+  const H = Math.max(16, Math.round((W * (a.height || 9)) / (a.width || 16)));
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  const exact = await ClipDecoder.open(p.id, assetId);
+  const source = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+  const gray = async (t: number): Promise<Gray> => {
+    const f = await source.frameAt(Math.max(0, Math.min(t, a.duration - 0.01)));
+    if (f) ctx.drawImage(f as CanvasImageSource, 0, 0, W, H);
+    const rgba = ctx.getImageData(0, 0, W, H).data;
+    const px = new Uint8Array(W * H);
+    for (let i = 0, j = 0; j < px.length; i += 4, j++) px[j] = (rgba[i]! * 77 + rgba[i + 1]! * 150 + rgba[i + 2]! * 29) >> 8;
+    return { w: W, h: H, px };
+  };
+  const out: Array<{ x: number; y: number; lost?: boolean }> = [];
+  try {
+    let prev = await gray(times[0] ?? 0);
+    if (box) {
+      const step = boxTracker(prev, { x: box.x * W, y: box.y * H, w: box.w * W, h: box.h * H });
+      out.push(step(null));
+      for (const t of times.slice(1)) out.push(step(await gray(t)));
+    } else {
+      out.push({ x: 0, y: 0 });
+      for (const t of times.slice(1)) {
+        const cur = await gray(t);
+        const s = frameShift(prev, cur, Math.round(W * 0.06));
+        out.push({ x: s.dx / W, y: s.dy / H });
+        prev = cur;
+      }
+    }
+  } finally {
+    source.close();
+  }
+  return out;
 }

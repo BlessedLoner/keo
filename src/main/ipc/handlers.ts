@@ -515,6 +515,14 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'studio:readAloud': async ({ id, clip, voice }) => s.studioReadAloud(id, clip, voice).catch(studioErr),
     'studio:saveRecording': async ({ id, wavBase64, at }) => s.studio.saveRecording(id, Buffer.from(wavBase64, 'base64'), at).catch(studioErr),
     'studio:analyzeSpeech': async ({ id }) => ({ analysed: (await s.studio.analyzeSpeech(id).catch(studioErr)).analysed }),
+    'studio:track': async ({ id, clip, box }) => {
+      const r = await s.studio.trackMotion(id, clip, box).catch(studioErr);
+      return { points: r.points, lost: r.lost };
+    },
+    'studio:stabilize': async ({ id, clip, strength }) => {
+      const r = await s.studio.stabilize(id, clip, strength).catch(studioErr);
+      return { points: r.points, zoom: r.zoom };
+    },
     'studio:previewCopies': async ({ id, assets }) => ({ made: (await s.studio.makePreviewCopies(id, assets).catch(studioErr)).made }),
     'studio:cleanSound': async ({ id, clip, strength }) => ({ seconds: (await s.studio.cleanSound(id, clip, strength).catch(studioErr)).seconds }),
     'studio:reverse': async ({ id, clip }) => ({ seconds: (await s.studio.reverseClip(id, clip).catch(studioErr)).seconds }),

@@ -55,6 +55,20 @@ export function StudioView() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [full, setFull] = useState(false);
   const [reversing, setReversing] = useState(false);
+  // Motion tracking: the clip that will follow what the user boxes on the preview.
+  const [follow, setFollow] = useState<string | null>(null);
+  const onPickBox = async (box: { x: number; y: number; w: number; h: number } | null) => {
+    const clip = follow;
+    setFollow(null);
+    if (!box || !clip || !project) return;
+    try {
+      ui.toast('Following it through the video…', 'info');
+      const r = await invoke('studio:track', { id: project.id, clip, box });
+      ui.toast(r.lost > r.points / 3 ? `Followed it, but it was hard to see in ${r.lost} of ${r.points} moments: check the result.` : `The clip now follows it (${r.points} points).`, r.lost > r.points / 3 ? 'info' : 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
   const reverseClip = async (clip: string) => {
     setReversing(true);
     try {
@@ -543,7 +557,7 @@ export function StudioView() {
       <div className="studio-main">
         <MediaBin project={project} time={time} onImport={() => void importMedia()} onAddAsset={addAsset} onEdit={edit} onMusic={() => void addMusic()} onCaptions={() => void autoCaptions()} captioning={captioning} />
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
-          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} />
+          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
           <div className="studio-transport">
             <select className="select preview-opt" value={quality} onChange={(e) => setQuality(Number(e.target.value))} title="Preview quality: lower is smoother on slower PCs (the export is always full quality)">
               <option value={1}>Full</option>
@@ -606,7 +620,11 @@ export function StudioView() {
               <ElementsPanel project={project} time={time} onEdit={edit} />
             </>
           )}
-          {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} /> : <ProjectSettings project={project} onEdit={edit} />)}
+          {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
+                setPlaying(false);
+                setFollow(sel.clip.id);
+                ui.toast('Drag a box on the preview around what this clip should follow.', 'info');
+              }} /> : <ProjectSettings project={project} onEdit={edit} />)}
         </aside>
       </div>
       <div
@@ -817,7 +835,7 @@ function Checklist({ steps, onClose }: { steps: Step[]; onClose: () => void }) {
 
 // ---------------------------------------------------------------- inspector
 
-function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Clip; time: number; onEdit: (ops: EditOp[]) => void }) {
+function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project; clip: Clip; time: number; onEdit: (ops: EditOp[]) => void; onFollow: () => void }) {
   const set = (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => onEdit([{ op: 'set', clip: clip.id, ...patch }]);
   const asset = isAV(clip) ? project.assets.find((a) => a.id === clip.assetId) : undefined;
   return (
@@ -981,6 +999,14 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
           <p className="small muted insp-tip-inline">◆ animates a value: move the playhead, change the value, and Keo makes the in-between.</p>
         </Section>
       )}
+      {clip.type !== 'audio' && clip.type !== 'adjust' && (
+        <Section title="Motion tracking">
+          <button className="btn sm" onClick={onFollow} title="Text, a sticker or an element moves with something in the video (a face, a car, a ball)">
+            <Icon name="vision" size={13} /> Follow something in the video
+          </button>
+          {clip.type === 'media' && asset?.kind === 'video' && <SteadyButton projectId={project.id} clipId={clip.id} />}
+        </Section>
+      )}
       {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
       {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
@@ -989,6 +1015,28 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
       {clip.type !== 'audio' && clip.type !== 'adjust' && <MotionFields clip={clip} set={set} />}
     </div>
+  );
+}
+
+/** Steadies a shaky video clip (measured on this PC). */
+function SteadyButton({ projectId, clipId }: { projectId: string; clipId: string }) {
+  const ui = useUi();
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      const r = await invoke('studio:stabilize', { id: projectId, clip: clipId, strength: 0.7 });
+      ui.toast(`Steadied (zoomed in ${Math.round((r.zoom - 1) * 100)}% so no edge shows).`, 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn sm" style={{ marginTop: 6 }} disabled={busy} onClick={() => void go()} title="Smooths handheld shake (side to side and up and down)">
+      {busy ? <span className="spinner tiny" /> : <Icon name="film" size={13} />} {busy ? 'Steadying…' : 'Steady shaky video'}
+    </button>
   );
 }
 

@@ -552,7 +552,8 @@ export type RenderJob =
   | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number }
   | { kind: 'signatures'; projectId: string; assetId: string; times: number[] }
   | { kind: 'export_file'; projectId: string; exportId: string; format: 'gif' | 'wav' }
-  | { kind: 'denoise'; projectId: string; assetId: string; strength: number };
+  | { kind: 'denoise'; projectId: string; assetId: string; strength: number }
+  | { kind: 'track'; projectId: string; assetId: string; times: number[]; box: { x: number; y: number; w: number; h: number } | null };
 
 /** Export choices: the shorter side in pixels (or the project's own size), frame rate, quality, file name. */
 export const ExportQuality = z.enum(['standard', 'high', 'best']);

@@ -618,7 +618,8 @@ app.whenReady().then(() => {
         imageTools: electronImageTools,
         clipboard: { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) },
         documentsDir: app.getPath('documents'),
-        videosDir: app.getPath('videos'),
+        // Smoke checks save their test videos inside the disposable profile, never in the user's Videos folder.
+        videosDir: SMOKE ? path.join(profile.userData, 'smoke-videos') : app.getPath('videos'),
         homeDir: app.getPath('home'),
         openPath: async (p) => (await shell.openPath(p)) === '',
         showInFolder: (p) => shell.showItemInFolder(p),
@@ -1115,6 +1116,66 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const after = { pause: nzRms((i) => nzBytes.readInt16LE(44 + i * 4), 4800, 43200), voice: nzRms((i) => nzBytes.readInt16LE(44 + i * 4), 52800, 91200) };
   out.denoise = { name: nzClean.name, pauseDb: 20 * Math.log10(before.pause / Math.max(1, after.pause)), voiceDb: 20 * Math.log10(before.voice / Math.max(1, after.voice)) };
   s.studio.delete(nz.id);
+  // Motion tracking: a red square slides left to right in a real video; a title follows it.
+  const mv = s.studio.create('Studio smoke moving', 'square');
+  s.studio.edit(mv.id, [
+    { op: 'set_project', width: 320, height: 320, background: '#101018' },
+    { op: 'add_shape', shape: 'rect', start: 0, duration: 2, style: { width: 0.15, height: 0.15, radius: 0, fill: '#FF2020' }, transform: { x: 0.2, y: 0.5 }, keys: { x: [{ at: 0, value: 0.2, ease: 'linear' }, { at: 2, value: 0.8, ease: 'linear' }] } },
+  ]);
+  const mvFile = (await s.studio.exportVideo(mv.id)).file;
+  s.studio.delete(mv.id);
+  const tk = s.studio.create('Studio smoke track', 'square');
+  const tkVid = (await s.studio.importFiles(tk.id, [mvFile])).added[0]!;
+  s.studio.edit(tk.id, [{ op: 'add_media', assetId: tkVid.id, start: 0 }, { op: 'add_text', text: 'Follow', start: 0, duration: 2, transform: { x: 0.2, y: 0.3 } }]);
+  const tkText = s.studio.get(tk.id).tracks.find((t) => t.kind === 'text')!.clips[0]!;
+  const tracked = await s.studio.trackMotion(tk.id, tkText.id, { x: 0.12, y: 0.42, w: 0.16, h: 0.16 });
+  const tkKeys = (s.studio.get(tk.id).tracks.find((t) => t.kind === 'text')!.clips[0] as { keys?: { x?: Array<{ value: number }>; y?: Array<{ value: number }> } }).keys;
+  out.track = { points: tracked.points, lost: tracked.lost, firstX: tkKeys?.x?.[0]?.value, lastX: tkKeys?.x?.at(-1)?.value, lastY: tkKeys?.y?.at(-1)?.value };
+  s.studio.delete(tk.id);
+  // Stabilising: the picture jitters every frame in a real video; Keo moves it against the jitter.
+  const jt = s.studio.create('Studio smoke shaky', 'square');
+  // A textured scene (like real footage), so how far it moved can be measured.
+  const texPx = Buffer.alloc(480 * 480 * 4);
+  let texSeed = 11;
+  for (let by = 0; by < 480; by += 12)
+    for (let bx = 0; bx < 480; bx += 12) {
+      texSeed = (texSeed * 1664525 + 1013904223) >>> 0;
+      const v = texSeed >>> 24;
+      for (let y = by; y < by + 12; y++)
+        for (let x = bx; x < bx + 12; x++) {
+          const i = (y * 480 + x) * 4;
+          texPx[i] = v;
+          texPx[i + 1] = (v * 3) & 255;
+          texPx[i + 2] = 255 - v;
+          texPx[i + 3] = 255;
+        }
+    }
+  const texFile = path.join(dir, 'texture.png');
+  fs.writeFileSync(texFile, nativeImage.createFromBitmap(texPx, { width: 480, height: 480 }).toPNG());
+  const jtPic = (await s.studio.importFiles(jt.id, [texFile])).added[0]!;
+  const jitter = Array.from({ length: 31 }, (_, i) => (i % 2 ? 0.03 : -0.03) * (i % 3 === 0 ? 1 : 0.6));
+  s.studio.edit(jt.id, [
+    { op: 'set_project', width: 320, height: 320 },
+    { op: 'add_media', assetId: jtPic.id, start: 0, duration: 2, transform: { scale: 1.3 }, keys: { x: jitter.map((v, i) => ({ at: Math.round(((i + 0.5) / 15) * 1000) / 1000, value: 0.5 + v, ease: 'hold' as const })) } },
+  ]);
+  const jtFile = (await s.studio.exportVideo(jt.id)).file;
+  s.studio.delete(jt.id);
+  const st2 = s.studio.create('Studio smoke steady', 'square');
+  const stVid = (await s.studio.importFiles(st2.id, [jtFile])).added[0]!;
+  s.studio.edit(st2.id, [{ op: 'add_media', assetId: stVid.id, start: 0 }]);
+  const steadied = await s.studio.stabilize(st2.id, s.studio.get(st2.id).tracks[0]!.clips[0]!.id, 1);
+  const stKeys = ((s.studio.get(st2.id).tracks[0]!.clips[0] as { keys?: { x?: Array<{ at: number; value: number }> } }).keys?.x ?? []).slice(1, 28);
+  // The correction moves against the shake: compare each step's change with the shake's change.
+  // Each switch is half a step after a sample time, so every sample sees one clear position.
+  const shakeAt = (t: number) => jitter[Math.max(0, Math.min(jitter.length - 1, Math.floor(t * 15 - 0.5 + 1e-6)))]!;
+  let agree = 0;
+  for (let i = 1; i < stKeys.length; i++) {
+    const shake = shakeAt(stKeys[i]!.at) - shakeAt(stKeys[i - 1]!.at);
+    const moved = stKeys[i]!.value - stKeys[i - 1]!.value;
+    if (Math.abs(shake) > 0.01 && Math.sign(moved) === -Math.sign(shake)) agree++;
+  }
+  out.steady = { points: steadied.points, zoom: steadied.zoom, against: agree, steps: stKeys.length - 1, sample: stKeys.slice(0, 8).map((k) => [k.at, Math.round((k.value - 0.5) * 1000) / 1000, shakeAt(k.at)]) };
+  s.studio.delete(st2.id);
   // Curved text: the same words straight (0–1 s) and along an arc (1–2 s); the arc is taller.
   const cv = s.studio.create('Studio smoke curve', 'square');
   s.studio.edit(cv.id, [

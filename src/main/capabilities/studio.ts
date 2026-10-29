@@ -722,6 +722,73 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const shorts = defineCapability({
+    ...simple({
+      id: 'studio.make_shorts',
+      title: 'Make shorts from a long video',
+      description:
+        'Turn the best moments of a long video (a podcast, stream, talk or vlog) into separate vertical shorts: each moment (timeline seconds from–to, 15–90 s is best, each a complete thought with a strong first line) becomes its own new Studio project with that part of the edit — captions, effects and music included — made 9:16 with wide video shown whole over a blurred copy, and an optional hook title. First read the transcript (studio__transcript) and pick the moments yourself: a clear hook, a payoff, no half sentences. The long video is not changed. Afterwards offer to add captions, reframe or export each short.',
+      summary: 'Make shorts from the best moments',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        moments: z.array(z.object({ from: z.number().min(0), to: z.number().min(0), title: z.string().trim().min(1).max(120).optional() }).strict()).min(1).max(20),
+      })
+      .strict(),
+    output: z.object({ shorts: z.array(z.object({ projectId: z.string(), name: z.string(), seconds: z.number() })) }),
+    auditView: (i) => ({ moments: i.moments.length }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      try {
+        return { shorts: s.makeShorts(p.id, i.moments) };
+      } catch (e) {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      }
+    },
+  });
+
+  const Box = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.01).max(1), h: z.number().min(0.01).max(1) }).strict();
+  const track = defineCapability({
+    ...simple({
+      id: 'studio.track',
+      title: 'Follow something in the video',
+      description: 'Motion tracking: make a text, sticker, element or picture follow something that moves in the video under it (a face, a car, a ball), found frame by frame on this PC. box: where that thing is at the clip’s start, as fractions of the frame (top-left x, y and size w, h; look at a frame with studio__look first to find it). The clip keeps its place relative to the thing. Sets position keyframes. One edit (one undo).',
+      summary: 'Make the clip follow something in the video',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), box: Box, video: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/).optional() }).strict(),
+    output: State.extend({ points: z.number(), lost: z.number() }),
+    timeoutMs: 30 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.trackMotion(p.id, i.clip, i.box, i.video).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), points: r.points, lost: r.lost };
+    },
+  });
+
+  const stabilize = defineCapability({
+    ...simple({
+      id: 'studio.stabilize',
+      title: 'Steady a shaky video',
+      description: 'Stabilise a shaky handheld video clip on this PC: the shake (side to side, up and down) is measured, the smooth camera path kept, and the clip moved against the shake, zoomed in a little so no edge shows. strength 0.1..1 (0.7 natural; 1 almost locked off). One edit (one undo).',
+      summary: 'Steady the shaky video',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.7) }).strict(),
+    output: State.extend({ points: z.number(), zoom: z.number() }),
+    timeoutMs: 30 * 60_000,
+    auditView: (i) => ({ strength: i.strength }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.stabilize(p.id, i.clip, i.strength).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), points: r.points, zoom: r.zoom };
+    },
+  });
+
   const previewCopies = defineCapability({
     ...simple({
       id: 'studio.preview_copies',
@@ -917,7 +984,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, reframe, readAloud, template, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

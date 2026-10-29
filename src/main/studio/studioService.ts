@@ -3,8 +3,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, findClip, isAV, needsAnalysis, sourceSpan, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
+import { smooth, videoPlacement } from '../../shared/studioTrack';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -618,6 +619,147 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- long video to shorts
+
+  /**
+   * Shorts from a long video: for each moment (timeline seconds), a new project with just that part
+   * of the edit — every track, caption, effect and the music — made vertical (9:16) when the long
+   * video is not, with wide videos shown whole over a blurred copy (or reframed by Keo afterwards),
+   * and an optional title at the top. The long video is not changed.
+   */
+  makeShorts(id: string, moments: Array<{ from: number; to: number; title?: string }>): Array<{ projectId: string; name: string; seconds: number }> {
+    const p = this.get(id);
+    const total = projectDuration(p);
+    if (!moments.length) throw new StudioError('Name at least one moment to make into a short.');
+    const out: Array<{ projectId: string; name: string; seconds: number }> = [];
+    moments.forEach((m, i) => {
+      const from = Math.max(0, Math.min(m.from, total));
+      const to = Math.max(from, Math.min(m.to, total));
+      if (to - from < 1) throw new StudioError(`Moment ${i + 1} (${m.from}–${m.to} s) is shorter than a second or outside the video.`);
+      const copy = this.duplicate(id);
+      const name = `${p.name} — short ${i + 1}${m.title ? `: ${m.title}` : ''}`.slice(0, 120);
+      const cuts: Array<{ from: number; to: number }> = [];
+      if (from > 0.01) cuts.push({ from: 0, to: from });
+      if (to < total - 0.01) cuts.push({ from: to, to: total });
+      const ops: EditOp[] = [{ op: 'set_project', name }];
+      if (cuts.length) ops.push({ op: 'cut_ranges', ranges: cuts });
+      // Locked tracks would refuse the cut: shorts are new projects, so they are unlocked here.
+      for (const t of copy.tracks) if (t.locked) ops.unshift({ op: 'set_track', track: t.id, locked: false });
+      let r = this.edit(copy.id, ops);
+      if (r.project.width >= r.project.height) {
+        const reshape: EditOp[] = [{ op: 'set_project', width: 1080, height: 1920 }];
+        for (const t of r.project.tracks)
+          for (const c of t.clips)
+            if (c.type === 'media') {
+              const a = r.project.assets.find((x) => x.id === c.assetId);
+              if (a && a.width > a.height) reshape.push({ op: 'set', clip: c.id, fit: 'contain', backdrop: 'blur' });
+            }
+        r = this.edit(copy.id, reshape);
+      }
+      if (m.title) r = this.edit(copy.id, [{ op: 'add_text', text: m.title.slice(0, 120), start: 0, duration: Math.min(3, to - from), animIn: 'pop', transform: { y: 0.18 } }]);
+      // A fresh project: nothing to undo into the long video's history.
+      this.undo.delete(copy.id);
+      this.redo.delete(copy.id);
+      out.push({ projectId: copy.id, name, seconds: Math.round(projectDuration(r.project) * 100) / 100 });
+    });
+    this.d.log.info('studio.shorts', { made: out.length });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- motion tracking and stabilising
+
+  /** Times across a stretch of a video clip (timeline seconds) and the matching seconds into its file. */
+  private clipTimes(v: MediaClip, a: Asset, from: number, to: number): { times: number[]; source: number[] } {
+    const step = Math.max(1 / 15, (to - from) / 290);
+    const times: number[] = [];
+    for (let t = from; t < to - 1e-6; t += step) times.push(Math.round(t * 1000) / 1000);
+    const source = times.map((t) => Math.max(0, Math.min(a.duration - 0.01, v.in + sourceSpan(v, t - v.start))));
+    return { times, source };
+  }
+
+  /**
+   * Makes a text, element or picture follow something in the video under it: `box` is where that
+   * thing is at the clip's start (fractions of the frame). Position keyframes follow it, keeping
+   * the clip where it is relative to the thing. One edit (one undo).
+   */
+  async trackMotion(id: string, clipId: string, box: { x: number; y: number; w: number; h: number }, videoId?: string): Promise<{ project: Project; points: number; lost: number }> {
+    const p = this.get(id);
+    const f = findClip(p, clipId);
+    if (!f || f.clip.type === 'audio' || f.clip.type === 'adjust') throw new StudioError('Choose a text, element, sticker or picture to follow something.');
+    const o = f.clip;
+    const under = (c: Clip): c is MediaClip => c.type === 'media' && c.id !== o.id && p.assets.find((x) => x.id === c.assetId)?.kind === 'video' && c.start < clipEnd(o) && clipEnd(c) > o.start;
+    const v = (videoId ? [findClip(p, videoId)?.clip] : p.tracks.flatMap((t) => t.clips)).find((c): c is MediaClip => !!c && under(c));
+    if (!v) throw new StudioError('There is no video under that clip to follow.');
+    const a = p.assets.find((x) => x.id === v.assetId)!;
+    const from = Math.max(o.start, v.start);
+    const to = Math.min(clipEnd(o), clipEnd(v));
+    if (to - from < 0.2) throw new StudioError('The clip and the video overlap for too short a time.');
+    const place = videoPlacement(v, a, p.width, p.height);
+    const tl = place.toVideo(box.x, box.y);
+    const br = place.toVideo(box.x + box.w, box.y + box.h);
+    const vb = { x: Math.max(0, tl.x), y: Math.max(0, tl.y), w: Math.min(1, br.x) - Math.max(0, tl.x), h: Math.min(1, br.y) - Math.max(0, tl.y) };
+    if (vb.w <= 0.01 || vb.h <= 0.01) throw new StudioError('That box is not on the video.');
+    const { times, source } = this.clipTimes(v, a, from, to);
+    const path = await this.runJob<Array<{ x: number; y: number; lost?: boolean }>>({ kind: 'track', projectId: id, assetId: a.id, times: source, box: vb }, 30 * 60_000);
+    // The clip keeps its place relative to the thing it follows.
+    const start = place.toFrame(path[0]!.x, path[0]!.y);
+    const rt0 = from - o.start;
+    const baseX = o.keys?.x?.length ? keyValue(o.keys.x, rt0) : o.transform.x;
+    const baseY = o.keys?.y?.length ? keyValue(o.keys.y, rt0) : o.transform.y;
+    const keysX: Key[] = [];
+    const keysY: Key[] = [];
+    path.forEach((pt, i) => {
+      const fpt = place.toFrame(pt.x, pt.y);
+      const at = Math.round((times[i]! - o.start) * 1000) / 1000;
+      keysX.push({ at, value: Math.round((baseX + fpt.x - start.x) * 10000) / 10000, ease: 'linear' });
+      keysY.push({ at, value: Math.round((baseY + fpt.y - start.y) * 10000) / 10000, ease: 'linear' });
+    });
+    const r = this.edit(id, [{ op: 'set', clip: o.id, keys: { x: keysX, y: keysY } }]);
+    const lost = path.filter((x) => x.lost).length;
+    this.d.log.info('studio.tracked', { points: path.length, lost });
+    return { project: r.project, points: path.length, lost };
+  }
+
+  /**
+   * Steadies a shaky video clip: the camera's shake is measured on this PC, its smooth path kept,
+   * and the clip moved against the shake (zoomed in a little so no edge shows). One edit.
+   */
+  async stabilize(id: string, clipId: string, strength = 0.7): Promise<{ project: Project; points: number; zoom: number }> {
+    const p = this.get(id);
+    const f = findClip(p, clipId);
+    if (!f || f.clip.type !== 'media') throw new StudioError('Choose a video clip to steady.');
+    const v = f.clip;
+    const a = p.assets.find((x) => x.id === v.assetId);
+    if (!a || a.kind !== 'video') throw new StudioError('Only videos can be steadied.');
+    if (v.freeze) throw new StudioError('A frozen frame does not shake.');
+    const { times, source } = this.clipTimes(v, a, v.start, clipEnd(v));
+    if (times.length < 4) throw new StudioError('That clip is too short to steady.');
+    const shifts = await this.runJob<Array<{ x: number; y: number }>>({ kind: 'track', projectId: id, assetId: a.id, times: source, box: null }, 30 * 60_000);
+    // The camera's path, its smoothed path, and the move that takes one to the other.
+    const px: number[] = [];
+    const py: number[] = [];
+    shifts.forEach((s, i) => {
+      px.push((px[i - 1] ?? 0) + s.x);
+      py.push((py[i - 1] ?? 0) + s.y);
+    });
+    const half = Math.max(2, Math.round(times.length / Math.max(0.1, clipEnd(v) - v.start) * (0.4 + strength)));
+    const sx = smooth(px, half);
+    const sy = smooth(py, half);
+    const cx = px.map((x, i) => (sx[i]! - x) * strength);
+    const cy = py.map((y, i) => (sy[i]! - y) * strength);
+    const most = Math.max(0.001, ...cx.map(Math.abs), ...cy.map(Math.abs));
+    const zoom = Math.min(1.25, 1 + most * 2.2);
+    const scale = Math.round(v.transform.scale * zoom * 1000) / 1000;
+    const placed = videoPlacement({ ...v, transform: { ...v.transform, scale } }, a, p.width, p.height);
+    const fx = (a.width || p.width) * placed.scaleX;
+    const fy = (a.height || p.height) * placed.scaleY;
+    const keysX: Key[] = times.map((t, i) => ({ at: Math.round((t - v.start) * 1000) / 1000, value: Math.round((v.transform.x + cx[i]! * fx) * 10000) / 10000, ease: 'linear' }));
+    const keysY: Key[] = times.map((t, i) => ({ at: Math.round((t - v.start) * 1000) / 1000, value: Math.round((v.transform.y + cy[i]! * fy) * 10000) / 10000, ease: 'linear' }));
+    const r = this.edit(id, [{ op: 'set', clip: v.id, transform: { scale }, keys: { x: keysX, y: keysY } }]);
+    this.d.log.info('studio.stabilized', { points: times.length, zoom: Math.round(zoom * 100) / 100 });
+    return { project: r.project, points: times.length, zoom };
   }
 
   // ---------------------------------------------------------------- preview copies
