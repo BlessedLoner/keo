@@ -97,9 +97,9 @@ async function run(s: Setup, capabilityId: string, input: unknown, approve = tru
 }
 
 describe('Keo Studio tools', () => {
-  it('belong to the video tool group', () => {
-    expect(groupOf('studio__edit')).toBe('video');
-    expect(groupOf('studio__look')).toBe('video');
+  it('are their own tool group (Studio)', () => {
+    expect(groupOf('studio__edit')).toBe('studio');
+    expect(groupOf('studio__look')).toBe('studio');
   });
 
   it('create a project, add the files the user named, edit, undo and redo', async () => {
@@ -122,6 +122,10 @@ describe('Keo Studio tools', () => {
     const p = h!.services.studio.resolve();
     expect(p.tracks[1]!.clips).toHaveLength(1);
 
+    // A wrongly written op is explained exactly, and nothing changes.
+    const typo = await run(s, 'studio.edit', { ops: [{ op: 'add_text', text: 'Big', start: 0, duration: 2, style: { sizePct: 99 } }] });
+    expect(typo.step!.state).toBe('failed');
+    expect(typo.step!.error).toContain('Nothing was changed. Fix: ops[0].style.sizePct: Too big');
     // An impossible edit changes nothing.
     const bad = await run(s, 'studio.edit', { ops: [{ op: 'delete', clip: 'cl_missing1' }] });
     expect(bad.step!.state).toBe('failed');

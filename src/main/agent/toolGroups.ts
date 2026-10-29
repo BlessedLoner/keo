@@ -8,7 +8,7 @@ import type { ToolSpec } from '../providers/types';
  * few turns, and on request: the model can load any group with tools__load in the same turn.
  * Any registered tool still runs if the model calls it by name.
  */
-export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'projects'] as const;
+export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number] | 'core';
 
 /** Which group a tool belongs to (by its name: "desktop__click" → desktop). */
@@ -44,8 +44,9 @@ export function groupOf(toolName: string): ToolGroup {
     case 'picture':
       return 'pictures';
     case 'video':
-    case 'studio':
       return 'video';
+    case 'studio':
+      return 'studio';
     case 'project':
     case 'workflows':
       return 'projects';
@@ -67,7 +68,8 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   files: 'read, open, show, write files; project workspace files and scripts',
   create: 'make Word, PowerPoint, Excel files, web games, 3D models',
   pictures: 'edit, animate or make pictures; look at photos',
-  video: 'make and edit videos (Keo Studio: timeline editing, captions, export)',
+  video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
+  studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
 };
 
@@ -85,6 +87,7 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   create: /\b(make|create|write|draft|build|generate|design)\b.*\b(presentation|slides?|deck|powerpoint|pptx|word|document|docx|report|letter|cv|resume|essay|proposal|spreadsheet|excel|xlsx|budget|invoice|game|app|page|3d|stl|model)\b|\b(presentation|slides|deck|spreadsheet|powerpoint|word document|excel sheet)\b/,
   pictures: /\b(pictures?|images?|photos?|logo|png|jpe?g|gif|crop|animate|animated|background|redesign|illustration|poster|banner|thumbnail|wallpaper|icon|edit (the|this|my) (pic|image|photo|logo))\b/,
   video: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?)\b/,
+  studio: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?|voice-?over|green ?screen|transition|thumbnail)\b/,
   projects: /\b(projects?|workflows?|workspace|milestone|backlog)\b/,
 };
 

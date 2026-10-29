@@ -67,8 +67,10 @@ interface ActiveTurn {
 export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
   systemExtra: (conversationId: string) => string = () => '';
-  /** Tool groups a conversation always gets (e.g. video tools for Keo Studio's own conversations). */
+  /** Tool groups a conversation always gets (e.g. Studio's tools for Keo Studio's own conversations). */
   extraGroups: ((conversationId: string) => ToolGroup[]) | null = null;
+  /** Tool groups a conversation never gets (Studio's conversations do not need the older video pipeline). */
+  excludeGroups: ((conversationId: string) => ToolGroup[]) | null = null;
   /**
    * Open questions per conversation: an action that could not run because a
    * choice was missing (which app, which profile, which window). The next
@@ -448,6 +450,7 @@ export class AgentService {
               recent: recentGroups,
               pendingTool: this.pending.get(conversationId)?.toolName ?? null,
             });
+      for (const g of this.excludeGroups?.(conversationId) ?? []) groups.delete(g);
       const toolsOn = settings.agent.toolsEnabled && !!info?.capabilities.tools;
       const buildTools = () => {
         if (!toolsOn) return [];

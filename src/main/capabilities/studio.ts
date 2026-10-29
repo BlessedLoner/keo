@@ -51,6 +51,8 @@ const Step = z.object({ label: z.string().trim().min(1).max(80), status: z.enum(
 type Step = z.infer<typeof Step>;
 
 const ProjectId = z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/).describe('Studio project id; omit for the project open in Studio');
+/** An edit operation as the model writes it: its kind, and the fields the description lists for it. */
+const LooseOp = z.object({ op: z.enum(EditOp.options.map((o) => o.shape.op.value) as [string, ...string[]]) }).catchall(z.unknown());
 const fail = (code: string, message: string) => new CapabilityError(code, message, { dispatched: 'no' });
 
 /** StudioService errors are the model's to fix (wrong id, impossible edit): nothing happened. */
@@ -174,7 +176,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Edit the video in Studio',
     description: `Change the Studio timeline with exact operations; the user sees each change live and can undo it. ${OPS_HELP} Times are seconds on the timeline. After a few edits, look at the result (studio__look) before telling the user it is done.`,
-    input: z.object({ projectId: ProjectId.optional(), ops: z.array(EditOp).min(1).max(200) }).strict(),
+    // The model sees a short schema (each op's fields are in the description); every op is checked in full before anything changes.
+    input: z.object({ projectId: ProjectId.optional(), ops: z.array(LooseOp).min(1).max(200) }).strict(),
     output: State.extend({ changes: z.array(z.string()) }),
     risk: 'low',
     approval: 'never',
@@ -190,7 +193,13 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     auditView: (i) => ({ ops: i.ops.map((o) => o.op) }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
-      const r = run(() => s.edit(p.id, i.ops));
+      const checked = z.array(EditOp).safeParse(i.ops);
+      if (!checked.success) {
+        // Exactly what to fix, by the op's place in the list.
+        const issues = checked.error.issues.slice(0, 4).map((x) => `ops[${x.path.join('.').replace(/^(\d+)/, '$1]')}${x.path.length ? '' : ']'}: ${x.message}`.replace('ops[]', 'ops'));
+        throw fail('invalid_op', `Nothing was changed. Fix: ${issues.join('; ')}.`);
+      }
+      const r = run(() => s.edit(p.id, checked.data));
       return { ...state(s, r.project), changes: r.changes };
     },
   });

@@ -786,7 +786,8 @@ export class Services {
         ? 'I’m still on your last request, so I’ve started this one in the background — I’ll tell you when it’s done.'
         : 'I’m still on your last request and other jobs are running, so this one is queued — I’ll tell you when it’s done.';
     };
-    this.agent.extraGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['video'] : []);
+    this.agent.extraGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['studio'] : []);
+    this.agent.excludeGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['video'] : []);
     this.agent.systemExtra = (conversationId) =>
       this.jobs.isJobConversation(conversationId) ? this.live.agentContext() + this.researchContext() + this.videoContext() + this.studioContext(conversationId) + this.jobs.jobContext(conversationId) : this.agentExtra(conversationId);
     this.agentExtra = (conversationId?: string) =>
