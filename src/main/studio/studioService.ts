@@ -383,9 +383,11 @@ export class StudioService {
   }
 
   /** The file of a project's media (for the media protocol): only media in that project. */
-  assetFile(projectId: string, assetId: string): string | null {
+  assetFile(projectId: string, assetId: string, preview = false): string | null {
     try {
       const a = this.get(projectId).assets.find((x) => x.id === assetId);
+      // The preview may play the light copy; everything else (export, frames) gets the original.
+      if (a && preview && a.proxy && fs.existsSync(a.proxy)) return a.proxy;
       return a && fs.existsSync(a.path) ? a.path : null;
     } catch {
       return null;
@@ -508,7 +510,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'name'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -616,6 +618,48 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- preview copies
+
+  /** Videos bigger than this (either side, in pixels) play smoother in the preview from a light copy. */
+  static readonly BIG = 1920;
+
+  /**
+   * A light copy (540p) of a big video for smooth editing, made once on this PC; the preview plays
+   * it, the export and frames still use the original. Every big video of the project by default.
+   */
+  async makePreviewCopies(id: string, assetIds?: string[]): Promise<{ project: Project; made: number }> {
+    const p = this.get(id);
+    const videos = p.assets.filter((a) => a.kind === 'video' && (assetIds ? assetIds.includes(a.id) : Math.max(a.width, a.height) > StudioService.BIG) && !(a.proxy && fs.existsSync(a.proxy)));
+    let made = 0;
+    for (const a of videos) {
+      const file = path.join(this.d.dir, 'made', `preview-${a.id}.mp4`);
+      if (!fs.existsSync(file)) {
+        const k = 540 / Math.max(1, Math.min(a.width || 1080, a.height || 1920));
+        const width = Math.max(16, Math.round(((a.width || 1080) * Math.min(1, k)) / 2) * 2);
+        const height = Math.max(16, Math.round(((a.height || 1920) * Math.min(1, k)) / 2) * 2);
+        const fps = Math.min(30, p.fps);
+        const tmp = Project.parse({ ...newProject({ name: `${a.name} preview`, rand: () => crypto.randomBytes(6).toString('hex').slice(0, 10) }), width, height, fps, background: '#000000', assets: [a] });
+        const one = applyEdits(tmp, [{ op: 'add_media', assetId: a.id, start: 0, duration: Math.max(0.04, a.duration), fit: 'contain' }]).project;
+        fs.writeFileSync(this.file(one.id), JSON.stringify(one));
+        const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
+        this.exportTargets.set(exportId, file);
+        try {
+          await this.runJob({ kind: 'export', projectId: one.id, exportId, size: { width, height, fps, quality: 'standard' } }, 2 * 60 * 60 * 1000);
+        } catch (e) {
+          fs.rmSync(file, { force: true });
+          throw e;
+        } finally {
+          this.exportTargets.delete(exportId);
+          fs.rmSync(this.file(one.id), { force: true });
+        }
+      }
+      this.learn(id, a.id, { proxy: file });
+      made++;
+    }
+    this.d.log.info('studio.preview_copies', { made });
+    return { project: this.get(id), made };
   }
 
   // ---------------------------------------------------------------- background noise

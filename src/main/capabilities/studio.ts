@@ -722,6 +722,26 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const previewCopies = defineCapability({
+    ...simple({
+      id: 'studio.preview_copies',
+      title: 'Smooth preview for big videos',
+      description: 'Make light 540p copies of the project’s big videos (2K and 4K) on this PC so the Studio preview plays smoothly; the export and frames Keo looks at still use the full-quality originals. Use it when the user says the preview stutters or a 4K video is slow.',
+      summary: 'Make light preview copies of big videos',
+    }),
+    input: z.object({ projectId: ProjectId.optional() }).strict(),
+    output: State.extend({ made: z.number() }),
+    timeoutMs: 2 * 60 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.makePreviewCopies(p.id).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), made: r.made };
+    },
+  });
+
   const cleanSound = defineCapability({
     ...simple({
       id: 'studio.clean_sound',
@@ -897,7 +917,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, reframe, readAloud, template, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

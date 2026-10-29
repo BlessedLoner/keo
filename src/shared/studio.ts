@@ -101,6 +101,8 @@ export const Asset = z
     /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
     beats: z.array(Sec).max(20000).optional(),
     bpm: z.number().min(20).max(400).nullable().optional(),
+    /** A light copy (540p) the preview plays instead of a big video; the export always uses the original. */
+    proxy: z.string().min(1).max(1000).optional(),
     /** A copy with the background noise taken out, which Keo made of this file. */
     cleanOf: Id.optional(),
     /** A reversed copy Keo made: of which video, from where in it. */

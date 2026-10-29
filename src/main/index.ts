@@ -85,9 +85,10 @@ function registerAppProtocol(): void {
     if (url.host !== 'keo') return new Response('Not found', { status: 404 });
     // Keo Studio's media: only files that are in a project (or being measured), with seeking.
     const media = /^\/media\/(pr_[A-Za-z0-9]{4,24})\/(as_[A-Za-z0-9]{4,24})$/.exec(url.pathname);
+    const preview = url.searchParams.get('preview') === '1';
     const probing = /^\/probe\/([0-9a-f]{24})$/.exec(url.pathname);
     if (media || probing) {
-      const file = media ? (services?.studio.assetFile(media[1]!, media[2]!) ?? null) : (services?.studio.probeTarget(probing![1]!) ?? null);
+      const file = media ? (services?.studio.assetFile(media[1]!, media[2]!, preview) ?? null) : (services?.studio.probeTarget(probing![1]!) ?? null);
       if (!file) return new Response('Not found', { status: 404 });
       return serveFile(file, request.headers.get('range'));
     }
@@ -1079,6 +1080,15 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
     { op: 'add_shape', shape: 'rect', start: 1.5, duration: 1.5, style: { width: 1.2, height: 1.2, radius: 0, fill: '#FF0000' } },
   ]);
   const shFile = (await s.studio.exportVideo(sh.id)).file;
+  // A preview copy of that video made for real: the preview is served the copy, the export the original.
+  const px = s.studio.create('Studio smoke preview copy', 'square');
+  const pxVid = (await s.studio.importFiles(px.id, [shFile])).added[0]!;
+  const pxMade = await s.studio.makePreviewCopies(px.id, [pxVid.id]);
+  const pxFile = s.studio.assetFile(px.id, pxVid.id, true);
+  const pxRead = pxFile ? Mp4Reader.open(pxFile) : null;
+  out.previewCopy = { made: pxMade.made, isCopy: !!pxFile && pxFile !== shFile, original: s.studio.assetFile(px.id, pxVid.id) === shFile, frames: pxRead?.video()?.samples.length ?? 0, sound: !!pxRead?.audio() };
+  pxRead?.close();
+  s.studio.delete(px.id);
   const scP = s.studio.create('Studio smoke split', 'square');
   const scVid = (await s.studio.importFiles(scP.id, [shFile])).added[0]!;
   s.studio.edit(scP.id, [{ op: 'add_media', assetId: scVid.id, start: 0 }]);

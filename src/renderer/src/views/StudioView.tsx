@@ -826,6 +826,7 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
         <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : clip.type === 'adjust' ? 'Adjustment layer' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
       </div>
       {asset && <p className="small muted insp-name">{asset.name}</p>}
+      {asset?.kind === 'video' && (asset.proxy ? <p className="small muted insp-name">Smooth preview: plays a light copy (the export uses the original).</p> : Math.max(asset.width, asset.height) > 1920 && <PreviewCopyButton projectId={project.id} assetId={asset.id} />)}
       {isAV(clip) && (
         <label className="insp-num wide insp-replace">
           <span>Replace with</span>
@@ -988,6 +989,28 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
       {clip.type !== 'audio' && clip.type !== 'adjust' && <MotionFields clip={clip} set={set} />}
     </div>
+  );
+}
+
+/** A light copy of a big video so the preview plays smoothly (the export keeps the original). */
+function PreviewCopyButton({ projectId, assetId }: { projectId: string; assetId: string }) {
+  const ui = useUi();
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      await invoke('studio:previewCopies', { id: projectId, assets: [assetId] });
+      ui.toast('The preview now plays a light copy; the export still uses the full-quality video.', 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn sm insp-replace" style={{ margin: '0 12px 8px' }} disabled={busy} onClick={() => void go()} title="A big video (2K or 4K) can stutter in the preview: Keo makes a light 540p copy for editing">
+      {busy ? <span className="spinner tiny" /> : <Icon name="film" size={13} />} {busy ? 'Making a preview copy…' : 'Smooth preview (big video)'}
+    </button>
   );
 }
 

@@ -182,3 +182,42 @@ describe('Remove background noise', () => {
     expect(jobs.filter((k) => k === 'denoise')).toHaveLength(1);
   });
 });
+
+describe('Smooth preview copies', () => {
+  it('makes a light copy of each big video once; only the preview gets it', async () => {
+    const dir = tempDir('keo-proxy-');
+    const big = path.join(dir, 'drone-4k.mp4');
+    const small = path.join(dir, 'phone.mp4');
+    fs.writeFileSync(big, 'x');
+    fs.writeFileSync(small, 'x');
+    const sizes: Array<{ width: number; height: number }> = [];
+    h = makeHarness({
+      dir: path.join(dir, 'profile'),
+      deps: {
+        studioProbe: async (f) => ({ kind: 'video', duration: 6, width: f.includes('4k') ? 3840 : 1080, height: f.includes('4k') ? 2160 : 1920, hasAudio: true }),
+        studioJob: (jobId, job) =>
+          setTimeout(() => {
+            if (job.kind !== 'export') return h!.services.studio.jobDone(jobId, null, 'not in this test');
+            sizes.push({ width: job.size!.width, height: job.size!.height });
+            const tmp = JSON.parse(fs.readFileSync(path.join(h!.dir, 'studio', `${job.projectId}.json`), 'utf8'));
+            const out = path.join(h!.dir, 'studio', 'made', `preview-${tmp.assets[0].id}.mp4`);
+            fs.mkdirSync(path.dirname(out), { recursive: true });
+            fs.writeFileSync(out, 'x');
+            h!.services.studio.jobDone(jobId, { file: out, durationSec: 6, frames: 180, bytes: 1 }, null);
+          }, 2),
+      },
+    });
+    const s = h.services.studio;
+    const p = s.create('Drone', 'landscape');
+    const [b, sm] = (await s.importFiles(p.id, [big, small])).added;
+    const r = await s.makePreviewCopies(p.id);
+    expect(r.made).toBe(1);
+    expect(sizes).toEqual([{ width: 960, height: 540 }]);
+    expect(s.assetFile(p.id, b!.id, true)).toMatch(/preview-as_.*\.mp4$/);
+    expect(s.assetFile(p.id, b!.id)).toBe(big);
+    expect(s.assetFile(p.id, sm!.id, true)).toBe(small);
+    // Made once.
+    expect((await s.makePreviewCopies(p.id)).made).toBe(0);
+    expect(sizes).toHaveLength(1);
+  });
+});

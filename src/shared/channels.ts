@@ -70,6 +70,7 @@ export const INVOKE_CHANNELS = [
   'studio:splitScenes',
   'studio:reverse',
   'studio:cleanSound',
+  'studio:previewCopies',
   'studio:analyzeSpeech',
   'studio:reframe',
   'studio:readAloud',

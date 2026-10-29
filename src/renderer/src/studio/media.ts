@@ -26,14 +26,24 @@ export class PreviewSources implements SourceProvider {
     private readonly redraw: () => void,
   ) {}
 
-  private video(c: MediaClip): HTMLVideoElement {
+  private video(c: MediaClip, a: Asset): HTMLVideoElement {
+    // A big video plays from its light copy when Keo has made one.
+    const src = `${mediaUrl(this.projectId, c.assetId)}${a.proxy ? '?preview=1' : ''}`;
     let v = this.videos.get(c.id);
+    if (v && v.dataset.src !== src) {
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+      this.videos.delete(c.id);
+      v = undefined;
+    }
     if (!v) {
       v = document.createElement('video');
       v.crossOrigin = 'anonymous';
       v.preload = 'auto';
       v.playsInline = true;
-      v.src = mediaUrl(this.projectId, c.assetId);
+      v.dataset.src = src;
+      v.src = src;
       v.addEventListener('seeked', this.redraw);
       v.addEventListener('loadeddata', this.redraw);
       this.videos.set(c.id, v);
@@ -58,7 +68,7 @@ export class PreviewSources implements SourceProvider {
       const i = this.image(asset);
       return i.complete && i.naturalWidth ? i : null;
     }
-    const v = this.video(clip);
+    const v = this.video(clip, asset);
     return v.readyState >= 2 ? v : null;
   }
 
@@ -121,7 +131,7 @@ export class PreviewSources implements SourceProvider {
         let el: HTMLMediaElement;
         if (c.type === 'media' && a.kind === 'video') {
           if (tr.hidden && (tr.muted || !a.hasAudio)) continue;
-          el = this.video(c);
+          el = this.video(c, a);
           activeVideos.add(c.id);
         } else {
           let s = this.sounds.get(c.id);
