@@ -134,6 +134,41 @@ export class StudioService {
     return p;
   }
 
+  /** A template's slots: the videos and pictures on its video tracks, in the order they play. */
+  templateSlots(p: Project): MediaClip[] {
+    return p.tracks
+      .filter((t) => t.kind === 'video')
+      .flatMap((t) => t.clips)
+      .filter((c): c is MediaClip => c.type === 'media')
+      .sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
+  }
+
+  /**
+   * A new project made from a template (any project): the same edit, with these files in its video
+   * slots in order (extra slots keep the template's own media). One project, fully undoable.
+   */
+  async fromTemplate(templateId: string, files: string[], name?: string): Promise<{ project: Project; filled: number; slots: number }> {
+    const tpl = this.get(templateId);
+    const slots = this.templateSlots(tpl);
+    if (!slots.length) throw new StudioError('That project has no videos or pictures to replace: it cannot be used as a template.');
+    const copy = this.duplicate(templateId);
+    const named = Project.parse({ ...copy, name: (name ?? `${tpl.name} — my version`).slice(0, 120) });
+    this.save(named);
+    const imported = await this.importFiles(named.id, files);
+    const visual = imported.added.filter((a) => a.kind !== 'audio');
+    if (!visual.length) {
+      this.delete(named.id);
+      throw new StudioError(imported.skipped.length ? `Keo could not use those files: ${imported.skipped.slice(0, 2).join('; ')}` : 'Choose videos or pictures to put in the template.');
+    }
+    const ops: EditOp[] = this.templateSlots(this.get(named.id))
+      .slice(0, visual.length)
+      .map((c, i) => ({ op: 'replace_media' as const, clip: c.id, assetId: visual[i]!.id }));
+    const r = this.edit(named.id, ops);
+    this.current = named.id;
+    this.d.log.info('studio.template_used', { slots: slots.length, filled: ops.length });
+    return { project: r.project, filled: ops.length, slots: slots.length };
+  }
+
   /** A copy of a project (its timeline and media list; the media files themselves are shared). */
   duplicate(id: string): Project {
     const p = this.get(id);
@@ -627,6 +662,22 @@ export class StudioService {
     const next = Project.parse({ ...p, assets: [...p.assets, asset], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
     this.save(next);
     return { project: next, asset };
+  }
+
+  /** The picture at `time`, full size, saved as a new PNG next to the exports (a cover or thumbnail). */
+  async saveFrame(id: string, time: number): Promise<string> {
+    const p = this.get(id);
+    if (projectDuration(p) === 0) throw new StudioError('The timeline is empty.');
+    const f = (await this.runJob<Array<{ time: number; pngBase64: string }>>({ kind: 'frames', projectId: id, times: [Math.max(0, Math.min(time, projectDuration(p) - 0.02))], width: p.width }, 120_000))[0];
+    if (!f) throw new StudioError('The frame could not be drawn.');
+    const dir = this.d.exportsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
+    const base = `${p.name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 70) || 'Keo video'} cover`;
+    let file = path.join(dir, `${base}.png`);
+    for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).png`);
+    fs.writeFileSync(file, Buffer.from(f.pngBase64, 'base64'));
+    return file;
   }
 
   // ---------------------------------------------------------------- exporting

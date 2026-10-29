@@ -6,14 +6,14 @@ import { errText, invoke } from '../lib/api';
 import { useFilmstrip } from './thumbs';
 
 /** Your Studio projects: a thumbnail, name, length and when it was last changed; open, rename, copy or delete. */
-export function ProjectGrid({ projects, current, onOpen, onChanged }: { projects: ProjectSummary[]; current: string | null; onOpen: (id: string) => void; onChanged: () => void }) {
+export function ProjectGrid({ projects, current, onOpen, onChanged }: { projects: ProjectSummary[]; current: string | null; onOpen: (id: string) => void; onChanged: () => void | Promise<void> }) {
   if (!projects.length) return null;
   return (
     <div className="project-grid-wrap">
       <h3>Your projects</h3>
       <div className="project-grid">
         {projects.map((p) => (
-          <ProjectTile key={p.id} p={p} current={p.id === current} onOpen={() => onOpen(p.id)} onChanged={onChanged} />
+          <ProjectTile key={p.id} p={p} current={p.id === current} onOpen={() => onOpen(p.id)} onChanged={onChanged} onOpenId={onOpen} />
         ))}
       </div>
     </div>
@@ -29,7 +29,7 @@ const ago = (iso: string) => {
 };
 const len = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s` : `${s.toFixed(1)}s`);
 
-function ProjectTile({ p, current, onOpen, onChanged }: { p: ProjectSummary; current: boolean; onOpen: () => void; onChanged: () => void }) {
+function ProjectTile({ p, current, onOpen, onChanged, onOpenId }: { p: ProjectSummary; current: boolean; onOpen: () => void; onChanged: () => void | Promise<void>; onOpenId: (id: string) => void }) {
   const ui = useUi();
   const strip = useFilmstrip(p.id, p.cover ?? undefined);
   const [renaming, setRenaming] = useState(false);
@@ -66,6 +66,26 @@ function ProjectTile({ p, current, onOpen, onChanged }: { p: ProjectSummary; cur
         <span className="project-actions">
           <button className="btn icon sm ghost" title="Rename" onClick={() => setRenaming(true)}>
             <Icon name="text" size={12} />
+          </button>
+          <button
+            className="btn icon sm ghost"
+            title="Use as a template: pick your clips, and Keo makes the same edit with them"
+            disabled={!p.cover}
+            onClick={() =>
+              void (async () => {
+                try {
+                  const r = await invoke('studio:useTemplate', { id: p.id });
+                  if (!r) return;
+                  ui.toast(`Made “${r.project.name}”: ${r.filled} of ${r.slots} slots filled with your clips.`, 'success');
+                  await onChanged();
+                  onOpenId(r.project.id);
+                } catch (e) {
+                  ui.error(errText(e));
+                }
+              })()
+            }
+          >
+            <Icon name="film" size={12} />
           </button>
           <button className="btn icon sm ghost" title="Make a copy" onClick={() => void act(() => invoke('studio:duplicate', { id: p.id }))}>
             <Icon name="plus" size={12} />

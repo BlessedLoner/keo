@@ -132,6 +132,8 @@ export const invokeSchemas = {
   'studio:open': z.object({ id: studioProjectId }).strict(),
   'studio:delete': z.object({ id: studioProjectId }).strict(),
   'studio:duplicate': z.object({ id: studioProjectId }).strict(),
+  'studio:useTemplate': z.object({ id: studioProjectId }).strict(),
+  'studio:saveFrame': z.object({ id: studioProjectId, time: z.number().min(0).max(86400) }).strict(),
   'studio:edit': z.object({ id: studioProjectId, ops: z.array(EditOp).min(1).max(200) }).strict(),
   'studio:undo': z.object({ id: studioProjectId }).strict(),
   'studio:redo': z.object({ id: studioProjectId }).strict(),
@@ -447,6 +449,8 @@ export interface InvokeOutputs {
   'studio:open': StudioProject;
   'studio:delete': { ok: true };
   'studio:duplicate': StudioProject;
+  'studio:useTemplate': { project: StudioProject; filled: number; slots: number } | null;
+  'studio:saveFrame': { file: string };
   'studio:edit': { project: StudioProject; changes: string[] };
   'studio:undo': StudioProject;
   'studio:redo': StudioProject;

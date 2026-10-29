@@ -52,6 +52,8 @@ export const INVOKE_CHANNELS = [
   'studio:open',
   'studio:delete',
   'studio:duplicate',
+  'studio:useTemplate',
+  'studio:saveFrame',
   'studio:edit',
   'studio:undo',
   'studio:redo',

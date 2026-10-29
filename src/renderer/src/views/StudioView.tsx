@@ -598,6 +598,18 @@ export function StudioView() {
             </button>
           </>
         )}
+        <button
+          className="btn sm ghost"
+          disabled={duration === 0}
+          title="Save the picture at the playhead (full size) as a cover or thumbnail, next to your exports"
+          onClick={() =>
+            void invoke('studio:saveFrame', { id: project.id, time })
+              .then((r) => ui.toast(`Saved ${r.file.split(/[\\/]/).pop()} in Videos\\Keo.`, 'success'))
+              .catch((e) => ui.error(errText(e)))
+          }
+        >
+          Save frame
+        </button>
         {selection.length > 1 && <span className="chip">{selection.length} selected</span>}
         <div className="spacer" />
         <span className="small muted">Zoom</span>
@@ -748,6 +760,27 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
         <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
       </div>
       {asset && <p className="small muted insp-name">{asset.name}</p>}
+      {isAV(clip) && (
+        <label className="insp-num wide insp-replace">
+          <span>Replace with</span>
+          <select
+            className="select"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) onEdit([{ op: 'replace_media', clip: clip.id, assetId: e.target.value }]);
+            }}
+          >
+            <option value="">Another file of this project…</option>
+            {project.assets
+              .filter((a) => a.id !== clip.assetId && (clip.type === 'audio' ? a.hasAudio : a.kind !== 'audio'))
+              .map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+          </select>
+        </label>
+      )}
       <Section title="Timing">
         <div className="insp-grid">
           <Num label="Start" value={clip.start} min={0} suffix="s" onCommit={(v) => onEdit([{ op: 'move', clip: clip.id, start: v }])} />

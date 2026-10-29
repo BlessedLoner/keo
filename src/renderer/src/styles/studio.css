@@ -107,6 +107,7 @@
 .insp-section .btn.ghost { margin-top: 6px; }
 .insp-section .insp-range + .insp-range { margin-top: 6px; }
 .insp-section .insp-check { margin-top: 8px; }
+.insp-replace { padding: 0 12px; margin-bottom: 6px !important; }
 .insp-name { padding: 0 12px; margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-section { padding: 6px 12px 10px; border-bottom: 1px solid var(--line); }
 .insp-section:last-child { border-bottom: 0; }

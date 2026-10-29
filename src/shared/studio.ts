@@ -582,6 +582,8 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('detach_audio'), clip: ClipRef }).strict(),
   /** Holds a video's frame at `at` for `duration` seconds; what comes after on its track moves later. */
   z.object({ op: z.literal('freeze'), clip: ClipRef, at: Sec, duration: z.number().min(0.1).max(60).default(2) }).strict(),
+  /** Another video, picture or sound in a clip's place: its timing, motion, look and effects stay. */
+  z.object({ op: z.literal('replace_media'), clip: ClipRef, assetId: AssetRef, in: Sec.optional() }).strict(),
   /** A copy of a clip (default: right after it, on the same track). */
   z.object({ op: z.literal('duplicate'), clip: ClipRef, start: At.optional(), track: TrackRef.optional() }).strict(),
   /** Delete a clip; ripple: later clips on its track move left to close the gap. */
@@ -1183,6 +1185,24 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         f.track.clips.push(still, ...(after ? [after] : []));
         sortClips(f.track);
         changes.push(`Froze the frame at ${at}s for ${d}s (${still.id}).`);
+        break;
+      }
+      case 'replace_media': {
+        const f = get(op.clip);
+        const c = f.clip;
+        if (!isAV(c)) throw new EditError(`${c.id} is not a video, picture or sound.`);
+        const a = asset(op.assetId);
+        if (c.type === 'media' && a.kind === 'audio') throw new EditError(`${a.name} is a sound: it cannot take a video's or picture's place.`);
+        if (c.type === 'audio' && !a.hasAudio) throw new EditError(`${a.name} has no sound.`);
+        c.assetId = a.id;
+        c.in = round(Math.max(0, Math.min(op.in ?? 0, Math.max(0, a.duration - 0.04))));
+        if (c.type === 'media' && a.kind === 'image') {
+          delete c.speedCurve;
+          delete c.freeze;
+        }
+        const need = c.type === 'media' ? sourceSpan(c, c.duration) : c.duration;
+        const short = a.kind !== 'image' && a.duration - c.in < need - 0.05;
+        changes.push(`Put ${a.name} in ${c.id}'s place${short ? ` (it is shorter: its last frame holds for ${round(need - (a.duration - c.in))}s)` : ''}.`);
         break;
       }
       case 'duplicate': {

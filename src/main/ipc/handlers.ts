@@ -446,6 +446,13 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'studio:get': ({ id }) => s.studio.get(id),
     'studio:open': ({ id }) => s.studio.open(id),
     'studio:duplicate': ({ id }) => studioCall(() => s.studio.duplicate(id)),
+    // The user picks their clips in Windows' own picker; they go into the template's slots.
+    'studio:useTemplate': async ({ id }) => {
+      const files = host.pickMedia ? await host.pickMedia() : [];
+      if (!files.length) return null;
+      return s.studio.fromTemplate(id, files).catch(studioErr);
+    },
+    'studio:saveFrame': async ({ id, time }) => ({ file: await s.studio.saveFrame(id, time).catch(studioErr) }),
     'studio:delete': ({ id }) => {
       s.studio.delete(id);
       return { ok: true as const };

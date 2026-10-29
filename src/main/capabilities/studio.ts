@@ -71,7 +71,7 @@ function state(s: StudioService, p: Project) {
 const State = z.object({ projectId: z.string(), durationSec: z.number(), timeline: z.string(), history: z.object({ undo: z.boolean(), redo: z.boolean() }) });
 
 const OPS_HELP =
-  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), null removes it}; add_track {kind, name}; set_track {track, hidden, muted, name}; delete_track {track}; set_project {name, width, height, fps, background, loudness}. ' +
+  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), null removes it}; add_track {kind, name}; set_track {track, hidden, muted, name}; delete_track {track}; set_project {name, width, height, fps, background, loudness}. ' +
   'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, typewriter, blur-in, words (word by word); out: fade, pop, slide-down, blur-out. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Later tracks are drawn on top. ' +
   'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height). Videos and pictures: mask {shape rounded|circle, radius}, frame phone|browser|card (a device mock-up), shadow. Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
 
@@ -753,6 +753,34 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const template = defineCapability({
+    ...simple({
+      id: 'studio.use_template',
+      title: 'Make a video from a template',
+      description:
+        'Make a new Studio project with the same edit as another project (its cuts, timing, motion, text, music and effects), with the user’s videos or pictures in its video slots in order. Without paths, the user picks the files in Windows’ picker. Use it when the user wants “the same edit with my clips”. Afterwards, change the texts to fit the new clips.',
+      summary: 'Make a video from a template',
+    }),
+    input: z.object({ template: ProjectId.describe('The project to copy the edit from'), paths: z.array(z.string().trim().min(4).max(500)).min(1).max(100).optional(), name: z.string().trim().min(1).max(120).optional() }).strict(),
+    output: State.extend({ filled: z.number(), slots: z.number() }),
+    timeoutMs: 10 * 60_000,
+    auditView: (i) => ({ files: i.paths?.length ?? 0, picker: !i.paths }),
+    async execute(i, ctx) {
+      let files: string[];
+      if (i.paths) files = i.paths.map((x) => trusted(d, x, ctx));
+      else {
+        if (!d.pick) throw fail('no_picker', 'The file picker is available only in the Keo app. Ask the user for the full path of each file.');
+        files = await d.pick();
+        if (!files.length) throw fail('cancelled', 'The user closed the picker without choosing anything. Nothing was made.');
+      }
+      const r = await s.fromTemplate(i.template, files, i.name).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      d.showStudio();
+      return { ...state(s, r.project), filled: r.filled, slots: r.slots };
+    },
+  });
+
   const exportVideo = defineCapability({
     id: 'studio.export',
     version: '1.0.0',
@@ -801,7 +829,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, readAloud, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

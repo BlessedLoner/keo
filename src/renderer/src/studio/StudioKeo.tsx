@@ -19,6 +19,7 @@ const CHIPS: Array<{ label: string; text: string; needs?: 'media' | 'speech' }> 
   { label: 'Add captions', text: 'Add word-by-word captions in a bold short-form style.', needs: 'speech' },
   { label: 'Hook title', text: 'Add a strong hook title in the first 2 seconds that fits what this video is about.', needs: 'media' },
   { label: 'Make it pop', text: 'Make it more engaging: motion on the pictures, a few sound effects on the cuts, and a colour look that fits.', needs: 'media' },
+  { label: 'Translate captions', text: 'Translate all the captions on screen into another language. Ask me which language first, then keep the same timing and style.', needs: 'media' },
   { label: 'Check my video', text: 'Look at my video carefully and tell me what to improve before I post it. Do not change anything yet.', needs: 'media' },
 ];
 
