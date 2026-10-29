@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import type { Project } from '@shared/studio';
 import { invoke, subscribe } from '../lib/api';
-import { assetWav, probe, renderFrames, runExport, speechWav } from './exporter';
+import { assetSignatures, assetWav, probe, renderFrames, runExport, speechWav } from './exporter';
 
 /**
  * Keo's hidden render window: it does the Studio's heavy work (exports, frames for Keo to look at,
@@ -27,6 +27,7 @@ export function RenderApp() {
             if (msg.job.kind === 'frames') result = await renderFrames(p, msg.job.times, msg.job.width);
             else if (msg.job.kind === 'audio') result = await speechWav(p, msg.job.sampleRate);
             else if (msg.job.kind === 'asset_audio') result = await assetWav(p, msg.job.assetId, msg.job.sampleRate);
+            else if (msg.job.kind === 'signatures') result = await assetSignatures(p, msg.job.assetId, msg.job.times);
             else if (msg.job.kind === 'export') {
               const exportId = msg.job.exportId;
               result = await runExport(

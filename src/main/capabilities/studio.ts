@@ -696,6 +696,32 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const scenes = defineCapability({
+    ...simple({
+      id: 'studio.scenes',
+      title: 'Split at shot changes',
+      description:
+        'Find where a video changes shot (on this PC, from its frames) and split its clips there, so each shot is its own clip to reorder, trim, delete or put a transition on. Default: every video clip; or the clips you name. split false only lists the shot changes (seconds into each video). Use it first on a long recording, a downloaded video or an old edit before cutting it up. One edit (one undo).',
+      summary: 'Split the video at its shot changes',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), clips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(500).optional(), split: z.boolean().default(true) }).strict(),
+    output: State.extend({ splits: z.number(), shots: z.record(z.string(), z.array(z.number())) }),
+    timeoutMs: 20 * 60_000,
+    auditView: (i) => ({ split: i.split, clips: i.clips?.length ?? null }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const wrap = (e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      };
+      const videos = p.assets.filter((a) => a.kind === 'video' && p.tracks.some((t) => t.clips.some((c) => c.type === 'media' && c.assetId === a.id && (!i.clips || i.clips.includes(c.id)))));
+      const shots: Record<string, number[]> = {};
+      for (const a of videos) shots[a.id] = await s.detectScenes(p.id, a.id).catch(wrap);
+      if (!i.split) return { ...state(s, s.get(p.id)), splits: 0, shots };
+      const r = await s.splitScenes(p.id, i.clips).catch(wrap);
+      return { ...state(s, r.project), splits: r.splits, shots };
+    },
+  });
+
   const reframe = defineCapability({
     id: 'studio.reframe',
     version: '1.0.0',
@@ -829,7 +855,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, reframe, readAloud, template, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */

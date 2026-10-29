@@ -1062,6 +1062,21 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   });
   const moOut = await s.studio.exportVideo(mo.id);
   out.motion = { frames: moOut.frames, brightness: stats, layers: moP().tracks.reduce((n, t) => n + t.clips.length, 0) };
+  // Shot changes: a video made of two shots (the picture, then a red frame from 1.5 s), decoded
+  // in the render window, split where the red starts.
+  const sh = s.studio.create('Studio smoke shots', 'square');
+  const shPic = (await s.studio.importFiles(sh.id, [pic])).added[0]!;
+  s.studio.edit(sh.id, [
+    { op: 'set_project', width: 320, height: 320 },
+    { op: 'add_media', assetId: shPic.id, start: 0, duration: 3 },
+    { op: 'add_shape', shape: 'rect', start: 1.5, duration: 1.5, style: { width: 1.2, height: 1.2, radius: 0, fill: '#FF0000' } },
+  ]);
+  const shFile = (await s.studio.exportVideo(sh.id)).file;
+  const scP = s.studio.create('Studio smoke split', 'square');
+  const scVid = (await s.studio.importFiles(scP.id, [shFile])).added[0]!;
+  s.studio.edit(scP.id, [{ op: 'add_media', assetId: scVid.id, start: 0 }]);
+  const scSplit = await s.studio.splitScenes(scP.id);
+  out.shots = { scenes: s.studio.get(scP.id).assets[0]?.scenes ?? null, splits: scSplit.splits, starts: s.studio.get(scP.id).tracks[0]!.clips.map((c) => c.start) };
   // Cut to the beat: a drum track (a click every half second) decoded in the render window.
   const drumRate = 16000;
   const drumPcm = new Int16Array(drumRate * 8);

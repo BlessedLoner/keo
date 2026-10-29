@@ -1,7 +1,7 @@
 import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project, type VoiceFx } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
-import { ExactSources, mediaUrl } from './media';
+import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
 import { normalize, voiceChain, voiceFxChain } from './sound';
 
 /**
@@ -397,4 +397,37 @@ export async function probe(url: string): Promise<{ kind: 'video' | 'image' | 'a
     v.onerror = () => done(null);
     v.src = url;
   });
+}
+
+/**
+ * Colour fingerprints of one video's frames at `times` (seconds into the file, sorted): each a
+ * 64-bin colour histogram of a tiny copy of the frame, summing to 1. For finding shot changes.
+ */
+export async function assetSignatures(p: Project, assetId: string, times: number[]): Promise<number[][]> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind !== 'video') throw new Error('That is not a video of this project.');
+  const W = 32;
+  const H = 18;
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  const exact = await ClipDecoder.open(p.id, assetId);
+  const source = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+  const out: number[][] = [];
+  try {
+    for (const t of times) {
+      const f = await source.frameAt(Math.max(0, Math.min(t, a.duration - 0.01)));
+      if (!f) {
+        out.push(out.at(-1) ?? new Array<number>(64).fill(1 / 64));
+        continue;
+      }
+      ctx.drawImage(f as CanvasImageSource, 0, 0, W, H);
+      const px = ctx.getImageData(0, 0, W, H).data;
+      const bins = new Array<number>(64).fill(0);
+      for (let i = 0; i < px.length; i += 4) bins[((px[i]! >> 6) << 4) | ((px[i + 1]! >> 6) << 2) | (px[i + 2]! >> 6)]! += 1;
+      out.push(bins.map((b) => Math.round((b / (W * H)) * 1e4) / 1e4));
+    }
+  } finally {
+    source.close();
+  }
+  return out;
 }

@@ -89,6 +89,8 @@ export const Asset = z
     /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
     beats: z.array(Sec).max(20000).optional(),
     bpm: z.number().min(20).max(400).nullable().optional(),
+    /** Where the video changes shot (seconds into it), found on this PC once. */
+    scenes: z.array(Sec).max(5000).optional(),
   })
   .strict();
 export type Asset = z.infer<typeof Asset>;
@@ -477,7 +479,8 @@ export type RenderJob =
   | { kind: 'probe'; url: string }
   | { kind: 'audio'; projectId: string; sampleRate: number }
   | { kind: 'cancel'; exportId: string }
-  | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number };
+  | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number }
+  | { kind: 'signatures'; projectId: string; assetId: string; times: number[] };
 
 /** Export choices: the shorter side in pixels (or the project's own size), frame rate, quality, file name. */
 export const ExportQuality = z.enum(['standard', 'high', 'best']);

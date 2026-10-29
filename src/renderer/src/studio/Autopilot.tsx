@@ -36,6 +36,12 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
       const r = await invoke('studio:beatSync', { id: project.id, every: beatEvery });
       ui.toast(`Put ${r.placed} clip${r.placed === 1 ? '' : 's'} on the beat${r.bpm ? ` (${Math.round(r.bpm)} BPM)` : ''}.`, 'success');
     });
+  const hasVideo = project.tracks.some((t) => t.clips.some((c) => c.type === 'media' && project.assets.find((a) => a.id === c.assetId)?.kind === 'video'));
+  const splitShots = () =>
+    run('shots', async () => {
+      const r = await invoke('studio:splitScenes', { id: project.id });
+      ui.toast(r.splits ? `Split at ${r.splits} shot change${r.splits === 1 ? '' : 's'}: each shot is its own clip now.` : 'No shot changes found: each video is one shot.', 'success');
+    });
   // Clips that start right where another clip ends on a video track (a cut).
   const cuts = project.tracks.flatMap((t) => (t.kind === 'video' ? t.clips.filter((c) => c.type === 'media' && t.clips.some((o) => o.id !== c.id && o.type === 'media' && Math.abs(o.start + o.duration - c.start) < 0.05)).map((c) => c.id) : []));
   const media = project.tracks.flatMap((t) => t.clips.filter((c) => c.type === 'media'));
@@ -128,6 +134,9 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
         </button>
         <button className="btn sm" disabled={working || !voices.length} onClick={() => void punchIns()} title="Jump closer at new sentences, like a second camera">
           <Icon name="film" size={13} /> Punch-ins
+        </button>
+        <button className="btn sm" disabled={working || !hasVideo} onClick={() => void splitShots()} title="Find where each video changes shot and split it there (found on this PC)">
+          <Icon name="film" size={13} /> Split at shots
         </button>
         <button className={`btn sm ${duckOn ? 'on' : ''}`} aria-pressed={duckOn} disabled={working || !music.length} onClick={() => void toggleDuck()} title={music.length ? 'Music quieter while someone speaks' : 'Add music on an audio track first'}>
           <Icon name="music" size={13} /> Duck music

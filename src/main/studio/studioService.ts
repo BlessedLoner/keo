@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
 import { applyEdits, describeProject, EditError, ExportOptions, exportSize, findClip, isAV, needsAnalysis, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -98,7 +99,7 @@ export class StudioService {
         const p = Project.parse(JSON.parse(fs.readFileSync(path.join(this.d.dir, f), 'utf8')));
         const first = p.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media').sort((x, y) => x.start - y.start)[0];
         const cover = (first?.type === 'media' ? p.assets.find((a) => a.id === first.assetId) : undefined) ?? p.assets.find((a) => a.kind !== 'audio') ?? null;
-        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined } : null });
+        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined, scenes: undefined } : null });
       } catch {
         /* a damaged file is left alone */
       }
@@ -497,7 +498,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -605,6 +606,65 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- shots inside a video
+
+  /** Where a video of the project changes shot (seconds into it): found on this PC once, then kept with the file. */
+  async detectScenes(id: string, assetId: string): Promise<number[]> {
+    const a = this.get(id).assets.find((x) => x.id === assetId);
+    if (!a || a.kind !== 'video') throw new StudioError('That is not a video of this project.');
+    if (a.scenes) return a.scenes;
+    // A fingerprint every quarter second (fewer for long videos), then frame by frame around each change.
+    const step = Math.max(0.25, a.duration / 4000);
+    const times: number[] = [];
+    for (let t = 0; t < a.duration - 0.02; t += step) times.push(Math.round(t * 1000) / 1000);
+    const sigs: number[][] = [];
+    for (let i = 0; i < times.length; i += 400) sigs.push(...(await this.runJob<number[][]>({ kind: 'signatures', projectId: id, assetId, times: times.slice(i, i + 400) }, 10 * 60_000)));
+    const candidates = sceneCandidates(times, sigs);
+    const scenes: number[] = [];
+    for (let i = 0; i < candidates.length; i += 40) {
+      const batch = candidates.slice(i, i + 40);
+      const fine = batch.map((c) => {
+        // Every frame from the last sample of the old shot up to the first of the new one (both included).
+        const list: number[] = [];
+        for (let k = 0; c.from + k / 30 < c.to - 1e-3; k++) list.push(Math.round((c.from + k / 30) * 1000) / 1000);
+        list.push(c.to);
+        return list;
+      });
+      const all = await this.runJob<number[][]>({ kind: 'signatures', projectId: id, assetId, times: fine.flat() }, 10 * 60_000);
+      let at = 0;
+      for (const list of fine) {
+        scenes.push(refineCut(list, all.slice(at, at + list.length)));
+        at += list.length;
+      }
+    }
+    this.learn(id, assetId, { scenes });
+    this.d.log.info('studio.scenes', { scenes: scenes.length });
+    return scenes;
+  }
+
+  /**
+   * Splits video clips where their shot changes (default: every video clip of the project), in one
+   * edit (one undo).
+   */
+  async splitScenes(id: string, clipIds?: string[]): Promise<{ project: Project; splits: number; clips: number }> {
+    const p = this.get(id);
+    const clips = p.tracks
+      .filter((t) => !t.locked)
+      .flatMap((t) => t.clips)
+      .filter((c): c is MediaClip => c.type === 'media' && (!clipIds || clipIds.includes(c.id)) && p.assets.find((a) => a.id === c.assetId)?.kind === 'video' && !c.freeze);
+    if (!clips.length) throw new StudioError(clipIds ? 'Those are not video clips Keo can split.' : 'There are no video clips to split.');
+    const ops: EditOp[] = [];
+    for (const c of clips) {
+      const cuts = await this.detectScenes(id, c.assetId);
+      // From the end backwards, so the clip being split keeps its id.
+      for (const at of sceneSplitTimes(c, cuts).sort((x, y) => y - x)) ops.push({ op: 'split', clip: c.id, at });
+    }
+    if (!ops.length) return { project: this.get(id), splits: 0, clips: clips.length };
+    const r = this.edit(id, ops);
+    this.d.log.info('studio.split_scenes', { splits: ops.length });
+    return { project: r.project, splits: ops.length, clips: clips.length };
   }
 
   // ---------------------------------------------------------------- music: beats
