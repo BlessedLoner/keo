@@ -1077,6 +1077,24 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const scVid = (await s.studio.importFiles(scP.id, [shFile])).added[0]!;
   s.studio.edit(scP.id, [{ op: 'add_media', assetId: scVid.id, start: 0 }]);
   const scSplit = await s.studio.splitScenes(scP.id);
+  // An adjustment layer: black and white over the picture for its first second only.
+  const adj = s.studio.create('Studio smoke adjust', 'square');
+  const adjPic = (await s.studio.importFiles(adj.id, [pic])).added[0]!;
+  s.studio.edit(adj.id, [
+    { op: 'set_project', width: 160, height: 160 },
+    { op: 'add_media', assetId: adjPic.id, start: 0, duration: 2 },
+    { op: 'add_adjust', start: 0, duration: 1, color: { saturation: -1 } },
+  ]);
+  const adjFrames = await s.studio.frames(adj.id, [0.5, 1.5], 160);
+  const spread = (png: Buffer) => {
+    const img = nativeImage.createFromBuffer(png);
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
+    return Math.max(bmp[at]!, bmp[at + 1]!, bmp[at + 2]!) - Math.min(bmp[at]!, bmp[at + 1]!, bmp[at + 2]!);
+  };
+  out.adjust = { during: spread(adjFrames[0]!.png), after: spread(adjFrames[1]!.png) };
+  s.studio.delete(adj.id);
   // Reverse: the same two-shot video played backwards (picture and sound) — red first, then the picture.
   const rv = s.studio.create('Studio smoke reverse', 'square');
   const rvVid = (await s.studio.importFiles(rv.id, [shFile])).added[0]!;

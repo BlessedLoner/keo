@@ -156,6 +156,7 @@
 .shape-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px; }
 .shape-row .btn { font-size: 14px; }
 .tl-clip.shape { background: linear-gradient(180deg, #b0476e, #8a2e52); }
+.tl-clip.adjust { background: repeating-linear-gradient(135deg, #2f6f73 0 8px, #285e62 8px 16px); }
 
 /* Tools row above the timeline (and the bar that resizes the timeline) */
 .tl-resize { height: 5px; cursor: ns-resize; background: transparent; border-top: 1px solid var(--line); margin-top: -1px; }

@@ -1,4 +1,4 @@
-import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type Asset, type Blend, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
+import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { chromaKey } from './chroma';
@@ -53,7 +53,12 @@ export function fadeAt(c: { start: number; duration: number; fadeIn: number; fad
 
 /** The visible clips at time t, bottom layer first. */
 export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip> {
-  const out: Array<MediaClip | TextClip | ShapeClip> = [];
+  return layersAt(p, t).filter((c): c is MediaClip | TextClip | ShapeClip => c.type !== 'adjust');
+}
+
+/** Everything drawn at time t, bottom layer first: the visible clips and adjustment layers. */
+export function layersAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip | AdjustClip> {
+  const out: Array<MediaClip | TextClip | ShapeClip | AdjustClip> = [];
   for (const tr of p.tracks) {
     if (tr.hidden || tr.kind === 'audio') continue;
     // During a transition both clips show: the one going out under the one coming in.
@@ -88,8 +93,9 @@ export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, 
   ctx.fillRect(0, 0, W, H);
   const roles = transitionRoles(p, t);
   let flash = 0;
-  for (const c of visibleAt(p, t)) {
-    if (c.type === 'media') {
+  for (const c of layersAt(p, t)) {
+    if (c.type === 'adjust') drawAdjust(ctx, c, t, W, H);
+    else if (c.type === 'media') {
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a) continue;
       const role = roles.get(c.id);
@@ -146,6 +152,52 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
   }
   // The visible box (media drawn larger than it is cut to it).
   return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
+}
+
+/** A copy of what is drawn so far (an adjustment layer changes it). */
+let under: OffscreenCanvas | null = null;
+
+/** An adjustment layer: everything under it, graded, blurred and with effects, mixed in by its strength. */
+function drawAdjust(ctx: CanvasRenderingContext2D, c: AdjustClip, t: number, W: number, H: number): void {
+  const amount = clamp(c.strength * fadeAt(c, t));
+  const g = c.color;
+  const graded = !!(g && (g.exposure || g.contrast || g.saturation));
+  if (amount <= 0 || !(graded || c.blur > 0 || g?.temperature || g?.vignette || c.effects)) return;
+  if (!under || under.width !== W || under.height !== H) under = new OffscreenCanvas(W, H);
+  const u = under.getContext('2d')!;
+  u.clearRect(0, 0, W, H);
+  u.drawImage(ctx.canvas, 0, 0);
+  const src = under as unknown as Drawable;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = amount;
+  const filters: string[] = [];
+  if (graded) filters.push(`brightness(${(1 + g!.exposure * 0.6).toFixed(3)}) contrast(${(1 + g!.contrast * 0.5).toFixed(3)}) saturate(${(1 + g!.saturation).toFixed(3)})`);
+  if (c.blur > 0) filters.push(`blur(${((c.blur / 100) * H).toFixed(1)}px)`);
+  const paint = (cx: CanvasRenderingContext2D) => cx.drawImage(under!, 0, 0, W, H);
+  if (filters.length) {
+    ctx.filter = filters.join(' ');
+    paint(ctx);
+    ctx.filter = 'none';
+  }
+  if (c.effects) drawEffects(ctx, c.effects, src, paint, 0, 0, W, H, t, H);
+  if (g?.temperature) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * amount);
+    ctx.fillStyle = g.temperature > 0 ? '#FF8A1E' : '#1E7BFF';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (g?.vignette) {
+    const r = Math.hypot(W, H) / 2;
+    const v = ctx.createRadialGradient(W / 2, H / 2, r * 0.45, W / 2, H / 2, r);
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, `rgba(0,0,0,${(g.vignette * 0.85).toFixed(3)})`);
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
 }
 
 /** Blend modes as the canvas names them. */

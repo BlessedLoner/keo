@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, BLENDS, VOICE_FX, VOICE_FX_LABEL, type Blend, type VoiceFx } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, VOICE_FX, VOICE_FX_LABEL, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -622,6 +622,9 @@ export function StudioView() {
         <button className="btn sm ghost" disabled={!selection.length} onClick={() => void edit(selection.map((clip) => ({ op: 'duplicate' as const, clip })))} title="Duplicate (Ctrl+D)">
           Duplicate
         </button>
+        <button className="btn sm ghost" disabled={duration === 0} onClick={() => void edit([{ op: 'add_adjust', start: Math.min(time, Math.max(0, duration - 0.5)), duration: Math.max(0.5, Math.min(3, duration - Math.min(time, Math.max(0, duration - 0.5)))), color: { contrast: 0.15, saturation: 0.1 } }])} title="An adjustment layer at the playhead: one colour grade, blur or effect over everything under it">
+          Adjust layer
+        </button>
         {sel?.clip.type === 'media' && project.assets.find((a) => a.id === (sel.clip as { assetId: string }).assetId)?.kind === 'video' && (
           <>
             <button className="btn sm ghost" disabled={time < sel.clip.start || time > sel.clip.start + sel.clip.duration} onClick={() => void edit([{ op: 'freeze', clip: sel.clip.id, at: time, duration: 2 }])} title="Hold the frame at the playhead for 2 seconds">
@@ -794,7 +797,7 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
   return (
     <div className="inspector">
       <div className="studio-pane-head">
-        <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
+        <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : clip.type === 'adjust' ? 'Adjustment layer' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
       </div>
       {asset && <p className="small muted insp-name">{asset.name}</p>}
       {isAV(clip) && (
@@ -872,14 +875,25 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
           )}
         </Section>
       )}
-      {clip.type === 'media' && <ColorFields clip={clip} set={set} />}
+      {clip.type === 'adjust' && (
+        <Section title="Adjustment">
+          <p className="small muted">Changes everything under it (videos, pictures, elements) while it is on the timeline; titles and captions above it stay as they are.</p>
+          <div className="insp-grid">
+            <Num label="Strength" value={Math.round(clip.strength * 100)} min={0} max={100} step={5} suffix="%" onCommit={(v) => set({ strength: v / 100 })} />
+            <Num label="Blur" value={clip.blur} min={0} max={20} step={0.5} suffix="%" onCommit={(v) => set({ blur: v })} />
+            <Num label="Fade in" value={clip.fadeIn} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeIn: v })} />
+            <Num label="Fade out" value={clip.fadeOut} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeOut: v })} />
+          </div>
+        </Section>
+      )}
+      {(clip.type === 'media' || clip.type === 'adjust') && <ColorFields clip={clip} set={set} />}
       {clip.type === 'text' && <TextFields clip={clip} set={set} />}
       {clip.type === 'text' && (
         <Section title="Voice">
           <ReadAloud projectId={project.id} clipId={clip.id} />
         </Section>
       )}
-      {clip.type !== 'audio' && (
+      {clip.type !== 'audio' && clip.type !== 'adjust' && (
         <Section title="Position">
           {clip.type === 'media' && (
             <div className="insp-seg" role="radiogroup" aria-label="Fit">
@@ -926,14 +940,14 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
       {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
       {clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
-      {clip.type === 'media' && <EffectsFields clip={clip} set={set} />}
+      {(clip.type === 'media' || clip.type === 'adjust') && <EffectsFields clip={clip} set={set} />}
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
-      {clip.type !== 'audio' && <MotionFields clip={clip} set={set} />}
+      {clip.type !== 'audio' && clip.type !== 'adjust' && <MotionFields clip={clip} set={set} />}
     </div>
   );
 }
 
-function ColorFields({ clip, set }: { clip: MediaClip; set: (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => void }) {
+function ColorFields({ clip, set }: { clip: MediaClip | AdjustClip; set: (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => void }) {
   const g = clip.color ?? { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
   const field = (k: keyof typeof g, label: string, min = -1) => (
     <label className="insp-range" key={`${clip.id}-${k}-${g[k]}`}>
@@ -961,7 +975,7 @@ function ColorFields({ clip, set }: { clip: MediaClip; set: (patch: Omit<Extract
           Reset colour
         </button>
       )}
-      {!!clip.zooms?.length && (
+      {clip.type === 'media' && !!clip.zooms?.length && (
         <button className="btn sm ghost" onClick={() => set({ zooms: null })}>
           Remove zooms ({clip.zooms.length})
         </button>

@@ -220,3 +220,22 @@ describe('Studio editing: volume keyframes', () => {
     expect(videos(applyEdits(a, [{ op: 'set', clip: id, volumeKeys: null }], { rand }).project)[0]).not.toHaveProperty('volumeKeys');
   });
 });
+
+describe('Studio editing: adjustment layers', () => {
+  it('sits above the videos and graphics, under titles, and can be tuned', () => {
+    let p = withClip();
+    p = applyEdits(p, [{ op: 'add_text', text: 'Title', start: 0, duration: 2 }, { op: 'add_shape', shape: 'rect', start: 0, duration: 2 }], { rand }).project;
+    p = applyEdits(p, [{ op: 'add_adjust', start: 1, duration: 3, color: { saturation: -1 }, effects: { grain: 0.4 } }], { rand }).project;
+    expect(p.tracks.map((t) => t.name)).toEqual(['Video', 'Graphics', 'Adjustments', 'Text', 'Audio']);
+    const id = p.tracks[2]!.clips[0]!.id;
+    expect(p.tracks[2]!.clips[0]).toMatchObject({ type: 'adjust', start: 1, duration: 3, strength: 1, blur: 0, color: { saturation: -1 }, effects: { grain: 0.4 } });
+    p = applyEdits(p, [{ op: 'set', clip: id, blur: 4, strength: 0.5, fadeIn: 0.5, effects: { grain: null, vhs: 0.3 } }], { rand }).project;
+    expect(p.tracks[2]!.clips[0]).toMatchObject({ blur: 4, strength: 0.5, fadeIn: 0.5, effects: { vhs: 0.3 } });
+    expect(describeProject(p)).toMatch(/adjustment layer colour saturation -1 effects vhs 0.3 blur 4 strength 0.5/);
+    // Blur and strength are for adjustment layers only.
+    expect(() => applyEdits(p, [{ op: 'set', clip: videos(p)[0]!.id, strength: 0.2 }], { rand })).toThrow(/strength/);
+    // Cutting time moves it like any clip.
+    p = applyEdits(p, [{ op: 'cut_range', from: 0, to: 0.5 }], { rand }).project;
+    expect(p.tracks[2]!.clips[0]!.start).toBe(0.5);
+  });
+});

@@ -171,6 +171,7 @@ export function Timeline({
   const label = (c: Clip) => {
     if (c.type === 'text') return c.counter ? `${c.counter.prefix}${c.counter.to}${c.counter.suffix}` : c.text;
     if (c.type === 'shape') return c.shape[0]!.toUpperCase() + c.shape.slice(1);
+    if (c.type === 'adjust') return 'Adjustment';
     return project.assets.find((a) => a.id === c.assetId)?.name ?? 'Media';
   };
 
@@ -343,9 +344,9 @@ export function Timeline({
                     else setDrag({ kind: edge, clip: c, track: t, dx: 0, startX: e.clientX });
                   }}
                 >
-                  {c.type !== 'text' && c.type !== 'shape' && <ClipBody projectId={project.id} clip={c} asset={project.assets.find((a) => a.id === c.assetId)} width={w.width} pps={pps} height={ROW_H[t.kind] - 8} />}
+                  {(c.type === 'media' || c.type === 'audio') && <ClipBody projectId={project.id} clip={c} asset={project.assets.find((a) => a.id === c.assetId)} width={w.width} pps={pps} height={ROW_H[t.kind] - 8} />}
                   {(c.type === 'media' || c.type === 'audio') && selected === c.id && <FadeHandles clip={c} pps={pps} onEdit={onEdit} />}
-                  {c.type !== 'audio' &&
+                  {c.type !== 'audio' && c.type !== 'adjust' &&
                     !!c.keys &&
                     [...new Set(Object.values(c.keys).flatMap((list) => (list ?? []).map((k) => k.at)))]
                       .filter((at) => at <= c.duration + 1e-6)

@@ -56,7 +56,7 @@ type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: nu
 
 /** The edit that puts a layer's position, scale or rotation at these values at the playhead (a keyframe when that property is animated). */
 function placeOps(clip: Clip, rt: number, fps: number, v: Omit<Patch, 'id'>): EditOp[] {
-  if (clip.type === 'audio') return [];
+  if (clip.type === 'audio' || clip.type === 'adjust') return [];
   const keys: Partial<Record<KeyProp, Key[]>> = {};
   const transform: Record<string, number> = {};
   for (const [k, val] of Object.entries(v) as Array<[KeyProp, number | undefined]>) {
@@ -120,7 +120,7 @@ export function Preview({
     if (!patch) return project;
     const p = structuredClone(project);
     const f = findClip(p, patch.id);
-    if (f && f.clip.type !== 'audio') {
+    if (f && f.clip.type !== 'audio' && f.clip.type !== 'adjust') {
       const c = f.clip;
       for (const k of ['x', 'y', 'scale', 'rotation'] as const) {
         if (patch[k] === undefined) continue;
@@ -300,7 +300,7 @@ export function Preview({
     e.stopPropagation();
     e.preventDefault();
     const f = findClip(project, b.id);
-    if (!f || f.clip.type === 'audio') return;
+    if (!f || f.clip.type === 'audio' || f.clip.type === 'adjust') return;
     const p = toCanvas(e);
     const W = canvas.current!.width;
     const H = canvas.current!.height;

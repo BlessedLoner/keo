@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
-import { keyValue, MOTIONS, TRANSITIONS, volumeAt, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { keyValue, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -188,7 +188,7 @@ export function ChromaFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch
 }
 
 /** Effects over the picture, each with a strength. */
-export function EffectsFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
+export function EffectsFields({ clip, set }: { clip: MediaClip | AdjustClip; set: (p: SetPatch) => void }) {
   const fx = clip.effects ?? {};
   const rows: Array<[keyof NonNullable<MediaClip['effects']>, string]> = [
     ['grain', 'Film grain'],

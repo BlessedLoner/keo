@@ -424,7 +424,29 @@ export const AudioClip = z
   .strict();
 export type AudioClip = z.infer<typeof AudioClip>;
 
-export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip]);
+/**
+ * An adjustment layer: a colour grade, effects and blur laid over everything under it (videos,
+ * pictures, elements) while it is on the timeline. Lives on the Adjustments track.
+ */
+export const AdjustClip = z
+  .object({
+    id: Id,
+    type: z.literal('adjust'),
+    start: Sec,
+    duration: z.number().min(0.04).max(24 * 3600),
+    ...Fades,
+    /** How much of the adjustment shows (0..1). */
+    strength: z.number().min(0).max(1).default(1),
+    color: ColorGrade.optional(),
+    effects: Effects.optional(),
+    /** Blur of everything under it (percent of the frame height). */
+    blur: z.number().min(0).max(20).default(0),
+  })
+  .strict();
+export type AdjustClip = z.infer<typeof AdjustClip>;
+export const ADJUST_TRACK = 'Adjustments';
+
+export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip, AdjustClip]);
 export type Clip = z.infer<typeof Clip>;
 /** Clips with media behind them (video, picture or sound). */
 export const isAV = (c: Clip): c is MediaClip | AudioClip => c.type === 'media' || c.type === 'audio';
@@ -672,8 +694,23 @@ export const EditOp = z.discriminatedUnion('op', [
       chroma: Chroma.partial().nullable().optional(),
       /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
       effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
+      /** Adjustment layers: blur of everything under it, and how much of it shows. */
+      blur: z.number().min(0).max(20).optional(),
+      strength: z.number().min(0).max(1).optional(),
       /** A speed curve: points, a preset's name, or null for steady speed again. */
       speedCurve: z.union([z.array(SpeedPoint).min(2).max(16), z.enum(['montage', 'hero', 'bullet', 'flash-in', 'flash-out', 'jump-cut'])]).nullable().optional(),
+    })
+    .strict(),
+  /** An adjustment layer (colour, effects, blur over everything under it) on the Adjustments track (made above the videos and graphics, under text). */
+  z
+    .object({
+      op: z.literal('add_adjust'),
+      start: Sec,
+      duration: z.number().min(0.04).max(24 * 3600),
+      color: ColorGrade.partial().optional(),
+      effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1)).optional(),
+      blur: z.number().min(0).max(20).optional(),
+      strength: z.number().min(0).max(1).optional(),
     })
     .strict(),
   /** An element (shape) on an overlay track: by default the Graphics track, made above the videos when missing. */
@@ -899,7 +936,7 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
  */
 function shiftInto(c: Clip, by: number, length: number): void {
   if (isAV(c) && c.volumeKeys?.length) c.volumeKeys = shiftKeys(c.volumeKeys, by, length);
-  if (c.type !== 'audio' && c.keys) {
+  if (c.type !== 'audio' && c.type !== 'adjust' && c.keys) {
     // Each keyframed property: its value at the new start, then the keyframes after it.
     const keys: Keys = {};
     for (const k of KEY_PROPS) {
@@ -1407,8 +1444,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           else m.backdrop = op.backdrop;
         }
         if (op.effects !== undefined) {
-          only('effects (videos and pictures)', c.type === 'media');
-          const m = c as MediaClip;
+          only('effects (videos, pictures and adjustment layers)', c.type === 'media' || c.type === 'adjust');
+          const m = c as MediaClip | AdjustClip;
           const next: Record<string, number> = op.effects === null ? {} : { ...(m.effects ?? {}) };
           if (op.effects) for (const [k, v] of Object.entries(op.effects)) if (v) next[k] = v;
           else delete next[k];
@@ -1435,8 +1472,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         }
         for (const k of ['fadeIn', 'fadeOut'] as const)
           if (op[k] !== undefined) {
-            only('fades', isAV(c));
-            (c as MediaClip | AudioClip)[k] = op[k]!;
+            only('fades', isAV(c) || c.type === 'adjust');
+            (c as MediaClip | AudioClip | AdjustClip)[k] = op[k]!;
+          }
+        for (const k of ['blur', 'strength'] as const)
+          if (op[k] !== undefined) {
+            only(k === 'blur' ? 'blur (adjustment layers; use keys.blur for a clip)' : 'strength (adjustment layers)', c.type === 'adjust');
+            (c as AdjustClip)[k] = op[k]!;
           }
         if (op.fit) {
           only('fit', c.type === 'media');
@@ -1448,8 +1490,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
             ((c as TextClip)[k] as unknown) = op[k];
           }
         if (op.color !== undefined) {
-          only('colour', c.type === 'media');
-          const m = c as MediaClip;
+          only('colour', c.type === 'media' || c.type === 'adjust');
+          const m = c as MediaClip | AdjustClip;
           if (op.color === null) delete m.color;
           else m.color = ColorGrade.parse({ ...(m.color ?? {}), ...op.color });
         }
@@ -1561,6 +1603,31 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         t.clips.push(c);
         sortClips(t);
         changes.push(`Added a ${op.shape} at ${c.start}s on ${t.name} (${c.id}).`);
+        break;
+      }
+      case 'add_adjust': {
+        let t = p.tracks.find((x) => x.kind === 'text' && x.name === ADJUST_TRACK);
+        if (!t) {
+          t = { id: rid('tr', rand), kind: 'text', name: ADJUST_TRACK, hidden: false, muted: false, clips: [] };
+          // Above the videos and graphics, under titles and captions (they stay sharp and true).
+          const firstText = p.tracks.findIndex((x) => x.kind === 'text' && x.name !== GRAPHICS_TRACK);
+          p.tracks.splice(firstText < 0 ? p.tracks.length : firstText, 0, t);
+        }
+        if (t.locked) throw new EditError(`The track ${t.name} is locked: unlock it first (set_track locked false).`);
+        const fx = Object.fromEntries(Object.entries(op.effects ?? {}).filter(([, v]) => v));
+        const c = AdjustClip.parse({
+          id: rid('cl', rand),
+          type: 'adjust',
+          start: round(op.start),
+          duration: round(op.duration),
+          ...(op.color ? { color: ColorGrade.parse(op.color) } : {}),
+          ...(Object.keys(fx).length ? { effects: fx } : {}),
+          ...(op.blur !== undefined ? { blur: op.blur } : {}),
+          ...(op.strength !== undefined ? { strength: op.strength } : {}),
+        });
+        t.clips.push(c);
+        sortClips(t);
+        changes.push(`Added an adjustment layer at ${c.start}s for ${c.duration}s (${c.id}).`);
         break;
       }
       case 'add_captions': {
@@ -1714,7 +1781,11 @@ export function describeProject(p: Project): string {
       const span = `${round(c.start)}–${round(clipEnd(c))}s`;
       if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}${c.counter ? ` counter ${c.counter.from}→${c.counter.to}` : ''}${motionNote(c)}`);
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
-      else {
+      else if (c.type === 'adjust') {
+        const g = c.color ? Object.entries(c.color).filter(([, v]) => v).map(([k, v]) => `${k} ${round(v)}`) : [];
+        const fx = c.effects ? Object.entries(c.effects).map(([k, v]) => `${k} ${round(v ?? 0)}`) : [];
+        lines.push(`  ${c.id} ${span} adjustment layer${g.length ? ` colour ${g.join(', ')}` : ''}${fx.length ? ` effects ${fx.join(', ')}` : ''}${c.blur ? ` blur ${c.blur}` : ''}${c.strength !== 1 ? ` strength ${c.strength}` : ''}`);
+      } else {
         const a = p.assets.find((x) => x.id === c.assetId);
         lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
