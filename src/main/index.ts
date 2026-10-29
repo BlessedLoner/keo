@@ -1021,6 +1021,10 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   for (const c of now.tracks.flatMap((t) => t.clips))
     if (c.type === 'media') ops.push({ op: 'set', clip: c.id, voice: true, color: { ...LOOKS.warm }, zooms: [{ at: 0, scale: 1, x: 0.5, y: 0.5, ease: 'cut' }, { at: c.duration, scale: 1.15, x: 0.5, y: 0.5, ease: 'ramp' }] });
   ops.push({ op: 'add_audio', assetId: fx.asset.id, trackName: 'Effects', start: 0.3, volume: 0.6 });
+  // A crossfade between the two halves of the split video, and the first half cropped.
+  const halves = now.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media');
+  if (halves[1]) ops.push({ op: 'set', clip: halves[1].id, transition: { kind: 'crossfade', seconds: 0.5 } });
+  if (halves[0]) ops.push({ op: 'set', clip: halves[0].id, crop: { left: 0.1, right: 0.1 } });
   s.studio.edit(b.id, ops);
   const cleaned = await s.studio.cleanup(b.id, { silences: true });
   const third = await s.studio.exportVideo(b.id);

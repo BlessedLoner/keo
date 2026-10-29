@@ -11,7 +11,7 @@ import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
-import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields } from '../studio/MotionFields';
+import { CounterFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -747,6 +747,7 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
         </Section>
       )}
       {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
+      {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} set={set} />}
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
       {clip.type !== 'audio' && <MotionFields clip={clip} set={set} />}

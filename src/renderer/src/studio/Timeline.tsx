@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { clipEnd, projectDuration, type Asset, type Clip, type EditOp, type Project, type Track } from '@shared/studio';
+import { clipEnd, projectDuration, TRANSITIONS, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useFilmstrip, useWaveform } from './thumbs';
 
@@ -12,6 +12,18 @@ import { useFilmstrip, useWaveform } from './thumbs';
 const LABEL_W = 132;
 const ROW_H: Record<Track['kind'], number> = { video: 64, text: 36, audio: 46 };
 const SNAP_PX = 8;
+
+export const TRANSITION_LABEL: Record<Transition['kind'], string> = {
+  crossfade: 'Crossfade',
+  slide: 'Slide in',
+  push: 'Push',
+  zoom: 'Zoom through',
+  whip: 'Whip',
+  wipe: 'Wipe',
+  blur: 'Blur',
+  flash: 'Flash (white)',
+  dip: 'Dip to black',
+};
 
 type Drag =
   | { kind: 'move'; clip: Clip; track: Track; dx: number; startX: number; startY: number; targetTrack: string }
@@ -43,6 +55,13 @@ export function Timeline({
   height?: number;
 }) {
   const area = useRef<HTMLDivElement>(null);
+  const [cutMenu, setCutMenu] = useState<{ clip: string; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!cutMenu) return;
+    const close = () => setCutMenu(null);
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [cutMenu]);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
   dragRef.current = drag;
@@ -258,6 +277,28 @@ export function Timeline({
                 </button>
               )}
             </div>
+            {t.kind === 'video' &&
+              t.clips.map((c) => {
+                if (c.type !== 'media') return null;
+                const prev = t.clips.find((o) => o.type === 'media' && o.id !== c.id && Math.abs(clipEnd(o) - c.start) < 0.05);
+                if (!prev) return null;
+                const lane = lanesOf(t).lane.get(c.id) ?? 0;
+                return (
+                  <button
+                    key={`cut-${c.id}`}
+                    className={`tl-cut ${c.transition ? 'on' : ''}`}
+                    style={{ left: LABEL_W + c.start * pps, top: 4 + lane * ROW_H[t.kind] + (ROW_H[t.kind] - 8) / 2 }}
+                    title={c.transition ? `Transition: ${TRANSITION_LABEL[c.transition.kind]} (${c.transition.seconds}s) — click to change` : 'Add a transition here'}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCutMenu({ clip: c.id, x: e.clientX, y: e.clientY });
+                    }}
+                  >
+                    {c.transition ? '⧓' : '+'}
+                  </button>
+                );
+              })}
             {t.clips.map((c) => {
               const w = where(c, t);
               const lane = lanesOf(t).lane.get(c.id) ?? 0;
@@ -288,6 +329,30 @@ export function Timeline({
           </div>
         ))}
         <div className="tl-playhead" style={{ left: LABEL_W + time * pps }} />
+        {cutMenu && (
+          <div className="tl-menu" style={{ left: cutMenu.x, top: cutMenu.y }} onPointerDown={(e) => e.stopPropagation()}>
+            {TRANSITIONS.map((k) => (
+              <button
+                key={k}
+                onClick={() => {
+                  onEdit([{ op: 'set', clip: cutMenu.clip, transition: { kind: k, seconds: k === 'whip' || k === 'flash' ? 0.35 : 0.6 } }]);
+                  setCutMenu(null);
+                }}
+              >
+                {TRANSITION_LABEL[k]}
+              </button>
+            ))}
+            <button
+              className="none"
+              onClick={() => {
+                onEdit([{ op: 'set', clip: cutMenu.clip, transition: null }]);
+                setCutMenu(null);
+              }}
+            >
+              No transition
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

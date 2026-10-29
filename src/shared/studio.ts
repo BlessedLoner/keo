@@ -154,6 +154,17 @@ export type TextStyle = z.infer<typeof TextStyle>;
 
 const Fades = { fadeIn: z.number().min(0).max(30).default(0), fadeOut: z.number().min(0).max(30).default(0) };
 
+/** Edges cut off a video or picture: fractions of its width (left, right) and height (top, bottom). */
+export const Crop = z
+  .object({ left: z.number().min(0).max(0.45).default(0), top: z.number().min(0).max(0.45).default(0), right: z.number().min(0).max(0.45).default(0), bottom: z.number().min(0).max(0.45).default(0) })
+  .strict();
+export type Crop = z.infer<typeof Crop>;
+
+/** Transitions between two clips that touch on a track: the change is centred on the cut. */
+export const TRANSITIONS = ['crossfade', 'slide', 'push', 'zoom', 'whip', 'wipe', 'blur', 'flash', 'dip'] as const;
+export const Transition = z.object({ kind: z.enum(TRANSITIONS), seconds: z.number().min(0.1).max(3).default(0.5) }).strict();
+export type Transition = z.infer<typeof Transition>;
+
 export const MediaClip = z
   .object({
     id: Id,
@@ -176,6 +187,10 @@ export const MediaClip = z
     voice: z.boolean().default(false),
     /** A still: the frame at `in` held for the whole clip (no sound). */
     freeze: z.boolean().optional(),
+    /** How this clip takes over from the clip just before it on its track (both show during the change). */
+    transition: Transition.optional(),
+    /** Edges cut off the picture (fractions of its width and height). */
+    crop: Crop.optional(),
     mask: Mask.optional(),
     frame: DeviceFrame.optional(),
     /** A drop shadow under the layer (0: none). */
@@ -491,6 +506,8 @@ export const EditOp = z.discriminatedUnion('op', [
       counter: Counter.nullable().optional(),
       shapeStyle: ShapeStyle.partial().optional(),
       shape: ShapeKind.optional(),
+      transition: Transition.nullable().optional(),
+      crop: Crop.partial().nullable().optional(),
     })
     .strict(),
   /** An element (shape) on an overlay track: by default the Graphics track, made above the videos when missing. */
@@ -1032,6 +1049,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (isAV(c)) c.fadeOut = 0;
         c.duration = first;
         shiftInto(second, first, second.duration);
+        if (second.type === 'media') delete second.transition;
         shiftInto(c, 0, first);
         f.track.clips.splice(f.index + 1, 0, second);
         changes.push(`Split ${c.id} at ${op.at}s (new part ${second.id}).`);
@@ -1165,6 +1183,19 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const tc = c as TextClip;
           if (op.counter === null) delete tc.counter;
           else tc.counter = op.counter;
+        }
+        if (op.crop !== undefined) {
+          only('crop (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          const next = op.crop === null ? null : Crop.parse({ ...(m.crop ?? {}), ...op.crop });
+          if (!next || (!next.left && !next.top && !next.right && !next.bottom)) delete m.crop;
+          else m.crop = next;
+        }
+        if (op.transition !== undefined) {
+          only('transition (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          if (op.transition === null) delete m.transition;
+          else m.transition = op.transition;
         }
         if (op.shapeStyle || op.shape) {
           only('shape', c.type === 'shape');
@@ -1309,6 +1340,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
               b.fadeIn = 0;
             }
             shiftInto(b, skipped, b.duration);
+            if (b.type === 'media' && before >= 0.04) delete b.transition;
             out.push(b);
           }
         }
@@ -1329,6 +1361,9 @@ function motionNote(c: MediaClip | TextClip | ShapeClip): string {
   if (keyed.length) parts.push(`keyframes ${keyed.join('/')}`);
   if (c.type === 'media' && c.mask) parts.push(`${c.mask.shape} mask`);
   if (c.type === 'media' && c.frame) parts.push(`in a ${c.frame}`);
+  if (c.type === 'media' && c.transition) parts.push(`${c.transition.kind} transition in`);
+  if (c.type === 'media' && c.crop) parts.push('cropped');
+  if (c.type === 'media' && c.freeze) parts.push('freeze frame');
   return parts.length ? ` [${parts.join(', ')}]` : '';
 }
 
@@ -1348,4 +1383,20 @@ export function describeProject(p: Project): string {
     }
   });
   return lines.join('\n');
+}
+
+/**
+ * The transition under way on a track at t: the clip going out, the clip coming in, and how far
+ * along it is (0..1). Both clips show for the transition's length, centred on the cut.
+ */
+export function trackTransition(tr: Track, t: number): { out: MediaClip; in: MediaClip; p: number; kind: Transition['kind'] } | null {
+  for (const c of tr.clips) {
+    if (c.type !== 'media' || !c.transition) continue;
+    const prev = tr.clips.find((o) => o.type === 'media' && o.id !== c.id && Math.abs(o.start + o.duration - c.start) < 0.05) as MediaClip | undefined;
+    if (!prev) continue;
+    const d = Math.min(c.transition.seconds, prev.duration, c.duration);
+    const from = c.start - d / 2;
+    if (t >= from && t < from + d) return { out: prev, in: c, p: (t - from) / d, kind: c.transition.kind };
+  }
+  return null;
 }

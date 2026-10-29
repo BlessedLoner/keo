@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { keyValue, MOTIONS, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { TRANSITION_LABEL } from './Timeline';
+import { keyValue, MOTIONS, TRANSITIONS, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -125,6 +126,30 @@ export function MotionFields({ clip, set }: { clip: Visual; set: (p: SetPatch) =
   );
 }
 
+/** How this clip takes over from the one before it on its track. */
+export function TransitionFields({ clip, hasBefore, set }: { clip: MediaClip; hasBefore: boolean; set: (p: SetPatch) => void }) {
+  const tr = clip.transition;
+  return (
+    <Section title="Transition in">
+      {!hasBefore && <p className="small muted" style={{ margin: '0 0 6px' }}>Works when another clip ends right where this one starts on the same track.</p>}
+      <div className="insp-grid">
+        <label className="insp-num">
+          <span>Kind</span>
+          <select className="select" value={tr?.kind ?? 'none'} onChange={(e) => set({ transition: e.target.value === 'none' ? null : { kind: e.target.value as NonNullable<MediaClip['transition']>['kind'], seconds: tr?.seconds ?? 0.6 } })}>
+            <option value="none">None (cut)</option>
+            {TRANSITIONS.map((k) => (
+              <option key={k} value={k}>
+                {TRANSITION_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {tr && <Num label="Seconds" value={tr.seconds} min={0.1} max={3} step={0.05} suffix="s" onCommit={(v) => set({ transition: { ...tr, seconds: v } })} />}
+      </div>
+    </Section>
+  );
+}
+
 /** Masks, device mock-ups and a shadow for videos and pictures. */
 export function FrameFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
   return (
@@ -150,6 +175,17 @@ export function FrameFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch)
         {clip.mask?.shape === 'rounded' && <Num label="Corners" value={clip.mask.radius * 100} min={0} max={50} step={1} suffix="%" onCommit={(v) => set({ mask: { ...clip.mask!, radius: v / 100 } })} />}
         <Num label="Shadow" value={clip.shadow} min={0} max={60} step={2} onCommit={(v) => set({ shadow: v })} />
       </div>
+      <h4 style={{ margin: '12px 0 8px' }}>Crop</h4>
+      <div className="insp-grid">
+        {(['left', 'right', 'top', 'bottom'] as const).map((k) => (
+          <Num key={k} label={k[0]!.toUpperCase() + k.slice(1)} value={(clip.crop?.[k] ?? 0) * 100} min={0} max={45} step={1} suffix="%" onCommit={(v) => set({ crop: { [k]: v / 100 } })} />
+        ))}
+      </div>
+      {clip.crop && (
+        <button className="btn sm ghost" onClick={() => set({ crop: null })}>
+          Reset crop
+        </button>
+      )}
     </Section>
   );
 }

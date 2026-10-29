@@ -1,6 +1,6 @@
 import { bridged, clipEnd, duckGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
 import { invoke } from '../lib/api';
-import { sourceTime, type Drawable, type SourceProvider } from './engine';
+import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
 import { voiceChain } from './sound';
 
 /** A project's media file, served by Keo's own protocol (only media that is in the project). */
@@ -83,6 +83,8 @@ export class PreviewSources implements SourceProvider {
 
   /** Puts every clip's media where the playhead is (playing or paused). */
   sync(p: Project, t: number, playing: boolean): void {
+    // Clips shown at t, including both clips of a transition.
+    const shownNow = new Set(visibleAt(p, t).map((c) => c.id));
     let speech = this.speech.get(p);
     if (!speech) {
       speech = bridged(timelineSpeech(p));
@@ -92,7 +94,8 @@ export class PreviewSources implements SourceProvider {
     const activeSounds = new Set<string>();
     for (const tr of p.tracks) {
       for (const c of tr.clips) {
-        if (!isAV(c) || t < c.start || t >= clipEnd(c)) continue;
+        const outside = t < c.start || t >= clipEnd(c);
+        if (!isAV(c) || (outside && !shownNow.has(c.id))) continue;
         const a = p.assets.find((x) => x.id === c.assetId);
         if (!a || a.kind === 'image') continue;
         const target = c.type === 'media' ? sourceTime(c, a, t) : Math.min(a.duration, c.in + (t - c.start));
@@ -114,7 +117,7 @@ export class PreviewSources implements SourceProvider {
           activeSounds.add(c.id);
         }
         const fade = Math.min(c.fadeIn > 0 ? Math.min(1, (t - c.start) / c.fadeIn) : 1, c.fadeOut > 0 ? Math.min(1, (clipEnd(c) - t) / c.fadeOut) : 1);
-        el.muted = tr.muted || !a.hasAudio;
+        el.muted = tr.muted || !a.hasAudio || outside;
         const duck = c.type === 'audio' && c.duck !== null ? duckGain(speech, t, c.duck) : 1;
         const level = Math.max(0, c.volume * fade * duck);
         if (c.voice || this.routes.has(el)) {

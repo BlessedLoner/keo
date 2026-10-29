@@ -1,4 +1,4 @@
-import { clipEnd, EASES, zoomAt, type Asset, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { clipEnd, EASES, trackTransition, zoomAt, type Asset, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { drawDevice, drawNotch, drawShape } from './shapes';
@@ -52,9 +52,25 @@ export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip | S
   const out: Array<MediaClip | TextClip | ShapeClip> = [];
   for (const tr of p.tracks) {
     if (tr.hidden || tr.kind === 'audio') continue;
-    for (const c of tr.clips) if (c.type !== 'audio' && t >= c.start - 1e-6 && t < clipEnd(c) - 1e-6) out.push(c);
+    // During a transition both clips show: the one going out under the one coming in.
+    const x = tr.kind === 'video' ? trackTransition(tr, t) : null;
+    for (const c of tr.clips) if (c.type !== 'audio' && c !== x?.out && c !== x?.in && t >= c.start - 1e-6 && t < clipEnd(c) - 1e-6) out.push(c);
+    if (x) out.push(x.out, x.in);
   }
   return out;
+}
+
+/** Each clip's part in a transition under way at t (going out or coming in, and how far along). */
+export function transitionRoles(p: Project, t: number): Map<string, { as: 'out' | 'in'; p: number; kind: Transition['kind'] }> {
+  const roles = new Map<string, { as: 'out' | 'in'; p: number; kind: Transition['kind'] }>();
+  for (const tr of p.tracks) {
+    if (tr.hidden || tr.kind !== 'video') continue;
+    const x = trackTransition(tr, t);
+    if (!x) continue;
+    roles.set(x.out.id, { as: 'out', p: x.p, kind: x.kind });
+    roles.set(x.in.id, { as: 'in', p: x.p, kind: x.kind });
+  }
+  return roles;
 }
 
 export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, sources: SourceProvider): void {
@@ -66,14 +82,28 @@ export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, 
   ctx.filter = 'none';
   ctx.fillStyle = p.background.slice(0, 7);
   ctx.fillRect(0, 0, W, H);
+  const roles = transitionRoles(p, t);
+  let flash = 0;
   for (const c of visibleAt(p, t)) {
     if (c.type === 'media') {
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a) continue;
+      const role = roles.get(c.id);
+      // Flash and dip change over at the middle: before it only the old clip, after it only the new one.
+      if (role && (role.kind === 'flash' || role.kind === 'dip') && ((role.as === 'out' && role.p >= 0.5) || (role.as === 'in' && role.p < 0.5))) continue;
       const src = sources.frame(c, a, sourceTime(c, a, t));
-      if (src) drawMedia(ctx, c, src, fadeAt(c, t), t, W, H);
+      if (src) drawMedia(ctx, c, src, role ? 1 : fadeAt(c, t), t, W, H, role);
+      if (role?.as === 'in' && (role.kind === 'flash' || role.kind === 'dip')) flash = role.kind === 'flash' ? 1 - Math.abs(role.p - 0.5) * 2 : -(1 - Math.abs(role.p - 0.5) * 2);
     } else if (c.type === 'shape') drawShape(ctx, c, motionAt(c, t, H), W, H);
     else drawText(ctx, c, t, W, H);
+  }
+  // Flash: white at the cut; dip: black at the cut.
+  if (flash !== 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, Math.abs(flash));
+    ctx.fillStyle = flash > 0 ? '#FFFFFF' : '#000000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -114,10 +144,56 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
   return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number): void {
-  const { w, h } = sizeOf(src);
+function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, fade: number, t: number, W: number, H: number, role?: { as: 'out' | 'in'; p: number; kind: Transition['kind'] }): void {
+  const full = sizeOf(src);
+  // Cropped: only the part inside the crop is drawn (and sized).
+  const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
+  const sx = full.w * cr.left;
+  const sy = full.h * cr.top;
+  const w = Math.max(1, full.w * (1 - cr.left - cr.right));
+  const h = Math.max(1, full.h * (1 - cr.top - cr.bottom));
   const rt = t - c.start;
   const m = motionAt(c, t, H);
+  if (role) {
+    // The change from one clip to the next.
+    const e = EASES['in-out'](role.p);
+    const out = role.as === 'out';
+    switch (role.kind) {
+      case 'crossfade':
+        if (!out) m.opacity *= e;
+        break;
+      case 'slide':
+        if (!out) m.x += 1 - e;
+        break;
+      case 'push':
+        m.x += out ? -e : 1 - e;
+        break;
+      case 'zoom':
+        if (out) {
+          m.scaleX *= 1 + e * 0.6;
+          m.scaleY *= 1 + e * 0.6;
+          m.opacity *= 1 - e;
+        } else {
+          m.scaleX *= 0.7 + 0.3 * e;
+          m.scaleY *= 0.7 + 0.3 * e;
+          m.opacity *= e;
+        }
+        break;
+      case 'whip':
+        m.x += out ? -e * 1.1 : (1 - e) * 1.1;
+        m.blur += Math.sin(Math.PI * role.p) * H * 0.05;
+        break;
+      case 'wipe':
+        if (!out) m.reveal = { kind: 'wipe-right', p: e };
+        break;
+      case 'blur':
+        m.blur += (out ? e : 1 - e) * H * 0.04;
+        if (!out) m.opacity *= e;
+        break;
+      default:
+        break;
+    }
+  }
   const { dw, dh, vw, vh, inDevice } = mediaBox(c, w, h, W, H);
   ctx.save();
   ctx.globalAlpha = clamp(m.opacity * fade);
@@ -158,7 +234,8 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, src: Drawable, f
   if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
   if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
   if (filters.length) ctx.filter = filters.join(' ');
-  ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+  if (c.crop) ctx.drawImage(src, sx, sy, w, h, -dw / 2, -dh / 2, dw, dh);
+  else ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
   ctx.filter = 'none';
   if (m.flash > 0) {
     ctx.save();
@@ -252,7 +329,8 @@ export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number,
     let h: number;
     if (c.type === 'media') {
       const a = p.assets.find((x) => x.id === c.assetId);
-      const b = mediaBox(c, a?.width || W, a?.height || H, W, H);
+      const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
+      const b = mediaBox(c, (a?.width || W) * (1 - cr.left - cr.right), (a?.height || H) * (1 - cr.top - cr.bottom), W, H);
       w = b.vw;
       h = b.vh;
     } else if (c.type === 'shape') {

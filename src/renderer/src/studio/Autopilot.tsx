@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { isAV, LOOKS, needsAnalysis, type EditOp, type LookId, type Project } from '@shared/studio';
+import { isAV, LOOKS, needsAnalysis, TRANSITIONS, type EditOp, type LookId, type Project } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
@@ -28,6 +28,9 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
   const ui = useUi();
   const [busy, setBusy] = useState<string | null>(null);
   const [sfx, setSfx] = useState<(typeof SFX_KINDS)[number]>('whoosh');
+  const [allCuts, setAllCuts] = useState<(typeof TRANSITIONS)[number]>('crossfade');
+  // Clips that start right where another clip ends on a video track (a cut).
+  const cuts = project.tracks.flatMap((t) => (t.kind === 'video' ? t.clips.filter((c) => c.type === 'media' && t.clips.some((o) => o.id !== c.id && o.type === 'media' && Math.abs(o.start + o.duration - c.start) < 0.05)).map((c) => c.id) : []));
   const media = project.tracks.flatMap((t) => t.clips.filter((c) => c.type === 'media'));
   const voices = voiceClips(project);
   const music = musicClips(project);
@@ -126,6 +129,18 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
           {look === 'custom' && <option value="custom">Custom</option>}
         </select>
       </label>
+      <div className="auto-row auto-sfx">
+        <select className="select" value={allCuts} onChange={(e) => setAllCuts(e.target.value as typeof allCuts)} aria-label="Transition for every cut">
+          {TRANSITIONS.map((k) => (
+            <option key={k} value={k}>
+              {k[0]!.toUpperCase() + k.slice(1)}
+            </option>
+          ))}
+        </select>
+        <button className="btn sm" disabled={working || !cuts.length} onClick={() => void run('cuts', () => onEdit(cuts.map((clip) => ({ op: 'set', clip, transition: { kind: allCuts, seconds: allCuts === 'whip' || allCuts === 'flash' ? 0.35 : 0.6 } }))))} title={cuts.length ? `Put this transition on all ${cuts.length} cuts` : 'No cuts between clips yet'}>
+          Every cut{cuts.length ? ` (${cuts.length})` : ''}
+        </button>
+      </div>
       <div className="auto-row auto-sfx">
         <select className="select" value={sfx} onChange={(e) => setSfx(e.target.value as (typeof SFX_KINDS)[number])} aria-label="Sound effect">
           {SFX_KINDS.map((k) => (
