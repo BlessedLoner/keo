@@ -1,6 +1,7 @@
 import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, volumeAt, type Asset, type MediaClip, type Project, type Span, type VoiceFx, type Eq } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
+import { cutoutReady, loadCutout } from './cutout';
 import { eqChain, voiceChain, voiceFxChain } from './sound';
 
 /** A project's media file, served by Keo's own protocol (only media that is in the project). */
@@ -64,6 +65,8 @@ export class PreviewSources implements SourceProvider {
   }
 
   frame(clip: MediaClip, asset: Asset): Drawable | null {
+    // Background removal starts the first time a clip needs it; the preview redraws when it is ready.
+    if (clip.cutout && !cutoutReady()) void loadCutout().then((ok) => ok && this.redraw());
     if (asset.kind === 'image') {
       const i = this.image(asset);
       return i.complete && i.naturalWidth ? i : null;

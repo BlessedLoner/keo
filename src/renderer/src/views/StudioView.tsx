@@ -1010,6 +1010,13 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
       {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
       {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
       {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
+      {clip.type === 'media' && (
+        <Section title="Remove background">
+          <label className="insp-check" title="Keo finds the people in the picture on this PC and removes everything else, no green screen needed. Put a new background on a track below.">
+            <input type="checkbox" checked={!!clip.cutout} onChange={(e) => set({ cutout: e.target.checked, ...(e.target.checked ? { chroma: null } : {}) })} /> Remove background (AI, keeps people)
+          </label>
+        </Section>
+      )}
       {clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
       {(clip.type === 'media' || clip.type === 'adjust') && <EffectsFields clip={clip} set={set} />}
       {clip.type === 'text' && <CounterFields clip={clip} set={set} />}

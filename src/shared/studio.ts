@@ -342,6 +342,8 @@ export const MediaClip = z
     chroma: Chroma.optional(),
     /** Behind a picture that does not fill the frame: a blurred, darker copy of it fills the rest. */
     backdrop: z.enum(['blur']).optional(),
+    /** AI background removal: only the people in the picture show (found on this PC, no green screen needed). */
+    cutout: z.boolean().optional(),
     /** Played backwards. Keo uses it only to make a reversed copy of a video (a clip is reversed by using that copy). */
     reversed: z.boolean().optional(),
     /** Mirrored left-right and/or upside down. */
@@ -735,6 +737,7 @@ export const EditOp = z.discriminatedUnion('op', [
       transition: Transition.nullable().optional(),
       crop: Crop.partial().nullable().optional(),
       backdrop: z.enum(['blur']).nullable().optional(),
+      cutout: z.boolean().optional(),
       flipX: z.boolean().optional(),
       flipY: z.boolean().optional(),
       blend: Blend.optional(),
@@ -1517,6 +1520,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (op.chroma === null) delete m.chroma;
           else m.chroma = Chroma.parse({ ...(m.chroma ?? {}), ...op.chroma });
         }
+        if (op.cutout !== undefined) {
+          only('background removal (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          if (op.cutout) m.cutout = true;
+          else delete m.cutout;
+        }
         for (const k of ['flipX', 'flipY'] as const)
           if (op[k] !== undefined) {
             only('flip (videos and pictures)', c.type === 'media');
@@ -1895,7 +1904,7 @@ export function describeProject(p: Project): string {
         lines.push(`  ${c.id} ${span} adjustment layer${g.length ? ` colour ${g.join(', ')}` : ''}${fx.length ? ` effects ${fx.join(', ')}` : ''}${c.blur ? ` blur ${c.blur}` : ''}${c.strength !== 1 ? ` strength ${c.strength}` : ''}`);
       } else {
         const a = p.assets.find((x) => x.id === c.assetId);
-        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.eq ? ` eq ${c.eq.low}/${c.eq.mid}/${c.eq.high} dB` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
+        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.eq ? ` eq ${c.eq.low}/${c.eq.mid}/${c.eq.high} dB` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' && c.cutout ? ' background removed' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
       if (c.group && lines.length > before) lines[lines.length - 1] += ` [group ${c.group}]`;
     }

@@ -5,6 +5,7 @@ import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStere
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
+import { loadCutout } from './cutout';
 import { eqChain, normalize, voiceChain, voiceFxChain } from './sound';
 
 /**
@@ -23,6 +24,12 @@ function bytes(d: ArrayBuffer | ArrayBufferView): Uint8Array<ArrayBuffer> {
   return out;
 }
 const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
+
+/** Background removal is ready before a project that uses it is drawn. */
+async function prepareCutout(p: Project): Promise<void> {
+  if (!p.tracks.some((t) => t.clips.some((c) => c.type === 'media' && c.cutout))) return;
+  if (!(await loadCutout())) throw new Error('Background removal could not start on this PC.');
+}
 
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
@@ -246,6 +253,7 @@ export async function runExport(
   const fps = size?.fps ?? p.fps;
   const bpp = QUALITY_BPP[size?.quality ?? 'high'];
   const total = Math.max(1, Math.ceil(projectDuration(p) * fps - 1e-6));
+  await prepareCutout(p);
   progress({ stage: 'sound', done: 0, total });
   const mixed = await mixAudio(p, { loudness: true });
   console.info(`export: sound mixed (${mixed ? mixed.duration.toFixed(2) + 's' : 'silent'})`);
@@ -328,6 +336,7 @@ export async function renderFrames(p: Project, times: number[], width: number): 
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext('2d', { alpha: false }) as unknown as CanvasRenderingContext2D;
   const out: Array<{ time: number; pngBase64: string }> = [];
+  await prepareCutout(p);
   const sources = new ExactSources(p.id);
   try {
     for (const t of times) {
@@ -479,6 +488,7 @@ export async function exportFile(p: Project, format: 'gif' | 'wav', progress: Pr
     if (!mixed) throw new Error('The timeline has no sound to save.');
     return { base64: base64(wavStereo(mixed.getChannelData(0), mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : mixed.getChannelData(0), mixed.sampleRate)), frames: 0, durationSec: mixed.duration };
   }
+  await prepareCutout(p);
   const W = even(Math.min(480, p.width));
   const H = even((W * p.height) / p.width);
   const fps = Math.min(15, p.fps);

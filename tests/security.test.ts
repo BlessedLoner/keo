@@ -176,7 +176,9 @@ describe('network & content policy', () => {
     const csp = buildCsp(false);
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain('unsafe-inline');
-    expect(csp).not.toContain('unsafe-eval');
+    // JavaScript eval is blocked; only WebAssembly may compile (on-device background removal).
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).toMatch(/script-src 'self' 'wasm-unsafe-eval'(;|$)/);
     expect(csp).toContain("connect-src 'self'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");

@@ -2,6 +2,7 @@ import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, t
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { chromaKey } from './chroma';
+import { cutout } from './cutout';
 import { drawEffects } from './effects';
 import { drawDevice, drawNotch, drawShape } from './shapes';
 
@@ -206,7 +207,8 @@ const BLEND_OP: Record<Blend, GlobalCompositeOperation> = { normal: 'source-over
 function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawable, fade: number, t: number, W: number, H: number, role?: { as: 'out' | 'in'; p: number; kind: Transition['kind'] }): void {
   const full = sizeOf(original);
   // Green screen: the keyed picture (same size) is drawn instead of the original.
-  const keyed = c.chroma ? chromaKey(original, full.w, full.h, c.chroma) : null;
+  // AI background removal: the same, with only the people kept.
+  const keyed = c.chroma ? chromaKey(original, full.w, full.h, c.chroma) : c.cutout ? cutout(original, full.w, full.h) : null;
   const src: Drawable = keyed ? (keyed as unknown as Drawable) : original;
   const kx = keyed ? keyed.width / full.w : 1;
   // Cropped: only the part inside the crop is drawn (and sized).

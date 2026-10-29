@@ -87,6 +87,9 @@ function registerAppProtocol(): void {
     const media = /^\/media\/(pr_[A-Za-z0-9]{4,24})\/(as_[A-Za-z0-9]{4,24})$/.exec(url.pathname);
     const preview = url.searchParams.get('preview') === '1';
     const probing = /^\/probe\/([0-9a-f]{24})$/.exec(url.pathname);
+    // Studio's background removal: the WebAssembly files of the installed MediaPipe package (only these names).
+    const wasm = /^\/mediapipe\/(vision_wasm(?:_module|_nosimd)?_internal\.(?:js|wasm))$/.exec(url.pathname);
+    if (wasm) return serveFile(path.join(app.getAppPath(), 'node_modules', '@mediapipe', 'tasks-vision', 'wasm', wasm[1]!), request.headers.get('range'));
     if (media || probing) {
       const file = media ? (services?.studio.assetFile(media[1]!, media[2]!, preview) ?? null) : (services?.studio.probeTarget(probing![1]!) ?? null);
       if (!file) return new Response('Not found', { status: 404 });
@@ -1176,6 +1179,27 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   }
   out.steady = { points: steadied.points, zoom: steadied.zoom, against: agree, steps: stKeys.length - 1, sample: stKeys.slice(0, 8).map((k) => [k.at, Math.round((k.value - 0.5) * 1000) / 1000, shakeAt(k.at)]) };
   s.studio.delete(st2.id);
+  // AI background removal on a picture with no people in it: the model runs on this PC and removes
+  // all of it, so the project's own background (red) shows through where the picture was.
+  const co = s.studio.create('Studio smoke cutout', 'square');
+  const coPic = (await s.studio.importFiles(co.id, [pic])).added[0]!;
+  s.studio.edit(co.id, [
+    { op: 'set_project', width: 160, height: 160, background: '#FF0000' },
+    { op: 'add_media', assetId: coPic.id, start: 0, duration: 2 },
+  ]);
+  const coBefore = await s.studio.frames(co.id, [0.5], 160);
+  const coClip = s.studio.get(co.id).tracks[0]!.clips[0]!;
+  s.studio.edit(co.id, [{ op: 'set', clip: coClip.id, cutout: true }]);
+  const coAfter = await s.studio.frames(co.id, [0.5], 160).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+  const coCentre = (png: Buffer) => {
+    const img = nativeImage.createFromBuffer(png);
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
+    return { r: bmp[at + 2]!, g: bmp[at + 1]!, b: bmp[at]! };
+  };
+  out.cutout = { before: coCentre(coBefore[0]!.png), after: typeof coAfter === 'string' ? coAfter : coCentre(coAfter[0]!.png) };
+  s.studio.delete(co.id);
   // Curved text: the same words straight (0–1 s) and along an arc (1–2 s); the arc is taller.
   const cv = s.studio.create('Studio smoke curve', 'square');
   s.studio.edit(cv.id, [
