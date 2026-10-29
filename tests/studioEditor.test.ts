@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEdits, exportSize, newProject, projectDuration, type Asset, type AudioClip, type MediaClip, type Project } from '../src/shared/studio';
+import { applyEdits, describeProject, exportSize, newProject, projectDuration, type Asset, type AudioClip, type MediaClip, type Project } from '../src/shared/studio';
 
 let n = 0;
 const rand = () => `r${String(++n).padStart(7, '0')}`;
@@ -158,5 +158,42 @@ describe('Green screen and quiet the gaps', () => {
     expect(gateGain(spans, 2.1, -18)).toBeGreaterThan(low);
     const gated = applyEdits(p, [{ op: 'set', clip: c.id, gate: -18 }], { rand }).project;
     expect(videos(gated)[0]!.gate).toBe(-18);
+  });
+});
+
+describe('Studio editing: mirror, blend, voice changer, locked tracks', () => {
+  it('flips, blends and changes the voice, and says so to Keo', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    const a = applyEdits(p, [{ op: 'set', clip: id, flipX: true, blend: 'screen', voiceFx: 'robot' }], { rand }).project;
+    expect(videos(a)[0]).toMatchObject({ flipX: true, blend: 'screen', voiceFx: 'robot' });
+    expect(describeProject(a)).toMatch(/voice robot blend screen flipped/);
+    // Back to normal: the fields go away.
+    const b = applyEdits(a, [{ op: 'set', clip: id, flipX: false, blend: 'normal', voiceFx: null }], { rand }).project;
+    expect(videos(b)[0]).not.toHaveProperty('flipX');
+    expect(videos(b)[0]).not.toHaveProperty('blend');
+    expect(videos(b)[0]).not.toHaveProperty('voiceFx');
+    // The voice changer goes with the sound when it is detached.
+    const c = applyEdits(a, [{ op: 'detach_audio', clip: id }], { rand }).project;
+    expect((c.tracks.find((t) => t.name === 'Detached audio')!.clips[0] as AudioClip).voiceFx).toBe('robot');
+  });
+
+  it('a video without sound cannot get a voice changer', () => {
+    n = 0;
+    const silent = { ...vid, hasAudio: false };
+    const p = applyEdits({ ...newProject({ name: 'S', rand }), assets: [silent] }, [{ op: 'add_media', assetId: silent.id, start: 0, duration: 4 }], { rand }).project;
+    expect(() => applyEdits(p, [{ op: 'set', clip: videos(p)[0]!.id, voiceFx: 'deep' }], { rand })).toThrow(/no sound/);
+  });
+
+  it('a locked track’s clips cannot be changed until it is unlocked', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    const track = p.tracks.find((t) => t.name === 'Video')!.id;
+    const locked = applyEdits(p, [{ op: 'set_track', track, locked: true }], { rand }).project;
+    expect(describeProject(locked)).toMatch(/\(locked\)/);
+    for (const op of [{ op: 'move', clip: id, start: 3 }, { op: 'delete', clip: id }, { op: 'set', clip: id, volume: 0.5 }, { op: 'add_media', assetId: vid.id, start: 9, duration: 1, track }] as const)
+      expect(() => applyEdits(locked, [op], { rand })).toThrow(/locked/);
+    const open = applyEdits(locked, [{ op: 'set_track', track, locked: false }, { op: 'move', clip: id, start: 3 }], { rand }).project;
+    expect(videos(open)[0]!.start).toBe(3);
   });
 });

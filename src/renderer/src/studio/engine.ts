@@ -1,4 +1,4 @@
-import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type Asset, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
+import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type Asset, type Blend, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { chromaKey } from './chroma';
@@ -146,6 +146,9 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
   return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
 }
 
+/** Blend modes as the canvas names them. */
+const BLEND_OP: Record<Blend, GlobalCompositeOperation> = { normal: 'source-over', screen: 'screen', multiply: 'multiply', overlay: 'overlay', lighten: 'lighten', darken: 'darken', add: 'lighter', difference: 'difference' };
+
 function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawable, fade: number, t: number, W: number, H: number, role?: { as: 'out' | 'in'; p: number; kind: Transition['kind'] }): void {
   const full = sizeOf(original);
   // Green screen: the keyed picture (same size) is drawn instead of the original.
@@ -203,6 +206,7 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
   const { dw, dh, vw, vh, inDevice } = mediaBox(c, w, h, W, H);
   ctx.save();
   ctx.globalAlpha = clamp(m.opacity * fade);
+  if (c.blend) ctx.globalCompositeOperation = BLEND_OP[c.blend];
   if (c.backdrop === 'blur' && !inDevice) {
     // The empty part of the frame: the same picture filling it, blurred and darker.
     const cover = fitBox('cover', w, h, W, H);
@@ -250,7 +254,16 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
   if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
   if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
   if (filters.length) ctx.filter = filters.join(' ');
-  const paint = (cx: CanvasRenderingContext2D) => (c.crop ? cx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, -dw / 2, -dh / 2, dw, dh) : cx.drawImage(src, -dw / 2, -dh / 2, dw, dh));
+  const paint = (cx: CanvasRenderingContext2D) => {
+    // Mirrored: only the picture flips (its frame, mask and shadow stay put).
+    if (c.flipX || c.flipY) {
+      cx.save();
+      cx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
+    }
+    if (c.crop) cx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, -dw / 2, -dh / 2, dw, dh);
+    else cx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+    if (c.flipX || c.flipY) cx.restore();
+  };
   paint(ctx);
   ctx.filter = 'none';
   if (c.effects) drawEffects(ctx, c.effects, src, paint, -(shaped ? vw : dw) / 2, -(shaped ? vh : dh) / 2, shaped ? vw : dw, shaped ? vh : dh, t, H);

@@ -1,7 +1,7 @@
-import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span } from '@shared/studio';
+import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, type Asset, type MediaClip, type Project, type Span, type VoiceFx } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
-import { voiceChain } from './sound';
+import { voiceChain, voiceFxChain } from './sound';
 
 /** A project's media file, served by Keo's own protocol (only media that is in the project). */
 export const mediaUrl = (projectId: string, assetId: string) => `app://keo/media/${projectId}/${assetId}`;
@@ -18,7 +18,7 @@ export class PreviewSources implements SourceProvider {
   private readonly images = new Map<string, HTMLImageElement>();
   /** Sound that goes through Keo's voice clean-up (once routed, an element stays in the graph). */
   private audioCtx: AudioContext | null = null;
-  private readonly routes = new Map<HTMLMediaElement, { gain: GainNode; dry: GainNode; wet: GainNode }>();
+  private readonly routes = new Map<HTMLMediaElement, { src: MediaElementAudioSourceNode; pre: GainNode; gain: GainNode; dry: GainNode; wet: GainNode; fx: VoiceFx | null; stop: () => void }>();
   private readonly speech = new WeakMap<Project, Span[]>();
 
   constructor(
@@ -62,19 +62,33 @@ export class PreviewSources implements SourceProvider {
     return v.readyState >= 2 ? v : null;
   }
 
-  private route(el: HTMLMediaElement, voice: boolean): GainNode {
+  private route(el: HTMLMediaElement, voice: boolean, fx: VoiceFx | null): GainNode {
+    const ctx = (this.audioCtx ??= new AudioContext());
     let r = this.routes.get(el);
     if (!r) {
-      const ctx = (this.audioCtx ??= new AudioContext());
       const src = ctx.createMediaElementSource(el);
+      const pre = ctx.createGain();
       const gain = ctx.createGain();
       gain.connect(ctx.destination);
       const dry = ctx.createGain();
       const wet = ctx.createGain();
-      src.connect(dry).connect(gain);
-      voiceChain(ctx, src).connect(wet).connect(gain);
-      r = { gain, dry, wet };
+      src.connect(pre);
+      pre.connect(dry).connect(gain);
+      voiceChain(ctx, pre).connect(wet).connect(gain);
+      r = { src, pre, gain, dry, wet, fx: null, stop: () => undefined };
       this.routes.set(el, r);
+    }
+    if (r.fx !== fx) {
+      // A different voice changer: the sound is wired through the new one.
+      r.src.disconnect();
+      r.stop();
+      r.stop = () => undefined;
+      if (fx) {
+        const chain = voiceFxChain(ctx, r.src, fx);
+        chain.out.connect(r.pre);
+        r.stop = chain.stop;
+      } else r.src.connect(r.pre);
+      r.fx = fx;
     }
     r.dry.gain.value = voice ? 0 : 1;
     r.wet.gain.value = voice ? 1 : 0;
@@ -121,9 +135,9 @@ export class PreviewSources implements SourceProvider {
         el.muted = tr.muted || !a.hasAudio || outside;
         const duck = (c.type === 'audio' && c.duck !== null ? duckGain(speech, t, c.duck) : 1) * (c.gate ? gateGain(clipSpeech(p, c), t, c.gate) : 1);
         const level = Math.max(0, c.volume * fade * duck);
-        if (c.voice || this.routes.has(el)) {
+        if (c.voice || c.voiceFx || this.routes.has(el)) {
           el.volume = 1;
-          this.route(el, c.voice).gain.value = Math.min(4, level);
+          this.route(el, c.voice, c.voiceFx ?? null).gain.value = Math.min(4, level);
           if (playing && this.audioCtx?.state === 'suspended') void this.audioCtx.resume();
         } else el.volume = Math.min(1, level);
         el.playbackRate = rate;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, BLENDS, VOICE_FX, VOICE_FX_LABEL, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -842,6 +842,17 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
           <label className="insp-check">
             <input type="checkbox" checked={clip.voice} onChange={(e) => set({ voice: e.target.checked })} /> Enhance voice
           </label>
+          <label className="insp-row">
+            <span>Voice changer</span>
+            <select className="select" value={clip.voiceFx ?? ''} onChange={(e) => set({ voiceFx: (e.target.value || null) as VoiceFx | null })}>
+              <option value="">None</option>
+              {VOICE_FX.map((v) => (
+                <option key={v} value={v}>
+                  {VOICE_FX_LABEL[v]}
+                </option>
+              ))}
+            </select>
+          </label>
           {clip.type === 'audio' && (
             <label className="insp-check">
               <input type="checkbox" checked={clip.duck !== null} onChange={(e) => set({ duck: e.target.checked ? -14 : null })} /> Quieter while someone speaks (music)
@@ -869,6 +880,31 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
                 );
               })}
             </div>
+          )}
+          {clip.type === 'media' && (
+            <div className="insp-row">
+              <span>Mirror</span>
+              <div className="insp-seg">
+                <button className={clip.flipX ? 'on' : ''} aria-pressed={!!clip.flipX} onClick={() => set({ flipX: !clip.flipX })} title="Mirror left-right">
+                  ⇋ Flip
+                </button>
+                <button className={clip.flipY ? 'on' : ''} aria-pressed={!!clip.flipY} onClick={() => set({ flipY: !clip.flipY })} title="Turn upside down">
+                  ⇅ Flip
+                </button>
+              </div>
+            </div>
+          )}
+          {clip.type === 'media' && (
+            <label className="insp-row">
+              <span>Blend</span>
+              <select className="select" value={clip.blend ?? 'normal'} onChange={(e) => set({ blend: e.target.value as Blend })} title="How this layer mixes with the ones under it (Screen for light leaks and smoke, Multiply for paper and shadows)">
+                {BLENDS.map((b) => (
+                  <option key={b} value={b}>
+                    {b[0]!.toUpperCase() + b.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
           <PositionFields clip={clip} time={time} fps={project.fps} set={set} />
           <p className="small muted insp-tip-inline">◆ animates a value: move the playhead, change the value, and Keo makes the in-between.</p>

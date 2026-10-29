@@ -1,3 +1,5 @@
+import type { VoiceFx } from '@shared/studio';
+
 /**
  * Keo Studio's sound processing, shared by the preview and the export so both sound the same:
  * voice clean-up (low rumble cut, less boom, clearer speech, gentle compression) and the
@@ -75,4 +77,154 @@ export function normalize(buf: AudioBuffer, target = -14): { gainDb: number } {
     }
   }
   return { gainDb };
+}
+
+/**
+ * The voice changer: input → the effect → the returned node. Built only from the browser's own
+ * audio nodes, so the live preview and the offline export sound the same. `stop` ends its
+ * oscillators (the preview calls it when the effect changes).
+ */
+export function voiceFxChain(ctx: BaseAudioContext, input: AudioNode, fx: VoiceFx): { out: AudioNode; stop: () => void } {
+  const sources: AudioScheduledSourceNode[] = [];
+  const begin = <T extends AudioScheduledSourceNode>(s: T): T => {
+    sources.push(s);
+    s.start(ctx.currentTime);
+    return s;
+  };
+  const out = ctx.createGain();
+  const filter = (type: BiquadFilterType, frequency: number, Q = 0.7, gain = 0) => {
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = frequency;
+    f.Q.value = Q;
+    f.gain.value = gain;
+    return f;
+  };
+  const shaper = (k: number) => {
+    const w = ctx.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+    }
+    w.curve = curve;
+    return w;
+  };
+  const gainOf = (v: number) => {
+    const g = ctx.createGain();
+    g.gain.value = v;
+    return g;
+  };
+  switch (fx) {
+    case 'chipmunk':
+    case 'deep':
+      pitchShift(ctx, input, fx === 'chipmunk' ? 1.6 : 0.7, begin).connect(out);
+      break;
+    case 'robot': {
+      // Ring modulation (the voice times a 55 Hz tone) and a short metallic comb.
+      const ring = gainOf(0);
+      const osc = begin(ctx.createOscillator());
+      osc.frequency.value = 55;
+      osc.connect(ring.gain);
+      input.connect(ring);
+      const mix = ctx.createGain();
+      ring.connect(mix);
+      input.connect(gainOf(0.2)).connect(mix);
+      const comb = ctx.createDelay(0.05);
+      comb.delayTime.value = 0.008;
+      const fb = gainOf(0.45);
+      mix.connect(comb).connect(fb).connect(comb);
+      mix.connect(out);
+      comb.connect(gainOf(0.6)).connect(out);
+      break;
+    }
+    case 'radio':
+      input.connect(filter('highpass', 400)).connect(filter('lowpass', 3200)).connect(filter('peaking', 1500, 1, 6)).connect(shaper(4)).connect(gainOf(0.9)).connect(out);
+      break;
+    case 'megaphone':
+      input.connect(filter('highpass', 700)).connect(filter('lowpass', 4000)).connect(shaper(20)).connect(gainOf(0.55)).connect(out);
+      break;
+    case 'echo': {
+      input.connect(out);
+      const d = ctx.createDelay(1);
+      d.delayTime.value = 0.3;
+      input.connect(d);
+      d.connect(gainOf(0.4)).connect(d);
+      d.connect(gainOf(0.45)).connect(out);
+      break;
+    }
+    case 'hall': {
+      // A big room: a 2.4 s decaying noise tail as the room's echo (the same every time).
+      const conv = ctx.createConvolver();
+      const len = Math.round(ctx.sampleRate * 2.4);
+      const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+      let seed = 7;
+      for (let c = 0; c < 2; c++) {
+        const d = ir.getChannelData(c);
+        for (let i = 0; i < len; i++) {
+          seed = (seed * 1664525 + 1013904223) >>> 0;
+          d[i] = (seed / 2 ** 32 - 0.5) * 2 * Math.pow(1 - i / len, 3);
+        }
+      }
+      conv.buffer = ir;
+      input.connect(gainOf(0.8)).connect(out);
+      input.connect(conv).connect(gainOf(0.35)).connect(out);
+      break;
+    }
+    case 'underwater': {
+      const lp = filter('lowpass', 450, 6);
+      const lfo = begin(ctx.createOscillator());
+      lfo.frequency.value = 0.6;
+      lfo.connect(gainOf(150)).connect(lp.frequency);
+      input.connect(lp).connect(gainOf(0.9)).connect(out);
+      break;
+    }
+  }
+  return {
+    out,
+    stop: () => {
+      for (const s of sources) s.stop();
+    },
+  };
+}
+
+/**
+ * Higher or lower voice at the same speed: two delay lines whose delay ramps steadily (which
+ * changes the pitch), each faded out while it jumps back, taking turns half a period apart.
+ */
+function pitchShift(ctx: BaseAudioContext, input: AudioNode, ratio: number, begin: <T extends AudioScheduledSourceNode>(s: T) => T): AudioNode {
+  const period = 0.1;
+  const depth = Math.abs(ratio - 1) * period;
+  const up = ratio > 1;
+  const n = Math.round(period * ctx.sampleRate);
+  const out = ctx.createGain();
+  for (const phase of [0, 0.5]) {
+    const ramp = ctx.createBuffer(1, n, ctx.sampleRate);
+    const fade = ctx.createBuffer(1, n, ctx.sampleRate);
+    const r = ramp.getChannelData(0);
+    const f = fade.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      const p = (i / n + phase) % 1;
+      r[i] = up ? 1 - p : p;
+      f[i] = Math.sin(Math.PI * p) ** 2;
+    }
+    const delay = ctx.createDelay(1);
+    delay.delayTime.value = 0;
+    const mod = ctx.createBufferSource();
+    mod.buffer = ramp;
+    mod.loop = true;
+    const amount = ctx.createGain();
+    amount.gain.value = depth;
+    mod.connect(amount).connect(delay.delayTime);
+    const tap = ctx.createGain();
+    tap.gain.value = 0;
+    const fader = ctx.createBufferSource();
+    fader.buffer = fade;
+    fader.loop = true;
+    fader.connect(tap.gain);
+    input.connect(delay).connect(tap).connect(out);
+    begin(mod);
+    begin(fader);
+  }
+  return out;
 }

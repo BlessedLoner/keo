@@ -294,6 +294,9 @@ export function Timeline({
                   <Icon name={t.muted ? 'mute' : 'speaker'} size={13} />
                 </button>
               )}
+              <button className={`tl-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Unlock this track' : 'Lock this track (its clips cannot be moved or changed)'} onClick={() => onEdit([{ op: 'set_track', track: t.id, locked: !t.locked }])}>
+                <Icon name={t.locked ? 'lock' : 'unlock'} size={13} />
+              </button>
             </div>
             {t.kind === 'video' &&
               t.clips.map((c) => {
@@ -323,7 +326,7 @@ export function Timeline({
               return (
                 <div
                   key={c.id}
-                  className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''}`}
+                  className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''} ${t.locked ? 'locked' : ''}`}
                   style={{ left: LABEL_W + w.left, width: w.width, top: 4 + lane * ROW_H[t.kind], height: ROW_H[t.kind] - 8, bottom: 'auto' }}
                   title={`${label(c)} · ${c.start.toFixed(2)}s–${clipEnd(c).toFixed(2)}s`}
                   onPointerDown={(e) => {
@@ -333,6 +336,7 @@ export function Timeline({
                       return;
                     }
                     onSelect(c.id);
+                    if (t.locked) return;
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     const edge = e.clientX - r.left < 7 ? 'trim-start' : r.right - e.clientX < 7 ? 'trim-end' : 'move';
                     if (edge === 'move') setDrag({ kind: 'move', clip: c, track: t, dx: 0, startX: e.clientX, startY: e.clientY, targetTrack: t.id });

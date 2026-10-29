@@ -43,6 +43,16 @@ export const Zoom = z
   .strict();
 export type Zoom = z.infer<typeof Zoom>;
 
+/** Voice changer effects (the same in the preview and the export). */
+export const VOICE_FX = ['chipmunk', 'deep', 'robot', 'radio', 'megaphone', 'echo', 'hall', 'underwater'] as const;
+export const VoiceFx = z.enum(VOICE_FX);
+export const VOICE_FX_LABEL: Record<(typeof VOICE_FX)[number], string> = { chipmunk: 'Chipmunk (higher)', deep: 'Deep (lower)', robot: 'Robot', radio: 'Radio', megaphone: 'Megaphone', echo: 'Echo', hall: 'Big hall', underwater: 'Underwater' };
+export type VoiceFx = z.infer<typeof VoiceFx>;
+/** How a layer mixes with what is under it. */
+export const BLENDS = ['normal', 'screen', 'multiply', 'overlay', 'lighten', 'darken', 'add', 'difference'] as const;
+export const Blend = z.enum(BLENDS);
+export type Blend = z.infer<typeof Blend>;
+
 export const Transform = z
   .object({
     /** Centre of the layer, as a fraction of the frame (0.5, 0.5 = middle). */
@@ -298,6 +308,13 @@ export const MediaClip = z
     chroma: Chroma.optional(),
     /** Behind a picture that does not fill the frame: a blurred, darker copy of it fills the rest. */
     backdrop: z.enum(['blur']).optional(),
+    /** Mirrored left-right and/or upside down. */
+    flipX: z.boolean().optional(),
+    flipY: z.boolean().optional(),
+    /** How the picture mixes with the layers under it (screen for light leaks and smoke, multiply for paper…). */
+    blend: Blend.optional(),
+    /** Voice changer on the clip's sound. */
+    voiceFx: VoiceFx.optional(),
     /** Looks laid over the picture (film grain, VHS, glow, RGB split, light leak), each 0..1. */
     effects: Effects.optional(),
     /** A speed curve over the clip (x: fraction of the clip); replaces `speed` while set. */
@@ -391,6 +408,8 @@ export const AudioClip = z
     gate: z.number().min(-40).max(0).nullable().optional(),
     /** Music: this many dB quieter while someone speaks (null: never ducked). */
     duck: z.number().min(-40).max(0).nullable().default(null),
+    /** Voice changer on this sound. */
+    voiceFx: VoiceFx.optional(),
   })
   .strict();
 export type AudioClip = z.infer<typeof AudioClip>;
@@ -410,6 +429,8 @@ export const Track = z
     name: z.string().min(1).max(60),
     hidden: z.boolean().default(false),
     muted: z.boolean().default(false),
+    /** Locked: its clips cannot be changed, moved or deleted one by one (cuts of the whole timeline still apply). */
+    locked: z.boolean().optional(),
     clips: z.array(Clip).max(5000).default([]),
   })
   .strict();
@@ -631,6 +652,10 @@ export const EditOp = z.discriminatedUnion('op', [
       transition: Transition.nullable().optional(),
       crop: Crop.partial().nullable().optional(),
       backdrop: z.enum(['blur']).nullable().optional(),
+      flipX: z.boolean().optional(),
+      flipY: z.boolean().optional(),
+      blend: Blend.optional(),
+      voiceFx: VoiceFx.nullable().optional(),
       chroma: Chroma.partial().nullable().optional(),
       /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
       effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
@@ -671,7 +696,7 @@ export const EditOp = z.discriminatedUnion('op', [
     })
     .strict(),
   z.object({ op: z.literal('add_track'), kind: TrackKind, name: z.string().trim().min(1).max(60).optional() }).strict(),
-  z.object({ op: z.literal('set_track'), track: TrackRef, hidden: z.boolean().optional(), muted: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional() }).strict(),
+  z.object({ op: z.literal('set_track'), track: TrackRef, hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional() }).strict(),
   z.object({ op: z.literal('delete_track'), track: TrackRef }).strict(),
   z.object({ op: z.literal('set_project'), name: z.string().trim().min(1).max(120).optional(), width: z.number().int().min(16).max(7680).optional(), height: z.number().int().min(16).max(7680).optional(), fps: z.number().int().min(1).max(120).optional(), background: Hex.optional(), loudness: z.enum(['off', 'social']).optional() }).strict(),
 ]);
@@ -997,6 +1022,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       const t = p.tracks.find((x) => x.id === id);
       if (!t) throw new EditError(`There is no track ${id}.`);
       if (t.kind !== kind) throw new EditError(`Track ${t.name} holds ${t.kind}, not ${kind}.`);
+      if (t.locked) throw new EditError(`The track ${t.name} is locked: unlock it first (set_track locked false).`);
       return t;
     }
     const existing = p.tracks.find((x) => x.kind === kind);
@@ -1015,6 +1041,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
   const get = (id: string) => {
     const f = findClip(p, id);
     if (!f) throw new EditError(`There is no clip ${id}.`);
+    if (f.track.locked) throw new EditError(`The track ${f.track.name} is locked: unlock it first (set_track locked false).`);
     return f;
   };
   const sourceLeft = (c: Clip) => {
@@ -1155,7 +1182,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           t = { id: rid('tr', rand), kind: 'audio', name: 'Detached audio', hidden: false, muted: false, clips: [] };
           p.tracks.push(t);
         }
-        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice });
+        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}) });
         t.clips.push(s);
         sortClips(t);
         c.volume = 0;
@@ -1318,6 +1345,26 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const m = c as MediaClip;
           if (op.chroma === null) delete m.chroma;
           else m.chroma = Chroma.parse({ ...(m.chroma ?? {}), ...op.chroma });
+        }
+        for (const k of ['flipX', 'flipY'] as const)
+          if (op[k] !== undefined) {
+            only('flip (videos and pictures)', c.type === 'media');
+            const m = c as MediaClip;
+            if (op[k]) m[k] = true;
+            else delete m[k];
+          }
+        if (op.blend !== undefined) {
+          only('blend mode (videos and pictures)', c.type === 'media');
+          const m = c as MediaClip;
+          if (op.blend === 'normal') delete m.blend;
+          else m.blend = op.blend;
+        }
+        if (op.voiceFx !== undefined) {
+          only('voice changer', isAV(c));
+          const v = c as MediaClip | AudioClip;
+          if (v.type === 'media' && !asset(v.assetId).hasAudio) throw new EditError('That clip has no sound to change.');
+          if (op.voiceFx === null) delete v.voiceFx;
+          else v.voiceFx = op.voiceFx;
         }
         if (op.backdrop !== undefined) {
           only('backdrop (videos and pictures)', c.type === 'media');
@@ -1526,6 +1573,10 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (!t) throw new EditError(`There is no track ${op.track}.`);
         if (op.hidden !== undefined) t.hidden = op.hidden;
         if (op.muted !== undefined) t.muted = op.muted;
+        if (op.locked !== undefined) {
+          if (op.locked) t.locked = true;
+          else delete t.locked;
+        }
         if (op.name) t.name = op.name;
         changes.push(`Changed the track ${t.name}.`);
         break;
@@ -1624,14 +1675,14 @@ export function describeProject(p: Project): string {
   const lines = [`${p.name}: ${p.width}x${p.height}, ${p.fps} fps, ${projectDuration(p)}s.`, `Media: ${p.assets.map((a) => `${a.id} ${a.name} (${a.kind}${a.kind !== 'image' ? `, ${round(a.duration)}s` : ''}${a.hasAudio ? ', sound' : ''})`).join('; ') || 'none'}.`];
   if (p.markers.length) lines.push(`Markers: ${p.markers.map((m, i) => `${i + 1} “${m.label}” at ${round(m.t)}s`).join('; ')}.`);
   p.tracks.forEach((t, i) => {
-    lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}:`);
+    lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}${t.locked ? ' (locked)' : ''}:`);
     for (const c of t.clips) {
       const span = `${round(c.start)}–${round(clipEnd(c))}s`;
       if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}${c.counter ? ` counter ${c.counter.from}→${c.counter.to}` : ''}${motionNote(c)}`);
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
       else {
         const a = p.assets.find((x) => x.id === c.assetId);
-        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.type === 'media' ? motionNote(c) : ''}`);
+        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
     }
   });

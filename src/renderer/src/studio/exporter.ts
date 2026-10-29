@@ -1,8 +1,8 @@
-import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project } from '@shared/studio';
+import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, type ExportQuality, type MediaClip, type Project, type VoiceFx } from '@shared/studio';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ExactSources, mediaUrl } from './media';
-import { normalize, voiceChain } from './sound';
+import { normalize, voiceChain, voiceFxChain } from './sound';
 
 /**
  * Exporting and looking at frames, in Keo's render window: the same picture engine as the preview,
@@ -24,14 +24,14 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; fadeIn: number; fadeOut: number; voice: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
       if (!isAV(c) || c.volume <= 0) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
     }
   }
   if (!parts.length || dur <= 0) return null;
@@ -68,6 +68,7 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
       gain.gain.linearRampToValueAtTime(0, end);
     }
     let out: AudioNode = part.voice ? voiceChain(ctx, src) : src;
+    if (part.fx) out = voiceFxChain(ctx, out, part.fx).out;
     if (part.duck !== null && speech.length) {
       // Music under speech: a gain curve sampled every 50 ms from the same rule the preview uses.
       const duck = ctx.createGain();
