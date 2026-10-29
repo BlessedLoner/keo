@@ -487,6 +487,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.setStudioFocus({ projectId: id, time, selected });
       return { ok: true as const };
     },
+    'studio:assetIssue': ({ id, assetId, issue }) => {
+      s.noteStudioIssue(id, assetId, issue);
+      return { ok: true as const };
+    },
     'studio:conversation': ({ id }) => studioCall(() => ({ conversationId: s.studioConversation(id, s.studio.get(id).name) })),
     'studio:soundEffect': ({ id, kind, at }) => {
       try {

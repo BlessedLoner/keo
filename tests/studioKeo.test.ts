@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ChatRequest } from '../src/main/providers/types';
@@ -36,6 +37,13 @@ describe('Ask Keo in Studio', () => {
     expect(system(req)).toMatch(/The playhead is at 1\.25 s \(on screen: cl_/);
     expect(system(req)).toContain(`Selected: ${clip}`);
     expect(system(req)).toMatch(/talking to you from inside Keo Studio/);
+    // A video this PC cannot play is in Keo's picture too.
+    const fake = { id: 'as_hevc0001', kind: 'video' as const, path: 'C:\\v\\phone.mov', name: 'phone.mov', duration: 5, width: 1080, height: 1920, hasAudio: true };
+    const raw = s.studio.get(p.id);
+    fs.writeFileSync(path.join(h.dir, 'studio', `${p.id}.json`), JSON.stringify({ ...raw, assets: [...raw.assets, fake] }));
+    s.noteStudioIssue(p.id, fake.id, 'This PC cannot play HEVC (H.265) video.');
+    await s.agent.send(conv, 'why is it black?').done;
+    expect(system(h.provider.lastRequest)).toContain('Cannot play on this PC: as_hevc0001 phone.mov: This PC cannot play HEVC (H.265) video.');
   });
 
   it('Keo’s edits from the panel change the open project', async () => {

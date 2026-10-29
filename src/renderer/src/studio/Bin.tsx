@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { CAPTION_STYLE, type Asset, type EditOp, type Project, type TextClip, type TextStyle } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { invoke } from '../lib/api';
@@ -223,8 +223,41 @@ export function MediaBin({
 }
 
 /** A media tile: its first frame, its length, and the video playing while the mouse is over it. */
+/** Why this PC cannot play a video (its format), or null when it can. Checked once per file. */
+const playability = new Map<string, Promise<string | null>>();
+export function usePlayable(projectId: string, asset: Asset): string | null {
+  const [issue, setIssue] = useState<string | null>(null);
+  useEffect(() => {
+    if (asset.kind !== 'video') return;
+    const key = `${projectId}/${asset.id}`;
+    if (!playability.has(key))
+      playability.set(
+        key,
+        (async () => {
+          const t = await invoke('studio:videoTrack', { projectId, assetId: asset.id }).catch(() => null);
+          if (!t || typeof VideoDecoder === 'undefined') return null;
+          const ok = await VideoDecoder.isConfigSupported({ codec: t.codec, codedWidth: t.width, codedHeight: t.height, ...(t.description ? { description: t.description } : {}) })
+            .then((r) => !!r.supported)
+            .catch(() => false);
+          if (ok) return null;
+          const hevc = /^(hvc1|hev1)/.test(t.codec);
+          const issue = hevc ? 'HEVC (H.265)' : t.codec;
+          void invoke('studio:assetIssue', { id: projectId, assetId: asset.id, issue: `This PC cannot play ${issue} video${hevc ? ' (install HEVC Video Extensions from the Microsoft Store)' : ''}.` }).catch(() => undefined);
+          return issue;
+        })(),
+      );
+    let live = true;
+    void playability.get(key)!.then((r) => live && setIssue(r));
+    return () => {
+      live = false;
+    };
+  }, [projectId, asset.id, asset.kind]);
+  return issue;
+}
+
 function Tile({ projectId, asset, onAdd }: { projectId: string; asset: Asset; onAdd: () => void }) {
   const strip = useFilmstrip(projectId, asset);
+  const issue = usePlayable(projectId, asset);
   const video = useRef<HTMLVideoElement>(null);
   const [hover, setHover] = useState(false);
   return (
@@ -249,6 +282,18 @@ function Tile({ projectId, asset, onAdd }: { projectId: string; asset: Asset; on
       {strip?.frames[0] ? <img src={strip.frames[0]} alt="" draggable={false} /> : <span className="tile-blank" />}
       {asset.kind === 'video' && hover && <video ref={video} src={mediaUrl(projectId, asset.id)} muted playsInline loop crossOrigin="anonymous" autoPlay />}
       {asset.kind === 'video' && <span className="tile-dur">{fmt(asset.duration)}</span>}
+      {issue && (
+        <span
+          className="tile-issue"
+          title={
+            /HEVC/.test(issue)
+              ? 'This video is HEVC (H.265), which this PC cannot play yet. Install “HEVC Video Extensions” from the Microsoft Store and restart Keo — or on the phone choose Camera → Formats → Most Compatible (H.264) for new videos.'
+              : `This PC cannot play this video’s format (${issue}). Convert it to MP4 (H.264) first.`
+          }
+        >
+          ⚠ Can’t play: {issue}
+        </span>
+      )}
       <span className="tile-name">{asset.name}</span>
       <button
         className="tile-add"

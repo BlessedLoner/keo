@@ -72,6 +72,7 @@ export const INVOKE_CHANNELS = [
   'studio:readAloud',
   'studio:saveRecording',
   'studio:focus',
+  'studio:assetIssue',
   'studio:conversation',
   'studio:facelessPlan',
   'studio:import',

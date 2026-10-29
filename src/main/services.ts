@@ -1586,6 +1586,8 @@ export class Services {
     }
     const talking = p.assets.filter((a) => a.hasAudio && a.kind !== 'image');
     if (talking.length) lines.push(`Speech: ${talking.map((a) => `${a.id} ${a.words ? `transcribed (${a.words.length} words)` : 'not transcribed yet'}`).join('; ')}.`);
+    const issues = p.assets.map((a) => [a, this.studioIssues.get(`${id}/${a.id}`)] as const).filter(([, v]) => !!v);
+    if (issues.length) lines.push(`Cannot play on this PC: ${issues.map(([a, v]) => `${a.id} ${a.name}: ${v}`).join('; ')} Tell the user how to fix it if they ask why a clip is black.`);
     if (fromStudio)
       lines.push(
         'The user is talking to you from inside Keo Studio and watches every change live. Work like a skilled editor: for anything with several steps, show your plan with studio__checklist and update it as you go; make exact edits; after visual changes, look at a frame or two (studio__look) before saying it is done; say briefly what you changed. Never export unless asked.',
@@ -1598,6 +1600,12 @@ export class Services {
   private studioFocus: { projectId: string; time: number; selected: string[]; at: number } | null = null;
   /** Conversations started from Keo Studio's Ask Keo panel. */
   private readonly studioConversations = new Set<string>();
+
+  /** Media this PC cannot play (found by the Studio page), for Keo's context. */
+  private readonly studioIssues = new Map<string, string>();
+  noteStudioIssue(projectId: string, assetId: string, issue: string): void {
+    this.studioIssues.set(`${projectId}/${assetId}`, issue);
+  }
 
   setStudioFocus(f: { projectId: string; time: number; selected: string[] }): void {
     this.studioFocus = { ...f, at: Date.now() };
