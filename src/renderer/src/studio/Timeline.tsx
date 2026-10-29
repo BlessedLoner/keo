@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { clipEnd, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
+import { EaseEditor } from './EaseEditor';
+import { clipEnd, findClip, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useFilmstrip, useWaveform } from './thumbs';
 
@@ -36,6 +37,7 @@ export function Timeline({
   selected,
   selectedIds,
   onSelect,
+  onSelectMany,
   onTime,
   onEdit,
   zoom,
@@ -48,6 +50,8 @@ export function Timeline({
   /** All selected clips (several with Shift or Ctrl + click). */
   selectedIds?: string[];
   onSelect: (id: string | null, add?: boolean) => void;
+  /** Selects exactly these clips (the last one is shown in the inspector). */
+  onSelectMany?: (ids: string[]) => void;
   onTime: (t: number) => void;
   onEdit: (ops: EditOp[]) => void;
   zoom: number;
@@ -56,6 +60,8 @@ export function Timeline({
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [cutMenu, setCutMenu] = useState<{ clip: string; x: number; y: number } | null>(null);
+  const [easeMenu, setEaseMenu] = useState<{ clip: string; at: number; x: number; y: number } | null>(null);
+  const easeClip = easeMenu ? findClip(project, easeMenu.clip)?.clip : undefined;
   useEffect(() => {
     if (!cutMenu) return;
     const close = () => setCutMenu(null);
@@ -327,7 +333,7 @@ export function Timeline({
               return (
                 <div
                   key={c.id}
-                  className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''} ${t.locked ? 'locked' : ''}`}
+                  className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''} ${t.locked ? 'locked' : ''} ${c.group ? 'grouped' : ''}`}
                   style={{ left: LABEL_W + w.left, width: w.width, top: 4 + lane * ROW_H[t.kind], height: ROW_H[t.kind] - 8, bottom: 'auto' }}
                   title={`${label(c)} · ${c.start.toFixed(2)}s–${clipEnd(c).toFixed(2)}s`}
                   onPointerDown={(e) => {
@@ -336,7 +342,11 @@ export function Timeline({
                       onSelect(c.id, true);
                       return;
                     }
-                    onSelect(c.id);
+                    if (c.group && onSelectMany) {
+                      // A grouped clip selects its whole group (the clicked clip last, for the inspector).
+                      const members = project.tracks.flatMap((tr) => tr.clips.filter((o) => o.group === c.group && o.id !== c.id).map((o) => o.id));
+                      onSelectMany([...members, c.id]);
+                    } else onSelect(c.id);
                     if (t.locked) return;
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     const edge = e.clientX - r.left < 7 ? 'trim-start' : r.right - e.clientX < 7 ? 'trim-end' : 'move';
@@ -356,11 +366,15 @@ export function Timeline({
                           key={at}
                           className="tl-key"
                           style={{ left: at * pps }}
-                          title={`Keyframe at ${(c.start + at).toFixed(2)} s — click to go there`}
+                          title={`Keyframe at ${(c.start + at).toFixed(2)} s — click to go there, double-click to change how it eases in`}
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             onSelect(c.id);
                             onTime(c.start + at);
+                          }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            setEaseMenu({ clip: c.id, at, x: e.clientX, y: e.clientY });
                           }}
                         />
                       ))}
@@ -371,6 +385,7 @@ export function Timeline({
           </div>
         ))}
         <div className="tl-playhead" style={{ left: LABEL_W + time * pps }} />
+        {easeMenu && easeClip && easeClip.type !== 'audio' && easeClip.type !== 'adjust' && <EaseEditor clip={easeClip} at={easeMenu.at} x={easeMenu.x} y={easeMenu.y} onEdit={onEdit} onClose={() => setEaseMenu(null)} />}
         {cutMenu && (
           <div className="tl-menu" style={{ left: cutMenu.x, top: cutMenu.y }} onPointerDown={(e) => e.stopPropagation()}>
             {TRANSITIONS.map((k) => (

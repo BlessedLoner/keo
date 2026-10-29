@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, VOICE_FX, VOICE_FX_LABEL, type Blend, type VoiceFx } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -266,7 +266,16 @@ export function StudioView() {
 
   const deleteSelected = useCallback(
     (ripple: boolean) => {
-      const ids = selectionRef.current;
+      const p = projectRef.current;
+      // A group goes with any one of its clips: one delete per group.
+      const groups = new Set<string>();
+      const ids = selectionRef.current.filter((id) => {
+        const g = p ? findClip(p, id)?.clip.group : undefined;
+        if (!g) return true;
+        if (groups.has(g)) return false;
+        groups.add(g);
+        return true;
+      });
       if (!ids.length) return;
       setSelected(null);
       void edit(ids.map((clip) => ({ op: 'delete' as const, clip, ripple })));
@@ -310,7 +319,13 @@ export function StudioView() {
       } else if (!e.ctrlKey && (e.key === 'f' || e.key === 'F')) setFull((v) => !v);
       else if (!e.ctrlKey && (e.key === 'm' || e.key === 'M')) void edit([{ op: 'marker', at: timeRef.current }]);
       else if (e.key === '?') setHelpOpen((v) => !v);
-      else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
+      else if (e.ctrlKey && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        const sel = selectionRef.current;
+        const g = sel.length ? findClip(p, sel.at(-1)!)?.clip.group : undefined;
+        if (e.shiftKey && g) void edit([{ op: 'ungroup', clip: sel.at(-1)! }]);
+        else if (!e.shiftKey && sel.length >= 2) void edit([{ op: 'group', clips: sel }]);
+      } else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
         e.preventDefault();
         void edit(selectionRef.current.map((clip) => ({ op: 'duplicate' as const, clip })));
       } else if (e.ctrlKey && (e.key === 'a' || e.key === 'A')) {
@@ -622,6 +637,16 @@ export function StudioView() {
         <button className="btn sm ghost" disabled={!selection.length} onClick={() => void edit(selection.map((clip) => ({ op: 'duplicate' as const, clip })))} title="Duplicate (Ctrl+D)">
           Duplicate
         </button>
+        {selection.length >= 2 && (
+          <button className="btn sm ghost" onClick={() => void edit([{ op: 'group', clips: selection }])} title="Group these clips: they move and are deleted together (Ctrl+G)">
+            Group
+          </button>
+        )}
+        {sel?.clip.group && (
+          <button className="btn sm ghost" onClick={() => void edit([{ op: 'ungroup', clip: sel.clip.id }])} title="Take the group apart (Ctrl+Shift+G)">
+            Ungroup
+          </button>
+        )}
         <button className="btn sm ghost" disabled={duration === 0} onClick={() => void edit([{ op: 'add_adjust', start: Math.min(time, Math.max(0, duration - 0.5)), duration: Math.max(0.5, Math.min(3, duration - Math.min(time, Math.max(0, duration - 0.5)))), color: { contrast: 0.15, saturation: 0.1 } }])} title="An adjustment layer at the playhead: one colour grade, blur or effect over everything under it">
           Adjust layer
         </button>
@@ -661,6 +686,7 @@ export function StudioView() {
         selected={selected}
         selectedIds={selection}
         onSelect={pick}
+        onSelectMany={setSelection}
         onTime={(t) => {
           setPlaying(false);
           setTime(t);
@@ -858,6 +884,24 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
             <input type="checkbox" checked={clip.voice} onChange={(e) => set({ voice: e.target.checked })} /> Enhance voice
           </label>
           <label className="insp-row">
+            <span>Equalizer</span>
+            <select className="select" value={clip.eq ? (Object.entries(EQ_PRESETS).find(([, v]) => v.low === clip.eq!.low && v.mid === clip.eq!.mid && v.high === clip.eq!.high)?.[0] ?? 'custom') : ''} onChange={(e) => e.target.value !== 'custom' && set({ eq: (e.target.value || null) as keyof typeof EQ_PRESETS | null })}>
+              <option value="">Flat</option>
+              <option value="voice">Clear voice</option>
+              <option value="warm">Warm</option>
+              <option value="bass">Bass boost</option>
+              <option value="bright">Bright</option>
+              <option value="phone">Phone call</option>
+              {clip.eq && !Object.values(EQ_PRESETS).some((v) => v.low === clip.eq!.low && v.mid === clip.eq!.mid && v.high === clip.eq!.high) && <option value="custom">Custom</option>}
+            </select>
+          </label>
+          <div className="insp-grid" style={{ marginTop: 6 }}>
+            <Num label="Bass" value={clip.eq?.low ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { low: v } })} />
+            <Num label="Mids" value={clip.eq?.mid ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { mid: v } })} />
+            <Num label="Treble" value={clip.eq?.high ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { high: v } })} />
+          </div>
+          {!asset?.cleanOf && <CleanSoundButton projectId={project.id} clip={clip} />}
+          <label className="insp-row">
             <span>Voice changer</span>
             <select className="select" value={clip.voiceFx ?? ''} onChange={(e) => set({ voiceFx: (e.target.value || null) as VoiceFx | null })}>
               <option value="">None</option>
@@ -947,6 +991,28 @@ function Inspector({ project, clip, time, onEdit }: { project: Project; clip: Cl
   );
 }
 
+/** Takes the background noise out of a clip's sound (a cleaned copy, made on this PC). */
+function CleanSoundButton({ projectId, clip }: { projectId: string; clip: MediaClip | AudioClip }) {
+  const ui = useUi();
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      await invoke('studio:cleanSound', { id: projectId, clip: clip.id, strength: 0.8 });
+      ui.toast(clip.type === 'media' ? 'Background noise removed: the clean sound is on the Voice (clean) track.' : 'Background noise removed.', 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn sm" style={{ marginTop: 8 }} disabled={busy} onClick={() => void go()} title="Hum, hiss, fans and room tone taken out (made on this PC; undo puts it back)">
+      {busy ? <span className="spinner tiny" /> : <Icon name="mic" size={13} />} {busy ? 'Cleaning the sound…' : 'Remove background noise'}
+    </button>
+  );
+}
+
 function ColorFields({ clip, set }: { clip: MediaClip | AdjustClip; set: (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => void }) {
   const g = clip.color ?? { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
   const field = (k: keyof typeof g, label: string, min = -1) => (
@@ -1012,6 +1078,7 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
             </select>
           </label>
           <Num label="Spacing" value={st.letterSpacing} min={-5} max={40} step={0.5} onCommit={(v) => set({ style: { letterSpacing: v } })} />
+          <Num label="Curve" value={st.curve} min={-100} max={100} step={5} onCommit={(v) => set({ style: { curve: v } })} />
         </div>
         <div className="insp-seg" role="radiogroup" aria-label="Align">
           {(['left', 'center', 'right'] as const).map((a) => (
@@ -1120,6 +1187,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ['Esc', 'Select nothing'],
   ['F', 'Full screen preview'],
   ['M', 'Add a marker at the playhead'],
+  ['Ctrl+G / Ctrl+Shift+G', 'Group the selected clips / ungroup'],
   ['?', 'This list'],
 ];
 

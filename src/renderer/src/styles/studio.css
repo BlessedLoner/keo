@@ -156,6 +156,17 @@
 .shape-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px; }
 .shape-row .btn { font-size: 14px; }
 .tl-clip.shape { background: linear-gradient(180deg, #b0476e, #8a2e52); }
+.ease-editor { position: fixed; z-index: 80; width: 290px; padding: 10px; background: var(--bg-elev, #1b1d24); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); font-size: 12px; }
+.ease-head { font-weight: 600; margin-bottom: 8px; }
+.ease-body { display: flex; gap: 10px; }
+.ease-names { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.ease-names .btn { justify-content: flex-start; gap: 6px; height: 24px; }
+.ease-graph { display: block; background: rgba(255, 255, 255, 0.03); border-radius: 6px; touch-action: none; }
+.ease-frame { fill: none; stroke: var(--line-strong); stroke-dasharray: 3 3; }
+.ease-arm { stroke: var(--text-3); stroke-width: 1; }
+.ease-line { fill: none; stroke: #ffd400; stroke-width: 2; }
+.ease-handle { fill: #3dd6ff; cursor: grab; }
+.tl-clip.grouped { box-shadow: inset 0 -3px 0 #ffd400; }
 .tl-clip.adjust { background: repeating-linear-gradient(135deg, #2f6f73 0 8px, #285e62 8px 16px); }
 
 /* Tools row above the timeline (and the bar that resizes the timeline) */

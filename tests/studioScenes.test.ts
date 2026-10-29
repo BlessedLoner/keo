@@ -143,3 +143,42 @@ describe('Reverse', () => {
     await expect(s.reverseClip(p.id, s.get(p.id).tracks[0]!.clips[1]!.id)).rejects.toThrow(/Only videos/);
   });
 });
+
+describe('Remove background noise', () => {
+  it('a video keeps its picture, its sound goes clean on its own track, one undo', async () => {
+    const dir = tempDir('keo-clean-');
+    const file = path.join(dir, 'vlog.mp4');
+    fs.writeFileSync(file, 'x');
+    const jobs: string[] = [];
+    h = makeHarness({
+      dir: path.join(dir, 'profile'),
+      deps: {
+        studioProbe: async (f) => (f.endsWith('.wav') ? { kind: 'audio', duration: 10, width: 0, height: 0, hasAudio: true } : { kind: 'video', duration: 10, width: 1080, height: 1920, hasAudio: true }),
+        studioJob: (jobId, job) =>
+          setTimeout(() => {
+            jobs.push(job.kind);
+            if (job.kind !== 'denoise') return h!.services.studio.jobDone(jobId, null, 'not in this test');
+            h!.services.studio.jobDone(jobId, { base64: Buffer.from('RIFF....WAVE').toString('base64'), seconds: 10 }, null);
+          }, 2),
+      },
+    });
+    const s = h.services.studio;
+    const p = s.create('Clean', 'vertical');
+    const vid = (await s.importFiles(p.id, [file])).added[0]!;
+    s.edit(p.id, [{ op: 'add_media', assetId: vid.id, start: 2, duration: 4, in: 3 }]);
+    const id = s.get(p.id).tracks[0]!.clips[0]!.id;
+    s.edit(p.id, [{ op: 'set', clip: id, fadeIn: 0.5, voice: true, eq: 'voice' }]);
+    await s.cleanSound(p.id, id);
+    const now = s.get(p.id);
+    expect((now.tracks[0]!.clips[0] as MediaClip).volume).toBe(0);
+    const clean = now.tracks.find((t) => t.name === 'Voice (clean)')!.clips[0]!;
+    expect(clean).toMatchObject({ type: 'audio', start: 2, duration: 4, in: 3, fadeIn: 0.5, voice: true, eq: { low: -4, mid: 3, high: 2 } });
+    expect(now.assets.find((a) => a.cleanOf === vid.id)?.name).toBe('vlog.mp4 (clean sound)');
+    // Cleaning the same file again uses the copy already made.
+    s.undoEdit(p.id);
+    expect((s.get(p.id).tracks[0]!.clips[0] as MediaClip).volume).toBe(1);
+    expect(s.get(p.id).tracks.find((t) => t.name === 'Voice (clean)')?.clips.length ?? 0).toBe(0);
+    await s.cleanSound(p.id, id);
+    expect(jobs.filter((k) => k === 'denoise')).toHaveLength(1);
+  });
+});

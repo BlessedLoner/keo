@@ -71,7 +71,7 @@ function state(s: StudioService, p: Project) {
 const State = z.object({ projectId: z.string(), durationSec: z.number(), timeline: z.string(), history: z.object({ undo: z.boolean(), redo: z.boolean() }) });
 
 const OPS_HELP =
-  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; set_project {name, width, height, fps, background, loudness}. ' +
+  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), eq {low, mid, high: -12..12 dB} or voice|warm|bass|bright|phone (equalizer; null flat), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; text style.curve -100..100 (text along an arc, like a badge or a rainbow); group {clips} / ungroup {clip} (grouped clips move and are deleted together: move or delete one of them); keyframes also take curve [x1, y1, x2, y2] (a custom cubic-bezier ease into that keyframe); add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; set_project {name, width, height, fps, background, loudness}. ' +
   'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, typewriter, blur-in, words (word by word); out: fade, pop, slide-down, blur-out. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Later tracks are drawn on top. ' +
   'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height). Videos and pictures: mask {shape rounded|circle, radius}, frame phone|browser|card (a device mock-up), shadow. Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
 
@@ -722,6 +722,26 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const cleanSound = defineCapability({
+    ...simple({
+      id: 'studio.clean_sound',
+      title: 'Remove background noise',
+      description: 'Take the steady background noise (hum, hiss, fans, traffic rumble, room tone) out of a clip’s sound, on this PC: a cleaned copy of the sound is made once and used, so the voice sounds like it was recorded in a quiet room. strength 0.1..1 (0.8 natural; 1 for very noisy). For a video, its own sound is turned off and the clean sound goes on the Voice (clean) track at the same time. Use it before Enhance voice. One edit (one undo).',
+      summary: 'Remove the background noise',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.8) }).strict(),
+    output: State.extend({ seconds: z.number() }),
+    timeoutMs: 60 * 60_000,
+    auditView: (i) => ({ strength: i.strength }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.cleanSound(p.id, i.clip, i.strength).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), seconds: r.seconds };
+    },
+  });
+
   const reverse = defineCapability({
     ...simple({
       id: 'studio.reverse',
@@ -838,7 +858,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project').describe('The shorter side in pixels; project: the project size (1080 for most)'),
         fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
         quality: z.enum(['standard', 'high', 'best']).default('high'),
-        name: z.string().trim().min(1).max(80).optional().describe('File name without .mp4; default: the project name'),
+        format: z.enum(['mp4', 'gif', 'wav']).default('mp4').describe('mp4: the video; gif: an animated GIF (up to 480 px wide, 15 fps, at most 60 s) for chats and sites; wav: the sound alone (a voice-over or podcast)'),
+        name: z.string().trim().min(1).max(80).optional().describe('File name without the extension; default: the project name'),
       })
       .strict(),
     output: z.object({ file: z.string(), durationSec: z.number(), frames: z.number(), bytes: z.number() }),
@@ -861,7 +882,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       } catch {
         // No project: the action fails with its own message.
       }
-      return { summary: `Save the video${what}`, target: d.outputRoot(), consequences: ['Creates a new MP4 file; existing files are never replaced.'], dataExport: null };
+      const kind = i.format === 'gif' ? 'GIF' : i.format === 'wav' ? 'WAV sound' : 'MP4';
+      return { summary: `Save the ${i.format === 'wav' ? 'sound' : i.format === 'gif' ? 'GIF' : 'video'}${what}`, target: d.outputRoot(), consequences: [`Creates a new ${kind} file; existing files are never replaced.`], dataExport: null };
     },
     auditView: () => ({}),
     async execute(i) {
@@ -875,7 +897,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verify: (_i, o) => Promise.resolve(checkExport(o)),
   });
 
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, reframe, readAloud, template, exportVideo];
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, reframe, readAloud, template, exportVideo];
 }
 
 /** A path the model proposes is used only when the user wrote it (or the file's name) in this conversation. */
@@ -889,6 +911,21 @@ function trusted(d: StudioToolDeps, p: string, ctx: CapabilityContext): string {
 
 /** The saved file read back: a video track with every frame of the timeline. */
 function checkExport(o: { file: string; durationSec: number; frames: number }): { verified: boolean; detail: string } {
+  if (/\.(gif|wav)$/i.test(o.file)) {
+    // A GIF or WAV: the file starts as one and is not empty.
+    let head = '';
+    try {
+      const fd = fs.openSync(o.file, 'r');
+      const b = Buffer.alloc(12);
+      fs.readSync(fd, b, 0, 12, 0);
+      fs.closeSync(fd);
+      head = b.toString('latin1');
+    } catch {
+      /* unreadable: not verified */
+    }
+    const ok = o.file.toLowerCase().endsWith('.gif') ? head.startsWith('GIF89a') && o.frames > 0 : head.startsWith('RIFF') && head.slice(8, 12) === 'WAVE';
+    return { verified: ok, detail: ok ? `${o.file.toLowerCase().endsWith('.gif') ? `${o.frames} frames` : 'sound'}, ${o.durationSec.toFixed(1)} s` : 'The saved file is not the expected kind.' };
+  }
   const r = Mp4Reader.open(o.file);
   try {
     const v = r?.video();

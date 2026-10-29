@@ -239,3 +239,69 @@ describe('Studio editing: adjustment layers', () => {
     expect(p.tracks[2]!.clips[0]!.start).toBe(0.5);
   });
 });
+
+describe('Studio editing: equalizer', () => {
+  it('takes presets and single bands, goes flat, and travels with detached sound', () => {
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    let a = applyEdits(p, [{ op: 'set', clip: id, eq: 'voice' }], { rand }).project;
+    expect(videos(a)[0]!.eq).toEqual({ low: -4, mid: 3, high: 2 });
+    a = applyEdits(a, [{ op: 'set', clip: id, eq: { high: 6 } }], { rand }).project;
+    expect(videos(a)[0]!.eq).toEqual({ low: -4, mid: 3, high: 6 });
+    expect(describeProject(a)).toMatch(/eq -4\/3\/6 dB/);
+    const d = applyEdits(a, [{ op: 'detach_audio', clip: id }], { rand }).project;
+    expect((d.tracks.find((t) => t.name === 'Detached audio')!.clips[0] as AudioClip).eq).toEqual({ low: -4, mid: 3, high: 6 });
+    expect(videos(applyEdits(a, [{ op: 'set', clip: id, eq: null }], { rand }).project)[0]).not.toHaveProperty('eq');
+    expect(videos(applyEdits(a, [{ op: 'set', clip: id, eq: { low: 0, mid: 0, high: 0 } }], { rand }).project)[0]).not.toHaveProperty('eq');
+  });
+});
+
+describe('Studio editing: groups', () => {
+  it('grouped clips move and are deleted together; copies and ungroup leave the group', () => {
+    let p = withClip();
+    const vid1 = videos(p)[0]!.id;
+    p = applyEdits(p, [{ op: 'add_text', text: 'Hi', start: 1, duration: 2 }], { rand }).project;
+    const txt = p.tracks.find((t) => t.kind === 'text')!.clips[0]!.id;
+    p = applyEdits(p, [{ op: 'group', clips: [vid1, txt] }], { rand }).project;
+    const gid = videos(p)[0]!.group!;
+    expect(gid).toMatch(/^gr_/);
+    expect(describeProject(p)).toContain(`[group ${gid}]`);
+    // Moving the text 3 s later moves the video too.
+    p = applyEdits(p, [{ op: 'move', clip: txt, start: 4 }], { rand }).project;
+    expect(videos(p)[0]!.start).toBe(3);
+    // Never before 0 s: the whole group stops where its earliest clip reaches 0.
+    p = applyEdits(p, [{ op: 'move', clip: txt, start: 0 }], { rand }).project;
+    expect([videos(p)[0]!.start, p.tracks.find((t) => t.kind === 'text')!.clips[0]!.start]).toEqual([0, 1]);
+    // A copy is not in the group.
+    const copied = applyEdits(p, [{ op: 'duplicate', clip: vid1 }], { rand }).project;
+    expect(videos(copied)[1]!.group).toBeUndefined();
+    // Deleting one deletes both.
+    const gone = applyEdits(p, [{ op: 'delete', clip: vid1 }], { rand }).project;
+    expect(gone.tracks.flatMap((t) => t.clips)).toHaveLength(0);
+    const apart = applyEdits(p, [{ op: 'ungroup', clip: txt }], { rand }).project;
+    expect(apart.tracks.flatMap((t) => t.clips).some((c) => c.group)).toBe(false);
+    expect(() => applyEdits(apart, [{ op: 'ungroup', clip: txt }], { rand })).toThrow(/not in a group/);
+  });
+});
+
+describe('Studio editing: custom eases', () => {
+  it('a keyframe can ease in on its own curve', async () => {
+    const { cubicBezier, keyValue } = await import('../src/shared/studio');
+    // The straight curve is linear; ends are exact.
+    expect(cubicBezier([0.25, 0.25, 0.75, 0.75], 0.3)).toBeCloseTo(0.3, 3);
+    expect(cubicBezier([0.42, 0, 0.58, 1], 0)).toBeCloseTo(0, 9);
+    expect(cubicBezier([0.42, 0, 0.58, 1], 1)).toBeCloseTo(1, 6);
+    // A late, fast curve: hardly moved at 40%, an overshoot shows above 1.
+    expect(cubicBezier([0.9, 0, 1, 0.2], 0.4)).toBeLessThan(0.05);
+    expect(Math.max(...[0.6, 0.7, 0.8].map((p) => cubicBezier([0.3, 1.8, 0.6, 1], p)))).toBeGreaterThan(1);
+    const keys = [
+      { at: 0, value: 0, ease: 'linear' as const },
+      { at: 2, value: 100, ease: 'in-out' as const, curve: [0.25, 0.25, 0.75, 0.75] as [number, number, number, number] },
+    ];
+    expect(keyValue(keys, 1)).toBeCloseTo(50, 1);
+    const p = withClip();
+    const id = videos(p)[0]!.id;
+    const a = applyEdits(p, [{ op: 'set', clip: id, keys: { opacity: [{ at: 0, value: 0, ease: 'linear' }, { at: 1, value: 1, ease: 'in-out', curve: [0.9, 0, 1, 0.2] }] } }], { rand }).project;
+    expect(videos(a)[0]!.keys?.opacity?.[1]?.curve).toEqual([0.9, 0, 1, 0.2]);
+  });
+});

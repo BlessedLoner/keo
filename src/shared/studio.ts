@@ -48,6 +48,18 @@ export const VOICE_FX = ['chipmunk', 'deep', 'robot', 'radio', 'megaphone', 'ech
 export const VoiceFx = z.enum(VOICE_FX);
 export const VOICE_FX_LABEL: Record<(typeof VOICE_FX)[number], string> = { chipmunk: 'Chipmunk (higher)', deep: 'Deep (lower)', robot: 'Robot', radio: 'Radio', megaphone: 'Megaphone', echo: 'Echo', hall: 'Big hall', underwater: 'Underwater' };
 export type VoiceFx = z.infer<typeof VoiceFx>;
+/** A three-band equalizer, in dB. */
+export const Eq = z.object({ low: z.number().min(-12).max(12).default(0), mid: z.number().min(-12).max(12).default(0), high: z.number().min(-12).max(12).default(0) }).strict();
+export type Eq = z.infer<typeof Eq>;
+/** Equalizer presets for one click. */
+export const EQ_PRESETS: Record<'voice' | 'warm' | 'bass' | 'bright' | 'phone', Eq> = {
+  voice: { low: -4, mid: 3, high: 2 },
+  warm: { low: 3, mid: 0, high: -2 },
+  bass: { low: 6, mid: 0, high: 0 },
+  bright: { low: -1, mid: 1, high: 5 },
+  phone: { low: -12, mid: 6, high: -10 },
+};
+
 /** How a layer mixes with what is under it. */
 export const BLENDS = ['normal', 'screen', 'multiply', 'overlay', 'lighten', 'darken', 'add', 'difference'] as const;
 export const Blend = z.enum(BLENDS);
@@ -89,6 +101,8 @@ export const Asset = z
     /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
     beats: z.array(Sec).max(20000).optional(),
     bpm: z.number().min(20).max(400).nullable().optional(),
+    /** A copy with the background noise taken out, which Keo made of this file. */
+    cleanOf: Id.optional(),
     /** A reversed copy Keo made: of which video, from where in it. */
     reverseOf: z.object({ assetId: Id, in: Sec }).strict().optional(),
     /** Where the video changes shot (seconds into it), found on this PC once. */
@@ -107,7 +121,15 @@ export const TextAnimOut = z.enum(['none', 'fade', 'pop', 'slide-down', 'blur-ou
 export const Ease = z.enum(['linear', 'in', 'out', 'in-out', 'back', 'elastic', 'bounce', 'hold']);
 export type Ease = z.infer<typeof Ease>;
 /** A keyframe: at `at` seconds into the clip the property is `value`. */
-export const Key = z.object({ at: Sec, value: z.number().min(-10000).max(10000), ease: Ease.default('in-out') }).strict();
+export const Key = z
+  .object({
+    at: Sec,
+    value: z.number().min(-10000).max(10000),
+    ease: Ease.default('in-out'),
+    /** A custom ease into this keyframe, like CSS cubic-bezier(x1, y1, x2, y2); used instead of `ease`. */
+    curve: z.tuple([z.number().min(0).max(1), z.number().min(-1).max(2), z.number().min(0).max(1), z.number().min(-1).max(2)]).optional(),
+  })
+  .strict();
 export type Key = z.infer<typeof Key>;
 /**
  * The properties keyframes animate: x, y (fractions of the frame, like the position), scale,
@@ -164,6 +186,8 @@ export const TextStyle = z
     boxColor: Hex.default('#000000B3'),
     uppercase: z.boolean().default(false),
     letterSpacing: z.number().min(-5).max(40).default(0),
+    /** Text along an arc: 100 bends it into a half circle like a rainbow, -100 the other way (0: straight). */
+    curve: z.number().min(-100).max(100).default(0),
     lineHeight: z.number().min(0.6).max(3).default(1.15),
   })
   .strict();
@@ -284,6 +308,8 @@ export const MediaClip = z
   .object({
     id: Id,
     type: z.literal('media'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
     assetId: Id,
     start: Sec,
     duration: z.number().min(0.04).max(24 * 3600),
@@ -323,6 +349,8 @@ export const MediaClip = z
     blend: Blend.optional(),
     /** Voice changer on the clip's sound. */
     voiceFx: VoiceFx.optional(),
+    /** Equalizer: bass (around 120 Hz), mids (1.5 kHz) and treble (above 6 kHz), each -12..12 dB. */
+    eq: Eq.optional(),
     /** Looks laid over the picture (film grain, VHS, glow, RGB split, light leak), each 0..1. */
     effects: Effects.optional(),
     /** A speed curve over the clip (x: fraction of the clip); replaces `speed` while set. */
@@ -367,6 +395,8 @@ export const ShapeClip = z
   .object({
     id: Id,
     type: z.literal('shape'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
     start: Sec,
     duration: z.number().min(0.04).max(24 * 3600),
     shape: ShapeKind,
@@ -381,6 +411,8 @@ export const TextClip = z
   .object({
     id: Id,
     type: z.literal('text'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
     start: Sec,
     duration: z.number().min(0.04).max(24 * 3600),
     text: z.string().min(1).max(2000),
@@ -405,6 +437,8 @@ export const AudioClip = z
   .object({
     id: Id,
     type: z.literal('audio'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
     assetId: Id,
     start: Sec,
     duration: z.number().min(0.04).max(24 * 3600),
@@ -420,6 +454,8 @@ export const AudioClip = z
     duck: z.number().min(-40).max(0).nullable().default(null),
     /** Voice changer on this sound. */
     voiceFx: VoiceFx.optional(),
+    /** Equalizer: bass (around 120 Hz), mids (1.5 kHz) and treble (above 6 kHz), each -12..12 dB. */
+    eq: Eq.optional(),
   })
   .strict();
 export type AudioClip = z.infer<typeof AudioClip>;
@@ -432,6 +468,8 @@ export const AdjustClip = z
   .object({
     id: Id,
     type: z.literal('adjust'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
     start: Sec,
     duration: z.number().min(0.04).max(24 * 3600),
     ...Fades,
@@ -510,7 +548,9 @@ export type RenderJob =
   | { kind: 'audio'; projectId: string; sampleRate: number }
   | { kind: 'cancel'; exportId: string }
   | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number }
-  | { kind: 'signatures'; projectId: string; assetId: string; times: number[] };
+  | { kind: 'signatures'; projectId: string; assetId: string; times: number[] }
+  | { kind: 'export_file'; projectId: string; exportId: string; format: 'gif' | 'wav' }
+  | { kind: 'denoise'; projectId: string; assetId: string; strength: number };
 
 /** Export choices: the shorter side in pixels (or the project's own size), frame rate, quality, file name. */
 export const ExportQuality = z.enum(['standard', 'high', 'best']);
@@ -520,6 +560,8 @@ export const ExportOptions = z
     resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project'),
     fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
     quality: ExportQuality.default('high'),
+    /** mp4: the video; gif: an animated GIF (up to 480 px wide, 15 fps); wav: the sound alone. */
+    format: z.enum(['mp4', 'gif', 'wav']).default('mp4'),
     name: z.string().trim().min(1).max(80).optional(),
   })
   .strict();
@@ -642,6 +684,9 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('replace_media'), clip: ClipRef, assetId: AssetRef, in: Sec.optional() }).strict(),
   /** A marker at a moment (default label: "Marker n"); remove: the marker nearest `at` goes instead. */
   z.object({ op: z.literal('marker'), at: Sec, label: z.string().trim().min(1).max(60).optional(), remove: z.boolean().optional() }).strict(),
+  /** Group clips: they move and are deleted together (ungroup: the clip's group comes apart). */
+  z.object({ op: z.literal('group'), clips: z.array(ClipRef).min(2).max(200) }).strict(),
+  z.object({ op: z.literal('ungroup'), clip: ClipRef }).strict(),
   /** A copy of a clip (default: right after it, on the same track). */
   z.object({ op: z.literal('duplicate'), clip: ClipRef, start: At.optional(), track: TrackRef.optional() }).strict(),
   /** Delete a clip; ripple: later clips on its track move left to close the gap. */
@@ -691,6 +736,8 @@ export const EditOp = z.discriminatedUnion('op', [
       flipY: z.boolean().optional(),
       blend: Blend.optional(),
       voiceFx: VoiceFx.nullable().optional(),
+      /** Equalizer bands to change (dB), or a preset's name; null: flat again. */
+      eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
       chroma: Chroma.partial().nullable().optional(),
       /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
       effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
@@ -978,6 +1025,20 @@ export function volumeAt(c: { volume: number; volumeKeys?: Key[] | undefined }, 
 const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
 
 /** Easing curves: progress 0..1 to 0..1 (back and elastic overshoot a little). */
+/** CSS-style cubic-bezier(x1, y1, x2, y2) at progress p (0..1): the curve's height where its x is p. */
+export function cubicBezier([x1, y1, x2, y2]: [number, number, number, number], p: number): number {
+  const at = (a: number, b: number, t: number) => 3 * a * t * (1 - t) * (1 - t) + 3 * b * t * t * (1 - t) + t * t * t;
+  // The t whose x is p (x rises steadily because x1 and x2 are 0..1), by halving.
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (at(x1, x2, mid) < p) lo = mid;
+    else hi = mid;
+  }
+  return at(y1, y2, (lo + hi) / 2);
+}
+
 export const EASES: Record<Ease, (p: number) => number> = {
   linear: (p) => p,
   in: (p) => p * p * p,
@@ -1015,7 +1076,8 @@ export function keyValue(keys: Key[], rt: number): number {
     if (rt < b.at) {
       const a = keys[i - 1]!;
       const p = (rt - a.at) / Math.max(1e-6, b.at - a.at);
-      return a.value + (b.value - a.value) * EASES[b.ease](Math.min(1, Math.max(0, p)));
+      const q = Math.min(1, Math.max(0, p));
+      return a.value + (b.value - a.value) * (b.curve && b.ease !== 'hold' ? cubicBezier(b.curve, q) : EASES[b.ease](q));
     }
   }
   return keys.at(-1)!.value;
@@ -1099,6 +1161,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
     return t;
   };
   const endOf = (t: Track) => t.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
+  /** Every clip of a group, with its track. */
+  const members_ = (gid: string) => p.tracks.flatMap((track) => track.clips.filter((c) => c.group === gid).map((clip) => ({ track, clip })));
   const get = (id: string) => {
     const f = findClip(p, id);
     if (!f) throw new EditError(`There is no clip ${id}.`);
@@ -1191,7 +1255,18 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const f = get(op.clip);
         const kind = f.track.kind;
         const to = op.track ? track(op.track, kind) : f.track;
-        f.clip.start = round(op.start);
+        if (f.clip.group) {
+          // The rest of its group moves by the same amount (never before 0 s).
+          const members = members_(f.clip.group).filter((m) => m.clip !== f.clip);
+          const earliest = Math.min(f.clip.start, ...members.map((m) => m.clip.start));
+          const by = Math.max(op.start - f.clip.start, -earliest);
+          for (const m of members) {
+            if (m.track.locked) throw new EditError(`The track ${m.track.name} is locked: unlock it first (set_track locked false).`);
+            m.clip.start = round(m.clip.start + by);
+            sortClips(m.track);
+          }
+          f.clip.start = round(f.clip.start + by);
+        } else f.clip.start = round(op.start);
         if (to !== f.track) {
           f.track.clips.splice(f.index, 1);
           to.clips.push(f.clip);
@@ -1243,7 +1318,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           t = { id: rid('tr', rand), kind: 'audio', name: 'Detached audio', hidden: false, muted: false, clips: [] };
           p.tracks.push(t);
         }
-        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}), ...(c.volumeKeys ? { volumeKeys: c.volumeKeys } : {}) });
+        const s = AudioClip.parse({ id: rid('cl', rand), type: 'audio', assetId: a.id, start: c.start, duration: c.duration, in: c.in, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}), ...(c.eq ? { eq: c.eq } : {}), ...(c.volumeKeys ? { volumeKeys: c.volumeKeys } : {}) });
         t.clips.push(s);
         sortClips(t);
         c.volume = 0;
@@ -1297,6 +1372,22 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         changes.push(`Put ${a.name} in ${c.id}'s place${short ? ` (it is shorter: its last frame holds for ${round(need - (a.duration - c.in))}s)` : ''}.`);
         break;
       }
+      case 'group': {
+        const found = [...new Set(op.clips)].map((cid) => get(cid));
+        if (found.length < 2) throw new EditError('A group needs at least two clips.');
+        const gid = rid('gr', rand);
+        for (const f of found) f.clip.group = gid;
+        changes.push(`Grouped ${found.length} clips (${gid}).`);
+        break;
+      }
+      case 'ungroup': {
+        const f = get(op.clip);
+        if (!f.clip.group) throw new EditError(`${f.clip.id} is not in a group.`);
+        const all = members_(f.clip.group);
+        for (const m of all) delete m.clip.group;
+        changes.push(`Ungrouped ${all.length} clips.`);
+        break;
+      }
       case 'marker': {
         if (op.remove) {
           if (!p.markers.length) throw new EditError('There are no markers to remove.');
@@ -1316,6 +1407,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const to = op.track ? track(op.track, f.track.kind) : f.track;
         const copy = structuredClone(f.clip);
         copy.id = rid('cl', rand);
+        delete copy.group;
         copy.start = round(op.start === undefined || op.start === 'end' ? (op.start === 'end' ? endOf(to) : clipEnd(f.clip)) : op.start);
         to.clips.push(copy);
         sortClips(to);
@@ -1348,7 +1440,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       }
       case 'delete': {
         const f = get(op.clip);
-        f.track.clips.splice(f.index, 1);
+        if (f.clip.group)
+          for (const m of members_(f.clip.group).filter((x) => x.clip !== f.clip)) {
+            if (m.track.locked) throw new EditError(`The track ${m.track.name} is locked: unlock it first (set_track locked false).`);
+            m.track.clips.splice(m.track.clips.indexOf(m.clip), 1);
+          }
+        f.track.clips.splice(f.track.clips.indexOf(f.clip), 1);
         if (op.ripple) for (const o2 of f.track.clips) if (o2.start >= clipEnd(f.clip) - 1e-6) o2.start = round(o2.start - f.clip.duration);
         changes.push(`Deleted ${f.clip.id}${op.ripple ? ' and closed the gap' : ''}.`);
         break;
@@ -1429,6 +1526,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           const m = c as MediaClip;
           if (op.blend === 'normal') delete m.blend;
           else m.blend = op.blend;
+        }
+        if (op.eq !== undefined) {
+          only('equalizer', isAV(c));
+          const v = c as MediaClip | AudioClip;
+          const next = op.eq === null ? null : typeof op.eq === 'string' ? EQ_PRESETS[op.eq] : Eq.parse({ ...(v.eq ?? {}), ...op.eq });
+          if (!next || (!next.low && !next.mid && !next.high)) delete v.eq;
+          else v.eq = { ...next };
         }
         if (op.voiceFx !== undefined) {
           only('voice changer', isAV(c));
@@ -1778,6 +1882,7 @@ export function describeProject(p: Project): string {
   p.tracks.forEach((t, i) => {
     lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}${t.locked ? ' (locked)' : ''}:`);
     for (const c of t.clips) {
+      const before = lines.length;
       const span = `${round(c.start)}–${round(clipEnd(c))}s`;
       if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}${c.counter ? ` counter ${c.counter.from}→${c.counter.to}` : ''}${motionNote(c)}`);
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
@@ -1787,8 +1892,9 @@ export function describeProject(p: Project): string {
         lines.push(`  ${c.id} ${span} adjustment layer${g.length ? ` colour ${g.join(', ')}` : ''}${fx.length ? ` effects ${fx.join(', ')}` : ''}${c.blur ? ` blur ${c.blur}` : ''}${c.strength !== 1 ? ` strength ${c.strength}` : ''}`);
       } else {
         const a = p.assets.find((x) => x.id === c.assetId);
-        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
+        lines.push(`  ${c.id} ${span} ${c.type === 'media' ? 'clip' : 'sound'} ${a?.name ?? c.assetId} from ${round(c.in)}s${c.type === 'media' && c.speed !== 1 ? ` at ${c.speed}x` : ''}${c.volume !== 1 ? ` volume ${c.volume}` : ''}${c.volumeKeys?.length ? ` volume keys ${c.volumeKeys.map((k) => `${round(k.at)}s:${round(k.value)}`).join(' ')}` : ''}${c.voiceFx ? ` voice ${c.voiceFx}` : ''}${c.eq ? ` eq ${c.eq.low}/${c.eq.mid}/${c.eq.high} dB` : ''}${c.type === 'media' && c.blend ? ` blend ${c.blend}` : ''}${c.type === 'media' && (c.flipX || c.flipY) ? ' flipped' : ''}${c.type === 'media' ? motionNote(c) : ''}`);
       }
+      if (c.group && lines.length > before) lines[lines.length - 1] += ` [group ${c.group}]`;
     }
   });
   return lines.join('\n');

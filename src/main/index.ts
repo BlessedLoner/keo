@@ -985,6 +985,12 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const firstAudio = Mp4Reader.open(first.file);
   out.firstHasSound = !!firstAudio?.audio();
   firstAudio?.close();
+  // The same timeline as an animated GIF and as sound alone.
+  const gif = await s.studio.exportVideo(a.id, { format: 'gif' });
+  const wav = await s.studio.exportVideo(a.id, { format: 'wav' });
+  const gifBytes = fs.readFileSync(gif.file);
+  const wavBytes = fs.readFileSync(wav.file);
+  out.formats = { gif: { head: gifBytes.subarray(0, 6).toString('latin1'), frames: gif.frames, width: gifBytes.readUInt16LE(6), ends: gifBytes.at(-1) }, wav: { head: wavBytes.subarray(8, 12).toString('latin1'), seconds: wavBytes.readUInt32LE(40) / (48000 * 4), peak: Math.max(...Array.from({ length: 2000 }, (_, i) => Math.abs(wavBytes.readInt16LE(44 + i * 4 * 20)))) } };
   // The timeline's sound for captions: 16 kHz mono, the 2-second tone found as one stretch of sound.
   const speech = await s.studio.speech(a.id);
   out.speech = speech ? { rate: speech.rate, seconds: speech.samples.length / speech.rate, spans: voicedSpans(speech.samples, speech.rate) } : null;
@@ -1077,6 +1083,52 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   const scVid = (await s.studio.importFiles(scP.id, [shFile])).added[0]!;
   s.studio.edit(scP.id, [{ op: 'add_media', assetId: scVid.id, start: 0 }]);
   const scSplit = await s.studio.splitScenes(scP.id);
+  // Background noise: a hissy recording (a tone between two pauses) cleaned in the render window.
+  const nzRate = 48000;
+  let nzSeed = 5;
+  const nzPcm = Int16Array.from({ length: nzRate * 3 }, (_, i) => Math.round((((nzSeed = (nzSeed * 1664525 + 1013904223) >>> 0) / 2 ** 32 - 0.5) * 0.06 + (i >= nzRate && i < nzRate * 2 ? 0.3 * Math.sin((2 * Math.PI * 220 * i) / nzRate) : 0)) * 32767));
+  const nzFile = path.join(dir, 'noisy.wav');
+  fs.writeFileSync(nzFile, wavOf(nzPcm, nzRate));
+  const nz = s.studio.create('Studio smoke noise', 'square');
+  const nzAsset = (await s.studio.importFiles(nz.id, [nzFile])).added[0]!;
+  s.studio.edit(nz.id, [{ op: 'add_audio', assetId: nzAsset.id, start: 0 }]);
+  await s.studio.cleanSound(nz.id, s.studio.get(nz.id).tracks.flatMap((t) => t.clips)[0]!.id);
+  const nzNow = s.studio.get(nz.id);
+  const nzClean = nzNow.assets.find((x) => x.id === (nzNow.tracks.flatMap((t) => t.clips)[0] as { assetId: string }).assetId)!;
+  const nzBytes = fs.readFileSync(nzClean.path);
+  const nzRms = (read: (i: number) => number, from: number, to: number) => {
+    let sum = 0;
+    for (let i = from; i < to; i++) sum += read(i) ** 2;
+    return Math.sqrt(sum / (to - from));
+  };
+  const before = { pause: nzRms((i) => nzPcm[i]!, 4800, 43200), voice: nzRms((i) => nzPcm[i]!, 52800, 91200) };
+  const after = { pause: nzRms((i) => nzBytes.readInt16LE(44 + i * 4), 4800, 43200), voice: nzRms((i) => nzBytes.readInt16LE(44 + i * 4), 52800, 91200) };
+  out.denoise = { name: nzClean.name, pauseDb: 20 * Math.log10(before.pause / Math.max(1, after.pause)), voiceDb: 20 * Math.log10(before.voice / Math.max(1, after.voice)) };
+  s.studio.delete(nz.id);
+  // Curved text: the same words straight (0–1 s) and along an arc (1–2 s); the arc is taller.
+  const cv = s.studio.create('Studio smoke curve', 'square');
+  s.studio.edit(cv.id, [
+    { op: 'set_project', width: 320, height: 320, background: '#000000' },
+    { op: 'add_text', text: 'KEO STUDIO CURVES', start: 0, duration: 1, style: { sizePct: 6, color: '#FFFFFF' } },
+    { op: 'add_text', text: 'KEO STUDIO CURVES', start: 1, duration: 1, style: { sizePct: 6, color: '#FFFFFF', curve: 80 } },
+  ]);
+  const inkHeight = (png: Buffer) => {
+    const img = nativeImage.createFromBuffer(png);
+    const { width, height } = img.getSize();
+    const bmp = img.toBitmap();
+    let top = height;
+    let bottom = -1;
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        if (bmp[(y * width + x) * 4 + 1]! > 128) {
+          top = Math.min(top, y);
+          bottom = Math.max(bottom, y);
+        }
+    return bottom - top;
+  };
+  const cvFrames = await s.studio.frames(cv.id, [0.5, 1.5], 320);
+  out.curve = { straight: inkHeight(cvFrames[0]!.png), curved: inkHeight(cvFrames[1]!.png) };
+  s.studio.delete(cv.id);
   // An adjustment layer: black and white over the picture for its first second only.
   const adj = s.studio.create('Studio smoke adjust', 'square');
   const adjPic = (await s.studio.importFiles(adj.id, [pic])).added[0]!;

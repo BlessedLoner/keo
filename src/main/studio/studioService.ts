@@ -261,6 +261,14 @@ export class StudioService {
     return r;
   }
 
+  /** One more edit that undoes together with the edit just before it (one step in the undo list). */
+  private mergeLast(id: string, op: EditOp): { project: Project; changes: string[] } {
+    const r = this.edit(id, [op]);
+    this.undo.get(id)?.pop();
+    this.undoLabels.get(id)?.pop();
+    return r;
+  }
+
   /** What each step in the undo list did (in the same order as the undo stack). */
   private readonly undoLabels = new Map<string, string[]>();
   private readonly redoLabels = new Map<string, string[]>();
@@ -500,7 +508,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'name'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'name'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -608,6 +616,55 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- background noise
+
+  /**
+   * Takes the background noise (hum, hiss, fans, room tone) out of a clip's sound: a cleaned copy
+   * of the whole file is made once on this PC and the clip uses it. A video keeps its picture and
+   * its own sound is turned off; the clean sound goes on the Voice (clean) track at the same time.
+   * One edit (one undo).
+   */
+  async cleanSound(id: string, clipId: string, strength = 0.8): Promise<{ project: Project; seconds: number }> {
+    const p = this.get(id);
+    const f = findClip(p, clipId);
+    if (!f || (f.clip.type !== 'media' && f.clip.type !== 'audio')) throw new StudioError('That is not a clip with sound.');
+    if (f.track.locked) throw new StudioError(`The track ${f.track.name} is locked: unlock it first.`);
+    const c = f.clip;
+    const a = p.assets.find((x) => x.id === c.assetId);
+    if (!a || !a.hasAudio) throw new StudioError('That clip has no sound.');
+    if (a.cleanOf) throw new StudioError('That sound is already cleaned.');
+    if (c.type === 'media' && (c.speed !== 1 || c.speedCurve || c.reversed)) throw new StudioError('Set the clip to normal speed first (its sound is cleaned at normal speed).');
+    if (a.duration > 45 * 60) throw new StudioError('That file is longer than 45 minutes: cut the part you need first.');
+    const level = Math.round(Math.max(0.1, Math.min(1, strength)) * 100);
+    const file = path.join(this.d.dir, 'made', `clean-${a.id}-${level}.wav`);
+    if (!fs.existsSync(file)) {
+      const r = await this.runJob<{ base64: string; seconds: number }>({ kind: 'denoise', projectId: id, assetId: a.id, strength: level / 100 }, 60 * 60_000);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(`${file}.tmp`, Buffer.from(r.base64, 'base64'));
+      fs.renameSync(`${file}.tmp`, file);
+    }
+    const known = this.get(id).assets.find((x) => path.resolve(x.path).toLowerCase() === path.resolve(file).toLowerCase());
+    const copy = known ?? (await this.importFiles(id, [file])).added[0];
+    if (!copy) throw new StudioError('Keo could not read the cleaned sound.');
+    if (!copy.cleanOf) this.learn(id, copy.id, { cleanOf: a.id, name: `${a.name} (clean sound)` });
+    const ops: EditOp[] =
+      c.type === 'audio'
+        ? [{ op: 'replace_media', clip: c.id, assetId: copy.id, in: c.in }]
+        : [
+            { op: 'set', clip: c.id, volume: 0 },
+            { op: 'add_audio', assetId: copy.id, trackName: 'Voice (clean)', start: c.start, in: c.in, duration: c.duration, volume: c.volume },
+          ];
+    let r = this.edit(id, ops);
+    if (c.type === 'media') {
+      // The clean sound keeps the video's sound settings (fades, voice, gate, changer, curve, EQ).
+      const added = r.project.tracks.find((t) => t.name === 'Voice (clean)')!.clips.filter((x) => x.type === 'audio' && x.assetId === copy.id).at(-1)!;
+      const keep: Extract<EditOp, { op: 'set' }> = { op: 'set', clip: added.id, fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.gate ? { gate: c.gate } : {}), ...(c.voiceFx ? { voiceFx: c.voiceFx } : {}), ...(c.eq ? { eq: c.eq } : {}), ...(c.volumeKeys ? { volumeKeys: c.volumeKeys } : {}) };
+      r = this.mergeLast(id, keep);
+    }
+    this.d.log.info('studio.cleaned_sound', { seconds: Math.round(c.duration), level });
+    return { project: r.project, seconds: c.duration };
   }
 
   // ---------------------------------------------------------------- reverse
@@ -854,6 +911,9 @@ export class StudioService {
     const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
     if (o.name) this.exportNames.set(exportId, o.name);
     this.running.set(id, exportId);
+    if (o.format !== 'mp4') return await this.exportFileAs(id, exportId, o.format, o.name).finally(() => {
+      if (this.running.get(id) === exportId) this.running.delete(id);
+    });
     const size = { ...exportSize(p, o), quality: o.quality };
     const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId, size }, 6 * 60 * 60 * 1000).finally(() => {
       this.exportNames.delete(exportId);
@@ -861,6 +921,23 @@ export class StudioService {
     });
     this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames });
     return r;
+  }
+
+  /** A GIF or the sound alone (WAV), made in the render window and saved next to the videos (a new file). */
+  private async exportFileAs(id: string, exportId: string, format: 'gif' | 'wav', name?: string): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+    const p = this.get(id);
+    if (format === 'gif' && projectDuration(p) > 60) throw new StudioError('A GIF can be at most 60 seconds: trim the video or export an MP4.');
+    const r = await this.runJob<{ base64: string; frames: number; durationSec: number }>({ kind: 'export_file', projectId: id, exportId, format }, 60 * 60_000);
+    const data = Buffer.from(r.base64, 'base64');
+    const dir = this.d.exportsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
+    const base = (name ?? p.name).replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
+    let file = path.join(dir, `${base}.${format}`);
+    for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).${format}`);
+    fs.writeFileSync(file, data, { flag: 'wx' });
+    this.d.log.info('studio.exported', { format, seconds: r.durationSec, frames: r.frames });
+    return { file, durationSec: r.durationSec, frames: r.frames, bytes: data.length };
   }
 
   /** The render window starts writing the export (its encoder told it the video's avcC). */

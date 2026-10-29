@@ -608,6 +608,33 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     ctx.fillText(str, x + gx, y);
     ctx.restore();
   };
+  if (st.curve) {
+    // Along an arc: the text as one line, each letter placed and turned on the circle.
+    const full = lines.map((l) => l.words.map((w) => w.text).join(' ')).join(' ');
+    const total = Math.max(1, ctx.measureText(full).width);
+    const arc = (Math.abs(st.curve) / 100) * Math.PI;
+    const R = total / arc;
+    const up = st.curve > 0 ? 1 : -1;
+    // The arc's own height, so the curved text stays centred where the straight text was.
+    const lift = (R * (1 - Math.cos(arc / 2))) / 2;
+    let along = -total / 2;
+    const fill = fillFor(total);
+    let letters = 0;
+    [...full].forEach((ch, i) => {
+      const w = ctx.measureText(ch).width;
+      const theta = (along + w / 2) / R;
+      along += w;
+      // Typewriter: only the letters typed so far.
+      if (!ch.trim() || letters++ >= shownChars) return;
+      ctx.save();
+      ctx.translate(R * Math.sin(theta), up * (R * (1 - Math.cos(theta)) - lift));
+      ctx.rotate(up * theta);
+      paint(ch, -w / 2, px * 0.35, fill, alpha, blur, i);
+      ctx.restore();
+    });
+    ctx.restore();
+    return;
+  }
   let chars = 0;
   lines.forEach((line, li) => {
     const y = top + li * lineH;

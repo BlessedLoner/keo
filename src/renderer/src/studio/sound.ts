@@ -1,4 +1,4 @@
-import type { VoiceFx } from '@shared/studio';
+import type { Eq, VoiceFx } from '@shared/studio';
 
 /**
  * Keo Studio's sound processing, shared by the preview and the export so both sound the same:
@@ -77,6 +77,24 @@ export function normalize(buf: AudioBuffer, target = -14): { gainDb: number } {
     }
   }
   return { gainDb };
+}
+
+/** The equalizer: input → bass, mids and treble filters → the returned node. */
+export function eqChain(ctx: BaseAudioContext, input: AudioNode, eq: Eq): AudioNode {
+  const low = ctx.createBiquadFilter();
+  low.type = 'lowshelf';
+  low.frequency.value = 120;
+  low.gain.value = eq.low;
+  const mid = ctx.createBiquadFilter();
+  mid.type = 'peaking';
+  mid.frequency.value = 1500;
+  mid.Q.value = 0.8;
+  mid.gain.value = eq.mid;
+  const high = ctx.createBiquadFilter();
+  high.type = 'highshelf';
+  high.frequency.value = 6000;
+  high.gain.value = eq.high;
+  return input.connect(low).connect(mid).connect(high);
 }
 
 /**

@@ -1,8 +1,10 @@
-import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx } from '@shared/studio';
+import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
+import { denoise } from '@shared/denoise';
+import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
 import { invoke } from '../lib/api';
 import { drawFrame, visibleAt } from './engine';
 import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
-import { normalize, voiceChain, voiceFxChain } from './sound';
+import { eqChain, normalize, voiceChain, voiceFxChain } from './sound';
 
 /**
  * Exporting and looking at frames, in Keo's render window: the same picture engine as the preview,
@@ -24,14 +26,14 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 /** Every clip's sound mixed into one stereo track (null: the video is silent). */
 export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Promise<AudioBuffer | null> {
   const dur = projectDuration(p);
-  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; volumeKeys?: Key[]; fadeIn: number; fadeOut: number; voice: boolean; reversed?: boolean; fx?: VoiceFx; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
+  const parts: Array<{ assetId: string; start: number; in: number; duration: number; speed: number; volume: number; volumeKeys?: Key[]; fadeIn: number; fadeOut: number; voice: boolean; reversed?: boolean; fx?: VoiceFx; eq?: Eq; duck: number | null; curve?: SpeedPoint[]; gate?: { db: number; speech: Span[] } }> = [];
   for (const tr of p.tracks) {
     if (tr.muted) continue;
     for (const c of tr.clips) {
       if (!isAV(c) || (c.volume <= 0 && !c.volumeKeys?.some((k) => k.value > 0))) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
       if (!a || !a.hasAudio || a.kind === 'image') continue;
-      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, ...(c.volumeKeys?.length ? { volumeKeys: c.volumeKeys } : {}), fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.type === 'media' && c.reversed ? { reversed: true } : {}), ...(c.voiceFx ? { fx: c.voiceFx } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
+      parts.push({ assetId: a.id, start: c.start, in: c.in, duration: c.duration, speed: c.type === 'media' ? c.speed : 1, volume: c.volume, ...(c.volumeKeys?.length ? { volumeKeys: c.volumeKeys } : {}), fadeIn: c.fadeIn, fadeOut: c.fadeOut, voice: c.voice, ...(c.type === 'media' && c.reversed ? { reversed: true } : {}), ...(c.voiceFx ? { fx: c.voiceFx } : {}), ...(c.eq ? { eq: c.eq } : {}), duck: c.type === 'audio' ? c.duck : null, ...(c.type === 'media' && c.speedCurve ? { curve: c.speedCurve } : {}), ...(c.gate ? { gate: { db: c.gate, speech: clipSpeech(p, c) } } : {}) });
     }
   }
   if (!parts.length || dur <= 0) return null;
@@ -92,6 +94,7 @@ export async function mixAudio(p: Project, o: { loudness?: boolean } = {}): Prom
       }
     }
     let out: AudioNode = part.voice ? voiceChain(ctx, src) : src;
+    if (part.eq) out = eqChain(ctx, out, part.eq);
     if (part.fx) out = voiceFxChain(ctx, out, part.fx).out;
     if (part.duck !== null && speech.length) {
       // Music under speech: a gain curve sampled every 50 ms from the same rule the preview uses.
@@ -455,4 +458,64 @@ export async function assetSignatures(p: Project, assetId: string, times: number
     source.close();
   }
   return out;
+}
+
+const base64 = (bytes: Uint8Array): string => {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+/**
+ * An animated GIF (up to 480 px wide, up to 15 frames a second, one palette for the whole
+ * animation) or the sound alone as a WAV: the same engine and mix as the MP4 export.
+ */
+export async function exportFile(p: Project, format: 'gif' | 'wav', progress: Progress, cancelled: () => boolean): Promise<{ base64: string; frames: number; durationSec: number }> {
+  const dur = projectDuration(p);
+  if (format === 'wav') {
+    progress({ stage: 'sound', done: 0, total: 1 });
+    const mixed = await mixAudio(p, { loudness: true });
+    if (!mixed) throw new Error('The timeline has no sound to save.');
+    return { base64: base64(wavStereo(mixed.getChannelData(0), mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : mixed.getChannelData(0), mixed.sampleRate)), frames: 0, durationSec: mixed.duration };
+  }
+  const W = even(Math.min(480, p.width));
+  const H = even((W * p.height) / p.width);
+  const fps = Math.min(15, p.fps);
+  const total = Math.max(1, Math.ceil(dur * fps - 1e-6));
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true }) as unknown as CanvasRenderingContext2D;
+  const sources = new ExactSources(p.id);
+  const draw = async (t: number): Promise<Uint8Array> => {
+    await sources.prepare(p, visibleAt(p, t).filter((c): c is MediaClip => c.type === 'media'), t);
+    drawFrame(ctx, p, t, sources);
+    return new Uint8Array(ctx.getImageData(0, 0, W, H).data.buffer);
+  };
+  try {
+    // One palette from frames across the whole animation, then each frame mapped and compressed.
+    const samples: Uint8Array[] = [];
+    for (let k = 0; k < 8; k++) samples.push((await draw((dur * (k + 0.5)) / 8)).slice());
+    const pal = buildPalette(samples);
+    const map = paletteMapper(pal);
+    const parts: Uint8Array[] = [gifHead(W, H, pal)];
+    const delay = Math.round(100 / fps);
+    for (let i = 0; i < total; i++) {
+      if (cancelled()) throw new Error('The export was cancelled.');
+      parts.push(gifFrame(W, H, map(await draw(i / fps)), delay));
+      if (i % 10 === 0) progress({ stage: 'video', done: i, total });
+    }
+    parts.push(GIF_END);
+    progress({ stage: 'saving', done: total, total });
+    return { base64: base64(join(parts)), frames: total, durationSec: total / fps };
+  } finally {
+    sources.close();
+  }
+}
+
+/** A media file's whole sound with the background noise taken out, as a 48 kHz stereo WAV (base64). */
+export async function denoiseAsset(p: Project, assetId: string, strength: number): Promise<{ base64: string; seconds: number }> {
+  const bytes = await (await fetch(mediaUrl(p.id, assetId))).arrayBuffer();
+  const buf = await new OfflineAudioContext(2, 1, SAMPLE_RATE).decodeAudioData(bytes);
+  const left = denoise(buf.getChannelData(0), { strength });
+  const right = buf.numberOfChannels > 1 ? denoise(buf.getChannelData(1), { strength }) : left;
+  return { base64: base64(wavStereo(left, right, buf.sampleRate)), seconds: buf.duration };
 }
