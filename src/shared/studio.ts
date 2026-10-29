@@ -428,6 +428,8 @@ export const Project = z
     background: Hex.default('#000000'),
     /** social: the export's loudness is evened out for phones and social apps (about -14 LUFS). */
     loudness: z.enum(['off', 'social']).default('off'),
+    /** Markers on the timeline: moments the user (or Keo) wants to find again. */
+    markers: z.array(z.object({ t: Sec, label: z.string().trim().min(1).max(60) }).strict()).max(300).default([]),
     assets: z.array(Asset).max(2000).default([]),
     tracks: z.array(Track).max(60).default([]),
   })
@@ -584,6 +586,8 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('freeze'), clip: ClipRef, at: Sec, duration: z.number().min(0.1).max(60).default(2) }).strict(),
   /** Another video, picture or sound in a clip's place: its timing, motion, look and effects stay. */
   z.object({ op: z.literal('replace_media'), clip: ClipRef, assetId: AssetRef, in: Sec.optional() }).strict(),
+  /** A marker at a moment (default label: "Marker n"); remove: the marker nearest `at` goes instead. */
+  z.object({ op: z.literal('marker'), at: Sec, label: z.string().trim().min(1).max(60).optional(), remove: z.boolean().optional() }).strict(),
   /** A copy of a clip (default: right after it, on the same track). */
   z.object({ op: z.literal('duplicate'), clip: ClipRef, start: At.optional(), track: TrackRef.optional() }).strict(),
   /** Delete a clip; ripple: later clips on its track move left to close the gap. */
@@ -1205,6 +1209,20 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         changes.push(`Put ${a.name} in ${c.id}'s place${short ? ` (it is shorter: its last frame holds for ${round(need - (a.duration - c.in))}s)` : ''}.`);
         break;
       }
+      case 'marker': {
+        if (op.remove) {
+          if (!p.markers.length) throw new EditError('There are no markers to remove.');
+          const near = p.markers.reduce((best, m, i) => (Math.abs(m.t - op.at) < Math.abs(p.markers[best]!.t - op.at) ? i : best), 0);
+          const [gone] = p.markers.splice(near, 1);
+          changes.push(`Removed the marker “${gone!.label}”.`);
+        } else {
+          const label = op.label ?? `Marker ${p.markers.length + 1}`;
+          p.markers.push({ t: round(op.at), label });
+          p.markers.sort((a, b) => a.t - b.t);
+          changes.push(`Added the marker “${label}” at ${round(op.at)}s.`);
+        }
+        break;
+      }
       case 'duplicate': {
         const f = get(op.clip);
         const to = op.track ? track(op.track, f.track.kind) : f.track;
@@ -1540,6 +1558,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
   /** Removes from..to from every track and closes the gap. */
   function cut(from: number, to: number): void {
     const len = to - from;
+    p.markers = p.markers.filter((m) => m.t < from || m.t >= to).map((m) => (m.t >= to ? { ...m, t: round(m.t - len) } : m));
     const op = { from, to };
     for (const t of p.tracks) {
       const out: Clip[] = [];
@@ -1603,6 +1622,7 @@ function motionNote(c: MediaClip | TextClip | ShapeClip): string {
 /** A short text view of the timeline, for Keo to read. */
 export function describeProject(p: Project): string {
   const lines = [`${p.name}: ${p.width}x${p.height}, ${p.fps} fps, ${projectDuration(p)}s.`, `Media: ${p.assets.map((a) => `${a.id} ${a.name} (${a.kind}${a.kind !== 'image' ? `, ${round(a.duration)}s` : ''}${a.hasAudio ? ', sound' : ''})`).join('; ') || 'none'}.`];
+  if (p.markers.length) lines.push(`Markers: ${p.markers.map((m, i) => `${i + 1} “${m.label}” at ${round(m.t)}s`).join('; ')}.`);
   p.tracks.forEach((t, i) => {
     lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}:`);
     for (const c of t.clips) {

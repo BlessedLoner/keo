@@ -3,7 +3,7 @@ import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDurati
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
-import { Preview } from '../studio/Preview';
+import { Preview, type Guides } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
 import { Autopilot } from '../studio/Autopilot';
 import { ProjectGrid } from '../studio/ProjectGrid';
@@ -53,6 +53,9 @@ export function StudioView() {
   const [history, setHistory] = useState<{ undo: boolean; redo: boolean; undoLabels: string[]; redoLabels: string[] }>({ undo: false, redo: false, undoLabels: [], redoLabels: [] });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [full, setFull] = useState(false);
+  const [quality, setQuality] = useState(1);
+  const [guideMode, setGuideMode] = useState<Guides>('none');
   const [progress, setProgress] = useState<Progress | null>(null);
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [creating, setCreating] = useState(false);
@@ -289,7 +292,11 @@ export function StudioView() {
         setTime((t) => Math.max(0, Math.min(projectDuration(p), t + step)));
       } else if (e.key === 'Home') setTime(0);
       else if (e.key === 'End') setTime(projectDuration(p));
-      else if (e.key === 'Escape') setSelected(null);
+      else if (e.key === 'Escape') {
+        setSelected(null);
+        setFull(false);
+      } else if (!e.ctrlKey && (e.key === 'f' || e.key === 'F')) setFull((v) => !v);
+      else if (!e.ctrlKey && (e.key === 'm' || e.key === 'M')) void edit([{ op: 'marker', at: timeRef.current }]);
       else if (e.key === '?') setHelpOpen((v) => !v);
       else if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && selectedRef.current) {
         e.preventDefault();
@@ -508,9 +515,21 @@ export function StudioView() {
       </header>
       <div className="studio-main">
         <MediaBin project={project} time={time} onImport={() => void importMedia()} onAddAsset={addAsset} onEdit={edit} onMusic={() => void addMusic()} onCaptions={() => void autoCaptions()} captioning={captioning} />
-        <section className="studio-stage">
-          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} />
+        <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
+          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} />
           <div className="studio-transport">
+            <select className="select preview-opt" value={quality} onChange={(e) => setQuality(Number(e.target.value))} title="Preview quality: lower is smoother on slower PCs (the export is always full quality)">
+              <option value={1}>Full</option>
+              <option value={0.5}>Half</option>
+              <option value={0.25}>Quarter</option>
+            </select>
+            <select className="select preview-opt" value={guideMode} onChange={(e) => setGuideMode(e.target.value as Guides)} title="Show where TikTok, Reels or Shorts put their buttons and captions">
+              <option value="none">No guides</option>
+              <option value="tiktok">TikTok safe zone</option>
+              <option value="reels">Reels safe zone</option>
+              <option value="shorts">Shorts safe zone</option>
+              <option value="thirds">Thirds</option>
+            </select>
             <button className="btn icon sm ghost" onClick={() => setTime(0)} title="To the start (Home)">
               <Icon name="skipback" size={15} />
             </button>
@@ -527,6 +546,9 @@ export function StudioView() {
             </button>
             <button className="btn icon sm ghost" onClick={() => setTime(duration)} title="To the end (End)">
               <Icon name="skipfwd" size={15} />
+            </button>
+            <button className="btn icon sm ghost" onClick={() => setFull((v) => !v)} title={full ? 'Leave full screen (F or Esc)' : 'Full screen preview (F)'}>
+              <Icon name={full ? 'x' : 'vision'} size={14} />
             </button>
             <span className="studio-time">
               {fmtTime(time, project.fps)} <span className="muted">/ {fmtTime(duration, project.fps)}</span>
@@ -1034,6 +1056,8 @@ const SHORTCUTS: Array<[string, string]> = [
   ['Ctrl + Z / Y', 'Undo / redo'],
   ['+ / −, Ctrl + wheel', 'Zoom the timeline'],
   ['Esc', 'Select nothing'],
+  ['F', 'Full screen preview'],
+  ['M', 'Add a marker at the playhead'],
   ['?', 'This list'],
 ];
 

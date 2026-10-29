@@ -109,11 +109,56 @@ export class StudioService {
   get(id: string): Project {
     const f = this.file(id);
     if (!fs.existsSync(f)) throw new StudioError('That Studio project does not exist (any more).');
-    return Project.parse(JSON.parse(fs.readFileSync(f, 'utf8')));
+    try {
+      return Project.parse(JSON.parse(fs.readFileSync(f, 'utf8')));
+    } catch {
+      // A damaged file: the newest backup that reads back, put in its place.
+      for (const b of this.backups(id)) {
+        try {
+          const p = Project.parse(JSON.parse(fs.readFileSync(b, 'utf8')));
+          fs.copyFileSync(f, `${f}.damaged`);
+          fs.writeFileSync(f, JSON.stringify(p));
+          this.d.log.warn('studio.restored_backup', {});
+          return p;
+        } catch {
+          /* try an older one */
+        }
+      }
+      throw new StudioError('That Studio project’s file is damaged and no backup could be read.');
+    }
+  }
+
+  /** A project's backups, newest first. */
+  private backups(id: string): string[] {
+    const dir = path.join(this.d.dir, 'backups', id);
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir)
+      .filter((n) => n.endsWith('.json'))
+      .sort()
+      .reverse()
+      .map((n) => path.join(dir, n));
+  }
+
+  /** Every 5 minutes of editing, a copy of the project as it was (the last 10 are kept). */
+  private readonly lastBackup = new Map<string, number>();
+  private backup(id: string, file: string): void {
+    const now = (this.d.now?.() ?? new Date()).getTime();
+    if (now - (this.lastBackup.get(id) ?? 0) < 5 * 60_000 || !fs.existsSync(file)) return;
+    this.lastBackup.set(id, now);
+    try {
+      const dir = path.join(this.d.dir, 'backups', id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(file, path.join(dir, `${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`));
+      for (const old of this.backups(id).slice(10)) fs.rmSync(old, { force: true });
+    } catch {
+      /* a backup is a convenience; saving goes on */
+    }
   }
 
   private save(p: Project): void {
     const f = this.file(p.id);
+    this.backup(p.id, f);
     const tmp = `${f}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(p));
     fs.renameSync(tmp, f);
@@ -180,6 +225,7 @@ export class StudioService {
 
   delete(id: string): void {
     fs.rmSync(this.file(id), { force: true });
+    fs.rmSync(path.join(this.d.dir, 'backups', id), { recursive: true, force: true });
     this.undo.delete(id);
     this.redo.delete(id);
     if (this.current === id) this.current = null;

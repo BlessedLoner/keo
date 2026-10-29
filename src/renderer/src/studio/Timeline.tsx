@@ -227,6 +227,24 @@ export function Timeline({
           }}
         >
           <div className="tl-label-gap" />
+          {project.markers.map((m, i) => (
+            <span
+              key={`m${i}-${m.t}`}
+              className="tl-marker"
+              style={{ left: LABEL_W + m.t * pps }}
+              title={`${i + 1}. ${m.label} (${m.t.toFixed(2)} s) — click to go there, double-click to remove`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                onTime(m.t);
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onEdit([{ op: 'marker', at: m.t, remove: true }]);
+              }}
+            >
+              {i + 1}
+            </span>
+          ))}
           {ticks.map((s) => (
             <span key={s} className="tl-tick" style={{ left: LABEL_W + s * pps }}>
               {fmt(s)}

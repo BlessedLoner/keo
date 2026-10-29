@@ -83,3 +83,37 @@ describe('Replace media and templates', () => {
     expect(path.basename(await s.saveFrame(p.id, 1))).toBe('Cover cover (2).png');
   });
 });
+
+describe('Markers and backups', () => {
+  it('markers are added in order, follow cuts, and can be removed', async () => {
+    const { applyEdits, newProject } = await import('../src/shared/studio');
+    let n = 0;
+    const rand = () => `r${String(++n).padStart(7, '0')}`;
+    let p = applyEdits(newProject({ name: 'M', rand }), [{ op: 'marker', at: 5 }, { op: 'marker', at: 2, label: 'Hook' }, { op: 'marker', at: 9 }], { rand }).project;
+    expect(p.markers).toEqual([
+      { t: 2, label: 'Hook' },
+      { t: 5, label: 'Marker 1' },
+      { t: 9, label: 'Marker 3' },
+    ]);
+    // Cutting 4–6 s: the marker inside goes, the one after moves 2 s earlier.
+    p = applyEdits(p, [{ op: 'cut_range', from: 4, to: 6 }], { rand }).project;
+    expect(p.markers.map((m) => m.t)).toEqual([2, 7]);
+    p = applyEdits(p, [{ op: 'marker', at: 6.8, remove: true }], { rand }).project;
+    expect(p.markers.map((m) => m.label)).toEqual(['Hook']);
+  });
+
+  it('a damaged project file comes back from its newest backup', async () => {
+    const { dir } = setup();
+    const s = h!.services.studio;
+    const p = s.create('Safe', 'vertical');
+    // A first save backs up the file as it was; then the file gets damaged.
+    s.edit(p.id, [{ op: 'add_text', text: 'Kept', start: 0, duration: 2 }]);
+    const file = path.join(h!.dir, 'studio', `${p.id}.json`);
+    fs.writeFileSync(file, '{ this is not json');
+    const back = s.get(p.id);
+    expect(back.name).toBe('Safe');
+    expect(fs.existsSync(`${file}.damaged`)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).id).toBe(p.id);
+    void dir;
+  });
+});

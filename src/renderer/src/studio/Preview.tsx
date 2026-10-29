@@ -9,6 +9,48 @@ import { PreviewSources } from './media';
  * and rotated right on the picture (with guides that snap to the middle).
  */
 
+export type Guides = 'none' | 'tiktok' | 'reels' | 'shorts' | 'thirds';
+
+/** Areas covered by each app's buttons and captions on a phone (fractions of a 9:16 frame). */
+const ZONES: Record<'tiktok' | 'reels' | 'shorts', Array<{ x: number; y: number; w: number; h: number; label: string }>> = {
+  tiktok: [
+    { x: 0, y: 0, w: 1, h: 0.08, label: 'Tabs' },
+    { x: 0.86, y: 0.33, w: 0.14, h: 0.52, label: 'Buttons' },
+    { x: 0, y: 0.8, w: 0.84, h: 0.2, label: 'Caption & name' },
+  ],
+  reels: [
+    { x: 0.86, y: 0.5, w: 0.14, h: 0.4, label: 'Buttons' },
+    { x: 0, y: 0.82, w: 0.84, h: 0.18, label: 'Caption & name' },
+  ],
+  shorts: [
+    { x: 0, y: 0, w: 1, h: 0.07, label: 'Top bar' },
+    { x: 0.85, y: 0.45, w: 0.15, h: 0.43, label: 'Buttons' },
+    { x: 0, y: 0.83, w: 0.83, h: 0.17, label: 'Title & channel' },
+  ],
+};
+
+/** Where a social app will cover the video (vertical videos), or the rule of thirds. */
+function SafeZones({ kind, vertical }: { kind: Exclude<Guides, 'none'>; vertical: boolean }) {
+  if (kind === 'thirds' || !vertical)
+    return (
+      <div className="safe-zones thirds" aria-hidden>
+        <span style={{ left: '33.33%' }} className="v" />
+        <span style={{ left: '66.66%' }} className="v" />
+        <span style={{ top: '33.33%' }} className="h" />
+        <span style={{ top: '66.66%' }} className="h" />
+      </div>
+    );
+  return (
+    <div className="safe-zones" aria-hidden>
+      {ZONES[kind].map((z) => (
+        <span key={z.label} className="zone" style={{ left: `${z.x * 100}%`, top: `${z.y * 100}%`, width: `${z.w * 100}%`, height: `${z.h * 100}%` }}>
+          {z.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 type Gesture = { id: string; kind: 'move' | 'scale' | 'rotate'; startX: number; startY: number; box: LayerBox; base: { x: number; y: number; scale: number; rotation: number } };
 type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number };
 
@@ -45,7 +87,13 @@ export function Preview({
   selected,
   onSelect,
   onEdit,
+  quality = 1,
+  guides = 'none',
 }: {
+  /** Fewer pixels for smooth playback on slower PCs (1 = full). */
+  quality?: number;
+  /** Where social apps put their buttons and captions, or the rule of thirds. */
+  guides?: Guides;
   project: Project;
   time: number;
   playing: boolean;
@@ -64,7 +112,8 @@ export function Preview({
   const [size, setSize] = useState({ w: 0, h: 0, scale: 1 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [patch, setPatch] = useState<Patch | null>(null);
-  const [guides, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false });
+  const [snap, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false });
+  const guideMode = guides;
 
   // While a layer is being moved, the preview draws it where the mouse is.
   const shown = (() => {
@@ -113,7 +162,7 @@ export function Preview({
       c.style.width = `${Math.floor(w)}px`;
       c.style.height = `${Math.floor(h)}px`;
       // Never more pixels than the export itself.
-      const scale = Math.min(dpr, project.width / Math.max(1, w));
+      const scale = Math.max(0.15, Math.min(dpr, project.width / Math.max(1, w)) * quality);
       c.width = Math.max(16, Math.round(w * scale));
       c.height = Math.max(16, Math.round(h * scale));
       setSize({ w: Math.floor(w), h: Math.floor(h), scale: c.width / Math.max(1, Math.floor(w)) });
@@ -123,7 +172,7 @@ export function Preview({
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [project.width, project.height]);
+  }, [project.width, project.height, quality]);
 
   redraw.current = () => {
     const c = canvas.current;
@@ -262,6 +311,7 @@ export function Preview({
     <div className="studio-preview" ref={box}>
       <div className="preview-frame" style={{ width: size.w || undefined, height: size.h || undefined }}>
         <canvas ref={canvas} aria-label="Video preview" />
+        {guideMode !== 'none' && <SafeZones kind={guideMode} vertical={project.height > project.width} />}
         {onSelect && !playing && (
           <div
             className="preview-overlay"
@@ -272,8 +322,8 @@ export function Preview({
               if (hit) start('move', hit, e);
             }}
           >
-            {guides.v && <div className="guide v" />}
-            {guides.h && <div className="guide h" />}
+            {snap.v && <div className="guide v" />}
+            {snap.h && <div className="guide h" />}
             {sel && (
               <div className="sel-box" style={{ left: sel.cx / k, top: sel.cy / k, width: sel.w / k, height: sel.h / k, transform: `translate(-50%, -50%) rotate(${sel.rotation}deg)` }}>
                 <span className="handle rotate" title="Drag to rotate (Shift: 15° steps)" onPointerDown={(e) => start('rotate', sel, e)} />
