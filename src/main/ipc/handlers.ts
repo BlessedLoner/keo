@@ -523,6 +523,16 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const r = await s.studio.stabilize(id, clip, strength).catch(studioErr);
       return { points: r.points, zoom: r.zoom };
     },
+    'studio:templates': () => s.studio.recipes(),
+    'studio:learnTemplate': async ({ id, assetId, name }) => s.studio.learnTemplate(id, assetId, name ? { name } : {}).catch(studioErr),
+    'studio:applyTemplate': async ({ id, recipe, endText }) => {
+      const r = await s.studio.asKeo(() => s.studio.applyTemplate(id, recipe, endText ? { endText } : {})).catch(studioErr);
+      return { cutaways: r.cutaways, captions: r.captions, music: r.music, needsWords: r.needsWords };
+    },
+    'studio:deleteTemplate': ({ recipe }) => {
+      studioCall(() => s.studio.deleteRecipe(recipe));
+      return { ok: true as const };
+    },
     'studio:sounds': ({ query, kind, genre }) => s.studio.sounds.list({ ...(query ? { query } : {}), ...(kind ? { kind } : {}), ...(genre ? { genre } : {}) }),
     'studio:soundsAdd': async ({ paths, kind }) => {
       const files = paths ?? (host.pickMedia ? await host.pickMedia() : []);

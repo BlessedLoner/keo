@@ -1,4 +1,5 @@
 import type { Sound } from './studioSounds';
+import type { Recipe } from './studioRecipe';
 import { Storyboard } from './studioFaceless';
 import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
@@ -163,6 +164,10 @@ export const invokeSchemas = {
   'studio:analyzeSpeech': z.object({ id: studioProjectId }).strict(),
   'studio:track': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.01).max(1), h: z.number().min(0.01).max(1) }).strict() }).strict(),
   'studio:stabilize': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.7) }).strict(),
+  'studio:templates': z.object({}).strict(),
+  'studio:learnTemplate': z.object({ id: studioProjectId, assetId: studioAssetId, name: z.string().trim().min(1).max(80).optional() }).strict(),
+  'studio:applyTemplate': z.object({ id: studioProjectId, recipe: z.string().regex(/^rc_[A-Za-z0-9]{4,24}$/), endText: z.string().trim().min(1).max(120).optional() }).strict(),
+  'studio:deleteTemplate': z.object({ recipe: z.string().regex(/^rc_[A-Za-z0-9]{4,24}$/) }).strict(),
   'studio:sounds': z.object({ query: z.string().max(200).optional(), kind: z.enum(['music', 'effect']).optional(), genre: z.string().max(40).optional() }).strict(),
   'studio:soundsAdd': z.object({ paths: z.array(z.string().min(1).max(1000)).max(200).optional(), kind: z.enum(['music', 'effect']).optional() }).strict(),
   'studio:soundUpdate': z.object({ sound: z.string().regex(/^sn_[A-Za-z0-9]{4,24}$/), name: z.string().trim().min(1).max(120).optional(), kind: z.enum(['music', 'effect']).optional(), genre: z.string().max(40).optional(), tags: z.array(z.string().max(30)).max(12).optional() }).strict(),
@@ -491,6 +496,10 @@ export interface InvokeOutputs {
   'studio:cleanSound': { seconds: number };
   'studio:previewCopies': { made: number };
   'studio:watch': { ok: true };
+  'studio:templates': Recipe[];
+  'studio:learnTemplate': Recipe;
+  'studio:applyTemplate': { cutaways: number; captions: boolean; music: string | null; needsWords: boolean };
+  'studio:deleteTemplate': { ok: true };
   'studio:sounds': Sound[];
   'studio:soundsAdd': { added: Sound[]; skipped: string[] };
   'studio:soundUpdate': Sound;

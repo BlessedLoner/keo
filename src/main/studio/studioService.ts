@@ -8,6 +8,7 @@ import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studio
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
+import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -791,6 +792,118 @@ export class StudioService {
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
     this.d.log.info('studio.recorded', { seconds: Math.round(seconds) });
     return { clip: clip.id, seconds: asset.duration };
+  }
+
+  // ---------------------------------------------------------------- templates as recipes
+
+  private get recipesFile(): string {
+    return path.join(this.d.dir, 'library', 'recipes.json');
+  }
+  recipes(): Recipe[] {
+    try {
+      return JSON.parse(fs.readFileSync(this.recipesFile, 'utf8')) as Recipe[];
+    } catch {
+      return [];
+    }
+  }
+  private saveRecipes(list: Recipe[]): void {
+    fs.mkdirSync(path.dirname(this.recipesFile), { recursive: true });
+    fs.writeFileSync(`${this.recipesFile}.tmp`, JSON.stringify(list));
+    fs.renameSync(`${this.recipesFile}.tmp`, this.recipesFile);
+  }
+  deleteRecipe(recipeId: string): void {
+    const list = this.recipes();
+    if (!list.some((r) => r.id === recipeId)) throw new StudioError('That template is not saved.');
+    this.saveRecipes(list.filter((r) => r.id !== recipeId));
+  }
+
+  /**
+   * Learns a template video (media of the project) as a recipe, measured on this PC: its shots and
+   * their rhythm, which are camera footage, screen recordings or an end card, whether it has a
+   * voice, music (and its tempo) and whooshes on the cuts. What Keo saw in its frames (captions,
+   * look, end card text) can be given to correct the measured guesses. Kept for every project.
+   */
+  async learnTemplate(id: string, assetId: string, o: { name?: string; seen?: Partial<Pick<Recipe, 'captions' | 'look' | 'transition' | 'notes'>> & { endCard?: Partial<Recipe['endCard']>; shotKinds?: ShotKind[] } } = {}): Promise<Recipe> {
+    const p = this.get(id);
+    const a = p.assets.find((x) => x.id === assetId);
+    if (!a || a.kind !== 'video') throw new StudioError('Choose a video of this project as the template.');
+    const cuts = await this.detectScenes(id, assetId);
+    const edges = [0, ...cuts, a.duration];
+    const mids = edges.slice(0, -1).map((t, i) => Math.round(((t + edges[i + 1]!) / 2) * 1000) / 1000);
+    const sigs = mids.length ? await this.runJob<number[][]>({ kind: 'signatures', projectId: id, assetId, times: mids }, 5 * 60_000) : [];
+    const kinds = o.seen?.shotKinds ?? sigs.map(guessShotKind);
+    // Only the last shot can be the end card.
+    const fixed = kinds.map((k, i) => (k === 'end-card' && i !== kinds.length - 1 ? 'camera' : k));
+    const shots = shotsFrom(cuts, a.duration, fixed);
+    // The sound: a voice (speech covering a good part), music (a steady beat), whooshes on the cuts.
+    const sound = a.hasAudio ? await this.assetSound(id, assetId).catch(() => null) : null;
+    const speech = sound ? voicedSpans(sound.samples, sound.rate) : [];
+    const spoken = speech.reduce((n, s) => n + (s.end - s.start), 0);
+    const beat = sound ? detectBeats(sound.samples, sound.rate) : { onsets: [], beats: [], bpm: null };
+    const hits = cuts.filter((c) => beat.onsets.some((x) => Math.abs(x - c) < 0.15)).length;
+    const voice = spoken > a.duration * 0.3;
+    const last = shots.at(-1);
+    const seenEnd = o.seen?.endCard ?? {};
+    const recipe: Recipe = {
+      id: `rc_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`,
+      name: (o.name ?? a.name.replace(/\.[^.]+$/, '')).slice(0, 80),
+      source: a.name,
+      seconds: Math.round(a.duration * 100) / 100,
+      aspect: a.height > a.width * 1.15 ? 'vertical' : a.width > a.height * 1.15 ? 'landscape' : 'square',
+      shots,
+      captions: { on: voice, style: 'phrase', wordsPerLine: 3, position: 'center', uppercase: false, ...(o.seen?.captions ?? {}) },
+      look: o.seen?.look ?? null,
+      transition: o.seen?.transition ?? 'cut',
+      endCard: { on: last?.kind === 'end-card', seconds: last?.kind === 'end-card' ? Math.round((last.end - last.start) * 100) / 100 : 0, text: null, ...seenEnd },
+      audio: { voice, music: beat.bpm !== null && beat.beats.length >= 8, bpm: beat.bpm, whooshOnCuts: cuts.length >= 3 && hits >= cuts.length * 0.5, musicGenre: null },
+      notes: (o.seen?.notes ?? '').slice(0, 2000),
+      learnedAt: (this.d.now?.() ?? new Date()).toISOString(),
+    };
+    this.saveRecipes([...this.recipes().filter((r) => r.name !== recipe.name), recipe]);
+    this.d.log.info('studio.template_learned', { shots: shots.length, voice, music: recipe.audio.music });
+    return recipe;
+  }
+
+  /**
+   * Makes the template's edit with this project's clips: the talking clip (default: the longest
+   * video with sound on the bottom track) carries the voice; the other videos and pictures cut in
+   * over it at the template's rhythm and order; captions in its style (when the speech is
+   * transcribed), its look on every clip, its end card, music from the library and a whoosh on each
+   * cut when the template has them. Shown step by step while the user watches.
+   */
+  async applyTemplate(id: string, recipeId: string, o: { main?: string; cutaways?: string[]; endText?: string; music?: string | null; whooshes?: boolean } = {}): Promise<{ project: Project; cutaways: number; captions: boolean; music: string | null; needsWords: boolean }> {
+    const r = this.recipes().find((x) => x.id === recipeId);
+    if (!r) throw new StudioError('That template is not saved: learn it first.');
+    const p = this.get(id);
+    const media = p.tracks.flatMap((t) => t.clips.filter((c): c is MediaClip => c.type === 'media'));
+    const assetOf = (c: MediaClip) => p.assets.find((a) => a.id === c.assetId);
+    const main =
+      (o.main ? media.find((c) => c.id === o.main) : undefined) ??
+      [...media].filter((c) => assetOf(c)?.kind === 'video' && assetOf(c)?.hasAudio && assetOf(c)?.name !== r.source).sort((x, y) => y.duration - x.duration)[0];
+    if (!main) throw new StudioError('Put the talking video on the timeline first (the clip whose voice tells the story).');
+    const cutaways = (o.cutaways ? p.assets.filter((a) => o.cutaways!.includes(a.id)) : p.assets.filter((a) => a.kind !== 'audio' && a.id !== main.assetId && a.name !== r.source && !a.reverseOf && !a.cleanOf)).map((a) => ({ assetId: a.id, duration: a.duration, kind: a.kind === 'image' ? ('image' as const) : ('video' as const) }));
+    const words = timelineWords(p).filter((w) => w.start >= main.start - 0.05 && w.end <= main.start + main.duration + 0.05);
+    const built = recipeOps(r, { main: { clip: main.id, start: main.start, duration: main.duration }, cutaways, words, endText: o.endText ?? r.endCard.text });
+    if (!built.ops.length) throw new StudioError('There is nothing in this project the template can use: add screen recordings or other clips to cut to.');
+    let res = this.edit(id, built.ops);
+    // The template's look on every video and picture (one more step of the same undo).
+    const look = lookOf(r);
+    if (look) {
+      for (const c of res.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media')) res = this.mergeLast(id, { op: 'set', clip: c.id, color: { ...look } });
+    }
+    // Sound: music from the library, and a whoosh into each cutaway.
+    let music: string | null = null;
+    const wantMusic = o.music !== null && (o.music !== undefined || r.audio.music);
+    if (wantMusic) {
+      const pick = o.music ? this.sounds.get(o.music) : (this.sounds.list({ kind: 'music', ...(r.audio.musicGenre ? { genre: r.audio.musicGenre } : {}) })[0] ?? this.sounds.list({ kind: 'music' })[0] ?? null);
+      if (pick && !pick.builtIn) {
+        res = { project: (await this.useSound(id, pick.id, { role: 'music', at: main.start })).project, changes: [] };
+        music = pick.name;
+      }
+    }
+    if (o.whooshes ?? r.audio.whooshOnCuts) for (const at of built.cutawayStarts) res = { project: (await this.useSound(id, 'sfx_whoosh', { at: Math.max(0, at - 0.15), volume: 0.5 })).project, changes: [] };
+    this.d.log.info('studio.template_used_recipe', { cutaways: built.cutawayStarts.length, music: !!music });
+    return { project: res.project, cutaways: built.cutawayStarts.length, captions: r.captions.on && words.length > 0, music, needsWords: r.captions.on && words.length === 0 };
   }
 
   // ---------------------------------------------------------------- long video to shorts

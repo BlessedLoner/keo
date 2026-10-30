@@ -55,6 +55,14 @@
 .sound-row .sound-genre { width: 86px; height: 24px; padding: 0 4px; font-size: 11px; flex: none; }
 .text-default .lib-card-art { font-family: Georgia, serif; }
 
+.templates { display: flex; flex-direction: column; gap: 6px; }
+.tpl-learn { display: flex; gap: 6px; }
+.tpl-learn .select { flex: 1; min-width: 0; height: 28px; font-size: 12px; }
+.tpl-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tpl-list li { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.tpl-list li .grow { display: flex; flex-direction: column; min-width: 0; }
+.tpl-list li strong { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* The selected clip's tabs (right panel), CapCut-style */
 .insp-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; padding: 6px 8px; overflow-x: auto; background: var(--bg-side); border-bottom: 1px solid var(--line); }
 .insp-tabs button { flex: none; padding: 5px 10px; border: 0; border-radius: 7px; background: none; color: var(--text-2); font-size: 12.5px; font-weight: 600; cursor: pointer; }

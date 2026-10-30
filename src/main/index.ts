@@ -1183,6 +1183,42 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
     const moved = stKeys[i]!.value - stKeys[i - 1]!.value;
     if (Math.abs(shake) > 0.01 && Math.sign(moved) === -Math.sign(shake)) agree++;
   }
+  // Templates: a template like the reference ad (camera, screen, camera, screen, black end card,
+  // 1.5 s each) made for real, learned from its decoded frames, then made again with a talking
+  // clip and a screen-like picture.
+  const tp = s.studio.create('Studio smoke template', 'square');
+  const tpPic = (await s.studio.importFiles(tp.id, [pic])).added[0]!;
+  const screenShot = (at: number): EditOp[] => [
+    { op: 'add_shape', shape: 'rect', start: at, duration: 1.5, style: { width: 1.2, height: 1.2, radius: 0, fill: '#ECEDF2' } },
+    { op: 'add_shape', shape: 'rect', start: at, duration: 1.5, style: { width: 0.6, height: 0.3, radius: 0.05, fill: '#1A1C22' }, trackName: 'UI' },
+  ];
+  s.studio.edit(tp.id, [
+    { op: 'set_project', width: 320, height: 320, background: '#000000' },
+    { op: 'add_media', assetId: tpPic.id, start: 0, duration: 1.5 },
+    { op: 'add_media', assetId: tpPic.id, start: 3, duration: 1.5 },
+    ...screenShot(1.5),
+    ...screenShot(4.5),
+    { op: 'add_shape', shape: 'rect', start: 6, duration: 1.5, style: { width: 1.2, height: 1.2, radius: 0, fill: '#000000' }, trackName: 'End' },
+  ]);
+  const tpFile = (await s.studio.exportVideo(tp.id, { name: 'Smoke ad template' })).file;
+  s.studio.delete(tp.id);
+  const ta = s.studio.create('Studio smoke use template', 'square');
+  const [taTalk, taScreen, taTemplate] = (await s.studio.importFiles(ta.id, [shFile, texFile, tpFile])).added;
+  s.studio.edit(ta.id, [{ op: 'add_media', assetId: taTalk!.id, start: 0 }]);
+  const learned = await s.studio.learnTemplate(ta.id, taTemplate!.id, { seen: { endCard: { text: 'keo.app' } } });
+  const usedTpl = await s.studio.applyTemplate(ta.id, learned.id, { whooshes: true });
+  const taNow = s.studio.get(ta.id);
+  out.template = {
+    kinds: learned.shots.map((x) => x.kind[0]).join(''),
+    cuts: learned.shots.slice(1).map((x) => x.start),
+    endCard: learned.endCard,
+    cutaways: usedTpl.cutaways,
+    broll: taNow.tracks.find((t) => t.name === 'B-roll')?.clips.map((c) => [c.start, c.duration, c.type === 'media' && c.assetId === taScreen!.id]) ?? [],
+    endAt: taNow.tracks.find((t) => t.name === 'End card')?.clips[0]?.start ?? null,
+    endText: taNow.tracks.flatMap((t) => t.clips).some((c) => c.type === 'text' && c.text === 'keo.app'),
+    whooshes: taNow.tracks.find((t) => t.name === 'Effects')?.clips.map((c) => c.start) ?? [],
+  };
+  s.studio.delete(ta.id);
   out.steady = { points: steadied.points, zoom: steadied.zoom, against: agree, steps: stKeys.length - 1, sample: stKeys.slice(0, 8).map((k) => [k.at, Math.round((k.value - 0.5) * 1000) / 1000, shakeAt(k.at)]) };
   s.studio.delete(st2.id);
   // A phone video stored lying down with a quarter turn to play upright (like WhatsApp videos):

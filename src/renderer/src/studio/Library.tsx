@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { Autopilot } from './Autopilot';
+import { Templates } from './Templates';
 import { EMOJI, TEXT_STYLES, Tile } from './Bin';
 import { ElementsPanel } from './MotionFields';
 import { TRANSITION_LABEL } from './Timeline';
@@ -57,7 +58,10 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
     ['styles', 'Caption styles'],
   ],
   filters: [['looks', 'Looks']],
-  smart: [['tools', 'One-click tools']],
+  smart: [
+    ['templates', 'Templates'],
+    ['tools', 'One-click tools'],
+  ],
 };
 
 const EFFECTS: Array<['grain' | 'vhs' | 'glow' | 'rgbSplit' | 'lightLeak', string, string]> = [
@@ -110,7 +114,7 @@ export function Library({
 }) {
   const ui = useUi();
   const [tab, setTab] = useState<Tab>('media');
-  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'tools' });
+  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'templates' });
   const sel = selected ? (findClip(project, selected)?.clip ?? null) : null;
   const now = cat[tab];
   const run = (ops: EditOp[]) => void onEdit(ops).catch((e: unknown) => ui.error(errText(e)));
@@ -257,7 +261,8 @@ export function Library({
               </div>
             </>
           )}
-          {tab === 'smart' && <Autopilot project={project} time={time} onEdit={onEdit} onBusy={() => undefined} />}
+          {tab === 'smart' && now === 'templates' && <Templates project={project} onAskKeo={onAskKeo} />}
+          {tab === 'smart' && now === 'tools' && <Autopilot project={project} time={time} onEdit={onEdit} onBusy={() => undefined} />}
         </div>
       </div>
     </aside>

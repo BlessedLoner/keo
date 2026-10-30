@@ -27,7 +27,7 @@ export interface SceneOptions {
  * times it lies between.
  */
 export function sceneCandidates(times: number[], sigs: number[][], o: SceneOptions = {}): Array<{ from: number; to: number; strength: number }> {
-  const threshold = o.threshold ?? 0.3;
+  const threshold = o.threshold ?? 0.2;
   const contrast = o.contrast ?? 2.5;
   const minShot = o.minShot ?? 0.6;
   const d: number[] = [];

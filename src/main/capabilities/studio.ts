@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project } from '../../shared/studio';
+import { rhythm, type Recipe as LearnedRecipe } from '../../shared/studioRecipe';
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
@@ -722,6 +723,98 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const Recipe = z.object({ id: z.string(), name: z.string(), shots: z.number(), medianShot: z.number(), cutsPerMinute: z.number(), kinds: z.string(), captions: z.string(), endCard: z.boolean(), voice: z.boolean(), music: z.boolean(), whooshes: z.boolean(), notes: z.string() });
+  const summary = (r: LearnedRecipe) => {
+    const rh = rhythm(r);
+    return { id: r.id, name: r.name, shots: r.shots.length, medianShot: rh.median, cutsPerMinute: rh.cutsPerMinute, kinds: r.shots.map((s) => s.kind[0]).join(''), captions: r.captions.on ? `${r.captions.style}, ${r.captions.wordsPerLine} words, ${r.captions.position}${r.captions.uppercase ? ', upper case' : ''}` : 'none', endCard: r.endCard.on, voice: r.audio.voice, music: r.audio.music, whooshes: r.audio.whooshOnCuts, notes: r.notes };
+  };
+  const learnTemplate = defineCapability({
+    ...simple({
+      id: 'studio.learn_template',
+      title: 'Learn a template',
+      description:
+        'Learn a template video (media of this project; add it with studio__add_media without placing it) as a recipe kept for every project: its cuts and rhythm and which shots are camera footage (c), screen recordings (s), graphics (g) or an end card (e) are measured on this PC, with its voice, music and whooshes on cuts. First look at it with studio__study_template, then pass what you saw: captions {on, style phrase|word, wordsPerLine, position center|lower|upper, uppercase}, look natural|warm|cool|punchy|cinematic|black-white, endCard {on, seconds, text}, transition, shotKinds (one per shot, in order, when the measured kinds are wrong), notes (how it feels and why it works). Then studio__apply_template.',
+      summary: 'Learn the template',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        assetId: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/),
+        name: z.string().trim().min(1).max(80).optional(),
+        captions: z.object({ on: z.boolean().optional(), style: z.enum(['phrase', 'word', 'none']).optional(), wordsPerLine: z.number().int().min(1).max(8).optional(), position: z.enum(['center', 'lower', 'upper']).optional(), uppercase: z.boolean().optional() }).strict().optional(),
+        look: z.enum(['natural', 'warm', 'cool', 'punchy', 'cinematic', 'black-white']).nullable().optional(),
+        endCard: z.object({ on: z.boolean().optional(), seconds: z.number().min(0).max(10).optional(), text: z.string().max(120).nullable().optional() }).strict().optional(),
+        transition: z.enum(['cut', 'crossfade', 'slide', 'push', 'zoom', 'whip', 'wipe', 'blur', 'flash', 'dip']).optional(),
+        shotKinds: z.array(z.enum(['camera', 'screen', 'graphic', 'end-card'])).max(400).optional(),
+        notes: z.string().max(2000).optional(),
+      })
+      .strict(),
+    output: Recipe,
+    timeoutMs: 15 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s
+        .learnTemplate(p.id, i.assetId, {
+          ...(i.name ? { name: i.name } : {}),
+          seen: {
+            ...(i.captions ? { captions: { on: true, style: 'phrase' as const, wordsPerLine: 3, position: 'center' as const, uppercase: false, ...i.captions } } : {}),
+            ...(i.look !== undefined ? { look: i.look } : {}),
+            ...(i.endCard ? { endCard: { ...i.endCard, ...(i.endCard.text === undefined ? {} : { text: i.endCard.text }) } } : {}),
+            ...(i.transition ? { transition: i.transition } : {}),
+            ...(i.shotKinds ? { shotKinds: i.shotKinds } : {}),
+            ...(i.notes ? { notes: i.notes } : {}),
+          },
+        })
+        .catch((e: unknown) => {
+          throw e instanceof StudioError ? fail('studio', e.message) : e;
+        });
+      return summary(r);
+    },
+  });
+
+  const templates = defineCapability({
+    ...simple({ id: 'studio.templates', title: 'List learned templates', description: 'The templates Keo has learned (for every project): their rhythm, shot kinds (c camera, s screen, g graphic, e end card), captions, end card and sound. Use one with studio__apply_template.', summary: 'List the learned templates' }),
+    input: z.object({}).strict(),
+    output: z.object({ templates: z.array(Recipe) }),
+    timeoutMs: 10_000,
+    auditView: () => ({}),
+    execute: () => Promise.resolve({ templates: s.recipes().map(summary) }),
+  });
+
+  const applyTemplate = defineCapability({
+    ...simple({
+      id: 'studio.apply_template',
+      title: 'Edit like a template',
+      description:
+        'Make a learned template’s edit with this project’s clips: the talking clip (main; default the longest video with sound) carries the voice, the other videos and pictures (cutaways; default all of them except the template) cut in over it at the template’s rhythm and order of shot kinds, captions in its style (transcribe first with studio__transcript so the words are known), its look, its end card (endText: the website, handle or call to action, ask the user), music from the sound library (music: a sound id from studio__sounds; null for none) and a whoosh into each cutaway. Shown step by step on the timeline. Afterwards look at it (studio__look) and fine-tune.',
+      summary: 'Edit like the template',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        recipe: z.string().regex(/^rc_[A-Za-z0-9]{4,24}$/),
+        main: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/).optional(),
+        cutaways: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(100).optional(),
+        endText: z.string().trim().min(1).max(120).optional(),
+        music: z.string().regex(/^(sn|sfx)_[A-Za-z0-9]{3,24}$/).nullable().optional(),
+        whooshes: z.boolean().optional(),
+      })
+      .strict(),
+    output: State.extend({ cutaways: z.number(), captions: z.boolean(), music: z.string().nullable(), note: z.string().nullable() }),
+    timeoutMs: 10 * 60_000,
+    auditView: (i) => ({ recipe: i.recipe }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s
+        .applyTemplate(p.id, i.recipe, { ...(i.main ? { main: i.main } : {}), ...(i.cutaways ? { cutaways: i.cutaways } : {}), ...(i.endText ? { endText: i.endText } : {}), ...(i.music !== undefined ? { music: i.music } : {}), ...(i.whooshes !== undefined ? { whooshes: i.whooshes } : {}) })
+        .catch((e: unknown) => {
+          throw e instanceof StudioError ? fail('studio', e.message) : e;
+        });
+      return { ...state(s, r.project), cutaways: r.cutaways, captions: r.captions, music: r.music, note: r.needsWords ? 'No captions yet: the speech is not transcribed. Run studio__transcript, then studio__captions in the template’s style.' : null };
+    },
+  });
+
   const sounds = defineCapability({
     ...simple({
       id: 'studio.sounds',
@@ -1025,7 +1118,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     execute: (i: never, ctx: never) => s.asKeo(() => (c.execute as (i: never, ctx: never) => unknown)(i, ctx), (i as { projectId?: string } | undefined)?.projectId),
   })) as AnyCapability[];
