@@ -7,6 +7,7 @@ import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clip
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
+import { SoundLibrary } from './soundLibrary';
 
 export type { ProjectSummary, RenderJob };
 import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
@@ -94,7 +95,11 @@ export class StudioService {
   /** The project open in the Studio page (Keo's tools act on it unless they name another). */
   current: string | null = null;
 
+  /** The user's music and sound effects (all projects). */
+  readonly sounds: SoundLibrary;
+
   constructor(private readonly d: StudioDeps) {
+    this.sounds = new SoundLibrary({ dir: path.join(d.dir, 'library'), measure: async (f) => (await this.probeFile(f, 'audio').catch(() => null))?.duration ?? null, ...(d.now ? { now: d.now } : {}) });
     fs.mkdirSync(d.dir, { recursive: true });
   }
 
@@ -1241,6 +1246,41 @@ export class StudioService {
     const next = Project.parse({ ...p, assets: [...p.assets, asset], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
     this.save(next);
     return { project: next, asset };
+  }
+
+  /**
+   * A sound from the library on the timeline: music goes on the Music track from `at` (quieter,
+   * lower still under speech, fading out at the end of the video), an effect on the Effects track
+   * at `at`. One edit (one undo).
+   */
+  async useSound(id: string, soundId: string, o: { at?: number; role?: 'music' | 'effect'; volume?: number } = {}): Promise<{ project: Project; clip: string }> {
+    const s = this.sounds.get(soundId);
+    if (!s) throw new StudioError('That sound is not in the library.');
+    const role = o.role ?? s.kind;
+    let asset: Asset;
+    if (s.builtIn) asset = this.soundEffect(id, s.id.slice(4) as SfxKind).asset;
+    else {
+      const file = this.sounds.file(soundId);
+      if (!file) throw new StudioError(`The file of “${s.name}” is missing.`);
+      const p0 = this.get(id);
+      asset = p0.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file).toLowerCase()) ?? (await this.importFiles(id, [file])).added[0]!;
+      if (!asset) throw new StudioError(`Keo could not read “${s.name}”.`);
+      if (asset.name !== s.name) this.learn(id, asset.id, { name: s.name });
+    }
+    const p = this.get(id);
+    const total = projectDuration(p);
+    const at = Math.max(0, o.at ?? (role === 'music' ? 0 : 0));
+    const op: EditOp =
+      role === 'music'
+        ? { op: 'add_audio', assetId: asset.id, trackName: 'Music', start: at, volume: o.volume ?? 0.3, duck: -14, ...(total > at + 1 ? { duration: Math.min(asset.duration, total - at) } : {}) }
+        : { op: 'add_audio', assetId: asset.id, trackName: 'Effects', start: at, volume: o.volume ?? 0.8 };
+    let r = this.edit(id, [op]);
+    const track = r.project.tracks.find((t) => t.name === (role === 'music' ? 'Music' : 'Effects'))!;
+    const clip = track.clips.filter((c) => c.type === 'audio' && c.assetId === asset.id).sort((a, b) => Math.abs(a.start - at) - Math.abs(b.start - at))[0]!;
+    // Music fades out with the end of the video.
+    if (role === 'music' && clip.duration > 3) r = this.mergeLast(id, { op: 'set', clip: clip.id, fadeIn: 0.5, fadeOut: 1.5 });
+    this.d.log.info('studio.sound_used', { role, builtIn: !!s.builtIn });
+    return { project: r.project, clip: clip.id };
   }
 
   /** The picture at `time`, full size, saved as a new PNG next to the exports (a cover or thumbnail). */

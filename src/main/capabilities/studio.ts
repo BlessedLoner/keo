@@ -722,6 +722,45 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const sounds = defineCapability({
+    ...simple({
+      id: 'studio.sounds',
+      title: 'Find sounds in the library',
+      description:
+        'Search the user’s sound library (their own music and sound effects, for all projects, plus Keo’s whoosh, pop, click, ding, riser, boom and swipe). kind music|effect; genre (music: hip-hop, afrobeats, amapiano, pop, rnb, lofi, electronic, house, rock, cinematic, ambient, acoustic, gospel, corporate, funny; effects: whoosh, pop, click, riser, impact, ding, swipe, glitch, laugh, applause, typing); query matches names and tags. Use it when the user names a sound or a style, and before choosing music. Then studio__use_sound.',
+      summary: 'Search the sound library',
+    }),
+    input: z.object({ query: z.string().max(200).optional(), kind: z.enum(['music', 'effect']).optional(), genre: z.string().max(40).optional() }).strict(),
+    output: z.object({ sounds: z.array(z.object({ id: z.string(), name: z.string(), kind: z.string(), genre: z.string(), seconds: z.number(), keo: z.boolean() })) }),
+    timeoutMs: 30_000,
+    auditView: (i) => ({ kind: i.kind ?? null, genre: i.genre ?? null }),
+    execute(i) {
+      const list = s.sounds.list({ ...(i.query ? { query: i.query } : {}), ...(i.kind ? { kind: i.kind } : {}), ...(i.genre ? { genre: i.genre } : {}) });
+      return Promise.resolve({ sounds: list.slice(0, 60).map((x) => ({ id: x.id, name: x.name, kind: x.kind, genre: x.genre, seconds: x.duration, keo: !!x.builtIn })) });
+    },
+  });
+
+  const useSound = defineCapability({
+    ...simple({
+      id: 'studio.use_sound',
+      title: 'Use a sound from the library',
+      description:
+        'Put a sound from the library (studio__sounds) on the timeline: music on the Music track from at (default 0; quieter, lower still under speech, fading out with the video), an effect on the Effects track at at (seconds). Sound design: a whoosh on each cut or transition, a pop when a title or sticker appears, a riser into a reveal or the end card, an impact on a big moment, typing or clicks over screen recordings. One edit.',
+      summary: 'Add a sound from the library',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), sound: z.string().regex(/^(sn|sfx)_[A-Za-z0-9]{3,24}$/), at: z.number().min(0).optional(), role: z.enum(['music', 'effect']).optional(), volume: z.number().min(0).max(2).optional() }).strict(),
+    output: State.extend({ clip: z.string() }),
+    timeoutMs: 2 * 60_000,
+    auditView: (i) => ({ sound: i.sound }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.useSound(p.id, i.sound, { ...(i.at !== undefined ? { at: i.at } : {}), ...(i.role ? { role: i.role } : {}), ...(i.volume !== undefined ? { volume: i.volume } : {}) }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, r.project), clip: r.clip };
+    },
+  });
+
   const shorts = defineCapability({
     ...simple({
       id: 'studio.make_shorts',
@@ -986,7 +1025,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     execute: (i: never, ctx: never) => s.asKeo(() => (c.execute as (i: never, ctx: never) => unknown)(i, ctx), (i as { projectId?: string } | undefined)?.projectId),
   })) as AnyCapability[];

@@ -5,15 +5,14 @@ import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
 import { Preview, type Guides } from '../studio/Preview';
 import { Timeline } from '../studio/Timeline';
-import { Autopilot } from '../studio/Autopilot';
 import { ProjectGrid } from '../studio/ProjectGrid';
 import { ReadAloud } from '../studio/VoiceTools';
-import { MediaBin } from '../studio/Bin';
+import { Library } from '../studio/Library';
 import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
-import { ChromaFields, CounterFields, EffectsFields, ElementsPanel, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
+import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import '../styles/studio.css';
 
 /**
@@ -108,7 +107,7 @@ export function StudioView() {
   selectedRef.current = selected;
   const timeRef = useRef(0);
   timeRef.current = time;
-  const [sideTab, setSideTab] = useState<'keo' | 'tools' | 'inspect'>('keo');
+  const [sideTab, setSideTab] = useState<'keo' | 'inspect'>('keo');
   // Picking a clip opens its settings.
   useEffect(() => {
     if (selected) setSideTab('inspect');
@@ -266,11 +265,7 @@ export function StudioView() {
       const r = await invoke('studio:import', { id: project.id });
       show(r.project);
       if (r.skipped.length) ui.toast(`Not added: ${r.skipped.slice(0, 3).join('; ')}`, 'error');
-      // The first media of an empty project goes straight onto the timeline.
-      if (r.added.length && projectDuration(project) === 0) {
-        const ops: EditOp[] = r.added.map((a) => (a.kind === 'audio' ? { op: 'add_audio', assetId: a.id, start: 'end' } : { op: 'add_media', assetId: a.id, start: 'end' }));
-        await edit(ops);
-      }
+      if (r.added.length) ui.toast(`Imported ${r.added.length} file${r.added.length === 1 ? '' : 's'}: drag ${r.added.length === 1 ? 'it' : 'them'} onto the timeline, or click +.`, 'success');
     } catch (e) {
       ui.error(errText(e));
     }
@@ -319,21 +314,7 @@ export function StudioView() {
       setCaptioning(false);
     }
   };
-  const addMusic = async () => {
-    if (!project) return;
-    try {
-      const r = await invoke('studio:import', { id: project.id });
-      const songs = r.added.filter((a) => a.kind === 'audio');
-      if (!songs.length) {
-        if (r.added.length || r.skipped.length) ui.toast('Choose a music file (MP3, M4A, WAV…).', 'error');
-        return;
-      }
-      // Music goes under everything, quieter, and ducks while someone speaks.
-      await edit(songs.map((a) => ({ op: 'add_audio', assetId: a.id, trackName: 'Music', start: 0, volume: 0.3, duck: -14, ...(duration > 0 ? { duration: Math.min(a.duration, duration) } : {}) })));
-    } catch (e) {
-      ui.error(errText(e));
-    }
-  };
+
 
   const splitAtPlayhead = useCallback(() => {
     const p = projectRef.current;
@@ -625,7 +606,21 @@ export function StudioView() {
         </button>
       </header>
       <div className="studio-main">
-        <MediaBin project={project} time={time} onImport={() => void importMedia()} onAddAsset={addAsset} onEdit={edit} onMusic={() => void addMusic()} onCaptions={() => void autoCaptions()} captioning={captioning} />
+        <Library
+          project={project}
+          time={time}
+          selected={selected}
+          onImport={() => void importMedia()}
+          onAddAsset={addAsset}
+          onEdit={edit}
+          onCaptions={() => void autoCaptions()}
+          captioning={captioning}
+          onAskKeo={(text) => {
+            setSideTab('keo');
+            // The Keo panel sends it once it is on screen.
+            setTimeout(() => window.dispatchEvent(new CustomEvent('keo:ask', { detail: text })), 50);
+          }}
+        />
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
           <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
           <div className="studio-transport">
@@ -676,8 +671,7 @@ export function StudioView() {
             {(
               [
                 ['keo', 'Keo'],
-                ['tools', 'Tools'],
-                ['inspect', sel ? 'Inspector' : 'Project'],
+                ['inspect', sel ? 'Edit' : 'Details'],
               ] as const
             ).map(([id, label]) => (
               <button key={id} role="tab" aria-selected={sideTab === id} className={sideTab === id ? 'on' : ''} onClick={() => setSideTab(id)}>
@@ -689,12 +683,6 @@ export function StudioView() {
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} />}
           {sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} />}
-          {sideTab === 'tools' && (
-            <>
-              <Autopilot project={project} time={time} onEdit={edit} onBusy={(b) => b && setPlaying(false)} />
-              <ElementsPanel project={project} time={time} onEdit={edit} />
-            </>
-          )}
           {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
                 setPlaying(false);
                 setFollow(sel.clip.id);
@@ -923,17 +911,47 @@ function Checklist({ steps, onClose }: { steps: Step[]; onClose: () => void }) {
 
 // ---------------------------------------------------------------- inspector
 
+type InspTab = 'video' | 'audio' | 'speed' | 'animation' | 'adjust' | 'text' | 'element';
+let lastInspTab: InspTab = 'video';
+
 function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project; clip: Clip; time: number; onEdit: (ops: EditOp[]) => void; onFollow: () => void }) {
   const set = (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => onEdit([{ op: 'set', clip: clip.id, ...patch }]);
   const asset = isAV(clip) ? project.assets.find((a) => a.id === clip.assetId) : undefined;
+  // CapCut-style tabs for what is selected (the last one used stays chosen).
+  const tabs: Array<[InspTab, string]> =
+    clip.type === 'media'
+      ? [['video', asset?.kind === 'image' ? 'Picture' : 'Video'], ...(asset?.hasAudio ? ([['audio', 'Audio']] as Array<[InspTab, string]>) : []), ...(asset?.kind === 'video' ? ([['speed', 'Speed']] as Array<[InspTab, string]>) : []), ['animation', 'Animation'], ['adjust', 'Adjust']]
+      : clip.type === 'audio'
+        ? [['audio', 'Audio']]
+        : clip.type === 'text'
+          ? [['text', 'Text'], ['animation', 'Animation']]
+          : clip.type === 'shape'
+            ? [['element', 'Element'], ['animation', 'Animation']]
+            : [['adjust', 'Adjust']];
+  const [tab, setTab] = useState<InspTab>(() => (tabs.some(([t]) => t === lastInspTab) ? lastInspTab : tabs[0]![0]));
+  const at = (t: InspTab) => tab === t;
+  const first = tab === tabs[0]![0];
   return (
     <div className="inspector">
-      <div className="studio-pane-head">
-        <span>{clip.type === 'text' ? 'Text' : clip.type === 'audio' ? 'Sound' : clip.type === 'shape' ? 'Element' : clip.type === 'adjust' ? 'Adjustment layer' : asset?.kind === 'image' ? 'Picture' : 'Video'}</span>
+      <div className="insp-tabs" role="tablist" aria-label="Edit the selected clip">
+        {tabs.map(([t, label]) => (
+          <button
+            key={t}
+            role="tab"
+            aria-selected={tab === t}
+            className={tab === t ? 'on' : ''}
+            onClick={() => {
+              lastInspTab = t;
+              setTab(t);
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-      {asset && <p className="small muted insp-name">{asset.name}</p>}
-      {asset?.kind === 'video' && (asset.proxy ? <p className="small muted insp-name">Smooth preview: plays a light copy (the export uses the original).</p> : Math.max(asset.width, asset.height) > 1920 && <PreviewCopyButton projectId={project.id} assetId={asset.id} />)}
-      {isAV(clip) && (
+      {first && asset && <p className="small muted insp-name">{asset.name}</p>}
+      {first && asset?.kind === 'video' && (asset.proxy ? <p className="small muted insp-name">Smooth preview: plays a light copy (the export uses the original).</p> : Math.max(asset.width, asset.height) > 1920 && <PreviewCopyButton projectId={project.id} assetId={asset.id} />)}
+      {first && isAV(clip) && (
         <label className="insp-num wide insp-replace">
           <span>Replace with</span>
           <select
@@ -954,10 +972,23 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           </select>
         </label>
       )}
+      {first && (
       <Section title="Timing">
         <div className="insp-grid">
           <Num label="Start" value={clip.start} min={0} suffix="s" onCommit={(v) => onEdit([{ op: 'move', clip: clip.id, start: v }])} />
           <Num label="Length" value={clip.duration} min={0.04} suffix="s" onCommit={(v) => onEdit([{ op: 'trim', clip: clip.id, duration: v }])} />
+          {isAV(clip) && (
+            <>
+              <Num label="Fade in" value={clip.fadeIn} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeIn: v })} />
+              <Num label="Fade out" value={clip.fadeOut} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeOut: v })} />
+            </>
+          )}
+        </div>
+      </Section>
+      )}
+      {at('speed') && (
+      <Section title="Speed">
+        <div className="insp-grid">
           {clip.type === 'media' && asset?.kind === 'video' && !clip.speedCurve && <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />}
           {clip.type === 'media' && asset?.kind === 'video' && (
             <label className="insp-num">
@@ -975,15 +1006,10 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
             </label>
           )}
           {clip.type === 'media' && clip.speedCurve && <CurveGraph points={clip.speedCurve} />}
-          {isAV(clip) && (
-            <>
-              <Num label="Fade in" value={clip.fadeIn} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeIn: v })} />
-              <Num label="Fade out" value={clip.fadeOut} min={0} max={30} suffix="s" onCommit={(v) => set({ fadeOut: v })} />
-            </>
-          )}
         </div>
       </Section>
-      {(clip.type === 'audio' || (clip.type === 'media' && asset?.hasAudio)) && (
+      )}
+      {at('audio') && (clip.type === 'audio' || (clip.type === 'media' && asset?.hasAudio)) && (
         <Section title="Sound">
           <VolumeField clip={clip} time={time} fps={project.fps} set={set} />
           {clip.volumeKeys?.length ? <p className="small muted insp-tip-inline">◆ The volume changes over the clip: move the playhead and change it to add a point.</p> : null}
@@ -1026,7 +1052,7 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           )}
         </Section>
       )}
-      {clip.type === 'adjust' && (
+      {at('adjust') && clip.type === 'adjust' && (
         <Section title="Adjustment">
           <p className="small muted">Changes everything under it (videos, pictures, elements) while it is on the timeline; titles and captions above it stay as they are.</p>
           <div className="insp-grid">
@@ -1037,14 +1063,14 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           </div>
         </Section>
       )}
-      {(clip.type === 'media' || clip.type === 'adjust') && <ColorFields clip={clip} set={set} />}
-      {clip.type === 'text' && <TextFields clip={clip} set={set} />}
-      {clip.type === 'text' && (
+      {at('adjust') && (clip.type === 'media' || clip.type === 'adjust') && <ColorFields clip={clip} set={set} />}
+      {at('text') && clip.type === 'text' && <TextFields clip={clip} set={set} />}
+      {at('text') && clip.type === 'text' && (
         <Section title="Voice">
           <ReadAloud projectId={project.id} clipId={clip.id} />
         </Section>
       )}
-      {clip.type !== 'audio' && clip.type !== 'adjust' && (
+      {(at('video') || at('text') || at('element')) && clip.type !== 'audio' && clip.type !== 'adjust' && (
         <Section title="Position">
           {clip.type === 'media' && (
             <div className="insp-seg" role="radiogroup" aria-label="Fit">
@@ -1087,7 +1113,7 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           <p className="small muted insp-tip-inline">◆ animates a value: move the playhead, change the value, and Keo makes the in-between.</p>
         </Section>
       )}
-      {clip.type !== 'audio' && clip.type !== 'adjust' && (
+      {(at('video') || at('text') || at('element')) && clip.type !== 'audio' && clip.type !== 'adjust' && (
         <Section title="Motion tracking">
           <button className="btn sm" onClick={onFollow} title="Text, a sticker or an element moves with something in the video (a face, a car, a ball)">
             <Icon name="vision" size={13} /> Follow something in the video
@@ -1095,20 +1121,20 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           {clip.type === 'media' && asset?.kind === 'video' && <SteadyButton projectId={project.id} clipId={clip.id} />}
         </Section>
       )}
-      {clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
-      {clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
-      {clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
-      {clip.type === 'media' && (
+      {at('element') && clip.type === 'shape' && <ShapeFields clip={clip} set={set} />}
+      {at('animation') && clip.type === 'media' && <TransitionFields clip={clip} hasBefore={project.tracks.some((t) => t.clips.some((o) => o.type === 'media' && o.id !== clip.id && Math.abs(o.start + o.duration - clip.start) < 0.05 && t.clips.includes(clip)))} set={set} />}
+      {at('video') && clip.type === 'media' && <FrameFields clip={clip} projectId={project.id} set={set} />}
+      {at('video') && clip.type === 'media' && (
         <Section title="Remove background">
           <label className="insp-check" title="Keo finds the people in the picture on this PC and removes everything else, no green screen needed. Put a new background on a track below.">
             <input type="checkbox" checked={!!clip.cutout} onChange={(e) => set({ cutout: e.target.checked, ...(e.target.checked ? { chroma: null } : {}) })} /> Remove background (AI, keeps people)
           </label>
         </Section>
       )}
-      {clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
-      {(clip.type === 'media' || clip.type === 'adjust') && <EffectsFields clip={clip} set={set} />}
-      {clip.type === 'text' && <CounterFields clip={clip} set={set} />}
-      {clip.type !== 'audio' && clip.type !== 'adjust' && <MotionFields clip={clip} set={set} />}
+      {at('video') && clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
+      {at('adjust') && (clip.type === 'media' || clip.type === 'adjust') && <EffectsFields clip={clip} set={set} />}
+      {at('text') && clip.type === 'text' && <CounterFields clip={clip} set={set} />}
+      {at('animation') && clip.type !== 'audio' && clip.type !== 'adjust' && <MotionFields clip={clip} set={set} />}
     </div>
   );
 }

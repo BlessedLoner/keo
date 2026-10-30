@@ -88,6 +88,12 @@ function registerAppProtocol(): void {
     const preview = url.searchParams.get('preview') === '1';
     const probing = /^\/probe\/([0-9a-f]{24})$/.exec(url.pathname);
     // Studio's background removal: the WebAssembly files of the installed MediaPipe package (only these names).
+    // A sound of the user's library (to listen to before adding it).
+    const sound = /^\/sound\/(sn_[A-Za-z0-9]{4,24})$/.exec(url.pathname);
+    if (sound) {
+      const file = services?.studio.sounds.file(sound[1]!) ?? null;
+      return file ? serveFile(file, request.headers.get('range')) : new Response('Not found', { status: 404 });
+    }
     const wasm = /^\/mediapipe\/(vision_wasm(?:_module|_nosimd)?_internal\.(?:js|wasm))$/.exec(url.pathname);
     if (wasm) return serveFile(path.join(app.getAppPath(), 'node_modules', '@mediapipe', 'tasks-vision', 'wasm', wasm[1]!), request.headers.get('range'));
     if (media || probing) {
@@ -1297,6 +1303,24 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   }
   const drumFile = path.join(dir, 'drums.wav');
   fs.writeFileSync(drumFile, wavOf(drumPcm, drumRate));
+  // The sound library: the drum loop added as music (measured on this PC), then put under a
+  // picture's 6 seconds, with one of Keo's own whooshes at 1 s.
+  const libAdded = await s.studio.sounds.add([drumFile], { kind: 'music', genre: 'hip-hop' });
+  const sl = s.studio.create('Studio smoke sounds', 'square');
+  const slPic = (await s.studio.importFiles(sl.id, [pic])).added[0]!;
+  s.studio.edit(sl.id, [{ op: 'add_media', assetId: slPic.id, start: 0, duration: 6 }]);
+  const slSong = libAdded.added[0] ?? s.studio.sounds.list({ query: 'drums' })[0];
+  const slMusic = await s.studio.useSound(sl.id, slSong!.id, {});
+  await s.studio.useSound(sl.id, 'sfx_whoosh', { at: 1 });
+  const slNow = s.studio.get(sl.id);
+  const slMusicClip = slNow.tracks.flatMap((t) => t.clips).find((c) => c.id === slMusic.clip) as { start: number; duration: number; volume: number; duck: number | null; fadeOut: number } | undefined;
+  out.sounds = {
+    found: s.studio.sounds.list({ kind: 'music', genre: 'hip-hop' }).map((x) => x.name),
+    seconds: slSong?.duration,
+    music: slMusicClip ? { track: slNow.tracks.find((t) => t.clips.some((c) => c.id === slMusic.clip))?.name, start: slMusicClip.start, duration: slMusicClip.duration, volume: slMusicClip.volume, duck: slMusicClip.duck, fadeOut: slMusicClip.fadeOut } : null,
+    effects: slNow.tracks.find((t) => t.name === 'Effects')?.clips.map((c) => c.start) ?? [],
+  };
+  s.studio.delete(sl.id);
   const bt = s.studio.create('Studio smoke beat', 'square');
   const btMedia = (await s.studio.importFiles(bt.id, [drumFile, pic])).added;
   const btSong = btMedia.find((x) => x.kind === 'audio')!;
@@ -1528,7 +1552,11 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('.studio-new button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
       await wait(500);
       // The Text styles in the library, and the Export window.
-      await js(`[...document.querySelectorAll('.bin-tabs button')].find((b) => b.textContent.trim() === 'Text')?.click();`);
+      // The library's Audio tab (music and sound effects), then the Text tab.
+      await js(`[...document.querySelectorAll('.lib-tabs button')].find((b) => b.textContent.trim() === 'Audio')?.click();`);
+      await wait(700);
+      fs.writeFileSync(path.join(dir, 'studio-audio.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('.lib-tabs button')].find((b) => b.textContent.trim() === 'Text')?.click();`);
       await wait(500);
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('Export'))?.click();`);
       await wait(600);

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { CAPTION_STYLE, type Asset, type EditOp, type Project, type TextClip, type TextStyle } from '@shared/studio';
+import { CAPTION_STYLE, type Asset, type TextClip, type TextStyle } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { invoke } from '../lib/api';
 import { mediaUrl } from './media';
 import { useFilmstrip } from './thumbs';
-import { VoiceRecorder } from './VoiceTools';
 
 /**
  * The Studio's library on the left: the project's media (thumbnails, lengths, a moving preview
@@ -15,7 +14,7 @@ import { VoiceRecorder } from './VoiceTools';
 const fmt = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`);
 
 /** Text styles: how they look in the gallery, and what they add. */
-const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css: CSSProperties; style: Partial<TextStyle>; animIn: TextClip['animIn']; animOut?: TextClip['animOut']; y?: number; duration?: number }> = [
+export const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css: CSSProperties; style: Partial<TextStyle>; animIn: TextClip['animIn']; animOut?: TextClip['animOut']; y?: number; duration?: number }> = [
   { id: 'title', label: 'Title', sample: 'TITLE', css: { fontWeight: 900, fontSize: 20, letterSpacing: 1 }, style: { sizePct: 8, weight: 'black', uppercase: true, shadow: 12 }, animIn: 'pop' },
   { id: 'caption', label: 'Bold caption', sample: 'SAY IT', css: { fontWeight: 900, fontSize: 17, WebkitTextStroke: '1.5px #000', color: '#fff' }, style: { ...CAPTION_STYLE }, animIn: 'pop', y: 0.74 },
   { id: 'neon', label: 'Neon glow', sample: 'Neon', css: { fontWeight: 800, fontSize: 19, color: '#fff', textShadow: '0 0 8px #ff3df0, 0 0 16px #ff3df0' }, style: { sizePct: 7, weight: 'bold', glow: 34, glowColor: '#FF3DF0', shadow: 0 }, animIn: 'blur-in' },
@@ -31,196 +30,7 @@ const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css: CSSPr
 ];
 
 /** Stickers: emoji drawn big, popping in and floating. */
-const EMOJI = ['🔥', '😂', '😍', '🤯', '👀', '💯', '✨', '🎉', '👍', '❤️', '😱', '🤔', '🙌', '💡', '⚡', '🚀', '⭐', '✅', '❌', '👇', '👉', '💰', '📈', '🎯'];
-
-const SFX = [
-  { id: 'whoosh', label: 'Whoosh' },
-  { id: 'swipe', label: 'Swipe' },
-  { id: 'pop', label: 'Pop' },
-  { id: 'click', label: 'Click' },
-  { id: 'ding', label: 'Ding' },
-  { id: 'riser', label: 'Riser' },
-  { id: 'boom', label: 'Boom' },
-] as const;
-
-export function MediaBin({
-  project,
-  time,
-  onImport,
-  onAddAsset,
-  onEdit,
-  onMusic,
-  onCaptions,
-  captioning,
-}: {
-  project: Project;
-  time: number;
-  onImport: () => void;
-  onAddAsset: (a: Asset) => void;
-  onEdit: (ops: EditOp[]) => Promise<void> | void;
-  onMusic: () => void;
-  onCaptions: () => void;
-  captioning: boolean;
-}) {
-  const [tab, setTab] = useState<'media' | 'text' | 'audio'>('media');
-  const visual = project.assets.filter((a) => a.kind !== 'audio');
-  const sounds = project.assets.filter((a) => a.kind === 'audio');
-  const hasSpeech = project.assets.some((a) => a.hasAudio);
-  return (
-    <aside className="studio-bin">
-      <div className="side-tabs bin-tabs" role="tablist" aria-label="Library">
-        {(
-          [
-            ['media', 'Media'],
-            ['text', 'Text'],
-            ['audio', 'Audio'],
-          ] as const
-        ).map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === 'media' && (
-        <>
-          <div className="bin-actions">
-            <button className="btn sm primary" onClick={onImport}>
-              <Icon name="plus" size={13} /> Import
-            </button>
-            <span className="small muted">or drop files here</span>
-          </div>
-          {visual.length === 0 ? (
-            <p className="small muted bin-hint">Add videos and pictures: click Import, or drag them here from File Explorer. Then drag them onto the timeline, or click + to add at the playhead.</p>
-          ) : (
-            <div className="bin-grid">
-              {visual.map((a) => (
-                <Tile key={a.id} projectId={project.id} asset={a} onAdd={() => onAddAsset(a)} />
-              ))}
-            </div>
-          )}
-          <div className="bin-tools">
-            <button className="btn sm" onClick={() => void onEdit([{ op: 'add_track', kind: 'video' }])}>
-              <Icon name="film" size={13} /> Video track
-            </button>
-          </div>
-        </>
-      )}
-      {tab === 'text' && (
-        <>
-          <div className="bin-actions">
-            <button className="btn sm" disabled={captioning || !hasSpeech} onClick={onCaptions} title={hasSpeech ? 'Turn the speech into word-by-word captions' : 'Add a video with speech first'}>
-              {captioning ? <span className="spinner tiny" /> : <Icon name="text" size={13} />} {captioning ? 'Captioning…' : 'Auto captions'}
-            </button>
-          </div>
-          <div className="studio-pane-head">
-            <span>Stickers</span>
-          </div>
-          <div className="emoji-grid">
-            {EMOJI.map((e) => (
-              <button
-                key={e}
-                className="emoji"
-                title="Add this sticker at the playhead"
-                onClick={() =>
-                  void onEdit([
-                    {
-                      op: 'add_text',
-                      text: e,
-                      start: time,
-                      duration: 2.5,
-                      animIn: 'pop',
-                      animOut: 'pop',
-                      animSeconds: 0.35,
-                      style: { font: 'Segoe UI Emoji', sizePct: 14, weight: 'normal', shadow: 14 },
-                      transform: { x: 0.72, y: 0.3, rotation: -8 },
-                      loop: { kind: 'float', amount: 0.4, period: 2.4 },
-                    },
-                  ])
-                }
-              >
-                {e}
-              </button>
-            ))}
-          </div>
-          <div className="studio-pane-head">
-            <span>Text styles</span>
-          </div>
-          <div className="style-grid">
-            {TEXT_STYLES.map((s) => (
-              <button
-                key={s.id}
-                className="style-tile"
-                title={`Add “${s.label}” at the playhead`}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData('application/x-keo-text', s.id)}
-                onClick={() => void onEdit([{ op: 'add_text', text: s.id === 'quote' ? '“Your words here”' : s.id === 'caption' ? 'SAY IT LOUD' : s.label === 'Title' ? 'YOUR TITLE' : 'Your text', start: time, duration: s.duration ?? 3, style: s.style, animIn: s.animIn, animOut: s.animOut ?? 'fade', transform: s.y ? { y: s.y } : {} }])}
-              >
-                <span className="style-sample" style={s.css}>
-                  {s.sample}
-                </span>
-                <span className="style-label">{s.label}</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-      {tab === 'audio' && (
-        <>
-          <div className="bin-actions">
-            <button className="btn sm primary" onClick={onMusic} title="Your own music file: it goes on the Music track, quieter while someone speaks">
-              <Icon name="music" size={13} /> Add music
-            </button>
-          </div>
-          <div className="bin-actions">
-            <VoiceRecorder projectId={project.id} time={time} />
-          </div>
-          {sounds.length > 0 && (
-            <div className="bin-list">
-              {sounds.map((a) => (
-                <div
-                  key={a.id}
-                  className="bin-item"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('application/x-keo-asset', a.id);
-                    e.dataTransfer.effectAllowed = 'copy';
-                  }}
-                  onDoubleClick={() => onAddAsset(a)}
-                >
-                  <span className="bin-thumb audio">
-                    <Icon name="music" size={16} />
-                  </span>
-                  <div className="bin-info">
-                    <span className="bin-name">{a.name}</span>
-                    <span className="small muted">{fmt(a.duration)}</span>
-                  </div>
-                  <button className="btn icon sm ghost" onClick={() => onAddAsset(a)} title="Add at the playhead">
-                    <Icon name="plus" size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="studio-pane-head">
-            <span>Sound effects</span>
-          </div>
-          <div className="sfx-grid">
-            {SFX.map((s) => (
-              <button key={s.id} className="btn sm" title={`Add a ${s.label.toLowerCase()} at the playhead`} onClick={() => void invoke('studio:soundEffect', { id: project.id, kind: s.id, at: time }).catch(() => undefined)}>
-                <Icon name="plus" size={12} /> {s.label}
-              </button>
-            ))}
-          </div>
-          <div className="bin-tools">
-            <button className="btn sm" onClick={() => void onEdit([{ op: 'add_track', kind: 'audio' }])}>
-              <Icon name="music" size={13} /> Audio track
-            </button>
-          </div>
-        </>
-      )}
-    </aside>
-  );
-}
+export const EMOJI = ['🔥', '😂', '😍', '🤯', '👀', '💯', '✨', '🎉', '👍', '❤️', '😱', '🤔', '🙌', '💡', '⚡', '🚀', '⭐', '✅', '❌', '👇', '👉', '💰', '📈', '🎯'];
 
 /** A media tile: its first frame, its length, and the video playing while the mouse is over it. */
 /** Why this PC cannot play a video (its format), or null when it can. Checked once per file. */
@@ -255,7 +65,7 @@ export function usePlayable(projectId: string, asset: Asset): string | null {
   return issue;
 }
 
-function Tile({ projectId, asset, onAdd }: { projectId: string; asset: Asset; onAdd: () => void }) {
+export function Tile({ projectId, asset, onAdd }: { projectId: string; asset: Asset; onAdd: () => void }) {
   const strip = useFilmstrip(projectId, asset);
   const issue = usePlayable(projectId, asset);
   const video = useRef<HTMLVideoElement>(null);

@@ -122,6 +122,14 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
       ui.error(errText(e));
     }
   };
+  // A request from elsewhere in Studio (a library button): sent like a typed one.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  useEffect(() => {
+    const ask = (e: Event) => void sendRef.current(String((e as CustomEvent).detail ?? ''));
+    window.addEventListener('keo:ask', ask);
+    return () => window.removeEventListener('keo:ask', ask);
+  }, []);
   const stop = () => conversationId && void invoke('chat:cancel', { conversationId }).catch(() => undefined);
 
   const hasMedia = project.assets.some((a) => a.kind !== 'audio') || project.tracks.some((t) => t.clips.length);

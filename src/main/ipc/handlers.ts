@@ -523,6 +523,17 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const r = await s.studio.stabilize(id, clip, strength).catch(studioErr);
       return { points: r.points, zoom: r.zoom };
     },
+    'studio:sounds': ({ query, kind, genre }) => s.studio.sounds.list({ ...(query ? { query } : {}), ...(kind ? { kind } : {}), ...(genre ? { genre } : {}) }),
+    'studio:soundsAdd': async ({ paths, kind }) => {
+      const files = paths ?? (host.pickMedia ? await host.pickMedia() : []);
+      return s.studio.sounds.add(files, kind ? { kind } : {}).catch(studioErr);
+    },
+    'studio:soundUpdate': ({ sound, ...patch }) => studioCall(() => s.studio.sounds.update(sound, patch)),
+    'studio:soundDelete': ({ sound }) => {
+      studioCall(() => s.studio.sounds.remove(sound));
+      return { ok: true as const };
+    },
+    'studio:soundUse': async ({ id, sound, at, role }) => ({ clip: (await s.studio.useSound(id, sound, { ...(at !== undefined ? { at } : {}), ...(role ? { role } : {}) }).catch(studioErr)).clip }),
     'studio:watch': ({ id, on }) => {
       s.studio.watch(id, on);
       return { ok: true as const };
