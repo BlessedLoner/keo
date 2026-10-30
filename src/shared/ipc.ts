@@ -494,7 +494,7 @@ export interface InvokeOutputs {
   'studio:readAloud': { clip: string; seconds: number };
   'studio:saveRecording': { clip: string; seconds: number };
   'studio:current': { id: string | null };
-  'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null;
+  'studio:videoTrack': { codec: string; description: Uint8Array | null; width: number; height: number; rotation: number; samples: number; keyTimes: number[] } | null;
   'studio:videoSamples': { from: number; samples: Array<{ data: Uint8Array; time: number; duration: number; key: boolean }> };
   'studio:exportBegin': { ok: true };
   'studio:exportChunk': { ok: true };

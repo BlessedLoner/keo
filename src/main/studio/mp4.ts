@@ -34,6 +34,8 @@ export interface Mp4Track {
   duration: number;
   width: number;
   height: number;
+  /** Degrees clockwise the picture is turned when it plays (phones store upright video lying down). */
+  rotation: 0 | 90 | 180 | 270;
   sampleRate: number;
   channels: number;
   samples: Mp4Sample[];
@@ -114,6 +116,12 @@ function parseTrack(buf: Buffer, trak: Box): Mp4Track | null {
   const mdia = child(buf, trak, 'mdia');
   if (!tkhd || !mdia) return null;
   const id = buf[tkhd.data] === 1 ? buf.readUInt32BE(tkhd.data + 20) : buf.readUInt32BE(tkhd.data + 12);
+  // The display matrix (a, b of its first row tell the turn).
+  const m = tkhd.data + (buf[tkhd.data] === 1 ? 52 : 40);
+  const ma = m + 8 <= tkhd.end ? buf.readInt32BE(m) : 65536;
+  const mb = m + 8 <= tkhd.end ? buf.readInt32BE(m + 4) : 0;
+  const turn = (((Math.round((Math.atan2(mb, ma) * 180) / Math.PI / 90) * 90) % 360) + 360) % 360;
+  const rotation = (turn === 90 || turn === 180 || turn === 270 ? turn : 0) as Mp4Track['rotation'];
   const mdhd = child(buf, mdia, 'mdhd');
   const hdlr = child(buf, mdia, 'hdlr');
   const stbl = path(buf, mdia, 'minf', 'stbl');
@@ -250,7 +258,7 @@ function parseTrack(buf: Buffer, trak: Box): Mp4Track | null {
   }
   const samples: Mp4Sample[] = new Array(count);
   for (let i = 0; i < count; i++) samples[i] = { offset: offsets[i]!, size: sizes[i]!, time: (dts[i]! + offsetCts[i]! - shift) / timescale, duration: durs[i]! / timescale, key: stss ? keys.has(i) : true };
-  return { id, kind, format, codec, description, timescale, duration: mdDuration / timescale, width, height, sampleRate, channels, samples };
+  return { id, kind, format, codec, description, timescale, duration: mdDuration / timescale, width, height, rotation, sampleRate, channels, samples };
 }
 
 /** The DecoderSpecificInfo (AudioSpecificConfig) inside an esds' ES descriptor. */

@@ -29,6 +29,8 @@ export interface ProbeResult {
   width: number;
   height: number;
   hasAudio: boolean;
+  /** Phone videos: how far the frames turn to stand upright (width and height are then upright). */
+  rotation?: 0 | 90 | 180 | 270;
 }
 
 
@@ -117,11 +119,38 @@ export class StudioService {
     return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  /**
+   * Projects made before Keo read the turn of phone videos: each MP4 video's turn is read once,
+   * its size made upright, and the project saved (quietly).
+   */
+  private upright(p: Project): Project {
+    const old = p.assets.filter((a) => a.kind === 'video' && a.rotation === undefined && MP4_EXT.has(path.extname(a.path).toLowerCase()));
+    if (!old.length) return p;
+    const assets = p.assets.map((a) => {
+      if (!old.includes(a)) return a;
+      let turn: 0 | 90 | 180 | 270;
+      const r = fs.existsSync(a.path) ? Mp4Reader.open(a.path) : null;
+      try {
+        turn = r?.video()?.rotation ?? 0;
+      } finally {
+        r?.close();
+      }
+      // Older projects kept the size as stored in the file: a quarter turn swaps it.
+      return { ...a, rotation: turn, ...(turn === 90 || turn === 270 ? { width: a.height, height: a.width } : {}) };
+    });
+    const next = Project.parse({ ...p, assets });
+    const f = this.file(p.id);
+    const tmp = `${f}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(next));
+    fs.renameSync(tmp, f);
+    return next;
+  }
+
   get(id: string): Project {
     const f = this.file(id);
     if (!fs.existsSync(f)) throw new StudioError('That Studio project does not exist (any more).');
     try {
-      return Project.parse(JSON.parse(fs.readFileSync(f, 'utf8')));
+      return this.upright(Project.parse(JSON.parse(fs.readFileSync(f, 'utf8'))));
     } catch {
       // A damaged file: the newest backup that reads back, put in its place.
       for (const b of this.backups(id)) {
@@ -340,6 +369,12 @@ export class StudioService {
   }
 
   delete(id: string): void {
+    // Files the project's videos were read from are let go (they can be moved or deleted again).
+    for (const [key, r] of this.readers)
+      if (key.startsWith(`${id}/`)) {
+        r?.close();
+        this.readers.delete(key);
+      }
     fs.rmSync(this.file(id), { force: true });
     fs.rmSync(path.join(this.d.dir, 'backups', id), { recursive: true, force: true });
     this.undo.delete(id);
@@ -462,7 +497,7 @@ export class StudioService {
         skipped.push(`${path.basename(file)} (Keo could not read it)`);
         continue;
       }
-      const asset: Asset = { id: `as_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, kind: info.kind, path: file, name: path.basename(file).slice(0, 260), duration: Math.round(info.duration * 1000) / 1000, width: info.width, height: info.height, hasAudio: info.hasAudio };
+      const asset: Asset = { id: `as_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, kind: info.kind, path: file, name: path.basename(file).slice(0, 260), duration: Math.round(info.duration * 1000) / 1000, width: info.width, height: info.height, hasAudio: info.hasAudio, ...(info.kind === 'video' && info.rotation !== undefined ? { rotation: info.rotation } : {}) };
       added.push(asset);
     }
     if (!added.length) return { project: p, added, skipped };
@@ -483,7 +518,9 @@ export class StudioService {
         try {
           const v = r.video();
           const a = r.audio();
-          if (v) return { kind: 'video', duration: Math.max(v.duration, a?.duration ?? 0), width: v.width, height: v.height, hasAudio: !!a };
+          // A phone video lying down with a turn to play upright: its size as it plays.
+          const side = v?.rotation === 90 || v?.rotation === 270;
+          if (v) return { kind: 'video', duration: Math.max(v.duration, a?.duration ?? 0), width: side ? v.height : v.width, height: side ? v.width : v.height, hasAudio: !!a, rotation: v.rotation };
           if (a) return { kind: 'audio', duration: a.duration, width: 0, height: 0, hasAudio: true };
         } finally {
           r.close();
@@ -546,10 +583,10 @@ export class StudioService {
   }
 
   /** How the render window can decode a clip's video itself (null: it uses the media element). */
-  videoTrack(projectId: string, assetId: string): { codec: string; description: Uint8Array | null; width: number; height: number; samples: number; keyTimes: number[] } | null {
+  videoTrack(projectId: string, assetId: string): { codec: string; description: Uint8Array | null; width: number; height: number; rotation: number; samples: number; keyTimes: number[] } | null {
     const t = this.reader(projectId, assetId)?.video();
     if (!t?.codec) return null;
-    return { codec: t.codec, description: t.description ? new Uint8Array(t.description) : null, width: t.width, height: t.height, samples: t.samples.length, keyTimes: t.samples.filter((s) => s.key).map((s) => s.time) };
+    return { codec: t.codec, description: t.description ? new Uint8Array(t.description) : null, width: t.width, height: t.height, rotation: t.rotation, samples: t.samples.length, keyTimes: t.samples.filter((s) => s.key).map((s) => s.time) };
   }
 
   /** Compressed video frames in decode order, starting at the key frame before `time` (or at `from`). */

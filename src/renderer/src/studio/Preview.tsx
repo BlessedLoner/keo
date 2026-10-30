@@ -150,6 +150,9 @@ export function Preview({
   const live = useRef({ project, time, playing });
   live.current = { project, time, playing };
   const redraw = useRef<() => void>(() => undefined);
+  /** Something has been drawn already (until then a missing frame is drawn as it is). */
+  const drawn = useRef(false);
+  const waiting = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0, scale: 1 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [patch, setPatch] = useState<Patch | null>(null);
@@ -220,7 +223,22 @@ export function Preview({
     const s = sources.current;
     if (!c || !s) return;
     const ctx = c.getContext('2d');
-    if (ctx) drawFrame(ctx, live.current.project, live.current.time, s);
+    // A video frame still on its way: keep the last picture rather than flash an empty frame
+    // (it is drawn as soon as the frame arrives).
+    if (drawn.current && s.missing(live.current.project, live.current.time)) {
+      if (waiting.current === null) {
+        waiting.current = performance.now();
+        // Paused, nothing else may ask again: look once more when the moment is over.
+        setTimeout(() => redraw.current(), 450);
+      }
+      // Never longer than a moment (a video that cannot play at all is drawn without its picture).
+      if (performance.now() - waiting.current < 400) return;
+    }
+    waiting.current = null;
+    if (ctx) {
+      drawFrame(ctx, live.current.project, live.current.time, s);
+      drawn.current = true;
+    }
   };
 
   // Paused: show the playhead's frame (and put the media there).

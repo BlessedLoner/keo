@@ -1179,6 +1179,33 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   }
   out.steady = { points: steadied.points, zoom: steadied.zoom, against: agree, steps: stKeys.length - 1, sample: stKeys.slice(0, 8).map((k) => [k.at, Math.round((k.value - 0.5) * 1000) / 1000, shakeAt(k.at)]) };
   s.studio.delete(st2.id);
+  // A phone video stored lying down with a quarter turn to play upright (like WhatsApp videos):
+  // red on the left of the stored frames must stand at the top once turned.
+  const rt = s.studio.create('Studio smoke turned', 'landscape');
+  s.studio.edit(rt.id, [
+    { op: 'set_project', width: 320, height: 180, background: '#0000FF' },
+    { op: 'add_shape', shape: 'rect', start: 0, duration: 1, style: { width: 0.5, height: 1.2, radius: 0, fill: '#FF0000' }, transform: { x: 0.25, y: 0.5 } },
+  ]);
+  const rtBytes = Buffer.from(fs.readFileSync((await s.studio.exportVideo(rt.id)).file));
+  s.studio.delete(rt.id);
+  const tkhdAt = rtBytes.indexOf('tkhd', 0, 'latin1') + 4;
+  const matrixAt = tkhdAt + (rtBytes[tkhdAt] === 1 ? 52 : 40);
+  [0, 65536, 0, -65536, 0].forEach((v, i) => rtBytes.writeInt32BE(v, matrixAt + i * 4));
+  const rtFile = path.join(dir, 'phone-turned.mp4');
+  fs.writeFileSync(rtFile, rtBytes);
+  const up = s.studio.create('Studio smoke upright', 'vertical');
+  const upVid = (await s.studio.importFiles(up.id, [rtFile])).added[0]!;
+  s.studio.edit(up.id, [{ op: 'set_project', width: 180, height: 320 }, { op: 'add_media', assetId: upVid.id, start: 0 }]);
+  const upFrame = (await s.studio.frames(up.id, [0.5], 180))[0]!;
+  const upImg = nativeImage.createFromBuffer(upFrame.png);
+  const upSize = upImg.getSize();
+  const upBmp = upImg.toBitmap();
+  const upAt = (y: number) => {
+    const i = (Math.floor(y * upSize.height) * upSize.width + Math.floor(upSize.width / 2)) * 4;
+    return { r: upBmp[i + 2]!, b: upBmp[i]! };
+  };
+  out.turned = { size: `${upVid.width}x${upVid.height}`, rotation: upVid.rotation ?? null, top: upAt(0.2), bottom: upAt(0.8) };
+  s.studio.delete(up.id);
   // AI background removal on a picture with no people in it: the model runs on this PC and removes
   // all of it, so the project's own background (red) shows through where the picture was.
   const co = s.studio.create('Studio smoke cutout', 'square');

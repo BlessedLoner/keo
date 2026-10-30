@@ -166,8 +166,36 @@ export class PreviewSources implements SourceProvider {
         }
       }
     }
+    if (playing) {
+      // The next clips get ready before they are reached (their first frame decoded), so a cut
+      // plays straight on instead of showing a gap while the next video seeks.
+      for (const tr of p.tracks) {
+        if (tr.hidden) continue;
+        for (const c of tr.clips) {
+          if (c.type !== 'media' || activeVideos.has(c.id) || c.start <= t || c.start > t + 1.5) continue;
+          const a = p.assets.find((x) => x.id === c.assetId);
+          if (!a || a.kind !== 'video') continue;
+          const v = this.video(c, a);
+          activeVideos.add(c.id);
+          v.muted = true;
+          if (!v.paused) v.pause();
+          const first = sourceTime(c, a, c.start);
+          if (Math.abs(v.currentTime - first) > 0.05 && !v.seeking) v.currentTime = first;
+        }
+      }
+    }
     for (const [id, v] of this.videos) if (!activeVideos.has(id) && !v.paused) v.pause();
     for (const [id, s] of this.sounds) if (!activeSounds.has(id) && !s.paused) s.pause();
+  }
+
+  /** A visible video clip whose frame is not ready yet (the preview then keeps its last picture). */
+  missing(p: Project, t: number): boolean {
+    for (const c of visibleAt(p, t)) {
+      if (c.type !== 'media') continue;
+      const a = p.assets.find((x) => x.id === c.assetId);
+      if (a?.kind === 'video' && !this.frame(c, a)) return true;
+    }
+    return false;
   }
 
   pauseAll(): void {
@@ -214,8 +242,25 @@ interface Track {
   description: Uint8Array | null;
   width: number;
   height: number;
+  /** Degrees clockwise the frames turn to stand upright (phone videos). */
+  rotation?: number;
   samples: number;
   keyTimes: number[];
+}
+
+/** A frame turned upright (90, 180 or 270 degrees clockwise), as a frame of its own. */
+function turnFrame(f: VideoFrame, rotation: number, canvas: OffscreenCanvas): VideoFrame {
+  const w = f.displayWidth;
+  const h = f.displayHeight;
+  const side = rotation === 90 || rotation === 270;
+  canvas.width = side ? h : w;
+  canvas.height = side ? w : h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+  ctx.drawImage(f, -w / 2, -h / 2, w, h);
+  return new VideoFrame(canvas, { timestamp: f.timestamp, ...(f.duration !== null ? { duration: f.duration } : {}) });
 }
 
 /**
@@ -305,7 +350,7 @@ export class ClipDecoder {
           for (let k = 0; k < upto - 1; k++) this.queue[k]!.close();
           this.queue.splice(0, upto);
         }
-        return this.current;
+        return this.shown();
       }
       if (!this.ended && this.decoder!.decodeQueueSize < 12) await this.feed();
       else await new Promise((r) => setTimeout(r, 2));
@@ -339,7 +384,7 @@ export class ClipDecoder {
             done = true;
             break;
           } else {
-            out.push(await copyFrame(f));
+            out.push(this.upright(await copyFrame(f)));
             f.close();
           }
         }
@@ -347,7 +392,7 @@ export class ClipDecoder {
         if (!this.ended && this.decoder!.decodeQueueSize < 12) await this.feed();
         else await new Promise((r) => setTimeout(r, 2));
       }
-      if (before) out.unshift(await copyFrame(before));
+      if (before) out.unshift(this.upright(await copyFrame(before)));
     } finally {
       before?.close();
       // The next frameAt starts again from a key frame.
@@ -356,10 +401,35 @@ export class ClipDecoder {
     return out;
   }
 
+  /** The current frame as it plays: upright when the file says to turn it. */
+  private turned: { of: VideoFrame; frame: VideoFrame } | null = null;
+  private turnCanvas: OffscreenCanvas | null = null;
+  private shown(): VideoFrame | null {
+    const f = this.current;
+    const turn = this.track.rotation ?? 0;
+    if (!f || !turn) return f;
+    if (this.turned?.of !== f) {
+      this.turned?.frame.close();
+      this.turned = { of: f, frame: turnFrame(f, turn, (this.turnCanvas ??= new OffscreenCanvas(1, 1))) };
+    }
+    return this.turned.frame;
+  }
+
+  /** A copied frame turned upright (the copy is closed). */
+  private upright(f: VideoFrame): VideoFrame {
+    const turn = this.track.rotation ?? 0;
+    if (!turn) return f;
+    const t = turnFrame(f, turn, (this.turnCanvas ??= new OffscreenCanvas(1, 1)));
+    f.close();
+    return t;
+  }
+
   close(): void {
     this.decoder?.close();
     for (const f of this.queue) f.close();
     this.current?.close();
+    this.turned?.frame.close();
+    this.turned = null;
     this.queue = [];
     this.current = null;
   }
