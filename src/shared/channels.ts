@@ -273,6 +273,7 @@ export const pushChannels = [
   'studio:progress',
   'studio:keoAction',
   'studio:show',
+  'studio:ask',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

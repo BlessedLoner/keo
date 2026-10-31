@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Task, ToolActivity } from '@shared/domain';
-import type { Project } from '@shared/studio';
+import type { Project, StudioAsk } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { Markdown } from '../components/Markdown';
 import { ApprovalCard } from '../components/TaskWidgets';
@@ -34,6 +34,9 @@ const OUTCOME_ICON: Record<ToolActivity['outcome'], string> = {
   proposed: '…',
 };
 
+/** Keo's open question per project (kept while the user looks elsewhere in Studio). */
+const asks = new Map<string, StudioAsk>();
+
 /** Keo's chat for this project (or, while Keo carries a task across projects, the chat it started in). */
 export function StudioKeo({ project, conversation }: { project: Project; conversation?: string | null }) {
   const ui = useUi();
@@ -42,6 +45,16 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
   const [live, setLive] = useState<{ text: string; tools: ToolActivity[]; phase: string | null } | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [draft, setDraft] = useState('');
+  const [question, setQuestion] = useState<StudioAsk | null>(asks.get(project.id) ?? null);
+  useEffect(() => setQuestion(asks.get(project.id) ?? null), [project.id]);
+  useEffect(
+    () =>
+      subscribe('studio:ask', (a) => {
+        asks.set(a.projectId, a);
+        if (a.projectId === project.id) setQuestion(a);
+      }),
+    [project.id],
+  );
   const [watchEdits, setWatchEdits] = useState(true);
   useEffect(() => {
     void invoke('studio:liveEdits', {})
@@ -114,6 +127,9 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
     const t = text.trim();
     if (!t || !conversationId) return;
     setDraft('');
+    // An answer (clicked or typed) closes Keo's question.
+    asks.delete(project.id);
+    setQuestion(null);
     setLive({ text: '', tools: [], phase: 'thinking' });
     try {
       await invoke('chat:send', { conversationId, text: t });
@@ -130,12 +146,12 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
     window.addEventListener('keo:ask', ask);
     return () => window.removeEventListener('keo:ask', ask);
   }, []);
+  const busy = !!live;
   const stop = () => conversationId && void invoke('chat:cancel', { conversationId }).catch(() => undefined);
 
   const hasMedia = project.assets.some((a) => a.kind !== 'audio') || project.tracks.some((t) => t.clips.length);
   const hasSpeech = project.assets.some((a) => a.hasAudio);
   const chips = CHIPS.filter((c) => !c.needs || (c.needs === 'media' ? hasMedia : hasSpeech));
-  const busy = !!live;
   const toggleWatch = async (on: boolean) => {
     setWatchEdits(on);
     setWatchEdits((await invoke('studio:liveEdits', { on }).catch(() => ({ on }))).on);
@@ -167,6 +183,29 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
             {!!live.tools.length && <ToolLines tools={live.tools} />}
           </div>
         )}
+        {question && (
+          <div className="keo-ask">
+            <p className="keo-ask-q">{question.question}</p>
+            {!!question.plan?.length && (
+              <ol className="keo-plan">
+                {question.plan.map((s, i) => (
+                  <li key={i}>
+                    <span className="keo-plan-at">{s.at}</span>
+                    <span>{s.what}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <div className="keo-ask-options">
+              {question.options.map((o, i) => (
+                <button key={o} className={`btn sm${i === 0 ? ' primary' : ''}`} onClick={() => void send(o)} disabled={!conversationId || busy}>
+                  {o}
+                </button>
+              ))}
+            </div>
+            <p className="small muted">Or type your own answer below.</p>
+          </div>
+        )}
         {tasks.flatMap((t) =>
           t.steps
             .filter((s) => s.state === 'awaiting_authorization')
@@ -177,7 +216,7 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
             )),
         )}
       </div>
-      {!busy && chips.length > 0 && (
+      {!busy && !question && chips.length > 0 && (
         <div className="keo-chips">
           {chips.map((c) => (
             <button key={c.label} className="btn sm" onClick={() => void send(c.text)} disabled={!conversationId}>

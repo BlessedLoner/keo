@@ -396,6 +396,14 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .keo-tools li.awaiting_authorization .keo-tool-mark { color: #ffbf47; }
 .keo-approval .approval { margin: 0; font-size: 12.5px; }
 .keo-approval .approval .row { flex-wrap: wrap; }
+.keo-ask { border: 1px solid rgba(139, 107, 255, 0.55); background: var(--bg-elev); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.keo-ask p { margin: 0; }
+.keo-ask-q { font-weight: 600; line-height: 1.4; }
+.keo-plan { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); }
+.keo-plan li { line-height: 1.35; }
+.keo-plan-at { display: inline-block; min-width: 74px; margin-right: 6px; font-family: var(--mono, monospace); font-size: 11.5px; color: var(--text-3); }
+.keo-ask-options { display: flex; flex-wrap: wrap; gap: 5px; }
+.keo-ask-options .btn { height: auto; min-height: 26px; white-space: normal; text-align: left; }
 .keo-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px; border-top: 1px solid var(--line); }
 .keo-chips .btn { font-size: 11.5px; height: 24px; }
 .keo-input { display: flex; gap: 6px; align-items: flex-end; padding: 8px 10px 10px; border-top: 1px solid var(--line); }

@@ -197,6 +197,14 @@ export const TextStyle = z
   .strict();
 export type TextStyle = z.infer<typeof TextStyle>;
 
+/** Keo asks the user in Studio: a question, answers to click, and maybe the edit it plans (moments with times). */
+export interface StudioAsk {
+  projectId: string;
+  question: string;
+  options: string[];
+  plan?: Array<{ at: string; what: string }>;
+}
+
 /** Fonts that ship with Keo (free licences): the same on every PC and in every export. */
 export const KEO_FONTS = ['Inter', 'Montserrat', 'Poppins', 'Bebas Neue', 'Anton', 'Archivo Black', 'Instrument Serif', 'Playfair Display', 'DM Serif Display'] as const;
 /** Fonts of Windows itself (on every Windows PC). */

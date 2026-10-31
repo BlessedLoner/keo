@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project } from '../../shared/studio';
+import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project, type StudioAsk } from '../../shared/studio';
 import { rhythm, type Recipe as LearnedRecipe } from '../../shared/studioRecipe';
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
 import { STYLES, type StyleId } from '../../shared/studioStyles';
@@ -48,6 +48,7 @@ export interface StudioToolDeps {
   captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
+  ask: (a: StudioAsk) => void;
 }
 
 const Step = z.object({ label: z.string().trim().min(1).max(80), status: z.enum(['pending', 'running', 'done', 'skipped', 'failed']), note: z.string().trim().max(160).optional() }).strict();
@@ -297,6 +298,40 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const p = run(() => s.resolve(i.projectId));
       d.checklist(p.id, i.steps);
       return { shown: true };
+    },
+  });
+
+  const ask = defineCapability({
+    id: 'studio.ask',
+    version: '1.0.0',
+    title: 'Ask the user in Studio',
+    description:
+      'Ask the user something in Studio with answers to click (2–6 short options; they can also type their own). Use it: to show your edit plan before a whole edit (plan: the moments in order, each with when and what, e.g. {at:"0:00–0:03", what:"Hook headline: What nobody tells you"}; options like "Go ahead", "Make it calmer", "Change the style"), when a clip a moment needs is missing (options: what they could give, "Skip this moment"), and for choices that are the user’s (style, end card name, music mood). Suggest, do not interrogate: one question at a time, with your recommendation as the first option. After asking, end your turn and wait for the answer.',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        question: z.string().trim().min(3).max(300),
+        options: z.array(z.string().trim().min(1).max(80)).min(2).max(6),
+        plan: z.array(z.object({ at: z.string().trim().min(1).max(30), what: z.string().trim().min(1).max(160) }).strict()).max(30).optional(),
+      })
+      .strict(),
+    output: z.object({ shown: z.boolean(), next: z.string() }),
+    risk: 'read',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 5_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Only shows a question in Keo’s window.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: () => ({ summary: 'Ask the user', target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ options: i.options.length, plan: i.plan?.length ?? 0 }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      d.ask({ projectId: p.id, question: i.question, options: i.options, ...(i.plan?.length ? { plan: i.plan } : {}) });
+      return { shown: true, next: 'Shown. End your turn now and wait for the user’s answer.' };
     },
   });
 
@@ -1194,7 +1229,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

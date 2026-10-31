@@ -1588,6 +1588,13 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
       await wait(3500);
       fs.writeFileSync(path.join(dir, 'studio-keo.png'), (await win.webContents.capturePage()).toPNG());
+      // Keo's plan, asked in the panel with answers to click.
+      const plan = JSON.stringify({ question: 'Here is my plan for your podcast. Shall I go ahead?', options: ['Go ahead', 'Make it calmer', 'Use the documentary style'], plan: [{ at: '0:00–0:04', what: 'Hook headline: What nobody tells you' }, { at: '0:10', what: 'FOCUS behind you' }, { at: '0:40', what: 'List: three things' }, { at: 'End', what: 'Follow card with your @handle' }] });
+      await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.ask ' + ${JSON.stringify(plan)}); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(200);
+      await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
+      await wait(2500);
+      fs.writeFileSync(path.join(dir, 'studio-ask.png'), (await win.webContents.capturePage()).toPNG());
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);
