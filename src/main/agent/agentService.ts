@@ -74,6 +74,8 @@ export class AgentService {
   extraGroups: ((conversationId: string) => ToolGroup[]) | null = null;
   /** Tool groups a conversation never gets (Studio's conversations do not need the older video pipeline). */
   excludeGroups: ((conversationId: string) => ToolGroup[]) | null = null;
+  /** At least this many tool rounds for a conversation (a whole Studio edit takes many steps), above the user's setting. */
+  minToolRounds: ((conversationId: string) => number) | null = null;
   /**
    * Open questions per conversation: an action that could not run because a
    * choice was missing (which app, which profile, which window). The next
@@ -491,14 +493,15 @@ export class AgentService {
       let freeRounds = 0;
       let freeStepRounds = 0;
       let toolRounds = 0;
+      const maxRounds = Math.max(settings.agent.maxToolIterations, this.minToolRounds?.(conversationId) ?? 0);
       const note = (s: string) => {
         text += s;
         this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: s });
       };
       for (let iteration = 0; ; iteration++) {
         const used = iteration - freeRounds;
-        if (used >= settings.agent.maxToolIterations) {
-          text += `${text ? '\n\n' : ''}_Stopped after ${settings.agent.maxToolIterations} tool rounds (limit set in Settings)._`;
+        if (used >= maxRounds) {
+          text += `${text ? '\n\n' : ''}_Stopped after ${maxRounds} tool rounds (limit set in Settings). Say “continue” to carry on._`;
           break;
         }
         // On long runs, older tool results are shortened so the request, the plan and recent results stay in view.
@@ -558,7 +561,7 @@ export class AgentService {
           if (result.stopReason === 'max_tokens') text += '\n\n_Response reached the output limit and may be incomplete._';
           // Honesty guard: the reply claims an action that no capability performed.
           const claims = unsupportedClaims(result.text, succeeded());
-          if (claims.length && tools.length && !claimNudged && used + 1 < settings.agent.maxToolIterations) {
+          if (claims.length && tools.length && !claimNudged && used + 1 < maxRounds) {
             claimNudged = true;
             this.log.warn('agent.unsupported_claim', { claims, nudged: true }, correlationId);
             const note = `\n\n> ⚠ Keo: the text above says Keo ${claims.join(' and ')}, but no such action was run. Keo asked the model to actually do it or correct itself.\n\n`;
@@ -586,7 +589,7 @@ export class AgentService {
           }
           // Finishing properly: no open plan steps, and no "done" over an action that failed or was not verified.
           const issue = claims.length || !tools.length ? null : finishIssues(result.text, meta.plan, [...problems.values()]);
-          if (issue && !finishNudged && used + 1 < settings.agent.maxToolIterations) {
+          if (issue && !finishNudged && used + 1 < maxRounds) {
             finishNudged = true;
             this.log.warn('agent.finish_checked', { openSteps: issue.open.length, problems: issue.problems.length }, correlationId);
             if (issue.problems.length) note(`\n\n> Keo: not everything above worked — ${describeProblems(issue.problems)}. Keo asked the model to fix it or say so.\n\n`);

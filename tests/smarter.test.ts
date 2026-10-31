@@ -311,3 +311,19 @@ describe('strongest model when it matters', () => {
     expect(models).toEqual(['keo-fast', 'keo-strong']);
   });
 });
+
+describe('round budget for long work', () => {
+  it('a conversation can get more rounds than the setting (a whole Studio edit), never fewer', async () => {
+    h = makeHarness({ script: (_req, n) => calls(['memory__search', { query: `step ${n}` }]) });
+    h.services.settings.update({ agent: { approvalWaitSeconds: 10, maxToolIterations: 3 } });
+    const plain = h.services.conversations.create();
+    expect((await h.services.agent.send(plain.id, 'look things up').done).content).toContain('Stopped after 3 tool rounds');
+    const studio = h.services.conversations.create();
+    h.services.agent.minToolRounds = (id) => (id === studio.id ? 5 : 0);
+    const before = h.provider.calls;
+    const msg = await h.services.agent.send(studio.id, 'look things up').done;
+    expect(msg.content).toContain('Stopped after 5 tool rounds');
+    expect(msg.content).toContain('Say “continue”');
+    expect(h.provider.calls - before).toBe(5);
+  });
+});

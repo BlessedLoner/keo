@@ -83,7 +83,8 @@ export function Timeline({
     if (x < el.scrollLeft + LABEL_W + 40 || x > el.scrollLeft + el.clientWidth - 80) el.scrollTo({ left: Math.max(0, x - LABEL_W - el.clientWidth / 3), behavior: 'smooth' });
   }, [keo, pps]);
   const duration = Math.max(projectDuration(project), 10);
-  const width = Math.ceil((duration + 8) * pps);
+  // Room after the end to drop clips there (the same on screen at any zoom).
+  const width = Math.ceil(duration * pps + Math.max(240, pps * 2));
 
   // Snapping: clip edges and the playhead.
   const edges = (except: string) => {
@@ -223,9 +224,17 @@ export function Timeline({
       ref={area}
       style={height ? { height } : undefined}
       onWheel={(e) => {
-        // Ctrl + wheel zooms around the mouse, like other editors.
-        if (!e.ctrlKey || !onZoom) return;
         const el = area.current!;
+        if (!e.ctrlKey) {
+          // The wheel moves through time (sideways) when the tracks all fit; with more tracks it moves
+          // through them, and Shift + wheel (the browser's own) moves through time.
+          const tall = el.scrollHeight > el.clientHeight + 2;
+          if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey || tall) return;
+          el.scrollLeft += e.deltaY;
+          return;
+        }
+        // Ctrl + wheel zooms around the mouse, like other editors.
+        if (!onZoom) return;
         const r = el.getBoundingClientRect();
         const at = (e.clientX - r.left - LABEL_W + el.scrollLeft) / pps;
         const next = Math.max(4, Math.min(400, Math.round(pps * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));

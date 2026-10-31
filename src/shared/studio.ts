@@ -101,6 +101,8 @@ export const Asset = z
     /** Music: the beat (source seconds) and tempo, from Keo's own analysis on this PC. */
     beats: z.array(Sec).max(20000).optional(),
     bpm: z.number().min(20).max(400).nullable().optional(),
+    /** What Keo saw in it, in a sentence (so it can pick the right clip for a moment). */
+    about: z.string().trim().min(1).max(300).optional(),
     /** Degrees clockwise the video's frames are turned to stand upright (phone videos); width and height are upright. */
     rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
     /** A light copy (540p) the preview plays instead of a big video; the export always uses the original. */
@@ -630,6 +632,7 @@ export type RenderJob =
   | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number }
   | { kind: 'signatures'; projectId: string; assetId: string; times: number[] }
   | { kind: 'review'; projectId: string; times: number[] }
+  | { kind: 'asset_sheet'; projectId: string; assetId: string }
   | { kind: 'export_file'; projectId: string; exportId: string; format: 'gif' | 'wav' }
   | { kind: 'denoise'; projectId: string; assetId: string; strength: number }
   | { kind: 'track'; projectId: string; assetId: string; times: number[]; box: { x: number; y: number; w: number; h: number } | null };
@@ -1997,7 +2000,7 @@ function motionNote(c: MediaClip | TextClip | ShapeClip): string {
 
 /** A short text view of the timeline, for Keo to read. */
 export function describeProject(p: Project): string {
-  const lines = [`${p.name}: ${p.width}x${p.height}, ${p.fps} fps, ${projectDuration(p)}s.`, `Media: ${p.assets.map((a) => `${a.id} ${a.name} (${a.kind}${a.kind !== 'image' ? `, ${round(a.duration)}s` : ''}${a.hasAudio ? ', sound' : ''})`).join('; ') || 'none'}.`];
+  const lines = [`${p.name}: ${p.width}x${p.height}, ${p.fps} fps, ${projectDuration(p)}s.`, `Media: ${p.assets.map((a) => `${a.id} ${a.name} (${a.kind}${a.kind !== 'image' ? `, ${round(a.duration)}s` : ''}${a.hasAudio ? ', sound' : ''}${a.about ? `; shows: ${JSON.stringify(a.about)}` : ''})`).join('; ') || 'none'}.`];
   if (p.markers.length) lines.push(`Markers: ${p.markers.map((m, i) => `${i + 1} “${m.label}” at ${round(m.t)}s`).join('; ')}.`);
   p.tracks.forEach((t, i) => {
     lines.push(`Track ${i + 1} ${t.id} ${t.kind} “${t.name}”${t.hidden ? ' (hidden)' : ''}${t.muted ? ' (muted)' : ''}${t.locked ? ' (locked)' : ''}:`);

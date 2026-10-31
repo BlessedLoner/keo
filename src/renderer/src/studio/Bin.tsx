@@ -87,7 +87,7 @@ export function Tile({ projectId, asset, onAdd, onOverlay }: { projectId: string
         setHover(false);
         video.current?.pause();
       }}
-      title={`${asset.name} — drag to the timeline, or double-click to add at the playhead`}
+      title={`${asset.name} — drag to the timeline, or double-click to add at the playhead${asset.about ? `\nKeo sees: ${asset.about}` : ''}`}
     >
       {strip?.frames[0] ? <img src={strip.frames[0]} alt="" draggable={false} /> : <span className="tile-blank" />}
       {asset.kind === 'video' && hover && <video ref={video} src={mediaUrl(projectId, asset.id)} muted playsInline loop crossOrigin="anonymous" autoPlay />}

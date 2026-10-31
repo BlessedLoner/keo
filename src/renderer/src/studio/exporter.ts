@@ -508,6 +508,46 @@ export async function assetSignatures(p: Project, assetId: string, times: number
   return out;
 }
 
+/**
+ * One picture of a media file for Keo to look at: a picture as it is, a video as three frames
+ * side by side (near its start, middle and end). PNG, base64.
+ */
+export async function assetSheet(p: Project, assetId: string): Promise<string> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind === 'audio') throw new Error('That is not a picture or video of this project.');
+  const cell = 360;
+  const aspect = a.width > 0 && a.height > 0 ? a.width / a.height : 16 / 9;
+  const cw = aspect >= 1 ? cell : Math.round(cell * aspect);
+  const ch = aspect >= 1 ? Math.round(cell / aspect) : cell;
+  const times = a.kind === 'video' ? [0.15, 0.5, 0.85].map((f) => f * a.duration) : [0];
+  const canvas = new OffscreenCanvas(cw * times.length + 8 * (times.length - 1), ch);
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (a.kind === 'image') {
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('The picture could not be read.'));
+      i.src = mediaUrl(p.id, assetId);
+    });
+    ctx.drawImage(img, 0, 0, cw, ch);
+  } else {
+    const exact = await ClipDecoder.open(p.id, assetId);
+    const source = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+    try {
+      for (const [k, t] of times.entries()) {
+        const f = await source.frameAt(Math.max(0, Math.min(t, a.duration - 0.01)));
+        if (f) ctx.drawImage(f as CanvasImageSource, k * (cw + 8), 0, cw, ch);
+      }
+    } finally {
+      source.close();
+    }
+  }
+  return base64(new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()));
+}
+
 const base64 = (bytes: Uint8Array): string => {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));

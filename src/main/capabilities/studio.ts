@@ -70,6 +70,21 @@ function run<T>(f: () => T): T {
   }
 }
 
+/** The note in a vision reply ({"about":"..."}), or the reply itself in one line when it is not JSON. */
+export function aboutOf(answer: string): string {
+  let about = answer;
+  const m = /\{[\s\S]*\}/.exec(answer);
+  if (m) {
+    try {
+      const v = (JSON.parse(m[0]) as { about?: unknown }).about;
+      if (typeof v === 'string') about = v;
+    } catch {
+      // Not JSON: the reply as it is.
+    }
+  }
+  return about.replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
 function state(s: StudioService, p: Project) {
   return { projectId: p.id, durationSec: projectDuration(p), timeline: s.describe(p.id), history: s.canUndo(p.id) };
 }
@@ -272,6 +287,50 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         ctx.signal,
       );
       return { times: frames.map((f) => f.time), answer: answer.slice(0, 4000) };
+    },
+  });
+
+  const understand = defineCapability({
+    id: 'studio.understand_media',
+    version: '1.0.0',
+    title: 'See what the clips show',
+    description:
+      'Look at the project’s pictures and videos (a video as three frames) and keep a one-sentence note of what each shows, so you can choose the right clip for a moment, a cutaway or a template’s missing piece without asking (the notes appear in the timeline as "shows: …"). By default the ones without a note yet (up to 6). Use it after the user imports clips for an edit, before planning.',
+    input: z.object({ projectId: ProjectId.optional(), assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(12).optional() }).strict(),
+    output: z.object({ notes: z.array(z.object({ asset: z.string(), about: z.string() })) }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 6 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Read-only on the media; a short note is kept with each file.',
+    unavailableReason: () => d.visionBlocked(),
+    autonomy: () => ({ tier: 'routine' }),
+    preview: () => ({ summary: 'Look at the clips', target: null, consequences: ['Keeps a short note of what each clip shows.'], dataExport: `Pictures of the clips are sent to ${d.visionDestination()}.` }),
+    auditView: (i) => ({ assets: i.assets?.length ?? null }),
+    async execute(i, ctx) {
+      const blocked = d.visionBlocked();
+      if (blocked) throw fail('vision_blocked', blocked);
+      const p = run(() => s.resolve(i.projectId));
+      const pick = i.assets ? p.assets.filter((a) => i.assets!.includes(a.id) && a.kind !== 'audio') : p.assets.filter((a) => a.kind !== 'audio' && !a.about && !a.reverseOf && !a.cleanOf).slice(0, 6);
+      if (!pick.length) return { notes: [] };
+      const notes: Array<{ asset: string; about: string }> = [];
+      for (const a of pick) {
+        if (ctx.signal.aborted) break;
+        const png = await s.assetSheet(p.id, a.id).catch((e: unknown) => {
+          throw e instanceof StudioError ? fail('studio', e.message) : fail('render', `The clip could not be drawn: ${errorMessage(e).slice(0, 200)}`);
+        });
+        const what = a.kind === 'video' ? 'three frames (start, middle, end) of a video clip' : 'a picture';
+        const answer = await d.askVision([png], `This is ${what} the user wants to use in a video edit. In one short sentence for a video editor choosing clips, say what it shows: the subject, the setting, and the kind of shot (a person talking to camera, a product photo, a screen recording of an app, a landscape, text or a graphic…). Do not name real people. Reply as JSON: {"about":"..."}`, ctx.signal);
+        const about = aboutOf(answer);
+        if (!about) continue;
+        run(() => s.noteAsset(p.id, a.id, about));
+        notes.push({ asset: a.id, about });
+      }
+      return { notes };
     },
   });
 
@@ -1313,7 +1372,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

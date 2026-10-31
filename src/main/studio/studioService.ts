@@ -745,7 +745,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -875,6 +875,18 @@ export class StudioService {
   private get recipesFile(): string {
     return path.join(this.d.dir, 'library', 'recipes.json');
   }
+  /** A picture of a media file for Keo to look at (PNG): a video as three frames side by side. */
+  async assetSheet(id: string, assetId: string): Promise<Buffer> {
+    const a = this.get(id).assets.find((x) => x.id === assetId);
+    if (!a || a.kind === 'audio') throw new StudioError('Choose a picture or video of this project.');
+    return Buffer.from(await this.runJob<string>({ kind: 'asset_sheet', projectId: id, assetId }, 2 * 60_000), 'base64');
+  }
+  /** What Keo saw in a media file, kept with it. */
+  noteAsset(id: string, assetId: string, about: string): Project {
+    if (!this.get(id).assets.some((a) => a.id === assetId)) throw new StudioError('That media is not in this project.');
+    return this.learn(id, assetId, { about: about.trim().slice(0, 300) });
+  }
+
   /** Keo's self-review: what is wrong with the edit (text over a face, cut off, overlapping, too fast). */
   async review(id: string): Promise<ReviewIssue[]> {
     const p = this.get(id);

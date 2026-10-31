@@ -762,7 +762,22 @@ export function StudioView() {
         {selection.length > 1 && <span className="chip">{selection.length} selected</span>}
         <div className="spacer" />
         <span className="small muted">Zoom</span>
-        <input type="range" min={8} max={240} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" />
+        <input type="range" min={4} max={240} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" />
+        <button
+          className="btn sm ghost"
+          title="Show the whole video on the timeline"
+          onClick={() => {
+            const el = document.querySelector<HTMLElement>('.studio-timeline');
+            // The timeline is always at least 10 seconds long.
+            const d = Math.max(10, projectDuration(project));
+            if (!el || d <= 0) return;
+            // The whole length in the visible width (track labels and a little room at the end left out).
+            setZoom(Math.max(4, Math.min(240, Math.floor((el.clientWidth - 132 - 260) / d))));
+            el.scrollLeft = 0;
+          }}
+        >
+          Fit
+        </button>
       </div>
       {keoStep && (
         <div className="keo-live-bar" role="status" aria-live="polite">

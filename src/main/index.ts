@@ -1609,6 +1609,15 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.versions-save button[type=submit]')?.click();`);
       await wait(900);
       fs.writeFileSync(path.join(dir, 'studio-versions.png'), (await win.webContents.capturePage()).toPNG());
+      // The timeline: zoomed in, the mouse wheel moves through time; Fit shows the whole video.
+      await js(`document.querySelector('.history-menu')?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false })); const z = document.querySelector('input[aria-label="Timeline zoom"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(z, '240'); z.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(400);
+      const wheel = await js(`const el = document.querySelector('.studio-timeline'); el.style.height = '2000px'; el.scrollLeft = 0; el.dispatchEvent(new WheelEvent('wheel', { deltaY: 300, bubbles: true })); const moved = el.scrollLeft; el.style.height = ''; return moved;`);
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Fit')?.click();`);
+      await wait(400);
+      const fit = await js(`const el = document.querySelector('.studio-timeline'); return { scroll: el.scrollWidth, width: el.clientWidth };`);
+      fs.writeFileSync(path.join(dir, 'studio-timeline.json'), JSON.stringify({ wheelScrolled: wheel, fit }));
+      fs.writeFileSync(path.join(dir, 'studio-fit.png'), (await win.webContents.capturePage()).toPNG());
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);
