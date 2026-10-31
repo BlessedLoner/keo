@@ -84,7 +84,7 @@ afterEach(async () => {
 describe('Learning and using a template', () => {
   it('learns a template’s shots from its frames and makes its edit with the user’s clips', async () => {
     const dir = tempDir('keo-recipe-');
-    const files = ['ad.mp4', 'me talking.mp4', 'screen.mp4'].map((n) => {
+    const files = ['ad.mp4', 'me talking.mp4', 'screen.mp4', 'friend talking.mp4'].map((n) => {
       const f = path.join(dir, n);
       fs.writeFileSync(f, 'x');
       return f;
@@ -112,7 +112,9 @@ describe('Learning and using a template', () => {
     });
     const s = h.services.studio;
     const p = s.create('Promo', 'vertical');
-    const [ad, me, screen] = (await s.importFiles(p.id, files)).added;
+    const [ad, me, screen, friend] = (await s.importFiles(p.id, files)).added;
+    // Another talking video (speech most of the way): never used as a cutaway.
+    s['learn'](p.id, friend!.id, { speech: [{ start: 0, end: 18 }] });
     // Shot detection itself is checked elsewhere: here the template's cuts are known.
     s['learn'](p.id, ad!.id, { scenes: cuts });
     const r = await s.learnTemplate(p.id, ad!.id, { seen: { look: 'warm', endCard: { text: 'heyclicky.com' } } });
@@ -136,6 +138,10 @@ describe('Learning and using a template', () => {
     expect(out.music).toBeNull();
     // The template had no voice (no sound here), so it has no captions to ask for.
     expect([r.captions.on, out.needsWords]).toEqual([false, false]);
+    // Using it again replaces its B-roll (nothing stacks up).
+    await s.applyTemplate(p.id, r.id, { endText: 'keo.app', whooshes: false });
+    expect(s.get(p.id).tracks.find((t) => t.name === 'B-roll')!.clips).toHaveLength(2);
+
   });
 });
 

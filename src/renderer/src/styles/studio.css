@@ -96,6 +96,7 @@
 .tile-name { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 5px 4px; font-size: 10.5px; color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, 0.85)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile-add { position: absolute; right: 4px; bottom: 4px; width: 22px; height: 22px; display: none; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: var(--primary-bg); color: var(--primary-text); cursor: pointer; }
 .bin-tile:hover .tile-add { display: inline-flex; }
+.tile-add.overlay { right: 30px; background: var(--bg-elev, #2a2d36); color: var(--text); }
 .style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px 10px; }
 .style-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 74px; border-radius: 8px; border: 1px solid var(--line); background: radial-gradient(circle at 50% 40%, #2a2a33, #111116); cursor: pointer; color: #fff; overflow: hidden; }
 .style-tile:hover { border-color: var(--accent); }

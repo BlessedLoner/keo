@@ -1581,6 +1581,32 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await wait(250);
       fs.writeFileSync(path.join(dir, 'studio-live.png'), (await win.webContents.capturePage()).toPNG());
       await wait(2500);
+      // Playback of a heavily cut video (about 20 pieces of one file, crossfades on half the cuts):
+      // the preview must keep up with a handful of players and no empty frames.
+      const hv = services!.studio.create('Studio heavy preview', 'vertical');
+      const hvMedia = studioSampleMedia(fs.mkdtempSync(path.join(os.tmpdir(), 'keo-studio-heavy-')));
+      const srcProject = services!.studio.create('Studio heavy source', 'vertical');
+      const spPic = (await services!.studio.importFiles(srcProject.id, [hvMedia.pic])).added[0] ?? null;
+      services!.studio.edit(srcProject.id, [
+        { op: 'set_project', width: 540, height: 960, background: '#102030' },
+        ...(spPic ? [{ op: 'add_media' as const, assetId: spPic.id, start: 0, duration: 8 }] : []),
+        { op: 'add_shape', shape: 'circle', start: 0, duration: 8, style: { width: 0.2, height: 0.11, fill: '#FFD400' }, keys: { x: [{ at: 0, value: 0.1, ease: 'linear' }, { at: 8, value: 0.9, ease: 'linear' }] } },
+      ]);
+      const hvFile = (await services!.studio.exportVideo(srcProject.id, { name: 'Heavy preview source' })).file;
+      services!.studio.delete(srcProject.id);
+      const hvVid = (await services!.studio.importFiles(hv.id, [hvFile])).added[0]!;
+      services!.studio.edit(hv.id, [{ op: 'add_media', assetId: hvVid.id, start: 0 }]);
+      services!.studio.edit(hv.id, [{ op: 'cut_ranges', ranges: Array.from({ length: 19 }, (_, k) => ({ from: 0.35 + k * 0.4, to: 0.43 + k * 0.4 })) }]);
+      const hvClips = services!.studio.get(hv.id).tracks[0]!.clips;
+      services!.studio.edit(hv.id, hvClips.filter((_, k) => k % 2 === 1).map((c) => ({ op: 'set' as const, clip: c.id, transition: { kind: 'crossfade' as const, seconds: 0.2 } })));
+      await services!.studio.asKeo(() => null, hv.id);
+      await wait(1500);
+      await js(`window.__keoPreview && Object.assign(window.__keoPreview, { drawn: 0, held: 0, longestHoldMs: 0 }); document.querySelector('.studio-transport .play')?.click();`);
+      await wait(5000);
+      const stats = await js(`document.querySelector('.studio-transport .play')?.click(); return { ...window.__keoPreview, clips: ${hvClips.length} };`);
+      fs.writeFileSync(path.join(dir, 'preview-stats.json'), JSON.stringify(stats));
+      fs.writeFileSync(path.join(dir, 'studio-heavy.png'), (await win.webContents.capturePage()).toPNG());
+      services!.studio.delete(hv.id);
       // The projects screen.
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('Projects'))?.click();`);
       await wait(1500);

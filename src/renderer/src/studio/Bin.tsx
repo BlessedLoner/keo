@@ -65,7 +65,7 @@ export function usePlayable(projectId: string, asset: Asset): string | null {
   return issue;
 }
 
-export function Tile({ projectId, asset, onAdd }: { projectId: string; asset: Asset; onAdd: () => void }) {
+export function Tile({ projectId, asset, onAdd, onOverlay }: { projectId: string; asset: Asset; onAdd: () => void; onOverlay?: () => void }) {
   const strip = useFilmstrip(projectId, asset);
   const issue = usePlayable(projectId, asset);
   const video = useRef<HTMLVideoElement>(null);
@@ -107,7 +107,7 @@ export function Tile({ projectId, asset, onAdd }: { projectId: string; asset: As
       <span className="tile-name">{asset.name}</span>
       <button
         className="tile-add"
-        title="Add at the playhead"
+        title="Add to the main track at the playhead"
         onClick={(e) => {
           e.stopPropagation();
           onAdd();
@@ -115,6 +115,18 @@ export function Tile({ projectId, asset, onAdd }: { projectId: string; asset: As
       >
         <Icon name="plus" size={13} />
       </button>
+      {onOverlay && (
+        <button
+          className="tile-add overlay"
+          title="Add as an overlay: on its own track above, small in the corner (picture-in-picture)"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOverlay();
+          }}
+        >
+          <Icon name="copy" size={12} />
+        </button>
+      )}
     </div>
   );
 }

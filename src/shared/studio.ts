@@ -839,15 +839,18 @@ function sourceToTimeline(c: MediaClip | AudioClip, sourceSec: number): number |
   return t < c.start - 1e-6 || t > clipEnd(c) + 1e-6 ? null : t;
 }
 
-/** The clips that carry someone's voice: sound clips on tracks that are heard, not music (ducked). */
+/**
+ * The clips that carry someone's voice: sound clips on tracks that are heard, not music (ducked, or
+ * on a Music track), not sound effects (an Effects track, or under a second long).
+ */
 function voiceClips(p: Project): Array<{ clip: MediaClip | AudioClip; asset: Asset }> {
   const out: Array<{ clip: MediaClip | AudioClip; asset: Asset }> = [];
   for (const t of p.tracks) {
-    if (t.muted) continue;
+    if (t.muted || (t.kind === 'audio' && /music|effect|sfx|sound effect/i.test(t.name))) continue;
     for (const c of t.clips) {
       if (!isAV(c) || c.volume <= 0 || (c.type === 'audio' && c.duck !== null)) continue;
       const a = p.assets.find((x) => x.id === c.assetId);
-      if (a && a.hasAudio && a.kind !== 'image') out.push({ clip: c, asset: a });
+      if (a && a.hasAudio && a.kind !== 'image' && a.duration >= 1) out.push({ clip: c, asset: a });
     }
   }
   return out;

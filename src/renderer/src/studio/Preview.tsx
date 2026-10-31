@@ -89,6 +89,10 @@ function SafeZones({ kind, vertical }: { kind: Exclude<Guides, 'none'>; vertical
   );
 }
 
+/** How the preview is keeping up (frames drawn, frames that waited for video, players in use): read by Keo's own checks. */
+const stats = { drawn: 0, held: 0, longestHoldMs: 0, elements: 0 };
+(window as unknown as { __keoPreview?: typeof stats }).__keoPreview = stats;
+
 type Gesture = { id: string; kind: 'move' | 'scale' | 'rotate'; startX: number; startY: number; box: LayerBox; base: { x: number; y: number; scale: number; rotation: number } };
 type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number };
 
@@ -226,6 +230,7 @@ export function Preview({
     // A video frame still on its way: keep the last picture rather than flash an empty frame
     // (it is drawn as soon as the frame arrives).
     if (drawn.current && s.missing(live.current.project, live.current.time)) {
+      stats.held++;
       if (waiting.current === null) {
         waiting.current = performance.now();
         // Paused, nothing else may ask again: look once more when the moment is over.
@@ -234,7 +239,10 @@ export function Preview({
       // Never longer than a moment (a video that cannot play at all is drawn without its picture).
       if (performance.now() - waiting.current < 400) return;
     }
+    if (waiting.current !== null) stats.longestHoldMs = Math.max(stats.longestHoldMs, performance.now() - waiting.current);
     waiting.current = null;
+    stats.drawn++;
+    stats.elements = s.elementCount();
     if (ctx) {
       drawFrame(ctx, live.current.project, live.current.time, s);
       drawn.current = true;

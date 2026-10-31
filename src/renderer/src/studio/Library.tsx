@@ -137,7 +137,7 @@ export function Library({
           ))}
         </nav>
         <div className="lib-items">
-          {tab === 'media' && <MediaItems project={project} kind={now as 'all' | 'video' | 'image'} onImport={onImport} onAddAsset={onAddAsset} onEdit={onEdit} />}
+          {tab === 'media' && <MediaItems project={project} time={time} kind={now as 'all' | 'video' | 'image'} onImport={onImport} onAddAsset={onAddAsset} onEdit={onEdit} />}
           {tab === 'audio' && (now === 'music' || now === 'effect') && <SoundItems key={now} project={project} kind={now} time={time} />}
           {tab === 'audio' && now === 'project' && <ProjectSounds project={project} onAddAsset={onAddAsset} sel={sel} onEdit={run} />}
           {tab === 'audio' && now === 'record' && (
@@ -227,7 +227,7 @@ export function Library({
               </div>
             </>
           )}
-          {tab === 'transitions' && <TransitionItems project={project} sel={sel} onEdit={run} />}
+          {tab === 'transitions' && <TransitionItems project={project} sel={sel} time={time} onEdit={run} />}
           {tab === 'captions' && now === 'auto' && (
             <div className="lib-pad">
               <p className="small muted">Keo writes captions from the speech, word by word, on the Captions track.</p>
@@ -269,7 +269,7 @@ export function Library({
   );
 }
 
-function MediaItems({ project, kind, onImport, onAddAsset, onEdit }: { project: Project; kind: 'all' | 'video' | 'image'; onImport: () => void; onAddAsset: (a: Asset) => void; onEdit: (ops: EditOp[]) => Promise<void> }) {
+function MediaItems({ project, time, kind, onImport, onAddAsset, onEdit }: { project: Project; time: number; kind: 'all' | 'video' | 'image'; onImport: () => void; onAddAsset: (a: Asset) => void; onEdit: (ops: EditOp[]) => Promise<void> }) {
   const visual = project.assets.filter((a) => a.kind !== 'audio' && (kind === 'all' || a.kind === kind));
   return (
     <>
@@ -287,11 +287,17 @@ function MediaItems({ project, kind, onImport, onAddAsset, onEdit }: { project: 
             <button className="btn sm primary" onClick={onImport}>
               <Icon name="plus" size={13} /> Import
             </button>
-            <span className="small muted">Drag to the timeline, or +</span>
+            <span className="small muted">Drag to the timeline, + to add, or the overlay button for picture-in-picture</span>
           </div>
           <div className="bin-grid">
             {visual.map((a) => (
-              <Tile key={a.id} projectId={project.id} asset={a} onAdd={() => onAddAsset(a)} />
+              <Tile
+                key={a.id}
+                projectId={project.id}
+                asset={a}
+                onAdd={() => onAddAsset(a)}
+                onOverlay={() => void onEdit([{ op: 'add_media', assetId: a.id, start: time, trackName: 'Overlay', ...(a.kind === 'image' ? { duration: 3 } : {}), transform: { scale: 0.42, x: 0.72, y: 0.24 } }])}
+              />
             ))}
           </div>
         </>
@@ -455,14 +461,16 @@ function ProjectSounds({ project, onAddAsset, sel, onEdit }: { project: Project;
   );
 }
 
-function TransitionItems({ project, sel, onEdit }: { project: Project; sel: Clip | null; onEdit: (ops: EditOp[]) => void }) {
+function TransitionItems({ project, sel, time, onEdit }: { project: Project; sel: Clip | null; time: number; onEdit: (ops: EditOp[]) => void }) {
   const ui = useUi();
-  const cuts = project.tracks.flatMap((t) => (t.kind === 'video' ? t.clips.filter((c) => c.type === 'media' && t.clips.some((o) => o.id !== c.id && o.type === 'media' && Math.abs(o.start + o.duration - c.start) < 0.05)).map((c) => c.id) : []));
-  const target = sel?.type === 'media' && cuts.includes(sel.id) ? sel : null;
+  const cutClips = project.tracks.flatMap((t) => (t.kind === 'video' ? t.clips.filter((c) => c.type === 'media' && t.clips.some((o) => o.id !== c.id && o.type === 'media' && Math.abs(o.start + o.duration - c.start) < 0.05)) : []));
+  const cuts = cutClips.map((c) => c.id);
+  // The selected clip after a cut, else the cut nearest the playhead.
+  const target = sel?.type === 'media' && cuts.includes(sel.id) ? sel : ([...cutClips].sort((a, b) => Math.abs(a.start - time) - Math.abs(b.start - time))[0] ?? null);
   const secondsOf = (k: (typeof TRANSITIONS)[number]) => (k === 'whip' || k === 'flash' ? 0.35 : 0.6);
   return (
     <>
-      <p className="small muted lib-note">{target ? 'Click to change into the selected clip with it.' : cuts.length ? 'Select the clip after a cut, or put one on every cut.' : 'Put two clips one after the other first.'}</p>
+      <p className="small muted lib-note">{!target ? 'Put two clips one after the other first.' : sel?.id === target.id ? 'Click to change into the selected clip with it.' : `Click to put it on the cut at ${target.start.toFixed(1)} s (nearest the playhead), or select the clip after another cut.`}</p>
       <div className="lib-grid">
         {TRANSITIONS.map((k) => (
           <button

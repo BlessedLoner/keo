@@ -10,12 +10,141 @@ export const mediaUrl = (projectId: string, assetId: string) => `app://keo/media
 // ---------------------------------------------------------------- preview (live playback)
 
 /**
- * The Studio preview's media: one video element per visible clip, kept in step with the playhead
- * (playing at the clip's speed, or sought when paused), and the sound of clips and audio tracks.
+ * Media elements for each file, lent to its clips: a project cut into a hundred pieces of one
+ * video still uses only a few elements of that video (the browser has only so many decoders), a
+ * clip borrows the element already nearest its moment (so a cut can play straight on), and
+ * elements no clip needs are paused and, past the limit, let go.
+ */
+class MediaPool<T extends HTMLMediaElement> {
+  private readonly bySrc = new Map<string, T[]>();
+  private readonly byClip = new Map<string, T>();
+  private readonly owner = new Map<T, string>();
+  private readonly used = new Map<T, number>();
+  /** Elements lent out in the current pass. */
+  private readonly lent = new Set<T>();
+
+  constructor(
+    private readonly make: (src: string) => T,
+    private readonly perFile: number,
+    private readonly total: number,
+  ) {}
+
+  /** A new pass over the timeline: nothing is lent yet. */
+  begin(): void {
+    this.lent.clear();
+  }
+
+  /** The element a clip plays from (`want`: the second of the file it needs now). */
+  lend(clipId: string, src: string, want: number): T {
+    const mine = this.byClip.get(clipId);
+    if (mine && mine.dataset.src === src && this.owner.get(mine) === clipId && !this.lent.has(mine)) return this.mark(clipId, mine);
+    const list = this.bySrc.get(src) ?? [];
+    const free = list.filter((e) => !this.lent.has(e));
+    // The free element already nearest the moment (no seek, or a short one).
+    let pick = free.sort((a, b) => Math.abs(a.currentTime - want) - Math.abs(b.currentTime - want))[0];
+    if (!pick || (Math.abs(pick.currentTime - want) > 1 && list.length < this.perFile)) pick = this.create(src, list);
+    return this.mark(clipId, pick);
+  }
+
+  /** The element lent to a clip, if any. */
+  of(clipId: string): T | undefined {
+    const e = this.byClip.get(clipId);
+    return e && this.owner.get(e) === clipId ? e : undefined;
+  }
+
+  private mark(clipId: string, e: T): T {
+    const before = this.owner.get(e);
+    if (before && before !== clipId) this.byClip.delete(before);
+    this.owner.set(e, clipId);
+    this.byClip.set(clipId, e);
+    this.lent.add(e);
+    this.used.set(e, performance.now());
+    return e;
+  }
+
+  private create(src: string, list: T[]): T {
+    const e = this.make(src);
+    e.dataset.src = src;
+    list.push(e);
+    this.bySrc.set(src, list);
+    // Past the limit: the element unused for longest is let go.
+    const all = [...this.bySrc.values()].flat();
+    if (all.length > this.total) {
+      const old = all.filter((x) => !this.lent.has(x) && x !== e).sort((a, b) => (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0))[0];
+      if (old) this.drop(old);
+    }
+    return e;
+  }
+
+  private drop(e: T): void {
+    e.pause();
+    e.removeAttribute('src');
+    e.load();
+    const src = e.dataset.src ?? '';
+    this.bySrc.set(src, (this.bySrc.get(src) ?? []).filter((x) => x !== e));
+    const owner = this.owner.get(e);
+    if (owner) this.byClip.delete(owner);
+    this.owner.delete(e);
+    this.used.delete(e);
+  }
+
+  /** Elements not lent in this pass stop playing. */
+  pauseIdle(): void {
+    for (const list of this.bySrc.values()) for (const e of list) if (!this.lent.has(e) && !e.paused) e.pause();
+  }
+
+  pauseAll(): void {
+    for (const list of this.bySrc.values()) for (const e of list) e.pause();
+  }
+
+  /** Clips that are gone no longer hold an element. */
+  forget(keep: Set<string>): void {
+    for (const [clip, e] of this.byClip)
+      if (!keep.has(clip)) {
+        this.byClip.delete(clip);
+        if (this.owner.get(e) === clip) this.owner.delete(e);
+      }
+  }
+
+  all(): T[] {
+    return [...this.bySrc.values()].flat();
+  }
+
+  clear(): void {
+    for (const e of this.all()) this.drop(e);
+  }
+}
+
+/**
+ * The Studio preview's media: video elements lent to the visible clips from a small pool per
+ * file, kept in step with the playhead (playing at the clip's speed, or sought when paused), the
+ * next clips made ready before they are reached, and the sound of clips and audio tracks.
  */
 export class PreviewSources implements SourceProvider {
-  private readonly videos = new Map<string, HTMLVideoElement>();
-  private readonly sounds = new Map<string, HTMLAudioElement>();
+  private readonly videos = new MediaPool<HTMLVideoElement>(
+    (src) => {
+      const v = document.createElement('video');
+      v.crossOrigin = 'anonymous';
+      v.preload = 'auto';
+      v.playsInline = true;
+      v.src = src;
+      v.addEventListener('seeked', () => this.redraw());
+      v.addEventListener('loadeddata', () => this.redraw());
+      return v;
+    },
+    4,
+    12,
+  );
+  private readonly sounds = new MediaPool<HTMLAudioElement>(
+    (src) => {
+      const s = new Audio(src);
+      s.crossOrigin = 'anonymous';
+      s.preload = 'auto';
+      return s;
+    },
+    3,
+    12,
+  );
   private readonly images = new Map<string, HTMLImageElement>();
   /** Sound that goes through Keo's voice clean-up (once routed, an element stays in the graph). */
   private audioCtx: AudioContext | null = null;
@@ -27,29 +156,9 @@ export class PreviewSources implements SourceProvider {
     private readonly redraw: () => void,
   ) {}
 
-  private video(c: MediaClip, a: Asset): HTMLVideoElement {
+  private video(c: MediaClip, a: Asset, want: number): HTMLVideoElement {
     // A big video plays from its light copy when Keo has made one.
-    const src = `${mediaUrl(this.projectId, c.assetId)}${a.proxy ? '?preview=1' : ''}`;
-    let v = this.videos.get(c.id);
-    if (v && v.dataset.src !== src) {
-      v.pause();
-      v.removeAttribute('src');
-      v.load();
-      this.videos.delete(c.id);
-      v = undefined;
-    }
-    if (!v) {
-      v = document.createElement('video');
-      v.crossOrigin = 'anonymous';
-      v.preload = 'auto';
-      v.playsInline = true;
-      v.dataset.src = src;
-      v.src = src;
-      v.addEventListener('seeked', this.redraw);
-      v.addEventListener('loadeddata', this.redraw);
-      this.videos.set(c.id, v);
-    }
-    return v;
+    return this.videos.lend(c.id, `${mediaUrl(this.projectId, c.assetId)}${a.proxy ? '?preview=1' : ''}`, want);
   }
 
   private image(a: Asset): HTMLImageElement {
@@ -71,8 +180,9 @@ export class PreviewSources implements SourceProvider {
       const i = this.image(asset);
       return i.complete && i.naturalWidth ? i : null;
     }
-    const v = this.video(clip, asset);
-    return v.readyState >= 2 ? v : null;
+    // The element the last pass lent this clip (it is already at the clip's moment).
+    const v = this.videos.of(clip.id) ?? this.video(clip, asset, clip.in);
+    return v.readyState >= 2 && !v.seeking ? v : null;
   }
 
   private route(el: HTMLMediaElement, voice: boolean, fx: VoiceFx | null, eq: Eq | null): GainNode {
@@ -120,8 +230,8 @@ export class PreviewSources implements SourceProvider {
       speech = bridged(timelineSpeech(p));
       this.speech.set(p, speech);
     }
-    const activeVideos = new Set<string>();
-    const activeSounds = new Set<string>();
+    this.videos.begin();
+    this.sounds.begin();
     for (const tr of p.tracks) {
       for (const c of tr.clips) {
         const outside = t < c.start || t >= clipEnd(c);
@@ -134,19 +244,8 @@ export class PreviewSources implements SourceProvider {
         let el: HTMLMediaElement;
         if (c.type === 'media' && a.kind === 'video') {
           if (tr.hidden && (tr.muted || !a.hasAudio)) continue;
-          el = this.video(c, a);
-          activeVideos.add(c.id);
-        } else {
-          let s = this.sounds.get(c.id);
-          if (!s) {
-            s = new Audio(mediaUrl(this.projectId, a.id));
-            s.crossOrigin = 'anonymous';
-            s.preload = 'auto';
-            this.sounds.set(c.id, s);
-          }
-          el = s;
-          activeSounds.add(c.id);
-        }
+          el = this.video(c, a, target);
+        } else el = this.sounds.lend(c.id, mediaUrl(this.projectId, a.id), target);
         const fade = Math.min(c.fadeIn > 0 ? Math.min(1, (t - c.start) / c.fadeIn) : 1, c.fadeOut > 0 ? Math.min(1, (clipEnd(c) - t) / c.fadeOut) : 1);
         el.muted = tr.muted || !a.hasAudio || outside;
         const duck = (c.type === 'audio' && c.duck !== null ? duckGain(speech, t, c.duck) : 1) * (c.gate ? gateGain(clipSpeech(p, c), t, c.gate) : 1);
@@ -169,23 +268,35 @@ export class PreviewSources implements SourceProvider {
     if (playing) {
       // The next clips get ready before they are reached (their first frame decoded), so a cut
       // plays straight on instead of showing a gap while the next video seeks.
-      for (const tr of p.tracks) {
-        if (tr.hidden) continue;
+      // Only the next two clips of each file: enough to be ready, without taking the elements in use.
+      const readied = new Map<string, number>();
+      const upcoming = p.tracks
+        .filter((tr) => !tr.hidden)
+        .flatMap((tr) => tr.clips)
+        .filter((c): c is MediaClip => c.type === 'media' && c.start > t && c.start <= t + 1.5)
+        .sort((a, b) => a.start - b.start);
+      for (const tr of [{ clips: upcoming }]) {
         for (const c of tr.clips) {
-          if (c.type !== 'media' || activeVideos.has(c.id) || c.start <= t || c.start > t + 1.5) continue;
+          const n = readied.get(c.assetId) ?? 0;
+          if (n >= 2) continue;
+          readied.set(c.assetId, n + 1);
           const a = p.assets.find((x) => x.id === c.assetId);
           if (!a || a.kind !== 'video') continue;
-          const v = this.video(c, a);
-          activeVideos.add(c.id);
+          const first = sourceTime(c, a, c.start);
+          const v = this.video(c, a, first);
           v.muted = true;
           if (!v.paused) v.pause();
-          const first = sourceTime(c, a, c.start);
           if (Math.abs(v.currentTime - first) > 0.05 && !v.seeking) v.currentTime = first;
         }
       }
     }
-    for (const [id, v] of this.videos) if (!activeVideos.has(id) && !v.paused) v.pause();
-    for (const [id, s] of this.sounds) if (!activeSounds.has(id) && !s.paused) s.pause();
+    this.videos.pauseIdle();
+    this.sounds.pauseIdle();
+  }
+
+  /** How many media elements the preview holds (it stays small, however many clips there are). */
+  elementCount(): number {
+    return this.videos.all().length + this.sounds.all().length;
   }
 
   /** A visible video clip whose frame is not ready yet (the preview then keeps its last picture). */
@@ -199,33 +310,19 @@ export class PreviewSources implements SourceProvider {
   }
 
   pauseAll(): void {
-    for (const v of this.videos.values()) v.pause();
-    for (const s of this.sounds.values()) s.pause();
+    this.videos.pauseAll();
+    this.sounds.pauseAll();
   }
 
   /** Forgets clips that are gone from the project. */
   prune(p: Project): void {
     const ids = new Set(p.tracks.flatMap((t) => t.clips.map((c) => c.id)));
-    for (const [id, v] of this.videos)
-      if (!ids.has(id)) {
-        v.pause();
-        v.removeAttribute('src');
-        v.load();
-        this.videos.delete(id);
-      }
-    for (const [id, s] of this.sounds)
-      if (!ids.has(id)) {
-        s.pause();
-        this.sounds.delete(id);
-      }
+    this.videos.forget(ids);
+    this.sounds.forget(ids);
   }
 
   dispose(): void {
     this.pauseAll();
-    for (const v of this.videos.values()) {
-      v.removeAttribute('src');
-      v.load();
-    }
     this.videos.clear();
     this.sounds.clear();
     this.images.clear();

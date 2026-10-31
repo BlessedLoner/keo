@@ -722,7 +722,9 @@ export class StudioService {
     const exact = !!t.words;
     const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id))) : needsAnalysis(p, 'words');
     let count = 0;
+    const failed: string[] = [];
     for (const a of todo) {
+      try {
       const sound = await this.assetSound(id, a.id);
       const spans = sound ? voicedSpans(sound.samples, sound.rate) : [];
       const words: Word[] = [];
@@ -744,8 +746,15 @@ export class StudioService {
       }
       count += words.length;
       p = this.learn(id, a.id, { speech: spans, words, wordsExact: exact });
+      } catch (e) {
+        // One file the speech service could not do: the others still get their words.
+        if (o.signal.aborted) throw new StudioError('Stopped.');
+        failed.push(`${a.name}: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`);
+        this.d.log.warn('studio.transcribe_failed', { kind: a.kind, seconds: Math.round(a.duration) });
+      }
     }
-    if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length, words: count, exact });
+    if (failed.length === todo.length && todo.length) throw new StudioError(`Speech-to-text did not work: ${failed.slice(0, 2).join('; ')}`);
+    if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length - failed.length, words: count, exact, failed: failed.length });
     return { project: p, transcribed: todo.length, words: count, exact };
   }
 
@@ -875,17 +884,29 @@ export class StudioService {
     const r = this.recipes().find((x) => x.id === recipeId);
     if (!r) throw new StudioError('That template is not saved: learn it first.');
     const p = this.get(id);
-    const media = p.tracks.flatMap((t) => t.clips.filter((c): c is MediaClip => c.type === 'media'));
-    const assetOf = (c: MediaClip) => p.assets.find((a) => a.id === c.assetId);
-    const main =
-      (o.main ? media.find((c) => c.id === o.main) : undefined) ??
-      [...media].filter((c) => assetOf(c)?.kind === 'video' && assetOf(c)?.hasAudio && assetOf(c)?.name !== r.source).sort((x, y) => y.duration - x.duration)[0];
-    if (!main) throw new StudioError('Put the talking video on the timeline first (the clip whose voice tells the story).');
-    const cutaways = (o.cutaways ? p.assets.filter((a) => o.cutaways!.includes(a.id)) : p.assets.filter((a) => a.kind !== 'audio' && a.id !== main.assetId && a.name !== r.source && !a.reverseOf && !a.cleanOf)).map((a) => ({ assetId: a.id, duration: a.duration, kind: a.kind === 'image' ? ('image' as const) : ('video' as const) }));
-    const words = timelineWords(p).filter((w) => w.start >= main.start - 0.05 && w.end <= main.start + main.duration + 0.05);
-    const built = recipeOps(r, { main: { clip: main.id, start: main.start, duration: main.duration }, cutaways, words, endText: o.endText ?? r.endCard.text });
+    // The voice: the whole main (bottom) video track, all its pieces in order, or the clip named.
+    const base = p.tracks.find((t) => t.kind === 'video' && t.name !== 'B-roll' && t.clips.some((c) => c.type === 'media'));
+    const named = o.main ? (findClip(p, o.main)?.clip as MediaClip | undefined) : undefined;
+    const mainClips = named ? [named] : (base?.clips.filter((c): c is MediaClip => c.type === 'media') ?? []);
+    if (!mainClips.length) throw new StudioError('Put the talking video on the timeline first (the clip whose voice tells the story).');
+    const start = Math.min(...mainClips.map((c) => c.start));
+    const end = Math.max(...mainClips.map((c) => clipEnd(c)));
+    const onMain = new Set(mainClips.map((c) => c.assetId));
+    // Cutaways: what the user named, else videos and pictures without much talking (screen
+    // recordings, B-roll) that are not on the main track and not the template itself.
+    const talks = (a: Asset) => a.kind === 'video' && a.hasAudio && (a.speech ?? []).reduce((n, s) => n + (s.end - s.start), 0) > a.duration * 0.4;
+    const candidates = o.cutaways
+      ? p.assets.filter((a) => o.cutaways!.includes(a.id))
+      : p.assets.filter((a) => a.kind !== 'audio' && !onMain.has(a.id) && a.name !== r.source && !a.reverseOf && !a.cleanOf && !talks(a));
+    if (!candidates.length && r.shots.some((s) => s.kind === 'screen' || s.kind === 'graphic'))
+      throw new StudioError('This template cuts to screen recordings or B-roll, but every other clip here is someone talking (or there are none). Import screen recordings or B-roll, or name the clips to cut to.');
+    const cutaways = candidates.map((a) => ({ assetId: a.id, duration: a.duration, kind: a.kind === 'image' ? ('image' as const) : ('video' as const) }));
+    const words = timelineWords(p).filter((w) => w.start >= start - 0.05 && w.end <= end + 0.05);
+    const built = recipeOps(r, { main: { clip: mainClips[0]!.id, start, duration: end - start }, cutaways, words, endText: o.endText ?? r.endCard.text });
     if (!built.ops.length) throw new StudioError('There is nothing in this project the template can use: add screen recordings or other clips to cut to.');
-    let res = this.edit(id, built.ops);
+    // Using a template again replaces what it made before (its B-roll and end card).
+    const before: EditOp[] = p.tracks.filter((t) => (t.name === 'B-roll' || t.name === 'End card') && !t.locked).flatMap((t) => t.clips.map((c) => ({ op: 'delete' as const, clip: c.id })));
+    let res = this.edit(id, [...before, ...built.ops]);
     // The template's look on every video and picture (one more step of the same undo).
     const look = lookOf(r);
     if (look) {
@@ -897,7 +918,7 @@ export class StudioService {
     if (wantMusic) {
       const pick = o.music ? this.sounds.get(o.music) : (this.sounds.list({ kind: 'music', ...(r.audio.musicGenre ? { genre: r.audio.musicGenre } : {}) })[0] ?? this.sounds.list({ kind: 'music' })[0] ?? null);
       if (pick && !pick.builtIn) {
-        res = { project: (await this.useSound(id, pick.id, { role: 'music', at: main.start })).project, changes: [] };
+        res = { project: (await this.useSound(id, pick.id, { role: 'music', at: start })).project, changes: [] };
         music = pick.name;
       }
     }
