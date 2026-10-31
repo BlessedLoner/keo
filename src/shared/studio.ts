@@ -190,8 +190,8 @@ export const TextStyle = z
     boxColor: Hex.default('#000000B3'),
     uppercase: z.boolean().default(false),
     letterSpacing: z.number().min(-5).max(40).default(0),
-    /** Text along an arc: 100 bends it into a half circle like a rainbow, -100 the other way (0: straight). */
-    curve: z.number().min(-100).max(100).default(0),
+    /** Text along an arc: 100 bends it into a half circle like a rainbow, 200 a full circle, negative the other way (0: straight). */
+    curve: z.number().min(-200).max(200).default(0),
     lineHeight: z.number().min(0.6).max(3).default(1.15),
   })
   .strict();

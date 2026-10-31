@@ -72,3 +72,9 @@ describe('A template’s moments on the user’s video', () => {
     expect(r.askFor).toEqual([{ moment: 'split', at: 6.67, needs: 'before and after photos' }]);
   });
 });
+
+describe('Template end cards', () => {
+  it('a follow card is placed without words from the speech', () => {
+    expect(placeMoments([{ at: 9, moment: 'follow-card' }], 10, { start: 0, duration: 20 }, []).place).toEqual([{ moment: 'follow-card', at: 18 }]);
+  });
+});

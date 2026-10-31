@@ -1012,7 +1012,11 @@ export class StudioService {
   }
 
   /** A moment (text behind the speaker, a word card, a split, a picture popping in), in one edit. */
-  moment(id: string, moment: MomentId, o: MomentOptions): { project: Project; changes: string[] } {
+  moment(id: string, moment: MomentId, given: MomentOptions): { project: Project; changes: string[] } {
+    // The end card's name and colour come from the brand kit when not given.
+    const b = this.brand();
+    const o = moment === 'follow-card' ? { ...given, text: given.text ?? b.handle ?? b.name, ...(given.color || !b.accent ? {} : { color: b.accent }) } : given;
+    if (moment === 'follow-card' && !o.text) throw new StudioError('The follow card needs the user’s @handle or name: ask them (and offer to remember it with studio__brand).');
     let ops: EditOp[];
     try {
       ops = momentOps(this.get(id), moment, o);
@@ -1077,9 +1081,14 @@ export class StudioService {
     const tplSeconds = r.seconds - (r.endCard.on ? r.endCard.seconds : 0);
     const placed = r.moments?.length ? placeMoments(r.moments, tplSeconds, { start, duration: end - start }, words) : { place: [], ask: [], skipped: 0 };
     let moments = 0;
+    const brand = this.brand();
     for (const m of placed.place) {
+      if (m.moment === 'follow-card' && !brand.handle && !brand.name && !o.endText) {
+        placed.ask.push({ moment: m.moment, at: m.at, needs: 'your @handle or name for the end card' });
+        continue;
+      }
       try {
-        res = this.moment(id, m.moment, { at: m.at, ...(m.text ? { text: m.text } : {}) });
+        res = this.moment(id, m.moment, { at: m.at, ...(m.text ? { text: m.text } : m.moment === 'follow-card' && o.endText && !brand.handle && !brand.name ? { text: o.endText } : {}) });
         moments++;
       } catch (e) {
         // One moment that does not fit (the video ends there) does not stop the others.

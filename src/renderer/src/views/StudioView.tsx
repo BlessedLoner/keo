@@ -1282,7 +1282,7 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
             </select>
           </label>
           <Num label="Spacing" value={st.letterSpacing} min={-5} max={40} step={0.5} onCommit={(v) => set({ style: { letterSpacing: v } })} />
-          <Num label="Curve" value={st.curve} min={-100} max={100} step={5} onCommit={(v) => set({ style: { curve: v } })} />
+          <Num label="Curve" value={st.curve} min={-200} max={200} step={5} onCommit={(v) => set({ style: { curve: v } })} />
         </div>
         <div className="insp-seg" role="radiogroup" aria-label="Align">
           {(['left', 'center', 'right'] as const).map((a) => (

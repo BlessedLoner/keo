@@ -11,6 +11,8 @@ export const MOMENTS = {
   'word-card': 'A full-screen colour card with one big word or short phrase (a beat between ideas)',
   split: 'Two pictures or videos side by side in rounded cards (before/after, this vs that), with labels',
   'image-pop': 'A picture or video pops in over the talking video as a rounded card with a shadow, tilted a little, floating',
+  'circle-text': 'Words around a circle that slowly turns (around a round photo when assets has one, else around the middle of the frame)',
+  'follow-card': 'End card: the name or @handle big in the middle and the platforms (text: "Instagram|TikTok|YouTube") popping in one by one as pills',
 } as const;
 export type MomentId = keyof typeof MOMENTS;
 
@@ -18,8 +20,10 @@ export interface MomentOptions {
   /** When (seconds on the timeline) and for how long. */
   at: number;
   duration?: number;
-  /** The words (text-behind, word-card) or the two labels "Before|After" (split). */
+  /** The words (text-behind, word-card, circle-text), the two labels "Before|After" (split), or the name or @handle (follow-card). */
   text?: string;
+  /** follow-card: the platforms, "Instagram|TikTok|YouTube". */
+  text2?: string;
   /** Pictures or videos of the project (split takes two). */
   assets?: string[];
   /** Colours: the text (or card words) and the card or background. */
@@ -195,6 +199,70 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
       });
       return ops;
     }
+    case 'circle-text': {
+      const d = o.duration ?? 4;
+      // The words repeated around the whole circle, with dots between.
+      const word = words().toUpperCase();
+      const ring = Array.from({ length: Math.max(1, Math.round(28 / (word.length + 3))) }, () => word).join(' • ') + ' • ';
+      // The circle's radius (a share of the frame's width) sets the size of the letters.
+      const radius = (vertical ? 0.33 : 0.2) * p.width;
+      const px = (2 * Math.PI * radius) / (ring.length * 0.62);
+      const sizePct = r2(Math.max(1.5, Math.min(9, (px / p.height) * 100)));
+      const ops: EditOp[] = [];
+      if (o.assets?.length) {
+        const [asset] = media(1, 'a round photo for the middle');
+        ops.push({ op: 'add_media', assetId: asset!, trackName: 'Circle', top: true, start: r2(at), duration: r2(d), fit: 'cover', mask: { shape: 'circle', radius: 0.5 }, transform: { x: 0.5, y: 0.45, scale: vertical ? 0.5 : 0.36 }, enter: { kind: 'zoom-in', seconds: 0.35 } });
+      }
+      ops.push({
+        op: 'add_text',
+        text: ring,
+        start: r2(at),
+        duration: r2(d),
+        trackName: 'Circle words',
+        animIn: 'fade',
+        animOut: 'fade',
+        style: { font: 'Montserrat', weight: 'bold', sizePct, color: o.color ?? '#FFFFFF', curve: 200, letterSpacing: 2, shadow: 10, maxWidth: 1 },
+        transform: { x: 0.5, y: 0.45 },
+        loop: { kind: 'spin', amount: 0.15, period: 12 },
+      });
+      return ops;
+    }
+    case 'follow-card': {
+      const d = o.duration ?? 3;
+      const handle = words();
+      const platforms = (o.text2 ?? 'Instagram|TikTok|YouTube').split('|').map((s) => s.trim()).filter(Boolean).slice(0, 4);
+      const ops: EditOp[] = [
+        { op: 'add_shape', shape: 'rect', start: r2(at), duration: r2(d), trackName: 'Cards', style: { width: 1, height: 1, radius: 0, fill: o.background ?? '#0D0D0F' }, enter: { kind: 'fade', seconds: 0.3 } },
+        {
+          op: 'add_text',
+          text: handle,
+          start: r2(at + 0.1),
+          duration: r2(d - 0.1),
+          trackName: 'Card words',
+          animIn: 'pop',
+          animOut: 'none',
+          animSeconds: 0.3,
+          style: { font: 'Montserrat', weight: 'black', sizePct: vertical ? 5.5 : 8, color: o.color ?? '#FFFFFF', shadow: 0, maxWidth: 0.9 },
+          transform: { x: 0.5, y: 0.42 },
+        },
+      ];
+      const gap = vertical ? 0.07 : 0.1;
+      platforms.forEach((name, i) =>
+        ops.push({
+          op: 'add_text',
+          text: name,
+          start: r2(at + 0.45 + i * 0.25),
+          duration: r2(d - 0.45 - i * 0.25),
+          trackName: 'Card words',
+          animIn: 'pop',
+          animOut: 'none',
+          animSeconds: 0.2,
+          style: { font: 'Poppins', weight: 'bold', sizePct: vertical ? 3.4 : 4.6, color: '#111111', shadow: 0, box: true, boxColor: o.color ?? '#FFFFFF' },
+          transform: { x: 0.5, y: r2(0.54 + i * gap) },
+        }),
+      );
+      return ops;
+    }
     case 'image-pop': {
       const [asset] = media(1, 'a picture or video to show (what the speaker is talking about)');
       const d = o.duration ?? 3;
@@ -251,6 +319,11 @@ export function placeMoments(
   for (const m of [...moments].sort((a, b) => a.at - b.at)) {
     const at = r2(Math.min(main.start + main.duration - 0.5, main.start + m.at * scale));
     if (at < main.start) continue;
+    // The end card carries the user's own name (from their brand kit), not words they said.
+    if (m.moment === 'follow-card') {
+      place.push({ moment: m.moment, at });
+      continue;
+    }
     if (m.moment === 'split' || m.moment === 'image-pop') {
       ask.push({ moment: m.moment, at, needs: m.needs ?? (m.moment === 'split' ? 'two pictures or videos to compare' : 'a picture or video of what you are talking about') });
       continue;

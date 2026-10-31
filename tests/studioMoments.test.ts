@@ -74,3 +74,26 @@ describe('Moment sizing', () => {
     expect(fitScale(q, 'as_video001', 0.9, 0.4)).toBe(0.4);
   });
 });
+
+describe('Circle text and follow card', () => {
+  it('circle-text: the words repeated around a full, slowly turning circle (with a round photo when given)', () => {
+    const out = add(podcast(), 'circle-text', { at: 2, text: 'grow', assets: ['as_pic00001'] });
+    const t = out.tracks[idx(out, 'Circle words')]!.clips[0] as TextClip;
+    expect(t.style.curve).toBe(200);
+    expect(t.text.startsWith('GROW • GROW')).toBe(true);
+    expect(t.loop?.kind).toBe('spin');
+    const photo = out.tracks[idx(out, 'Circle')]!.clips[0] as MediaClip;
+    expect(photo.mask?.shape).toBe('circle');
+    expect(idx(out, 'Circle')).toBeLessThan(idx(out, 'Circle words'));
+  });
+
+  it('follow-card: the handle, then each platform popping in', () => {
+    const out = add(podcast(), 'follow-card', { at: 20, text: '@keo.ai', text2: 'Instagram|TikTok' });
+    const words = (out.tracks[idx(out, 'Card words')]!.clips as TextClip[]).map((c) => [c.text, c.start]);
+    expect(words).toEqual([
+      ['@keo.ai', 20.1],
+      ['Instagram', 20.45],
+      ['TikTok', 20.7],
+    ]);
+  });
+});

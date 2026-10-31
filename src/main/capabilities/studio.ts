@@ -912,7 +912,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         Object.entries(MOMENTS)
           .map(([k, v]) => `${k}: ${v}`)
           .join('; ') +
-        '. text: the words (text-behind, word-card) or the two labels "Before|After" (split). assets: the pictures or videos (as_…) for split (two) and image-pop (one). If the project does not have a clip a moment needs, this fails saying what is missing: ask the user for it (offer choices, e.g. "a photo of your product, or a screenshot of the app?") instead of using an unrelated clip. Choose moments from what is said (studio__transcript): text-behind on the one big idea, word-card between sections, image-pop when the speaker names a thing, split for comparisons. Look at the frame after (studio__look).',
+        '. text: the words (text-behind, word-card, circle-text), the two labels "Before|After" (split), or the @handle (follow-card; default the brand kit’s); text2: the platforms for follow-card ("Instagram|TikTok"). assets: the pictures or videos (as_…) for split (two) and image-pop (one). If the project does not have a clip a moment needs, this fails saying what is missing: ask the user for it (offer choices, e.g. "a photo of your product, or a screenshot of the app?") instead of using an unrelated clip. Choose moments from what is said (studio__transcript): text-behind on the one big idea, word-card between sections, image-pop when the speaker names a thing, split for comparisons. Look at the frame after (studio__look).',
       summary: 'Add a moment',
     }),
     input: z
@@ -922,6 +922,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         at: z.number().min(0),
         duration: z.number().min(0.3).max(30).optional(),
         text: z.string().trim().min(1).max(200).optional(),
+        text2: z.string().trim().min(1).max(120).optional(),
         assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(2).optional(),
         color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
         background: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
