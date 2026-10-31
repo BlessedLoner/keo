@@ -8,6 +8,7 @@ import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studio
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
+import { MomentNeeds, momentOps, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
@@ -910,6 +911,19 @@ export class StudioService {
     const r = this.edit(id, ops);
     this.d.log.info('studio.style', { style, words: words.length, stressed: stressed.length });
     return { project: r.project, stressed, captions: style === 'doc-serif' ? lines.length : 0, needsWords: !words.length };
+  }
+
+  /** A moment (text behind the speaker, a word card, a split, a picture popping in), in one edit. */
+  moment(id: string, moment: MomentId, o: MomentOptions): { project: Project; changes: string[] } {
+    let ops: EditOp[];
+    try {
+      ops = momentOps(this.get(id), moment, o);
+    } catch (e) {
+      throw e instanceof MomentNeeds ? new StudioError(e.message) : e;
+    }
+    const r = this.edit(id, ops);
+    this.d.log.info('studio.moment', { moment });
+    return { project: r.project, changes: r.changes };
   }
 
   async applyTemplate(id: string, recipeId: string, o: { main?: string; cutaways?: string[]; endText?: string; music?: string | null; whooshes?: boolean } = {}): Promise<{ project: Project; cutaways: number; captions: boolean; music: string | null; needsWords: boolean }> {

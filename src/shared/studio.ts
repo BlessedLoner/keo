@@ -704,6 +704,12 @@ export const EditOp = z.discriminatedUnion('op', [
       enter: Entrance.optional(),
       exit: Entrance.optional(),
       loop: Loop.optional(),
+      /** Only the people in the picture (AI background removal), mirrored, colour graded. */
+      cutout: z.boolean().optional(),
+      flipX: z.boolean().optional(),
+      color: ColorGrade.partial().optional(),
+      /** A new track named trackName goes above everything, text too (a person in front of text behind them). */
+      top: z.boolean().optional(),
     })
     .strict(),
   z
@@ -713,6 +719,8 @@ export const EditOp = z.discriminatedUnion('op', [
       start: Sec,
       duration: z.number().min(0.04).max(3600),
       track: TrackRef.optional(),
+      /** A text track by name (made on top if there is none). */
+      trackName: z.string().trim().min(1).max(60).optional(),
       style: StylePatch.optional(),
       transform: TransformPatch.optional(),
       animIn: TextAnimIn.optional(),
@@ -1258,8 +1266,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         let t = op.trackName && !op.track ? p.tracks.find((x) => x.kind === 'video' && x.name === op.trackName) : undefined;
         if (!t && op.trackName && !op.track) {
           t = { id: rid('tr', rand), kind: 'video', name: op.trackName, hidden: false, muted: false, clips: [] };
-          // Above the other videos, below text and captions.
-          const firstText = p.tracks.findIndex((x) => x.kind === 'text');
+          // Above the other videos, below text and captions (or above everything: top).
+          const firstText = op.top ? -1 : p.tracks.findIndex((x) => x.kind === 'text');
           p.tracks.splice(firstText < 0 ? p.tracks.length : firstText, 0, t);
         }
         t ??= track(op.track, 'video');
@@ -1276,6 +1284,9 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.enter ? { enter: op.enter } : {}),
           ...(op.exit ? { exit: op.exit } : {}),
           ...(op.loop ? { loop: op.loop } : {}),
+          ...(op.cutout ? { cutout: true } : {}),
+          ...(op.flipX ? { flipX: true } : {}),
+          ...(op.color ? { color: op.color } : {}),
         });
         t.clips.push(c);
         sortClips(t);
@@ -1284,7 +1295,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       }
       case 'add_text': {
         // Text goes on the Text track by default (not Graphics or Captions).
-        const t = op.track ? track(op.track, 'text') : (p.tracks.find((x) => x.kind === 'text' && x.name === 'Text') ?? p.tracks.find((x) => x.kind === 'text' && x.name !== GRAPHICS_TRACK && x.name !== CAPTIONS_TRACK) ?? addTrack('text', 'Text'));
+        const named = op.trackName && !op.track ? (p.tracks.find((x) => x.kind === 'text' && x.name === op.trackName) ?? addTrack('text', op.trackName)) : null;
+        const t = named ?? (op.track ? track(op.track, 'text') : null) ?? (p.tracks.find((x) => x.kind === 'text' && x.name === 'Text') ?? p.tracks.find((x) => x.kind === 'text' && x.name !== GRAPHICS_TRACK && x.name !== CAPTIONS_TRACK) ?? addTrack('text', 'Text'));
         const c = TextClip.parse({
           id: rid('cl', rand),
           type: 'text',

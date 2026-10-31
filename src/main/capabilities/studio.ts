@@ -5,6 +5,7 @@ import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords
 import { rhythm, type Recipe as LearnedRecipe } from '../../shared/studioRecipe';
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
 import { STYLES, type StyleId } from '../../shared/studioStyles';
+import { MOMENTS, type MomentId } from '../../shared/studioMoments';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
 import { SFX, type SfxKind } from '../studio/sfx';
@@ -854,6 +855,42 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const moment = defineCapability({
+    ...simple({
+      id: 'studio.moment',
+      title: 'Add a moment',
+      description:
+        'Add one editing moment at a time on the timeline, in one edit (one undo): ' +
+        Object.entries(MOMENTS)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ') +
+        '. text: the words (text-behind, word-card) or the two labels "Before|After" (split). assets: the pictures or videos (as_…) for split (two) and image-pop (one). If the project does not have a clip a moment needs, this fails saying what is missing: ask the user for it (offer choices, e.g. "a photo of your product, or a screenshot of the app?") instead of using an unrelated clip. Choose moments from what is said (studio__transcript): text-behind on the one big idea, word-card between sections, image-pop when the speaker names a thing, split for comparisons. Look at the frame after (studio__look).',
+      summary: 'Add a moment',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        moment: z.enum(Object.keys(MOMENTS) as [MomentId, ...MomentId[]]),
+        at: z.number().min(0),
+        duration: z.number().min(0.3).max(30).optional(),
+        text: z.string().trim().min(1).max(200).optional(),
+        assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(2).optional(),
+        color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        background: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        side: z.enum(['left', 'right', 'center']).optional(),
+      })
+      .strict(),
+    output: State.extend({ changes: z.array(z.string()) }),
+    timeoutMs: 60_000,
+    auditView: (i) => ({ moment: i.moment }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const { projectId: _p, moment: id, ...o } = i;
+      const r = run(() => s.moment(p.id, id, o));
+      return { ...state(s, r.project), changes: r.changes.slice(0, 10) };
+    },
+  });
+
   const sounds = defineCapability({
     ...simple({
       id: 'studio.sounds',
@@ -1157,7 +1194,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

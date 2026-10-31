@@ -151,8 +151,10 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
     bh = side;
     ({ dw, dh } = fitBox('cover', w, h, side, side));
   }
-  // The visible box (media drawn larger than it is cut to it).
-  return { dw, dh, vw: inDevice || c.mask ? bw : dw, vh: inDevice || c.mask ? bh : dh, inDevice };
+  // The visible box (media drawn larger than it is cut to it). A rounded picture shown whole is a
+  // card of its own shape (no empty frame-shaped card around it).
+  const frameBox = inDevice || (!!c.mask && !(c.mask.shape === 'rounded' && fit === 'contain'));
+  return { dw, dh, vw: frameBox ? bw : dw, vh: frameBox ? bh : dh, inDevice };
 }
 
 /** A copy of what is drawn so far (an adjustment layer changes it). */
