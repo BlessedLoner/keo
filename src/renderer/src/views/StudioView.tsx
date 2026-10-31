@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx, KEO_FONTS, SYSTEM_FONTS } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -1254,10 +1254,19 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
           <label className="insp-num wide">
             <span>Font</span>
             <select className="select" value={st.font} onChange={(e) => set({ style: { font: e.target.value } })}>
-              {['Segoe UI', 'Segoe UI Black', 'Arial', 'Arial Black', 'Impact', 'Georgia', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Consolas', 'Comic Sans MS', 'Bahnschrift'].map((f) => (
-                <option key={f}>{f}</option>
-              ))}
-              {!['Segoe UI', 'Segoe UI Black', 'Arial', 'Arial Black', 'Impact', 'Georgia', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Consolas', 'Comic Sans MS', 'Bahnschrift'].includes(st.font) && <option>{st.font}</option>}
+              <optgroup label="Keo fonts">
+                {KEO_FONTS.map((f) => (
+                  <option key={f} style={{ fontFamily: `"${f}"` }}>
+                    {f}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Windows fonts">
+                {SYSTEM_FONTS.map((f) => (
+                  <option key={f}>{f}</option>
+                ))}
+              </optgroup>
+              {![...KEO_FONTS, ...SYSTEM_FONTS].includes(st.font as never) && <option>{st.font}</option>}
             </select>
           </label>
           <Num label="Size" value={st.sizePct} min={1} max={40} step={0.5} suffix="%" onCommit={(v) => set({ style: { sizePct: v } })} />

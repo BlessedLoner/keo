@@ -12,6 +12,7 @@ import { RenderApp } from './studio/RenderApp';
 import { UiProvider } from './components/ui';
 import { invoke, subscribe } from './lib/api';
 import { AppStateProvider } from './state/AppState';
+import './styles/fonts.css';
 import './styles/app.css';
 import './styles/emblem.css';
 import './styles/presence.css';

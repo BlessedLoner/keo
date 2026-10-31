@@ -359,34 +359,78 @@ interface Word {
   index: number;
   x: number;
   width: number;
+  /** Its own font (rich text marks), size in pixels and colour (null: the text's). */
+  font: string;
+  size: number;
+  color: string | null;
 }
 interface Line {
   words: Word[];
   width: number;
+  /** The biggest word's size, and where the line's baseline is below the top of the block. */
+  size: number;
+  y: number;
 }
 
 const FONT_WEIGHT = { normal: 400, bold: 700, black: 900 } as const;
 
-function layout(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): Line[] {
-  const space = ctx.measureText(' ').width;
+/**
+ * The fonts a project's text uses, loaded before anything is drawn (a canvas draws a font that is
+ * not loaded yet in a fallback font, so an export would come out wrong).
+ */
+export async function fontsReady(p: Project): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return;
+  const want = new Set<string>();
+  for (const t of p.tracks)
+    for (const c of t.clips) {
+      if (c.type !== 'text') continue;
+      want.add(`${FONT_WEIGHT[c.style.weight]} 64px "${c.style.font}"`);
+      for (const m of c.marks ?? []) want.add(`${m.italic ? 'italic ' : ''}${FONT_WEIGHT[m.weight ?? c.style.weight]} 64px "${m.font ?? c.style.font}"`);
+    }
+  await Promise.all([...want].map((f) => document.fonts.load(f).catch(() => [])));
+}
+
+/** How a word of a text is drawn: the text's style, or the rich text mark it is in. */
+function wordStyle(st: TextClip['style'], marks: TextClip['marks'], i: number, px: number): { font: string; size: number; color: string | null; upper: boolean } {
+  const m = marks?.find((x) => i >= x.from && i < x.to);
+  const size = px * (m?.scale ?? 1);
+  return { font: `${m?.italic ? 'italic ' : ''}${FONT_WEIGHT[m?.weight ?? st.weight]} ${size}px "${m?.font ?? st.font}", "Segoe UI", sans-serif`, size, color: m?.color ?? null, upper: m?.uppercase ?? st.uppercase };
+}
+
+/**
+ * Words laid out in lines no wider than maxWidth (a new paragraph at each line break), each in its
+ * own font and size; lines share a baseline and are as tall as their biggest word.
+ */
+function layout(ctx: CanvasRenderingContext2D, raw: string, st: TextClip['style'], marks: TextClip['marks'], px: number, maxWidth: number): { lines: Line[]; width: number; height: number } {
   const lines: Line[] = [];
   let index = 0;
-  for (const para of text.split(/\r?\n/)) {
-    let line: Line = { words: [], width: 0 };
-    for (const raw of para.split(/\s+/).filter(Boolean)) {
-      const w = ctx.measureText(raw).width;
+  for (const para of raw.split(/\r?\n/)) {
+    let line: Line = { words: [], width: 0, size: 0, y: 0 };
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const s = wordStyle(st, marks, index, px);
+      const text = s.upper ? word.toUpperCase() : word;
+      ctx.font = s.font;
+      const w = ctx.measureText(text).width;
+      const space = ctx.measureText(' ').width;
       const next = line.words.length ? line.width + space + w : w;
       if (line.words.length && next > maxWidth) {
         lines.push(line);
-        line = { words: [], width: 0 };
+        line = { words: [], width: 0, size: 0, y: 0 };
       }
       const x = line.words.length ? line.width + space : 0;
-      line.words.push({ text: raw, index: index++, x, width: w });
+      line.words.push({ text, index: index++, x, width: w, font: s.font, size: s.size, color: s.color });
       line.width = x + w;
+      line.size = Math.max(line.size, s.size);
     }
+    if (!line.size) line.size = px;
     lines.push(line);
   }
-  return lines;
+  let cursor = 0;
+  for (const l of lines) {
+    l.y = cursor + l.size * 0.85;
+    cursor += l.size * st.lineHeight;
+  }
+  return { lines, width: Math.max(0, ...lines.map((l) => l.width)), height: cursor };
 }
 
 /** How far into its in-animation (0..1) and out-animation (1..0) a text clip is. */
@@ -429,10 +473,10 @@ export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number,
       ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
       (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(st.letterSpacing * px) / 100}px`;
       const raw = c.counter ? counterText(c.counter, c.duration, c.duration) : c.text;
-      const lines = layout(ctx, st.uppercase ? raw.toUpperCase() : raw, st.maxWidth * W);
+      const laid = layout(ctx, raw, st, c.marks, px, st.maxWidth * W);
       ctx.restore();
-      w = Math.max(px, ...lines.map((l) => l.width)) + px * 0.4;
-      h = px * st.lineHeight * lines.length + px * 0.3;
+      w = Math.max(px, laid.width) + px * 0.4;
+      h = laid.height + px * 0.3;
     }
     out.push({ id: c.id, type: c.type, cx: m.x * W, cy: m.y * H, w: w * Math.abs(m.scaleX), h: h * Math.abs(m.scaleY), rotation: m.rotation });
   }
@@ -449,10 +493,12 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
   ctx.textBaseline = 'alphabetic';
   (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(st.letterSpacing * px) / 100}px`;
-  const lines = layout(ctx, text, st.maxWidth * W);
-  const lineH = px * st.lineHeight;
-  const blockH = lineH * lines.length;
-  const blockW = Math.max(1, ...lines.map((l) => l.width));
+  const baseFont = ctx.font;
+  const laid = layout(ctx, raw, st, c.marks, px, st.maxWidth * W);
+  ctx.font = baseFont;
+  const lines = laid.lines;
+  const blockH = laid.height;
+  const blockW = Math.max(1, laid.width);
   const { pin, pout } = phases(c, t);
 
   // Whole-block animation (position, scale, opacity, blur).
@@ -550,7 +596,8 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     return !!w && rt >= w.start && rt < w.end;
   };
 
-  const top = -blockH / 2 + px * 0.85;
+  const top = -blockH / 2;
+  const basePx = px;
   const fillFor = (lineWidth: number): string | CanvasGradient => {
     if (!st.color2) return st.color;
     const left = st.align === 'left' ? -blockW / 2 : st.align === 'right' ? blockW / 2 - lineWidth : -lineWidth / 2;
@@ -567,8 +614,11 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   // Glitch: while coming in, words jump sideways and split into red and cyan copies.
   const glitch = c.animIn === 'glitch' && pin < 1 ? 1 - pin : 0;
   /** Draws a piece of text with the style's glow, shadow and outline. */
-  const paint = (str: string, x: number, y: number, color: string | CanvasGradient, a: number, b: number, seed: number) => {
+  const paint = (str: string, x: number, y: number, color: string | CanvasGradient, a: number, b: number, seed: number, font?: string, size?: number) => {
+    // A word of rich text: its own font, and glow, shadow and outline in proportion to its size.
+    const px = size ?? basePx;
     ctx.save();
+    if (font) ctx.font = font;
     ctx.globalAlpha = clamp(a);
     if (b > 0.3) ctx.filter = `blur(${b.toFixed(1)}px)`;
     let gx = 0;
@@ -638,8 +688,8 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     return;
   }
   let chars = 0;
-  lines.forEach((line, li) => {
-    const y = top + li * lineH;
+  lines.forEach((line) => {
+    const y = top + line.y;
     const x0 = st.align === 'left' ? -blockW / 2 : st.align === 'right' ? blockW / 2 - line.width : -line.width / 2;
     if (st.box && line.words.length) {
       const pad = px * 0.22;
@@ -647,7 +697,7 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
       ctx.globalAlpha = alpha;
       ctx.fillStyle = st.boxColor;
       ctx.beginPath();
-      ctx.roundRect(x0 - pad, y - px * 0.85 - pad * 0.6, line.width + pad * 2, lineH + pad * 0.6, px * 0.18);
+      ctx.roundRect(x0 - pad, y - line.size * 0.85 - pad * 0.6, line.width + pad * 2, line.size * st.lineHeight + pad * 0.6, px * 0.18);
       ctx.fill();
       ctx.restore();
     }
@@ -663,12 +713,13 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
       chars += w.text.length;
       const r = wordReveal(w.index);
       if (r <= 0) continue;
-      const color = c.highlight && spoken(w.index) ? c.highlight : null;
+      const color = c.highlight && spoken(w.index) ? c.highlight : w.color;
       const x = x0 + w.x;
       if (!perLetter) {
-        paint(word, x, y, color ?? fill, alpha * easeOut(r), blur + (1 - easeOut(r)) * px * 0.3, w.index);
+        paint(word, x, y, color ?? fill, alpha * easeOut(r), blur + (1 - easeOut(r)) * px * 0.3, w.index, w.font, w.size);
         continue;
       }
+      ctx.font = w.font;
       // Letter by letter: each letter has its own moment, a little after the one before.
       for (let i = 0; i < word.length; i++) {
         const ch = word[i]!;
@@ -692,7 +743,7 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
           ly = -(1 - EASES.back(lp)) * px * 0.7 + Math.sin(rt * 4 - gi * 0.55) * px * 0.045;
         }
         if (la <= 0.001) continue;
-        paint(ch, lx, y + ly, color ?? fill, la, lb, w.index);
+        paint(ch, lx, y + ly, color ?? fill, la, lb, w.index, w.font, w.size);
       }
     }
   });

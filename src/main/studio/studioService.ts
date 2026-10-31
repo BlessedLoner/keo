@@ -8,6 +8,7 @@ import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studio
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
+import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
 export type { ProjectSummary, RenderJob };
@@ -880,6 +881,26 @@ export class StudioService {
    * transcribed), its look on every clip, its end card, music from the library and a whoosh on each
    * cut when the template has them. Shown step by step while the user watches.
    */
+  /**
+   * One of Keo's editing styles on the talking video, in one edit (one undo). Uses the transcript
+   * when there is one (pop words, captions); nothing leaves the PC.
+   */
+  applyStyle(id: string, style: StyleId, o: Omit<StyleOptions, 'words' | 'lines'> = {}): { project: Project; stressed: string[]; captions: number; needsWords: boolean } {
+    const p = this.get(id);
+    const words = timelineWords(p);
+    const lines = words.length ? captionLines(words, { maxWords: 4 }) : [];
+    const stressed = o.emphasis?.length ? o.emphasis : guessEmphasis(words);
+    let ops: EditOp[];
+    try {
+      ops = styleOps(p, style, { ...o, emphasis: stressed, words, lines });
+    } catch (e) {
+      throw e instanceof StyleError ? new StudioError(e.message) : e;
+    }
+    const r = this.edit(id, ops);
+    this.d.log.info('studio.style', { style, words: words.length, stressed: stressed.length });
+    return { project: r.project, stressed, captions: style === 'doc-serif' ? lines.length : 0, needsWords: !words.length };
+  }
+
   async applyTemplate(id: string, recipeId: string, o: { main?: string; cutaways?: string[]; endText?: string; music?: string | null; whooshes?: boolean } = {}): Promise<{ project: Project; cutaways: number; captions: boolean; music: string | null; needsWords: boolean }> {
     const r = this.recipes().find((x) => x.id === recipeId);
     if (!r) throw new StudioError('That template is not saved: learn it first.');

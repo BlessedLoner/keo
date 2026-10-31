@@ -143,6 +143,8 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.json': 'application/json',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
@@ -1079,6 +1081,22 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   });
   const moOut = await s.studio.exportVideo(mo.id);
   out.motion = { frames: moOut.frames, brightness: stats, layers: moP().tracks.reduce((n, t) => n + t.clips.length, 0) };
+  // Rich text in Keo's own fonts: the same words with a Keo font and with a font that does not
+  // exist must come out different (the bundled font really loaded before drawing).
+  const typeFrame = async (font: string): Promise<Buffer> => {
+    const ty = s.studio.create('Studio smoke type', 'vertical');
+    s.studio.edit(ty.id, [
+      { op: 'set_project', width: 360, height: 640, background: '#0B0B0B' },
+      { op: 'add_text', text: 'This is how you WIN', start: 0, duration: 2, style: { font: 'Montserrat', weight: 'black', sizePct: 7, color: '#FFFFFF' }, marks: [{ words: 'how you', font, italic: true, color: '#E53935', scale: 1.5, weight: 'normal' }] },
+    ]);
+    const f = (await s.studio.frames(ty.id, [1], 360))[0]!.png;
+    s.studio.delete(ty.id);
+    return f;
+  };
+  const withFont = await typeFrame('Instrument Serif');
+  const noFont = await typeFrame('No Such Font Keo');
+  if (process.env.KEO_SMOKE_SHOTS) fs.writeFileSync(path.join(process.env.KEO_SMOKE_SHOTS, 'studio-rich-text.png'), withFont);
+  out.richText = { differs: !withFont.equals(noFont), bytes: withFont.length };
   // Shot changes: a video made of two shots (the picture, then a red frame from 1.5 s), decoded
   // in the render window, split where the red starts.
   const sh = s.studio.create('Studio smoke shots', 'square');

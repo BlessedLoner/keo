@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { findClip, projectDuration, type Clip, type EditOp, type Key, type KeyProp, type Project } from '@shared/studio';
-import { drawFrame, layerBoxes, type LayerBox } from './engine';
+import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
 
 /**
@@ -179,6 +179,11 @@ export function Preview({
     return p;
   })();
   live.current.project = shown;
+
+  // The fonts its text uses: drawn again once they are loaded.
+  useEffect(() => {
+    void fontsReady(project).then(() => redraw.current());
+  }, [project]);
 
   // Media for this project (made again when another project opens).
   useEffect(() => {

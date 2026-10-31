@@ -3,7 +3,7 @@ import { denoise } from '@shared/denoise';
 import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
 import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
 import { invoke } from '../lib/api';
-import { drawFrame, visibleAt } from './engine';
+import { drawFrame, fontsReady, visibleAt } from './engine';
 import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
 import { loadCutout } from './cutout';
 import { eqChain, normalize, voiceChain, voiceFxChain } from './sound';
@@ -27,6 +27,7 @@ const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
 
 /** Background removal is ready before a project that uses it is drawn. */
 async function prepareCutout(p: Project): Promise<void> {
+  await fontsReady(p);
   if (!p.tracks.some((t) => t.clips.some((c) => c.type === 'media' && c.cutout))) return;
   if (!(await loadCutout())) throw new Error('Background removal could not start on this PC.');
 }

@@ -197,6 +197,62 @@ export const TextStyle = z
   .strict();
 export type TextStyle = z.infer<typeof TextStyle>;
 
+/** Fonts that ship with Keo (free licences): the same on every PC and in every export. */
+export const KEO_FONTS = ['Inter', 'Montserrat', 'Poppins', 'Bebas Neue', 'Anton', 'Archivo Black', 'Instrument Serif', 'Playfair Display', 'DM Serif Display'] as const;
+/** Fonts of Windows itself (on every Windows PC). */
+export const SYSTEM_FONTS = ['Segoe UI', 'Segoe UI Black', 'Arial', 'Arial Black', 'Impact', 'Georgia', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Consolas', 'Comic Sans MS', 'Bahnschrift'] as const;
+
+/**
+ * Rich text: a run of words (word `from` up to, not including, word `to`, counting the words of
+ * the text) in its own font, colour, size (`scale` × the text's size), italic, weight or capitals:
+ * "Do / what you love / AND" with a big word over small ones, or one word in red serif italic.
+ */
+export const TextMark = z
+  .object({
+    from: z.number().int().min(0).max(2000),
+    to: z.number().int().min(1).max(2000),
+    font: z.string().trim().min(1).max(80).optional(),
+    color: Hex.optional(),
+    scale: z.number().min(0.2).max(5).optional(),
+    italic: z.boolean().optional(),
+    weight: z.enum(['normal', 'bold', 'black']).optional(),
+    uppercase: z.boolean().optional(),
+  })
+  .strict();
+export type TextMark = z.infer<typeof TextMark>;
+/** A mark as Keo writes it: by word numbers, or by the words themselves (the first match after the marks before it). */
+export const TextMarkInput = TextMark.extend({ from: z.number().int().min(0).max(2000).optional(), to: z.number().int().min(1).max(2000).optional(), words: z.string().trim().min(1).max(300).optional() }).strict();
+export type TextMarkInput = z.infer<typeof TextMarkInput>;
+
+/** Marks with words given as text turned into word numbers (marks that match nothing are left out). */
+export function resolveMarks(text: string, marks: TextMarkInput[]): TextMark[] {
+  const norm = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+  const words = text.split(/\s+/).filter(Boolean).map(norm);
+  const out: TextMark[] = [];
+  let after = 0;
+  for (const m of marks) {
+    let from = m.from;
+    let to = m.to;
+    if (m.words) {
+      const want = m.words.split(/\s+/).filter(Boolean).map(norm);
+      const find = (start: number) => {
+        for (let i = start; i + want.length <= words.length; i++) if (want.every((w, k) => words[i + k] === w)) return i;
+        return -1;
+      };
+      let at = find(after);
+      if (at < 0) at = find(0);
+      if (at < 0) continue;
+      from = at;
+      to = at + want.length;
+      after = to;
+    }
+    if (from === undefined || to === undefined || to <= from || from >= words.length) continue;
+    const { words: _w, ...rest } = m;
+    out.push({ ...rest, from, to: Math.min(to, words.length) });
+  }
+  return out;
+}
+
 const Fades = { fadeIn: z.number().min(0).max(30).default(0), fadeOut: z.number().min(0).max(30).default(0) };
 
 /** Green screen (chroma key) settings. */
@@ -433,6 +489,8 @@ export const TextClip = z
     /** Captions: the word being spoken is drawn in this colour. */
     highlight: Hex.nullable().default(null),
     counter: Counter.optional(),
+    /** Rich text: runs of words in their own font, colour, size or italic. */
+    marks: z.array(TextMark).max(100).optional(),
     keys: Keys.optional(),
     loop: Loop.optional(),
   })
@@ -661,6 +719,8 @@ export const EditOp = z.discriminatedUnion('op', [
       animOut: TextAnimOut.optional(),
       animSeconds: z.number().min(0).max(5).optional(),
       counter: Counter.optional(),
+      /** Rich text: words in their own font, colour, size or italic. */
+      marks: z.array(TextMarkInput).max(100).optional(),
       keys: Keys.optional(),
       loop: Loop.optional(),
     })
@@ -744,6 +804,8 @@ export const EditOp = z.discriminatedUnion('op', [
       flipY: z.boolean().optional(),
       blend: Blend.optional(),
       voiceFx: VoiceFx.nullable().optional(),
+      /** Rich text marks (replace the text's marks; null or [] removes them). */
+      marks: z.array(TextMarkInput).max(100).nullable().optional(),
       /** Equalizer bands to change (dB), or a preset's name; null: flat again. */
       eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
       chroma: Chroma.partial().nullable().optional(),
@@ -790,7 +852,7 @@ export const EditOp = z.discriminatedUnion('op', [
     .object({
       op: z.literal('add_captions'),
       lines: z
-        .array(z.object({ text: z.string().min(1).max(300), start: Sec, end: Sec, words: z.array(z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict()).max(60).optional() }).strict())
+        .array(z.object({ text: z.string().min(1).max(300), start: Sec, end: Sec, words: z.array(z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict()).max(60).optional(), marks: z.array(TextMarkInput).max(20).optional() }).strict())
         .min(1)
         .max(3000),
       style: StylePatch.optional(),
@@ -1235,6 +1297,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.animOut ? { animOut: op.animOut } : {}),
           ...(op.animSeconds !== undefined ? { animSeconds: op.animSeconds } : {}),
           ...(op.counter ? { counter: op.counter } : {}),
+          ...(op.marks?.length ? { marks: resolveMarks(op.text, op.marks) } : {}),
           ...(op.keys ? { keys: sortKeys(op.keys) } : {}),
           ...(op.loop ? { loop: op.loop } : {}),
         });
@@ -1551,6 +1614,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (!next || (!next.low && !next.mid && !next.high)) delete v.eq;
           else v.eq = { ...next };
         }
+        if (op.marks !== undefined) {
+          only('text marks', c.type === 'text');
+          const tc = c as TextClip;
+          const resolved = op.marks?.length ? resolveMarks(op.text ?? tc.text, op.marks) : [];
+          if (resolved.length) tc.marks = resolved;
+          else delete tc.marks;
+        }
         if (op.voiceFx !== undefined) {
           only('voice changer', isAV(c));
           const v = c as MediaClip | AudioClip;
@@ -1775,6 +1845,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
               animOut: 'none',
               animSeconds: 0.12,
               ...(l.words?.length ? { words: l.words.map((w) => ({ text: w.text, start: round(Math.max(0, w.start - start)), end: round(Math.max(0, Math.max(w.start, w.end) - start)) })) } : {}),
+              ...(l.marks?.length ? { marks: resolveMarks(l.text, l.marks) } : {}),
               highlight: op.highlight === undefined ? '#FFD400' : op.highlight,
             }),
           );
