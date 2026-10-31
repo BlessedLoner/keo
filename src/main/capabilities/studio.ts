@@ -927,6 +927,27 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const review = defineCapability({
+    ...simple({
+      id: 'studio.review',
+      title: 'Check the edit',
+      description:
+        'Check the edit like a careful editor before saying it is done (on this PC, nothing is sent): text covering the speaker’s face, text cut off at the edge, text where TikTok, Reels and Shorts put their buttons (vertical videos), text on top of other text, and titles too short to read. Each issue names the clip, when, and how to fix it. Fix what is clearly wrong (studio__edit), look at the frame (studio__look), and tell the user anything that is a matter of taste.',
+      summary: 'Check the edit',
+    }),
+    input: z.object({ projectId: ProjectId.optional() }).strict(),
+    output: z.object({ issues: z.array(z.object({ kind: z.string(), clip: z.string(), at: z.number(), detail: z.string(), fix: z.string() })), ok: z.boolean() }),
+    timeoutMs: 6 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const issues = await s.review(p.id).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { issues, ok: issues.length === 0 };
+    },
+  });
+
   const brand = defineCapability({
     ...simple({
       id: 'studio.brand',
@@ -1248,7 +1269,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

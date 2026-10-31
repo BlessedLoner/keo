@@ -98,3 +98,45 @@ export function cutout(src: Drawable, w: number, h: number): OffscreenCanvas | n
     result.close();
   }
 }
+
+/**
+ * Where the people are in a picture: the box around them, as fractions of the picture (null: no
+ * one, or the segmenter is not ready). Keo's self-review uses it to keep text off faces.
+ */
+export function personBox(src: Drawable, w: number, h: number): { x0: number; y0: number; x1: number; y1: number } | null {
+  if (!segmenter) return null;
+  const k = SEG / Math.max(w, h);
+  const iw = Math.max(16, Math.round(w * k));
+  const ih = Math.max(16, Math.round(h * k));
+  if (!input || input.width !== iw || input.height !== ih) input = new OffscreenCanvas(iw, ih);
+  const ictx = input.getContext('2d', { willReadFrequently: true })!;
+  ictx.drawImage(src as CanvasImageSource, 0, 0, iw, ih);
+  const result = segmenter.segment(input);
+  try {
+    const masks = result.confidenceMasks ?? [];
+    const person = masks.length > 1 ? masks[1]! : masks[0];
+    if (!person) return null;
+    const conf = person.getAsFloat32Array();
+    const mw = person.width;
+    const mh = person.height;
+    let x0 = mw;
+    let y0 = mh;
+    let x1 = -1;
+    let y1 = -1;
+    let count = 0;
+    for (let y = 0; y < mh; y++)
+      for (let x = 0; x < mw; x++)
+        if (conf[y * mw + x]! > 0.5) {
+          count++;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+        }
+    // A few stray pixels are not a person.
+    if (count < mw * mh * 0.01) return null;
+    return { x0: x0 / mw, y0: y0 / mh, x1: (x1 + 1) / mw, y1: (y1 + 1) / mh };
+  } finally {
+    result.close();
+  }
+}

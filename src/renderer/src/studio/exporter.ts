@@ -3,9 +3,10 @@ import { denoise } from '@shared/denoise';
 import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
 import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
 import { invoke } from '../lib/api';
-import { drawFrame, fontsReady, visibleAt } from './engine';
+import { drawFrame, fontsReady, layerBoxes, visibleAt } from './engine';
+import type { ReviewSample } from '@shared/studioReview';
 import { ClipDecoder, ElementSeeker, ExactSources, mediaUrl } from './media';
-import { loadCutout } from './cutout';
+import { loadCutout, personBox } from './cutout';
 import { eqChain, normalize, voiceChain, voiceFxChain } from './sound';
 
 /**
@@ -349,6 +350,42 @@ export async function renderFrames(p: Project, times: number[], width: number): 
       let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       out.push({ time: t, pngBase64: btoa(bin) });
+    }
+  } finally {
+    sources.close();
+  }
+  return out;
+}
+
+/**
+ * Keo's self-review, measured: at each time, where every text is and where the person is (found
+ * in the pictures alone, without the text on top).
+ */
+export async function reviewSamples(p: Project, times: number[]): Promise<ReviewSample[]> {
+  const W = even(360);
+  const H = even((360 * p.height) / p.width);
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false }) as unknown as CanvasRenderingContext2D;
+  await prepareCutout(p);
+  const findPeople = await loadCutout().catch(() => false);
+  // The pictures only: text and graphics hidden.
+  const pictures: Project = { ...p, tracks: p.tracks.map((t) => (t.kind === 'video' ? t : { ...t, hidden: true })) };
+  const trackOf = new Map(p.tracks.flatMap((t) => t.clips.map((c) => [c.id, t.name] as const)));
+  const out: ReviewSample[] = [];
+  const sources = new ExactSources(p.id);
+  try {
+    for (const t of times) {
+      const media = visibleAt(pictures, t).filter((c): c is MediaClip => c.type === 'media');
+      let person: ReviewSample['person'] = null;
+      if (findPeople && media.length) {
+        await sources.prepare(pictures, media, t);
+        drawFrame(ctx, pictures, t, sources);
+        person = personBox(canvas, W, H);
+      }
+      const texts = layerBoxes(ctx, p, t, W, H)
+        .filter((b) => b.type === 'text')
+        .map((b) => ({ clip: b.id, track: trackOf.get(b.id) ?? '', box: { x0: (b.cx - b.w / 2) / W, y0: (b.cy - b.h / 2) / H, x1: (b.cx + b.w / 2) / W, y1: (b.cy + b.h / 2) / H } }));
+      out.push({ t, person, texts });
     }
   } finally {
     sources.close();

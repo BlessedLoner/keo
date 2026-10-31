@@ -9,6 +9,7 @@ import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
 import { Brand, patchBrand, type BrandPatch } from '../../shared/studioBrand';
+import { reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
 import { MomentNeeds, momentOps, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
@@ -817,6 +818,17 @@ export class StudioService {
   private get recipesFile(): string {
     return path.join(this.d.dir, 'library', 'recipes.json');
   }
+  /** Keo's self-review: what is wrong with the edit (text over a face, cut off, overlapping, too fast). */
+  async review(id: string): Promise<ReviewIssue[]> {
+    const p = this.get(id);
+    const times = reviewTimes(p);
+    if (!times.length) return [];
+    const samples = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times }, 5 * 60_000);
+    const issues = reviewEdit(p, samples);
+    this.d.log.info('studio.review', { samples: samples.length, issues: issues.length });
+    return issues;
+  }
+
   /** The user's brand kit (for every project). */
   brand(): Brand {
     try {
