@@ -948,6 +948,37 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const versions = defineCapability({
+    ...simple({
+      id: 'studio.versions',
+      title: 'Versions of the edit',
+      description:
+        'Saved versions of the edit, to compare and go back to (kept on this PC; the user sees them under History). action save keeps the edit as it is now under a short name ("Podcast frame", "Before music"): save before a big change such as another style or a re-cut, so the user can compare. list shows them; restore goes back to one (one step, undoable). Tell the user which versions there are when you have made more than one.',
+      summary: 'Versions of the edit',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        action: z.enum(['save', 'list', 'restore']),
+        name: z.string().trim().min(1).max(80).optional(),
+        version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional(),
+      })
+      .strict(),
+    output: State.partial().extend({ versions: z.array(z.object({ id: z.string(), name: z.string(), at: z.string(), seconds: z.number() })) }),
+    timeoutMs: 30_000,
+    auditView: (i) => ({ action: i.action }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      if (i.action === 'save') run(() => s.saveVersion(p.id, i.name ?? 'Version'));
+      if (i.action === 'restore') {
+        if (!i.version) throw fail('studio', 'Say which version to restore (version: vr_…; list them first).');
+        const r = run(() => s.restoreVersion(p.id, i.version!));
+        return { ...state(s, r), versions: s.versions(p.id) };
+      }
+      return { versions: s.versions(p.id) };
+    },
+  });
+
   const brand = defineCapability({
     ...simple({
       id: 'studio.brand',
@@ -1269,7 +1300,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

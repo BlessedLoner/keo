@@ -197,6 +197,14 @@ export const TextStyle = z
   .strict();
 export type TextStyle = z.infer<typeof TextStyle>;
 
+/** A saved version of an edit (to compare and go back to). */
+export interface StudioVersion {
+  id: string;
+  name: string;
+  at: string;
+  seconds: number;
+}
+
 /** Keo asks the user in Studio: a question, answers to click, and maybe the edit it plans (moments with times). */
 export interface StudioAsk {
   projectId: string;

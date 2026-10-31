@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
@@ -387,6 +387,7 @@ export class StudioService {
       }
     fs.rmSync(this.file(id), { force: true });
     fs.rmSync(path.join(this.d.dir, 'backups', id), { recursive: true, force: true });
+    fs.rmSync(path.join(this.d.dir, 'versions', id), { recursive: true, force: true });
     this.undo.delete(id);
     this.redo.delete(id);
     if (this.current === id) this.current = null;
@@ -433,6 +434,62 @@ export class StudioService {
       this.queueShow(id, before, ops, () => made[k++] ?? fresh());
     }
     return r;
+  }
+
+  // ---------------------------------------------------------------- versions
+
+  private versionsDir(id: string): string {
+    this.file(id);
+    return path.join(this.d.dir, 'versions', id);
+  }
+  /** The saved versions of a project, newest first. */
+  versions(id: string): StudioVersion[] {
+    const dir = this.versionsDir(id);
+    const out: StudioVersion[] = [];
+    for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      if (!/^vr_[A-Za-z0-9]+\.json$/.test(f)) continue;
+      try {
+        const v = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as { id: string; name: string; at: string; project: Project };
+        out.push({ id: v.id, name: v.name, at: v.at, seconds: Math.round(projectDuration(v.project) * 10) / 10 });
+      } catch {
+        // A damaged version file is skipped.
+      }
+    }
+    return out.sort((a, b) => b.at.localeCompare(a.at));
+  }
+  /** Keeps the edit as it is now under a name (up to 30 per project; the oldest go). */
+  saveVersion(id: string, name: string): StudioVersion {
+    const p = this.get(id);
+    const dir = this.versionsDir(id);
+    fs.mkdirSync(dir, { recursive: true });
+    const v = { id: `vr_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, name: name.trim().slice(0, 80) || 'Version', at: new Date().toISOString() };
+    fs.writeFileSync(path.join(dir, `${v.id}.json`), JSON.stringify({ ...v, project: p }));
+    for (const old of this.versions(id).slice(30)) fs.rmSync(path.join(dir, `${old.id}.json`), { force: true });
+    this.d.log.info('studio.version_saved', {});
+    return { ...v, seconds: Math.round(projectDuration(p) * 10) / 10 };
+  }
+  /** Back to a saved version (one step that can be undone; the media and what Keo learned about it stay). */
+  restoreVersion(id: string, versionId: string): Project {
+    if (!/^vr_[A-Za-z0-9]{4,24}$/.test(versionId)) throw new StudioError('That is not a version id.');
+    const file = path.join(this.versionsDir(id), `${versionId}.json`);
+    if (!fs.existsSync(file)) throw new StudioError('That version is not saved.');
+    const v = JSON.parse(fs.readFileSync(file, 'utf8')) as { name: string; project: Project };
+    const now = this.get(id);
+    const assets = [...now.assets, ...v.project.assets.filter((a) => !now.assets.some((b) => b.id === a.id))];
+    const restored: Project = { ...v.project, id, name: now.name, assets, updatedAt: new Date().toISOString() };
+    this.skipShow(id);
+    const stack = this.undo.get(id) ?? [];
+    stack.push(now);
+    if (stack.length > UNDO_DEPTH) stack.shift();
+    this.undo.set(id, stack);
+    this.redo.delete(id);
+    this.label(id, `Back to version “${v.name}”`);
+    this.save(restored);
+    return restored;
+  }
+  deleteVersion(id: string, versionId: string): void {
+    if (!/^vr_[A-Za-z0-9]{4,24}$/.test(versionId)) throw new StudioError('That is not a version id.');
+    fs.rmSync(path.join(this.versionsDir(id), `${versionId}.json`), { force: true });
   }
 
   /** One more edit that undoes together with the edit just before it (one step in the undo list). */

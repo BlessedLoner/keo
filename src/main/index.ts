@@ -1601,6 +1601,14 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`const h = [...document.querySelectorAll('.insp-section h4')].find((e) => e.textContent === 'Brand kit'); h?.scrollIntoView({ block: 'start' });`);
       await wait(400);
       fs.writeFileSync(path.join(dir, 'studio-brand.png'), (await win.webContents.capturePage()).toPNG());
+      // History: a version saved by name, above the list of changes.
+      await js(`[...document.querySelectorAll('.studio-head button, header button')].find((b) => b.textContent.trim() === 'History')?.click();`);
+      await wait(500);
+      await js(`const i = document.querySelector('.versions-save input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'Podcast frame'); i.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(150);
+      await js(`document.querySelector('.versions-save button[type=submit]')?.click();`);
+      await wait(900);
+      fs.writeFileSync(path.join(dir, 'studio-versions.png'), (await win.webContents.capturePage()).toPNG());
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);

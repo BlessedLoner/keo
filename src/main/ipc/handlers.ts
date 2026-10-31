@@ -549,6 +549,13 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { ok: true as const };
     },
     'studio:brand': ({ patch }) => (patch ? s.studio.setBrand(patch) : s.studio.brand()),
+    'studio:versions': ({ id, action, name, version }) => {
+      if (action === 'save') s.studio.saveVersion(id, name ?? 'Version');
+      else if ((action === 'restore' || action === 'delete') && !version) throw new StudioError('Choose a version.');
+      else if (action === 'restore') s.studio.restoreVersion(id, version!);
+      else if (action === 'delete') s.studio.deleteVersion(id, version!);
+      return s.studio.versions(id);
+    },
     'studio:liveEdits': ({ on }) => {
       if (on !== undefined) s.studio.liveEdits = on;
       return { on: s.studio.liveEdits };

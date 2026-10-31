@@ -177,6 +177,9 @@ export const invokeSchemas = {
   'studio:watch': z.object({ id: studioProjectId, on: z.boolean() }).strict(),
   'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
   'studio:brand': z.object({ patch: BrandPatch.optional() }).strict(),
+  'studio:versions': z
+    .object({ id: z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/), action: z.enum(['list', 'save', 'restore', 'delete']), name: z.string().trim().min(1).max(80).optional(), version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional() })
+    .strict(),
   'studio:skipShow': z.object({ id: studioProjectId }).strict(),
   'studio:previewCopies': z.object({ id: studioProjectId, assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200).optional() }).strict(),
   'studio:cleanSound': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.8) }).strict(),
@@ -509,6 +512,7 @@ export interface InvokeOutputs {
   'studio:soundUse': { clip: string };
   'studio:liveEdits': { on: boolean };
   'studio:brand': Brand;
+  'studio:versions': import('./studio').StudioVersion[];
   'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };
   'studio:stabilize': { points: number; zoom: number };

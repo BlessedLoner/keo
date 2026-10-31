@@ -11,6 +11,7 @@ import { Library } from '../studio/Library';
 import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
 import { BrandKit } from '../studio/BrandKit';
+import { Versions } from '../studio/Versions';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
@@ -572,11 +573,12 @@ export function StudioView() {
           <Icon name="undo" size={15} />
         </button>
         <span className="history-wrap">
-          <button className="btn sm ghost" disabled={!history.undo} onClick={() => setHistoryOpen((v) => !v)} title="Every change, newest first: go back to any of them">
+          <button className="btn sm ghost" onClick={() => setHistoryOpen((v) => !v)} title="Saved versions, and every change newest first: go back to any of them">
             History
           </button>
           {historyOpen && (
-            <div className="history-menu" onMouseLeave={() => setHistoryOpen(false)}>
+            <div className="history-menu" onMouseLeave={(e) => !(e.currentTarget as HTMLElement).contains(document.activeElement) && setHistoryOpen(false)}>
+              <Versions projectId={project.id} onDone={() => setHistoryOpen(false)} />
               {history.undoLabels.map((l, i) => (
                 <button
                   key={i}
