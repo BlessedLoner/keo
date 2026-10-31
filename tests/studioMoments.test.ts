@@ -97,3 +97,18 @@ describe('Circle text and follow card', () => {
     ]);
   });
 });
+
+describe('Grid', () => {
+  it('square tiles in two columns, popping in one by one, and asks for at least two pictures', () => {
+    const p = podcast();
+    const wide: Asset = { ...pic(3), id: 'as_wide0001', width: 1600, height: 900 };
+    const q = { ...p, assets: [...p.assets, wide] };
+    const out = add(q, 'grid', { at: 3, assets: ['as_pic00001', 'as_pic00002', 'as_wide0001'] });
+    const tiles = out.tracks[idx(out, 'Grid')]!.clips as MediaClip[];
+    expect(tiles.map((c) => c.start)).toEqual([3, 3.15, 3.3]);
+    // Two side by side, the third alone in the middle of the second row.
+    tiles.forEach((c, i) => expect(c.transform.x).toBeCloseTo([0.265, 0.735, 0.5][i]!, 1));
+    expect(tiles[2]!.crop).toEqual({ left: 0.22, right: 0.22, top: 0, bottom: 0 });
+    expect(() => momentOps(p, 'grid', { at: 3, assets: ['as_pic00001'] })).toThrow(MomentNeeds);
+  });
+});

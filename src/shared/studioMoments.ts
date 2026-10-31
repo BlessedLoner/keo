@@ -12,6 +12,7 @@ export const MOMENTS = {
   split: 'Two pictures or videos side by side in rounded cards (before/after, this vs that), with labels',
   'image-pop': 'A picture or video pops in over the talking video as a rounded card with a shadow, tilted a little, floating',
   'circle-text': 'Words around a circle that slowly turns (around a round photo when assets has one, else around the middle of the frame)',
+  grid: 'Two to four pictures or videos in a grid of rounded tiles on a plain background, popping in one by one (examples, results, a collection)',
   'follow-card': 'End card: the name or @handle big in the middle and the platforms (text: "Instagram|TikTok|YouTube") popping in one by one as pills',
 } as const;
 export type MomentId = keyof typeof MOMENTS;
@@ -53,6 +54,16 @@ function naturalSize(p: Project, assetId: string): [number, number] {
   const frame = p.width / p.height;
   const aspect = a && a.width > 0 && a.height > 0 ? a.width / a.height : frame;
   return aspect > frame ? [1, frame / aspect] : [aspect / frame, 1];
+}
+
+/** The crop that makes a picture square (its middle). */
+function squareCrop(p: Project, assetId: string): { left: number; top: number; right: number; bottom: number } {
+  const a = p.assets.find((x) => x.id === assetId);
+  const w = a?.width || 1;
+  const h = a?.height || 1;
+  const side = w > h ? Math.min(0.45, (1 - h / w) / 2) : 0;
+  const tb = h > w ? Math.min(0.45, (1 - w / h) / 2) : 0;
+  return { left: r2(side), right: r2(side), top: r2(tb), bottom: r2(tb) };
 }
 
 /** The talking video's clip at a time (the main video track). */
@@ -224,6 +235,38 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
         style: { font: 'Montserrat', weight: 'bold', sizePct, color: o.color ?? '#FFFFFF', curve: 200, letterSpacing: 2, shadow: 10, maxWidth: 1 },
         transform: { x: 0.5, y: 0.45 },
         loop: { kind: 'spin', amount: 0.15, period: 12 },
+      });
+      return ops;
+    }
+    case 'grid': {
+      const list = (o.assets ?? []).filter((a) => p.assets.some((x) => x.id === a && x.kind !== 'audio'));
+      if (list.length < 2) media(2, 'two to four pictures or videos for the grid');
+      const tiles = list.slice(0, 4);
+      const d = o.duration ?? 3.5;
+      // Two columns; one or two rows, centred.
+      const rows = Math.ceil(tiles.length / 2);
+      const tile = vertical ? 0.44 : 0.3;
+      const cellH = (tile * p.width) / p.height;
+      const ops: EditOp[] = [{ op: 'add_shape', shape: 'rect', start: r2(at), duration: r2(d), trackName: 'Grid back', style: { width: 1, height: 1, radius: 0, fill: o.background ?? '#F4F4F2' }, enter: { kind: 'fade', seconds: 0.2 } }];
+      tiles.forEach((asset, i) => {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const lone = tiles.length % 2 === 1 && i === tiles.length - 1;
+        ops.push({
+          op: 'add_media',
+          assetId: asset,
+          trackName: 'Grid',
+          top: true,
+          start: r2(at + 0.15 * i),
+          duration: r2(d - 0.15 * i),
+          // A square tile: the picture cropped square, shown whole.
+          fit: 'contain',
+          crop: squareCrop(p, asset),
+          mask: { shape: 'rounded', radius: 0.08 },
+          shadow: 18,
+          transform: { x: lone ? 0.5 : r2(0.5 + (col ? 1 : -1) * (tile / 2 + 0.015)), y: r2(0.5 + (row - (rows - 1) / 2) * (cellH + 0.02)), scale: r2(tile) },
+          enter: { kind: 'pop', seconds: 0.3 },
+        });
       });
       return ops;
     }

@@ -721,6 +721,8 @@ export const EditOp = z.discriminatedUnion('op', [
       enter: Entrance.optional(),
       exit: Entrance.optional(),
       loop: Loop.optional(),
+      /** Edges cut off the picture. */
+      crop: Crop.optional(),
       /** Only the people in the picture (AI background removal), mirrored, colour graded. */
       cutout: z.boolean().optional(),
       flipX: z.boolean().optional(),
@@ -1302,6 +1304,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.exit ? { exit: op.exit } : {}),
           ...(op.loop ? { loop: op.loop } : {}),
           ...(op.cutout ? { cutout: true } : {}),
+          ...(op.crop ? { crop: op.crop } : {}),
           ...(op.flipX ? { flipX: true } : {}),
           ...(op.color ? { color: op.color } : {}),
         });
