@@ -55,6 +55,9 @@ const CONTEXT_CAPS = new Set(['web.search', 'web.fetch_page', 'browser.read_page
 const MAX_TOOL_RESULT_CHARS = 20000;
 /** Rounds that only update the checklist do not use up the tool-round limit, up to this many. */
 const FREE_PLAN_ROUNDS = 3;
+/** Studio's step list on screen is progress only, like the checklist: its rounds are free too, up to this many. */
+const STUDIO_STEPS_TOOL = 'studio__checklist';
+const FREE_STEP_ROUNDS = 6;
 /** Smart routing moves a fast-model reply to the strong model after this many tool rounds. */
 const ESCALATE_AFTER_ROUNDS = 3;
 
@@ -486,6 +489,7 @@ export class AgentService {
       const problems = new Map<string, Problem>();
       const turnStart = messages.length;
       let freeRounds = 0;
+      let freeStepRounds = 0;
       let toolRounds = 0;
       const note = (s: string) => {
         text += s;
@@ -693,8 +697,11 @@ export class AgentService {
           flush(true);
         }
         messages.push({ role: 'user', content: results });
-        if (result.toolCalls.every((c) => c.name === PLAN_TOOL || c.name === LOAD_TOOLS) && freeRounds < FREE_PLAN_ROUNDS) freeRounds++;
-        else toolRounds++;
+        if (result.toolCalls.every((c) => c.name === PLAN_TOOL || c.name === LOAD_TOOLS) && freeRounds - freeStepRounds < FREE_PLAN_ROUNDS) freeRounds++;
+        else if (result.toolCalls.every((c) => c.name === STUDIO_STEPS_TOOL) && freeStepRounds < FREE_STEP_ROUNDS) {
+          freeStepRounds++;
+          freeRounds++;
+        } else toolRounds++;
         // A loop the model does not leave: stop instead of using up the remaining rounds.
         if (blockedNow === result.toolCalls.length && repeats.blocked >= 2) {
           text += `${text ? '\n\n' : ''}_Keo stopped here: the same action kept being requested after it had already run or failed._`;

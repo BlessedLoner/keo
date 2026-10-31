@@ -66,3 +66,22 @@ describe('Keo styles', () => {
     expect(() => styleOps(newProject({ name: 'E', rand }), 'doc-serif', { words: [] })).toThrow(StyleError);
   });
 });
+
+describe('Keo style touches', () => {
+  it('punches in on stressed words, fades, and adds the sounds it is given', () => {
+    const p = applyEdits(podcast(), [], { rand }).project;
+    const withSfx: Project = { ...p, assets: [...p.assets, { id: 'as_pop00001', kind: 'audio', path: 'C:/s/pop.wav', name: 'Pop', duration: 0.14, width: 0, height: 0, hasAudio: true }] };
+    const ops = styleOps(withSfx, 'podcast-frame', { words, emphasis: ['discipline', 'consistency', 'motivation'], endText: 'Follow', sfx: { pop: 'as_pop00001' } });
+    const out = applyEdits(withSfx, ops, { rand }).project;
+    const v = all(out).find((c) => c.type === 'media') as MediaClip;
+    // Words 1 and 3 punch in (every other one), each easing back out.
+    expect(v.zooms?.map((z) => [z.at, z.scale])).toEqual([
+      [4.5, 1.12],
+      [6.1, 1],
+      [9, 1.12],
+      [10.6, 1],
+    ]);
+    expect([v.fadeIn, v.fadeOut]).toEqual([0.3, 0.4]);
+    expect(out.tracks.find((t) => t.name === 'Effects')!.clips).toHaveLength(3);
+  });
+});

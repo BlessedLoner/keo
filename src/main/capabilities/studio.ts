@@ -825,7 +825,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         Object.entries(STYLES)
           .map(([k, v]) => `${k}: ${v}`)
           .join('; ') +
-        '. Run studio__transcript first so words pop and captions follow the speech, then read the transcript and choose: emphasis (the 5–15 strongest words, as said, spread through the video), a short headline for the opening and the words of it to put in the serif italic (headlineEmphasis), lists (a list the speaker says: at = when it starts, items short), endText and handle for the end card (ask the user for their name or @handle if you do not know it; never invent one). flip mirrors the picture back: use it when writing in the video reads backwards (front camera). The export is evened out to social loudness. Look at frames (studio__look) after, and fix anything that covers the face.',
+        '. Run studio__transcript first so words pop and captions follow the speech, then read the transcript and choose: emphasis (the 5–15 strongest words, as said, spread through the video), a short headline for the opening and the words of it to put in the serif italic (headlineEmphasis), lists (a list the speaker says: at = when it starts, items short), endText and handle for the end card (ask the user for their name or @handle if you do not know it; never invent one). flip mirrors the picture back: use it when writing in the video reads backwards (front camera). It also punches in on stressed words, fades into the end card and adds quiet pops and whooshes (sounds:false for none). The export is evened out to social loudness. Look at frames (studio__look) after, and fix anything that covers the face.',
       summary: 'Edit in a Keo style',
     }),
     input: z
@@ -840,6 +840,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         handle: z.string().trim().min(1).max(60).optional(),
         accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
         flip: z.boolean().optional(),
+        sounds: z.boolean().optional().describe('Keo’s pop on stressed words and whoosh on titles (default on)'),
       })
       .strict(),
     output: State.extend({ stressed: z.array(z.string()), captions: z.number(), note: z.string().nullable() }),
@@ -847,8 +848,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     auditView: (i) => ({ style: i.style }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
-      const { projectId: _p, style: id, ...o } = i;
-      const r = run(() => s.applyStyle(p.id, id, o));
+      const { projectId: _p, style: id, sounds, ...o } = i;
+      const r = run(() => s.applyStyle(p.id, id, { ...o, ...(sounds === false ? { sfx: {} } : {}) }));
       return { ...state(s, r.project), stressed: r.stressed, captions: r.captions, note: r.needsWords ? 'The speech is not transcribed yet, so no words pop and there are no captions: run studio__transcript, then this style again.' : null };
     },
   });

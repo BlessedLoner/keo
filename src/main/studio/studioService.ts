@@ -12,7 +12,7 @@ import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } 
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
 export type { ProjectSummary, RenderJob };
-import { captionLines, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
+import { captionLines, dropLoops, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
 import { planCleanup, punchIns, type CleanupPlan } from './cleanup';
 import { SFX, sfxWav, type SfxKind } from './sfx';
 import { keyBefore, Mp4Reader, Mp4Writer, type Mp4Track, type WriterAudio, type WriterVideo } from './mp4';
@@ -721,7 +721,10 @@ export class StudioService {
   ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean }> {
     let p = this.get(id);
     const exact = !!t.words;
-    const todo = o.force ? p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id))) : needsAnalysis(p, 'words');
+    const used = p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id)));
+    // A transcript saved before loops were caught ("the um, the um…"): done again.
+    const looped = used.filter((a) => a.words?.length && dropLoops(a.words, (w) => w.text).length < a.words.length * 0.9);
+    const todo = o.force ? used : [...new Set([...needsAnalysis(p, 'words'), ...looped])];
     let count = 0;
     const failed: string[] = [];
     for (const a of todo) {
@@ -737,10 +740,13 @@ export class StudioService {
         const from = g[0]!.start;
         const to = g.at(-1)!.end;
         const wav = wavOf(sound!.samples, sound!.rate, from, to);
+        const voiced = g.reduce((n, s) => n + (s.end - s.start), 0);
         if (t.words) {
-          for (const w of await t.words(wav, o.signal)) if (w.text.trim()) words.push({ text: w.text.trim().slice(0, 80), start: round3(from + w.start), end: round3(from + Math.max(w.start, w.end)) });
+          const said = (await t.words(wav, o.signal)).filter((w) => w.text.trim());
+          for (const w of dropLoops(said, (x) => x.text, voiced)) words.push({ text: w.text.trim().slice(0, 80), start: round3(from + w.start), end: round3(from + Math.max(w.start, w.end)) });
         } else if (t.text) {
-          const text = (await t.text(wav, o.signal)).trim();
+          // Repeated loops of the speech service are dropped before the words are spread out.
+          const text = dropLoops((await t.text(wav, o.signal)).trim().split(/\s+/).filter(Boolean), (x) => x, voiced).join(' ');
           if (text) words.push(...spreadWords(text, g).map((w) => ({ ...w, text: w.text.slice(0, 80) })));
         }
         o.progress?.(++done, groups.length);
@@ -890,12 +896,17 @@ export class StudioService {
     const words = timelineWords(p);
     const lines = words.length ? captionLines(words, { maxWords: 4 }) : [];
     const stressed = o.emphasis?.length ? o.emphasis : guessEmphasis(words);
-    let ops: EditOp[];
-    try {
-      ops = styleOps(p, style, { ...o, emphasis: stressed, words, lines });
-    } catch (e) {
-      throw e instanceof StyleError ? new StudioError(e.message) : e;
-    }
+    const make = (q: Project, sfx?: StyleOptions['sfx']) => {
+      try {
+        return styleOps(q, style, { ...o, emphasis: stressed, words, lines, ...(sfx ? { sfx } : {}) });
+      } catch (e) {
+        throw e instanceof StyleError ? new StudioError(e.message) : e;
+      }
+    };
+    // Checked first (no talking video: nothing changes), then Keo's own pop and whoosh (made on this PC).
+    make(p);
+    const sfx = o.sfx ?? { pop: this.soundEffect(id, 'pop').asset.id, whoosh: this.soundEffect(id, 'whoosh').asset.id };
+    const ops = make(this.get(id), sfx);
     const r = this.edit(id, ops);
     this.d.log.info('studio.style', { style, words: words.length, stressed: stressed.length });
     return { project: r.project, stressed, captions: style === 'doc-serif' ? lines.length : 0, needsWords: !words.length };

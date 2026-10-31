@@ -131,6 +131,38 @@ export function pieces(spans: Span[], maxSec = 14): Span[][] {
   return out;
 }
 
+/** Nobody says more than this many words a second (fast talkers manage about 4). */
+const MAX_WORDS_PER_SECOND = 5;
+
+/**
+ * Speech-to-text sometimes gets stuck and repeats itself ("the um, the um, the um…" for a minute)
+ * over pauses or music. Keeps the first of any run of the same phrase said 3 or more times in a
+ * row (a single word 4 or more times: "no, no, no" is real speech), and no more words than
+ * `seconds` of speech can hold.
+ */
+export function dropLoops<T>(items: T[], textOf: (x: T) => string, seconds = Infinity): T[] {
+  const key = (x: T) => textOf(x).toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+  const keys = items.map(key);
+  const same = (a: number, b: number, n: number) => {
+    for (let k = 0; k < n; k++) if (keys[a + k] !== keys[b + k]) return false;
+    return true;
+  };
+  const out: T[] = [];
+  let i = 0;
+  while (i < items.length) {
+    let skip = 0;
+    for (let n = 1; n <= 8 && !skip; n++) {
+      let reps = 1;
+      while (i + (reps + 1) * n <= items.length && same(i, i + reps * n, n)) reps++;
+      if (reps >= (n === 1 ? 4 : 3) && keys.slice(i, i + n).some(Boolean)) skip = n * reps;
+      if (skip) for (let k = 0; k < n; k++) out.push(items[i + k]!);
+    }
+    if (skip) i += skip;
+    else out.push(items[i++]!);
+  }
+  return out.slice(0, Math.max(1, Math.ceil(seconds * MAX_WORDS_PER_SECOND) + 3));
+}
+
 /** Words of a transcript spread over voiced spans by their length (longer words take longer). */
 export function spreadWords(text: string, spans: Span[]): Word[] {
   const words = text.split(/\s+/).map((w) => w.trim()).filter(Boolean);

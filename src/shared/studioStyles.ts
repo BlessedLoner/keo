@@ -1,4 +1,4 @@
-import { LOOKS, isAV, projectDuration, type EditOp, type MediaClip, type Project, type TextMarkInput } from './studio';
+import { LOOKS, isAV, projectDuration, type EditOp, type MediaClip, type Project, type TextMarkInput, type Zoom } from './studio';
 
 /**
  * Keo's editing styles: whole looks learned from real edits, applied to the user's own talking
@@ -43,6 +43,8 @@ export interface StyleOptions {
   accent?: string;
   /** Mirror the picture back (front cameras record mirrored: writing reads backwards). */
   flip?: boolean;
+  /** Keo's sound effects (asset ids of this project): a pop on stressed words, a whoosh on titles. */
+  sfx?: { pop?: string; whoosh?: string };
 }
 
 export class StyleError extends Error {}
@@ -106,20 +108,51 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
   const emphasis = o.emphasis?.length ? o.emphasis : guessEmphasis(o.words);
   const hits = emphasisTimes(o.words, emphasis);
   const ops: EditOp[] = [{ op: 'set_project', loudness: 'social' }];
+  // Finishing touches on the talking video: a punch-in on every other stressed word (back out
+  // smoothly), a fade in at the start and a fade out into the end card.
+  const punch = new Map<string, Zoom[]>();
+  hits.forEach((w, i) => {
+    if (i % 2) return;
+    const c = main.find((x) => w.start >= x.start && w.start < x.start + x.duration);
+    if (!c) return;
+    const at = (w.start - c.start) * c.speed;
+    const back = Math.min(c.duration * c.speed - 0.05, at + 1.6 * c.speed);
+    if (back - at < 0.4) return;
+    const list = punch.get(c.id) ?? [];
+    list.push({ at: r2(at), scale: 1.12, x: 0.5, y: 0.4, ease: 'cut' }, { at: r2(back), scale: 1, x: 0.5, y: 0.5, ease: 'smooth' });
+    punch.set(c.id, list);
+  });
+  const touches = (c: MediaClip, k: number): Partial<Extract<EditOp, { op: 'set' }>> => {
+    const z = punch.get(c.id);
+    // The clip's own zooms stay; new ones only where it has none close by.
+    const own = c.zooms ?? [];
+    const add = (z ?? []).filter((n) => !own.some((o) => Math.abs(o.at - n.at) < 0.8));
+    return {
+      ...(add.length ? { zooms: [...own, ...add].sort((a, b) => a.at - b.at) } : {}),
+      ...(k === 0 ? { fadeIn: 0.3 } : {}),
+      ...(k === main.length - 1 && (o.endText || o.handle) ? { fadeOut: 0.4 } : {}),
+    };
+  };
+  const sound = (asset: string | undefined, at: number, volume: number) => {
+    if (asset) ops.push({ op: 'add_audio', assetId: asset, trackName: 'Effects', start: r2(Math.max(0, at)), volume });
+  };
   const headlineMarks = (accentFont: string, color?: string): TextMarkInput[] =>
     o.headlineEmphasis ? [{ words: o.headlineEmphasis, font: accentFont, italic: true, weight: 'normal', scale: 1.2, ...(color ? { color } : {}) }] : [];
 
   if (id === 'podcast-frame') {
     const accent = o.accent ?? '#FFD23F';
     ops.push({ op: 'set_project', background: '#0D0D0F' });
-    for (const c of main)
+    main.forEach((c, k) =>
       ops.push({
         op: 'set',
         clip: c.id,
+        ...touches(c, k),
         mask: { shape: 'rounded', radius: 0.07 },
         transform: { scale: vertical ? 0.84 : 0.8, y: vertical ? 0.55 : 0.52 },
         ...(o.flip ? { flipX: !c.flipX } : {}),
-      });
+      }),
+    );
+    if (o.headline) sound(o.sfx?.whoosh, 0, 0.35);
     if (o.headline)
       ops.push({
         op: 'add_text',
@@ -133,6 +166,7 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
         marks: headlineMarks('Instrument Serif', accent),
         transform: { x: 0.5, y: vertical ? 0.075 : 0.1 },
       });
+    for (const w of hits) sound(o.sfx?.pop, w.start - 0.02, 0.3);
     hits.forEach((w, i) =>
       ops.push({
         op: 'add_text',
@@ -164,7 +198,8 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
   } else {
     const accent = o.accent ?? '#E53935';
     ops.push({ op: 'set_project', background: '#000000' });
-    for (const c of main) ops.push({ op: 'set', clip: c.id, color: LOOKS['black-white'], ...(o.flip ? { flipX: !c.flipX } : {}) });
+    main.forEach((c, k) => ops.push({ op: 'set', clip: c.id, ...touches(c, k), color: LOOKS['black-white'], ...(o.flip ? { flipX: !c.flipX } : {}) }));
+    if (o.headline) sound(o.sfx?.whoosh, 0, 0.35);
     const stress = new Set(emphasis.map(norm));
     const lines = o.lines ?? [];
     if (lines.length)
@@ -219,6 +254,7 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
   for (const l of o.lists ?? []) {
     const items = l.items.map((s) => s.trim()).filter(Boolean).slice(0, 8);
     if (!items.length) continue;
+    sound(o.sfx?.whoosh, l.at, 0.3);
     const step = 0.7;
     const total = l.seconds ?? Math.max(3, (items.length + 1) * step + 1.5);
     const serif = id === 'doc-serif';
