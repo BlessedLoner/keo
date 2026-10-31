@@ -1,4 +1,6 @@
 import { CAPTIONS_TRACK, LOOKS, type EditOp, type LookId, type TextStyle, type Transition } from './studio';
+import type { TemplateMoment } from './studioMoments';
+import type { StyleId } from './studioStyles';
 
 /**
  * Templates as recipes: what Keo measures in a template video (its shots and their rhythm, which
@@ -23,6 +25,9 @@ export interface Recipe {
   audio: { voice: boolean; music: boolean; bpm: number | null; whooshOnCuts: boolean; musicGenre: string | null };
   /** What Keo saw, in its own words (for the next time it uses the recipe). */
   notes: string;
+  /** The editing moments Keo saw (text behind the speaker, word cards, splits, pop-ins), and the Keo style closest to its look. */
+  moments?: TemplateMoment[];
+  style?: StyleId | null;
   learnedAt: string;
 }
 

@@ -785,6 +785,12 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         transition: z.enum(['cut', 'crossfade', 'slide', 'push', 'zoom', 'whip', 'wipe', 'blur', 'flash', 'dip']).optional(),
         shotKinds: z.array(z.enum(['camera', 'screen', 'graphic', 'end-card'])).max(400).optional(),
         notes: z.string().max(2000).optional(),
+        moments: z
+          .array(z.object({ at: z.number().min(0), moment: z.enum(Object.keys(MOMENTS) as [MomentId, ...MomentId[]]), needs: z.string().trim().min(1).max(120).optional() }).strict())
+          .max(60)
+          .optional()
+          .describe('The editing moments you saw in the template, with when (seconds into it): text-behind, word-card, split, image-pop; for split and image-pop say what the clip shows in general terms ("a product photo", "a screenshot of an app"), never the template’s brand or people'),
+        style: z.enum(Object.keys(STYLES) as [StyleId, ...StyleId[]]).optional().describe('The Keo style closest to the template’s look, if one is close'),
       })
       .strict(),
     output: Recipe,
@@ -802,6 +808,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
             ...(i.transition ? { transition: i.transition } : {}),
             ...(i.shotKinds ? { shotKinds: i.shotKinds } : {}),
             ...(i.notes ? { notes: i.notes } : {}),
+            ...(i.moments ? { moments: i.moments } : {}),
+            ...(i.style ? { style: i.style } : {}),
           },
         })
         .catch((e: unknown) => {
@@ -839,7 +847,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         whooshes: z.boolean().optional(),
       })
       .strict(),
-    output: State.extend({ cutaways: z.number(), captions: z.boolean(), music: z.string().nullable(), note: z.string().nullable() }),
+    output: State.extend({ cutaways: z.number(), captions: z.boolean(), music: z.string().nullable(), moments: z.number(), askFor: z.array(z.object({ moment: z.string(), at: z.number(), needs: z.string() })), note: z.string().nullable() }),
     timeoutMs: 10 * 60_000,
     auditView: (i) => ({ recipe: i.recipe }),
     async execute(i) {
@@ -849,7 +857,11 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         .catch((e: unknown) => {
           throw e instanceof StudioError ? fail('studio', e.message) : e;
         });
-      return { ...state(s, r.project), cutaways: r.cutaways, captions: r.captions, music: r.music, note: r.needsWords ? 'No captions yet: the speech is not transcribed. Run studio__transcript, then studio__captions in the template’s style.' : null };
+      const notes = [
+        r.needsWords ? 'The speech is not transcribed, so there are no captions and no word moments yet: run studio__transcript, then use the template again.' : '',
+        r.askFor.length ? 'The template has moments that need the user’s own pictures or videos (askFor): ask the user for them with studio__ask (one question, what each should show, and "Skip these" as an option), then add each with studio__moment at its time.' : '',
+      ].filter(Boolean);
+      return { ...state(s, r.project), cutaways: r.cutaways, captions: r.captions, music: r.music, moments: r.moments, askFor: r.askFor, note: notes.join(' ') || null };
     },
   });
 

@@ -220,3 +220,51 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
     }
   }
 }
+
+/** A moment Keo saw in a template: when (seconds into the template) and what it needs. */
+export interface TemplateMoment {
+  at: number;
+  moment: MomentId;
+  /** What the clip should show, in the user's terms (split and image-pop): "a photo of the product". */
+  needs?: string;
+}
+
+const STOP_WORDS = new Set('the a an and or but so to of in on at for with is are was were be it this that you i we they my your our'.split(' '));
+const plain = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+
+/**
+ * A template's moments on the user's video: each at the same point of the story (scaled to the
+ * talking video's length), with words from what the user says there (never the template's own
+ * words). Moments that need a picture or video come back as questions for the user.
+ */
+export function placeMoments(
+  moments: TemplateMoment[],
+  templateSeconds: number,
+  main: { start: number; duration: number },
+  words: Array<{ text: string; start: number; end: number }>,
+): { place: Array<{ moment: MomentId; at: number; text?: string }>; ask: Array<{ moment: MomentId; at: number; needs: string }>; skipped: number } {
+  const place: Array<{ moment: MomentId; at: number; text?: string }> = [];
+  const ask: Array<{ moment: MomentId; at: number; needs: string }> = [];
+  let skipped = 0;
+  const scale = templateSeconds > 0 ? main.duration / templateSeconds : 1;
+  const used = new Set<string>();
+  for (const m of [...moments].sort((a, b) => a.at - b.at)) {
+    const at = r2(Math.min(main.start + main.duration - 0.5, main.start + m.at * scale));
+    if (at < main.start) continue;
+    if (m.moment === 'split' || m.moment === 'image-pop') {
+      ask.push({ moment: m.moment, at, needs: m.needs ?? (m.moment === 'split' ? 'two pictures or videos to compare' : 'a picture or video of what you are talking about') });
+      continue;
+    }
+    // The strongest word said around then: the longest one not used yet.
+    const near = words.filter((w) => w.start >= at - 2 && w.start <= at + 2.5 && !STOP_WORDS.has(plain(w.text)) && !used.has(plain(w.text)) && plain(w.text).length >= 3);
+    const best = near.sort((a, b) => plain(b.text).length - plain(a.text).length || Math.abs(a.start - at) - Math.abs(b.start - at))[0];
+    if (!best) {
+      skipped++;
+      continue;
+    }
+    used.add(plain(best.text));
+    // On the word itself, so it lands as it is said.
+    place.push({ moment: m.moment, at: r2(best.start), text: best.text.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '') });
+  }
+  return { place, ask, skipped };
+}

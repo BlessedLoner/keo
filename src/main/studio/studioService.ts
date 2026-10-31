@@ -10,7 +10,7 @@ import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
 import { Brand, patchBrand, type BrandPatch } from '../../shared/studioBrand';
 import { reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
-import { MomentNeeds, momentOps, type MomentId, type MomentOptions } from '../../shared/studioMoments';
+import { MomentNeeds, momentOps, placeMoments, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
@@ -933,7 +933,7 @@ export class StudioService {
    * voice, music (and its tempo) and whooshes on the cuts. What Keo saw in its frames (captions,
    * look, end card text) can be given to correct the measured guesses. Kept for every project.
    */
-  async learnTemplate(id: string, assetId: string, o: { name?: string; seen?: Partial<Pick<Recipe, 'captions' | 'look' | 'transition' | 'notes'>> & { endCard?: Partial<Recipe['endCard']>; shotKinds?: ShotKind[] } } = {}): Promise<Recipe> {
+  async learnTemplate(id: string, assetId: string, o: { name?: string; seen?: Partial<Pick<Recipe, 'captions' | 'look' | 'transition' | 'notes' | 'moments' | 'style'>> & { endCard?: Partial<Recipe['endCard']>; shotKinds?: ShotKind[] } } = {}): Promise<Recipe> {
     const p = this.get(id);
     const a = p.assets.find((x) => x.id === assetId);
     if (!a || a.kind !== 'video') throw new StudioError('Choose a video of this project as the template.');
@@ -967,6 +967,8 @@ export class StudioService {
       endCard: { on: last?.kind === 'end-card', seconds: last?.kind === 'end-card' ? Math.round((last.end - last.start) * 100) / 100 : 0, text: null, ...seenEnd },
       audio: { voice, music: beat.bpm !== null && beat.beats.length >= 8, bpm: beat.bpm, whooshOnCuts: cuts.length >= 3 && hits >= cuts.length * 0.5, musicGenre: null },
       notes: (o.seen?.notes ?? '').slice(0, 2000),
+      ...(o.seen?.moments?.length ? { moments: o.seen.moments.filter((m) => m.at >= 0 && m.at <= a.duration).slice(0, 60) } : {}),
+      ...(o.seen?.style ? { style: o.seen.style } : {}),
       learnedAt: (this.d.now?.() ?? new Date()).toISOString(),
     };
     this.saveRecipes([...this.recipes().filter((r) => r.name !== recipe.name), recipe]);
@@ -1022,7 +1024,11 @@ export class StudioService {
     return { project: r.project, changes: r.changes };
   }
 
-  async applyTemplate(id: string, recipeId: string, o: { main?: string; cutaways?: string[]; endText?: string; music?: string | null; whooshes?: boolean } = {}): Promise<{ project: Project; cutaways: number; captions: boolean; music: string | null; needsWords: boolean }> {
+  async applyTemplate(
+    id: string,
+    recipeId: string,
+    o: { main?: string; cutaways?: string[]; endText?: string; music?: string | null; whooshes?: boolean } = {},
+  ): Promise<{ project: Project; cutaways: number; captions: boolean; music: string | null; needsWords: boolean; moments: number; askFor: Array<{ moment: MomentId; at: number; needs: string }> }> {
     const r = this.recipes().find((x) => x.id === recipeId);
     if (!r) throw new StudioError('That template is not saved: learn it first.');
     const p = this.get(id);
@@ -1045,10 +1051,11 @@ export class StudioService {
     const cutaways = candidates.map((a) => ({ assetId: a.id, duration: a.duration, kind: a.kind === 'image' ? ('image' as const) : ('video' as const) }));
     const words = timelineWords(p).filter((w) => w.start >= start - 0.05 && w.end <= end + 0.05);
     const built = recipeOps(r, { main: { clip: mainClips[0]!.id, start, duration: end - start }, cutaways, words, endText: o.endText ?? r.endCard.text });
-    if (!built.ops.length) throw new StudioError('There is nothing in this project the template can use: add screen recordings or other clips to cut to.');
+    const hasMoments = !!r.moments?.length || !!r.style;
+    if (!built.ops.length && !hasMoments) throw new StudioError('There is nothing in this project the template can use: add screen recordings or other clips to cut to.');
     // Using a template again replaces what it made before (its B-roll and end card).
     const before: EditOp[] = p.tracks.filter((t) => (t.name === 'B-roll' || t.name === 'End card') && !t.locked).flatMap((t) => t.clips.map((c) => ({ op: 'delete' as const, clip: c.id })));
-    let res = this.edit(id, [...before, ...built.ops]);
+    let res = built.ops.length || before.length ? this.edit(id, [...before, ...built.ops]) : { project: p, changes: [] as string[] };
     // The template's look on every video and picture (one more step of the same undo).
     const look = lookOf(r);
     if (look) {
@@ -1065,8 +1072,22 @@ export class StudioService {
       }
     }
     if (o.whooshes ?? r.audio.whooshOnCuts) for (const at of built.cutawayStarts) res = { project: (await this.useSound(id, 'sfx_whoosh', { at: Math.max(0, at - 0.15), volume: 0.5 })).project, changes: [] };
-    this.d.log.info('studio.template_used_recipe', { cutaways: built.cutawayStarts.length, music: !!music });
-    return { project: res.project, cutaways: built.cutawayStarts.length, captions: r.captions.on && words.length > 0, music, needsWords: r.captions.on && words.length === 0 };
+    // The template's look as a Keo style, then its moments at the same points of the story.
+    if (r.style) res = { project: this.applyStyle(id, r.style, o.endText ? { endText: o.endText } : {}).project, changes: [] };
+    const tplSeconds = r.seconds - (r.endCard.on ? r.endCard.seconds : 0);
+    const placed = r.moments?.length ? placeMoments(r.moments, tplSeconds, { start, duration: end - start }, words) : { place: [], ask: [], skipped: 0 };
+    let moments = 0;
+    for (const m of placed.place) {
+      try {
+        res = this.moment(id, m.moment, { at: m.at, ...(m.text ? { text: m.text } : {}) });
+        moments++;
+      } catch (e) {
+        // One moment that does not fit (the video ends there) does not stop the others.
+        if (!(e instanceof StudioError)) throw e;
+      }
+    }
+    this.d.log.info('studio.template_used_recipe', { cutaways: built.cutawayStarts.length, music: !!music, moments, ask: placed.ask.length });
+    return { project: res.project, cutaways: built.cutawayStarts.length, captions: r.captions.on && words.length > 0, music, needsWords: (r.captions.on || placed.skipped > 0) && words.length === 0, moments, askFor: placed.ask };
   }
 
   // ---------------------------------------------------------------- long video to shorts
