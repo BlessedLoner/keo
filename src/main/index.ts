@@ -1595,6 +1595,12 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`document.querySelector('.keo-input button[type=submit]')?.click();`);
       await wait(2500);
       fs.writeFileSync(path.join(dir, 'studio-ask.png'), (await win.webContents.capturePage()).toPNG());
+      // The project's details with the brand kit (nothing selected).
+      await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); [...document.querySelectorAll('.side-tabs button')].find((b) => b.textContent.includes('Details'))?.click();`);
+      await wait(700);
+      await js(`const h = [...document.querySelectorAll('.insp-section h4')].find((e) => e.textContent === 'Brand kit'); h?.scrollIntoView({ block: 'start' });`);
+      await wait(400);
+      fs.writeFileSync(path.join(dir, 'studio-brand.png'), (await win.webContents.capturePage()).toPNG());
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);

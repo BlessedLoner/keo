@@ -82,6 +82,7 @@ export const INVOKE_CHANNELS = [
   'studio:soundDelete',
   'studio:soundUse',
   'studio:liveEdits',
+  'studio:brand',
   'studio:skipShow',
   'studio:track',
   'studio:stabilize',

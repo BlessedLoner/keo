@@ -548,6 +548,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.studio.watch(id, on);
       return { ok: true as const };
     },
+    'studio:brand': ({ patch }) => (patch ? s.studio.setBrand(patch) : s.studio.brand()),
     'studio:liveEdits': ({ on }) => {
       if (on !== undefined) s.studio.liveEdits = on;
       return { on: s.studio.liveEdits };

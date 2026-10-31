@@ -6,6 +6,7 @@ import { rhythm, type Recipe as LearnedRecipe } from '../../shared/studioRecipe'
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
 import { STYLES, type StyleId } from '../../shared/studioStyles';
 import { MOMENTS, type MomentId } from '../../shared/studioMoments';
+import { BrandPatch } from '../../shared/studioBrand';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
 import { SFX, type SfxKind } from '../studio/sfx';
@@ -926,6 +927,24 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const brand = defineCapability({
+    ...simple({
+      id: 'studio.brand',
+      title: 'Remember the user’s brand',
+      description:
+        'The user’s brand kit, kept on this PC for every video: name, handle (e.g. @name), accent colour, headline and body fonts, end card line, favourite style (podcast-frame or doc-serif). With no changes it returns what is saved. Save only what the user told you or confirmed (null forgets a value); styles use it for the end card and colours when you do not say otherwise.',
+      summary: 'Brand kit',
+    }),
+    input: BrandPatch,
+    output: z.object({ brand: z.record(z.string(), z.string()) }),
+    timeoutMs: 10_000,
+    auditView: (i) => ({ fields: Object.keys(i).length }),
+    async execute(i) {
+      const b = Object.keys(i).length ? run(() => s.setBrand(i)) : s.brand();
+      return { brand: b as Record<string, string> };
+    },
+  });
+
   const sounds = defineCapability({
     ...simple({
       id: 'studio.sounds',
@@ -1229,7 +1248,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

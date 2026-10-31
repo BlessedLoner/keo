@@ -10,6 +10,7 @@ import { ReadAloud } from '../studio/VoiceTools';
 import { Library } from '../studio/Library';
 import { ExportDialog } from '../studio/ExportDialog';
 import { StudioKeo } from '../studio/StudioKeo';
+import { BrandKit } from '../studio/BrandKit';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
@@ -1469,6 +1470,7 @@ function ProjectSettings({ project, onEdit }: { project: Project; onEdit: (ops: 
           <Color label="Background" value={project.background} onCommit={(v) => onEdit([{ op: 'set_project', background: v }])} />
         </div>
       </Section>
+      <BrandKit />
       <p className="small muted insp-tip">Click a clip on the timeline to change it. Space plays, S splits at the playhead, Delete removes the selected clip, Ctrl+Z undoes.</p>
       <p className="small muted insp-tip">Or ask Keo in the chat, for example: “Cut the silences, add captions and soft background music.”</p>
     </div>

@@ -8,6 +8,7 @@ import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studio
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
+import { Brand, patchBrand, type BrandPatch } from '../../shared/studioBrand';
 import { MomentNeeds, momentOps, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
@@ -816,6 +817,29 @@ export class StudioService {
   private get recipesFile(): string {
     return path.join(this.d.dir, 'library', 'recipes.json');
   }
+  /** The user's brand kit (for every project). */
+  brand(): Brand {
+    try {
+      return Brand.parse(JSON.parse(fs.readFileSync(path.join(this.d.dir, 'library', 'brand.json'), 'utf8')));
+    } catch {
+      return {};
+    }
+  }
+  setBrand(patch: BrandPatch): Brand {
+    let next: Brand;
+    try {
+      next = patchBrand(this.brand(), patch);
+    } catch {
+      throw new StudioError('That brand kit value is not valid.');
+    }
+    const file = path.join(this.d.dir, 'library', 'brand.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
+    fs.renameSync(`${file}.tmp`, file);
+    this.d.log.info('studio.brand_saved', { fields: Object.keys(next).length });
+    return next;
+  }
+
   recipes(): Recipe[] {
     try {
       return JSON.parse(fs.readFileSync(this.recipesFile, 'utf8')) as Recipe[];
@@ -892,8 +916,11 @@ export class StudioService {
    * One of Keo's editing styles on the talking video, in one edit (one undo). Uses the transcript
    * when there is one (pop words, captions); nothing leaves the PC.
    */
-  applyStyle(id: string, style: StyleId, o: Omit<StyleOptions, 'words' | 'lines'> = {}): { project: Project; stressed: string[]; captions: number; needsWords: boolean } {
+  applyStyle(id: string, style: StyleId, given: Omit<StyleOptions, 'words' | 'lines'> = {}): { project: Project; stressed: string[]; captions: number; needsWords: boolean } {
     const p = this.get(id);
+    // What the user did not say comes from their brand kit.
+    const b = this.brand();
+    const o = { ...(b.handle ? { handle: b.handle } : {}), ...(b.endText ? { endText: b.endText } : {}), ...(b.accent ? { accent: b.accent } : {}), ...given };
     const words = timelineWords(p);
     const lines = words.length ? captionLines(words, { maxWords: 4 }) : [];
     const stressed = o.emphasis?.length ? o.emphasis : guessEmphasis(words);

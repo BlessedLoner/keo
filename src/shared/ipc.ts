@@ -1,6 +1,7 @@
 import type { Sound } from './studioSounds';
 import type { Recipe } from './studioRecipe';
 import { Storyboard } from './studioFaceless';
+import { Brand, BrandPatch } from './studioBrand';
 import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
 import { z } from 'zod';
@@ -175,6 +176,7 @@ export const invokeSchemas = {
   'studio:soundUse': z.object({ id: studioProjectId, sound: z.string().regex(/^(sn|sfx)_[A-Za-z0-9]{3,24}$/), at: z.number().min(0).optional(), role: z.enum(['music', 'effect']).optional() }).strict(),
   'studio:watch': z.object({ id: studioProjectId, on: z.boolean() }).strict(),
   'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
+  'studio:brand': z.object({ patch: BrandPatch.optional() }).strict(),
   'studio:skipShow': z.object({ id: studioProjectId }).strict(),
   'studio:previewCopies': z.object({ id: studioProjectId, assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200).optional() }).strict(),
   'studio:cleanSound': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.8) }).strict(),
@@ -506,6 +508,7 @@ export interface InvokeOutputs {
   'studio:soundDelete': { ok: true };
   'studio:soundUse': { clip: string };
   'studio:liveEdits': { on: boolean };
+  'studio:brand': Brand;
   'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };
   'studio:stabilize': { points: number; zoom: number };
