@@ -1,4 +1,4 @@
-import { bridged, clipEnd, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
+import { bridged, clipEnd, findClip, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
 import { denoise } from '@shared/denoise';
 import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
 import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
@@ -368,8 +368,11 @@ export async function reviewSamples(p: Project, times: number[]): Promise<Review
   const ctx = canvas.getContext('2d', { alpha: false }) as unknown as CanvasRenderingContext2D;
   await prepareCutout(p);
   const findPeople = await loadCutout().catch(() => false);
-  // The pictures only: text and graphics hidden.
-  const pictures: Project = { ...p, tracks: p.tracks.map((t) => (t.kind === 'video' ? t : { ...t, hidden: true })) };
+  // The person is found in the talking video alone (the bottom video track), so a picture laid
+  // over it cannot hide them; everything else is checked against them.
+  const main = p.tracks.find((t) => t.kind === 'video' && t.name !== 'B-roll' && t.clips.some((c) => c.type === 'media'));
+  const pictures: Project = { ...p, tracks: p.tracks.map((t) => (t === main ? t : { ...t, hidden: true })) };
+  const isOverlay = (track: string) => !!track && track !== main?.name && !track.startsWith('Person cut-out');
   const trackOf = new Map(p.tracks.flatMap((t) => t.clips.map((c) => [c.id, t.name] as const)));
   const out: ReviewSample[] = [];
   const sources = new ExactSources(p.id);
@@ -382,10 +385,12 @@ export async function reviewSamples(p: Project, times: number[]): Promise<Review
         drawFrame(ctx, pictures, t, sources);
         person = personBox(canvas, W, H);
       }
-      const texts = layerBoxes(ctx, p, t, W, H)
-        .filter((b) => b.type === 'text')
-        .map((b) => ({ clip: b.id, track: trackOf.get(b.id) ?? '', box: { x0: (b.cx - b.w / 2) / W, y0: (b.cy - b.h / 2) / H, x1: (b.cx + b.w / 2) / W, y1: (b.cy + b.h / 2) / H } }));
-      out.push({ t, person, texts });
+      const boxes = layerBoxes(ctx, p, t, W, H).map((b) => ({ ...b, track: trackOf.get(b.id) ?? '', box: { x0: (b.cx - b.w / 2) / W, y0: (b.cy - b.h / 2) / H, x1: (b.cx + b.w / 2) / W, y1: (b.cy + b.h / 2) / H } }));
+      const texts = boxes.filter((b) => b.type === 'text').map((b) => ({ clip: b.id, track: b.track, box: b.box }));
+      const overlays = boxes
+        .filter((b) => b.type === 'media' && isOverlay(b.track))
+        .map((b) => ({ clip: b.id, track: b.track, asset: (findClip(p, b.id)?.clip as MediaClip | undefined)?.assetId ?? '', box: b.box }));
+      out.push({ t, person, texts, overlays });
     }
   } finally {
     sources.close();

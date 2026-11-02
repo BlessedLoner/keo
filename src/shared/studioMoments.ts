@@ -252,6 +252,7 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
         const col = i % 2;
         const row = Math.floor(i / 2);
         const lone = tiles.length % 2 === 1 && i === tiles.length - 1;
+        const sq = squareCrop(p, asset);
         ops.push({
           op: 'add_media',
           assetId: asset,
@@ -259,12 +260,13 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
           top: true,
           start: r2(at + 0.15 * i),
           duration: r2(d - 0.15 * i),
-          // A square tile: the picture cropped square, shown whole.
+          // A square tile: the middle of the picture, shown whole (a cropped picture keeps its size,
+          // so the scale makes what is left as wide as a tile).
           fit: 'contain',
-          crop: squareCrop(p, asset),
+          crop: sq,
           mask: { shape: 'rounded', radius: 0.08 },
           shadow: 18,
-          transform: { x: lone ? 0.5 : r2(0.5 + (col ? 1 : -1) * (tile / 2 + 0.015)), y: r2(0.5 + (row - (rows - 1) / 2) * (cellH + 0.02)), scale: r2(tile) },
+          transform: { x: lone ? 0.5 : r2(0.5 + (col ? 1 : -1) * (tile / 2 + 0.015)), y: r2(0.5 + (row - (rows - 1) / 2) * (cellH + 0.02)), scale: r2(tile / (naturalSize(p, asset)[0] * (1 - sq.left - sq.right))) },
           enter: { kind: 'pop', seconds: 0.3 },
         });
       });

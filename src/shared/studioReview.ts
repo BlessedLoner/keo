@@ -19,8 +19,10 @@ export interface ReviewSample {
   /** Where the people are (null: no one). */
   person: Box | null;
   texts: Array<{ clip: string; track: string; box: Box }>;
+  /** Pictures and videos laid over the talking video (pop-ins, B-roll cards, splits…). */
+  overlays?: Array<{ clip: string; track: string; asset: string; box: Box }>;
 }
-export type IssueKind = 'face' | 'edge' | 'app-buttons' | 'overlap' | 'too-fast';
+export type IssueKind = 'face' | 'edge' | 'app-buttons' | 'overlap' | 'too-fast' | 'picture-face' | 'twice';
 export interface ReviewIssue {
   kind: IssueKind;
   clip: string;
@@ -76,6 +78,18 @@ export function reviewEdit(p: Project, samples: ReviewSample[]): ReviewIssue[] {
       // The apps' buttons: a column on the right (from half way down) and the caption at the bottom.
       else if (vertical && (x.box.y1 > 0.9 || overlap(x.box, { x0: 0.87, y0: 0.5, x1: 1, y1: 0.85 }) > a * 0.08))
         add({ kind: 'app-buttons', clip: x.clip, at: s.t, detail: 'sits where TikTok, Reels and Shorts put their buttons and caption', fix: 'keep it left of x 0.85 and above y 0.85' });
+    }
+    // Pictures over the talking video: not on the face, and not the same picture twice at once.
+    const seen = new Map<string, string>();
+    for (const o of s.overlays ?? []) {
+      // A full-frame cutaway (B-roll that replaces the speaker) is meant to cover them.
+      const full = o.box.x0 <= 0.02 && o.box.x1 >= 0.98 && o.box.y0 <= 0.02 && o.box.y1 >= 0.98;
+      if (face && !full && overlap(o.box, face) > area(face) * 0.15)
+        add({ kind: 'picture-face', clip: o.clip, at: s.t, detail: 'covers the speaker’s face', fix: 'make it smaller and move it below the face (transform y about 0.72) or above the head, or show it full screen as a cutaway instead' });
+      const other = seen.get(o.asset);
+      if (o.asset && other && other !== o.clip)
+        add({ kind: 'twice', clip: o.clip, at: s.t, detail: `shows the same picture as ${other} at the same time`, fix: 'delete one of the two' });
+      else if (o.asset) seen.set(o.asset, o.clip);
     }
     for (let i = 0; i < s.texts.length; i++)
       for (let j = i + 1; j < s.texts.length; j++) {

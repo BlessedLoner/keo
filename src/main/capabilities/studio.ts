@@ -1004,7 +1004,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       id: 'studio.review',
       title: 'Check the edit',
       description:
-        'Check the edit like a careful editor before saying it is done (on this PC, nothing is sent): text covering the speaker’s face, text cut off at the edge, text where TikTok, Reels and Shorts put their buttons (vertical videos), text on top of other text, and titles too short to read. Each issue names the clip, when, and how to fix it. Fix what is clearly wrong (studio__edit), look at the frame (studio__look), and tell the user anything that is a matter of taste.',
+        'Check the edit like a careful editor before saying it is done (on this PC, nothing is sent): text covering the speaker’s face, text cut off at the edge, text where TikTok, Reels and Shorts put their buttons (vertical videos), text on top of other text, titles too short to read, pictures or videos laid over the speaker that cover their face, and the same picture shown twice at once. Each issue names the clip, when, and how to fix it. Fix what is clearly wrong (studio__edit), look at the frame (studio__look), and tell the user anything that is a matter of taste.',
       summary: 'Check the edit',
     }),
     input: z.object({ projectId: ProjectId.optional() }).strict(),

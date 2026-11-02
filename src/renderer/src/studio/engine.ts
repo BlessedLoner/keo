@@ -157,6 +157,23 @@ function mediaBox(c: MediaClip, w: number, h: number, W: number, H: number): { d
   return { dw, dh, vw: frameBox ? bw : dw, vh: frameBox ? bh : dh, inDevice };
 }
 
+/**
+ * mediaBox for a file of fw×fh with the clip's crop. A picture shown whole (contain) keeps its size
+ * when cropped: the edges are cut off and the rest stays where it was (ox, oy: how far its middle
+ * moves). Anything else fills its box with the part that is left, as before.
+ */
+function croppedBox(c: MediaClip, fw: number, fh: number, W: number, H: number): { dw: number; dh: number; vw: number; vh: number; inDevice: boolean; ox: number; oy: number } {
+  const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
+  const keepW = Math.max(0.01, 1 - cr.left - cr.right);
+  const keepH = Math.max(0.01, 1 - cr.top - cr.bottom);
+  const whole = c.fit === 'contain' && !c.frame && c.mask?.shape !== 'circle';
+  if (!c.crop || !whole) return { ...mediaBox(c, fw * keepW, fh * keepH, W, H), ox: 0, oy: 0 };
+  const b = mediaBox(c, fw, fh, W, H);
+  const dw = b.dw * keepW;
+  const dh = b.dh * keepH;
+  return { dw, dh, vw: dw, vh: dh, inDevice: false, ox: ((cr.left - cr.right) / 2) * b.dw, oy: ((cr.top - cr.bottom) / 2) * b.dh };
+}
+
 /** A copy of what is drawn so far (an adjustment layer changes it). */
 let under: OffscreenCanvas | null = null;
 
@@ -261,7 +278,7 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
         break;
     }
   }
-  const { dw, dh, vw, vh, inDevice } = mediaBox(c, w, h, W, H);
+  const { dw, dh, vw, vh, inDevice, ox, oy } = croppedBox(c, full.w, full.h, W, H);
   ctx.save();
   ctx.globalAlpha = clamp(m.opacity * fade);
   if (c.blend) ctx.globalCompositeOperation = BLEND_OP[c.blend];
@@ -283,6 +300,8 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
     ctx.translate(-z.x * W, -z.y * H);
   }
   placeLayer(ctx, m, W, H);
+  // A cropped picture shown whole: what is left stays where it was.
+  if (ox || oy) ctx.translate(ox, oy);
   clipReveal(ctx, m, vw * 1.2, vh * 1.2);
   ctx.imageSmoothingQuality = 'high';
   let radius = 0;
@@ -461,10 +480,17 @@ export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number,
     let h: number;
     if (c.type === 'media') {
       const a = p.assets.find((x) => x.id === c.assetId);
-      const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
-      const b = mediaBox(c, (a?.width || W) * (1 - cr.left - cr.right), (a?.height || H) * (1 - cr.top - cr.bottom), W, H);
+      const b = croppedBox(c, a?.width || W, a?.height || H, W, H);
       w = b.vw;
       h = b.vh;
+      if (b.ox || b.oy) {
+        // The part that is left, where it is drawn (its offset turns and scales with the layer).
+        const r = (m.rotation * Math.PI) / 180;
+        const x = b.ox * m.scaleX;
+        const y = b.oy * m.scaleY;
+        out.push({ id: c.id, type: c.type, cx: m.x * W + x * Math.cos(r) - y * Math.sin(r), cy: m.y * H + x * Math.sin(r) + y * Math.cos(r), w: w * Math.abs(m.scaleX), h: h * Math.abs(m.scaleY), rotation: m.rotation });
+        continue;
+      }
     } else if (c.type === 'shape') {
       w = c.style.width * W;
       h = c.style.height * H;

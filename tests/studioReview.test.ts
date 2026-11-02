@@ -52,3 +52,33 @@ describe('Keo self-review', () => {
     expect(t[0]).toBe(0.5);
   });
 });
+
+describe('Pictures over the speaker', () => {
+  it('a picture on the face, and the same picture twice at once', () => {
+    const p = project();
+    const issues = reviewEdit(p, [
+      {
+        t: 64,
+        person,
+        texts: [],
+        overlays: [
+          { clip: 'cl_broll0001', track: 'B-roll', asset: 'as_shot0001', box: { x0: 0.18, y0: 0.32, x1: 0.82, y1: 0.68 } },
+          { clip: 'cl_popin0001', track: 'Pop-ins', asset: 'as_shot0001', box: { x0: 0.45, y0: 0.62, x1: 0.95, y1: 0.85 } },
+        ],
+      },
+    ]);
+    expect(issues.filter((i) => i.kind !== 'too-fast').map((i) => [i.kind, i.clip])).toEqual([
+      ['picture-face', 'cl_broll0001'],
+      ['twice', 'cl_popin0001'],
+    ]);
+  });
+
+  it('a pop-in below the face and a full-screen cutaway are fine', () => {
+    const p = project();
+    const issues = reviewEdit(p, [
+      { t: 5, person, texts: [], overlays: [{ clip: 'cl_popin0001', track: 'Pop-ins', asset: 'as_a', box: { x0: 0.45, y0: 0.6, x1: 0.95, y1: 0.85 } }] },
+      { t: 9, person, texts: [], overlays: [{ clip: 'cl_broll0002', track: 'B-roll', asset: 'as_b', box: { x0: 0, y0: 0, x1: 1, y1: 1 } }] },
+    ]);
+    expect(issues.filter((i) => i.kind !== 'too-fast')).toEqual([]);
+  });
+});
