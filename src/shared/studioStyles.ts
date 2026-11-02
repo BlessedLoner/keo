@@ -12,6 +12,8 @@ export const STYLES = {
     'Podcast in a rounded frame on a dark background: a mixed-font headline (bold sans with an elegant serif italic) opens it, single bold words pop beside the speaker on key moments, and it ends on a follow card',
   'doc-serif':
     'Documentary: black-and-white picture, clean white captions with the key words in red serif italic, a big title, lists that build item by item, and a brand end card',
+  cinematic:
+    'Cinematic: a filmic colour look with black bars, slow push-ins, elegant widely spaced titles, small quiet captions at the bottom and a calm end title (for making-ofs, stories, travel and brand films)',
   'bold-stack':
     'High-energy talking video: full-screen picture with a punchy colour look and punch-ins, big stacked uppercase captions two or three words at a time that pop in word by word, the spoken word lighting up and key words bigger in the accent colour',
 } as const;
@@ -196,6 +198,52 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
         ...(o.handle ? { marks: [{ words: o.handle, font: 'Instrument Serif', italic: true, weight: 'normal' as const, color: accent, scale: 0.9 }] } : {}),
         transform: { x: 0.5, y: 0.5 },
       });
+    }
+  } else if (id === 'cinematic') {
+    const accent = o.accent ?? '#E8D9B0';
+    // Slow push-ins instead of punch-ins: each shot drifts closer from start to end.
+    main.forEach((c, k) => {
+      const t = touches(c, k);
+      const own = c.zooms ?? [];
+      const push = own.length ? {} : { zooms: [{ at: 0, scale: 1, x: 0.5, y: 0.45, ease: 'cut' as const }, { at: r2(c.duration * c.speed), scale: 1.08, x: 0.5, y: 0.45, ease: 'ramp' as const }] };
+      const { zooms: _z, ...rest } = t;
+      ops.push({ op: 'set', clip: c.id, ...rest, ...push, color: LOOKS.cinematic, ...(o.flip ? { flipX: !c.flipX } : {}) });
+    });
+    // Black bars, as wide as a 2.39:1 film frame would leave (thinner on a tall video).
+    const bar = vertical ? 0.07 : Math.max(0.06, (1 - p.width / 2.39 / p.height) / 2);
+    // A little past the edge of the frame, so no line of picture shows above or below them.
+    for (const y of [bar / 2 - 0.01, 1 - bar / 2 + 0.01]) ops.push({ op: 'add_shape', shape: 'rect', start: 0, duration: r2(end), trackName: 'Letterbox', style: { width: 1.02, height: r2(bar + 0.02), radius: 0, fill: '#000000' }, transform: { x: 0.5, y: r2(y) } });
+    const lines = o.lines ?? [];
+    if (lines.length)
+      ops.push({
+        op: 'add_captions',
+        replace: true,
+        highlight: null,
+        animIn: 'fade',
+        style: { font: 'Inter', weight: 'normal', sizePct: vertical ? 3.4 : 4.2, color: '#FFFFFF', outline: 0, shadow: 16, uppercase: false, maxWidth: 0.8 },
+        transform: { y: r2(1 - bar - (vertical ? 0.08 : 0.07)) },
+        lines: lines.map((l) => ({ text: l.text, start: l.start, end: l.end, ...(l.words?.length ? { words: l.words } : {}) })),
+      });
+    const title = (text: string, start: number, duration: number, y: number) =>
+      ops.push({
+        op: 'add_text',
+        text,
+        start: r2(start),
+        duration: r2(duration),
+        animIn: 'blur-in',
+        animOut: 'blur-out',
+        animSeconds: 0.9,
+        style: { font: 'Playfair Display', weight: 'normal', sizePct: vertical ? 3.6 : 5, color: accent, shadow: 18, uppercase: true, letterSpacing: 14, maxWidth: 0.86, lineHeight: 1.3 },
+        transform: { x: 0.5, y },
+      });
+    if (o.headline) {
+      sound(o.sfx?.whoosh, 0, 0.25);
+      // Above the head on a tall video (the face is in the upper middle); mid-frame on a wide one.
+      title(o.headline, 0, Math.min(4, Math.max(2.5, end)), vertical ? r2(bar + 0.09) : 0.5);
+    }
+    if (o.endText || o.handle) {
+      ops.push({ op: 'add_shape', shape: 'rect', start: r2(end), duration: 3, trackName: 'Cards', style: { width: 1, height: 1, radius: 0, fill: '#000000' } });
+      title([o.endText, o.handle].filter(Boolean).join('\n'), end, 3, 0.5);
     }
   } else if (id === 'bold-stack') {
     const accent = o.accent ?? '#FFD23F';

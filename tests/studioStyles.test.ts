@@ -104,3 +104,25 @@ describe('bold-stack style', () => {
     expect(texts(out).some((c) => c.text === 'Follow\n@me')).toBe(true);
   });
 });
+
+describe('cinematic style', () => {
+  it('film look, black bars, slow push-ins, quiet captions above the bottom bar, spaced titles', () => {
+    const p = podcast();
+    const lines = [{ text: 'So today we', start: 0, end: 2.4 }];
+    const out = applyEdits(p, styleOps(p, 'cinematic', { words, lines, headline: 'The making of Keo', endText: 'Keo', flip: true }), { rand }).project;
+    const v = all(out).find((c) => c.type === 'media') as MediaClip;
+    expect(v.color?.vignette).toBe(0.4);
+    expect(v.zooms?.map((z) => [z.at, z.scale, z.ease])).toEqual([
+      [0, 1, 'cut'],
+      [20, 1.08, 'ramp'],
+    ]);
+    const bars = out.tracks.find((t) => t.name === 'Letterbox')!.clips;
+    expect(bars).toHaveLength(2);
+    const cap = (out.tracks.find((t) => t.name === 'Captions')!.clips as TextClip[])[0]!;
+    expect(cap.transform.y).toBeLessThan(0.93 - 0.05);
+    const title = texts(out).find((c) => c.text === 'The making of Keo')!;
+    expect([title.style.font, title.style.letterSpacing, title.style.uppercase]).toEqual(['Playfair Display', 14, true]);
+    // No pops: a calm style.
+    expect(out.tracks.find((t) => t.name === 'Effects')).toBeUndefined();
+  });
+});

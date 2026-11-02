@@ -16,7 +16,7 @@ export const Brand = z
     headlineFont: z.string().trim().min(1).max(80).optional(),
     bodyFont: z.string().trim().min(1).max(80).optional(),
     endText: z.string().trim().min(1).max(120).optional(),
-    style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack']).optional(),
+    style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack', 'cinematic']).optional(),
     /** Words speech-to-text gets wrong, and how they are written ("KUI" heard, "Keo" meant). */
     spellings: z.array(Spelling).max(40).optional(),
   })
@@ -32,7 +32,7 @@ export const BrandPatch = z
     headlineFont: z.string().trim().min(1).max(80).nullable().optional(),
     bodyFont: z.string().trim().min(1).max(80).nullable().optional(),
     endText: z.string().trim().min(1).max(120).nullable().optional(),
-    style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack']).nullable().optional(),
+    style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack', 'cinematic']).nullable().optional(),
     spellings: z.array(Spelling).max(40).nullable().optional(),
   })
   .strict();

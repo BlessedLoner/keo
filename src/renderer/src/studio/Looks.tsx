@@ -36,6 +36,13 @@ const LOOKS: Array<{ id: string; name: string; about: string; card: CSSPropertie
       { text: 'SMART', style: { fontFamily: 'Montserrat', fontWeight: 900, color: '#FFD23F', fontSize: 15 } },
     ],
   },
+  {
+    id: 'cinematic',
+    name: 'Cinematic',
+    about: 'Film look with black bars, slow push-ins and elegant spaced titles. For stories and making-ofs.',
+    card: { background: 'linear-gradient(180deg, #000 0 12%, #2c3a3f 12% 88%, #000 88%)' },
+    lines: [{ text: 'THE MAKING', style: { fontFamily: '"Playfair Display"', color: '#E8D9B0', fontSize: 8, letterSpacing: 2 } }],
+  },
 ];
 
 export function Looks({ onAskKeo }: { onAskKeo: (text: string) => void }) {
