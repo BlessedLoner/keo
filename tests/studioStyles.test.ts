@@ -85,3 +85,22 @@ describe('Keo style touches', () => {
     expect(out.tracks.find((t) => t.name === 'Effects')!.clips).toHaveLength(3);
   });
 });
+
+describe('bold-stack style', () => {
+  it('full-screen punchy picture, stacked captions popping in, key words bigger in the accent', () => {
+    const p = podcast();
+    const lines = [
+      { text: 'So today we', start: 0, end: 2.4 },
+      { text: 'talk about discipline', start: 2.5, end: 5 },
+    ];
+    const out = applyEdits(p, styleOps(p, 'bold-stack', { words, lines, emphasis: ['discipline'], endText: 'Follow', handle: '@me' }), { rand }).project;
+    const v = all(out).find((c) => c.type === 'media') as MediaClip;
+    expect(v.mask).toBeUndefined();
+    expect(v.color?.contrast).toBe(0.3);
+    const caps = out.tracks.find((t) => t.name === 'Captions')!.clips as TextClip[];
+    expect(caps.map((c) => c.animIn)).toEqual(['words-pop', 'words-pop']);
+    expect(caps[0]!.style.uppercase).toBe(true);
+    expect(caps[1]!.marks).toEqual([{ from: 2, to: 3, color: '#FFD23F', scale: 1.3 }]);
+    expect(texts(out).some((c) => c.text === 'Follow\n@me')).toBe(true);
+  });
+});

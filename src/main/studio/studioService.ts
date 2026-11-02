@@ -1010,7 +1010,8 @@ export class StudioService {
     const b = this.brand();
     const o = { ...(b.handle ? { handle: b.handle } : {}), ...(b.endText ? { endText: b.endText } : {}), ...(b.accent ? { accent: b.accent } : {}), ...given };
     const words = this.spokenWords(p);
-    const lines = words.length ? captionLines(words, { maxWords: 4 }) : [];
+    // Stacked captions show two or three words at a time.
+    const lines = words.length ? captionLines(words, { maxWords: style === 'bold-stack' ? 3 : 4 }) : [];
     const stressed = o.emphasis?.length ? o.emphasis : guessEmphasis(words);
     const make = (q: Project, sfx?: StyleOptions['sfx']) => {
       try {
@@ -1025,7 +1026,7 @@ export class StudioService {
     const ops = make(this.get(id), sfx);
     const r = this.edit(id, ops);
     this.d.log.info('studio.style', { style, words: words.length, stressed: stressed.length });
-    return { project: r.project, stressed, captions: style === 'doc-serif' ? lines.length : 0, needsWords: !words.length };
+    return { project: r.project, stressed, captions: style === 'podcast-frame' ? 0 : lines.length, needsWords: !words.length };
   }
 
   /** Where the speaker is in the talking video at time t (null: no one found, or it could not be measured). */

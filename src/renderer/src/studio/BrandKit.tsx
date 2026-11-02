@@ -62,6 +62,7 @@ export function BrandKit() {
             <option value="">None yet</option>
             <option value="podcast-frame">Podcast frame</option>
             <option value="doc-serif">Documentary serif</option>
+            <option value="bold-stack">Bold stacked captions</option>
           </select>
         </label>
       </div>

@@ -12,6 +12,8 @@ export const STYLES = {
     'Podcast in a rounded frame on a dark background: a mixed-font headline (bold sans with an elegant serif italic) opens it, single bold words pop beside the speaker on key moments, and it ends on a follow card',
   'doc-serif':
     'Documentary: black-and-white picture, clean white captions with the key words in red serif italic, a big title, lists that build item by item, and a brand end card',
+  'bold-stack':
+    'High-energy talking video: full-screen picture with a punchy colour look and punch-ins, big stacked uppercase captions two or three words at a time that pop in word by word, the spoken word lighting up and key words bigger in the accent colour',
 } as const;
 export type StyleId = keyof typeof STYLES;
 
@@ -195,6 +197,58 @@ export function styleOps(p: Project, id: StyleId, o: StyleOptions): EditOp[] {
         transform: { x: 0.5, y: 0.5 },
       });
     }
+  } else if (id === 'bold-stack') {
+    const accent = o.accent ?? '#FFD23F';
+    main.forEach((c, k) => ops.push({ op: 'set', clip: c.id, ...touches(c, k), color: LOOKS.punchy, ...(o.flip ? { flipX: !c.flipX } : {}) }));
+    const stress = new Set(emphasis.map(norm));
+    const lines = o.lines ?? [];
+    if (lines.length)
+      ops.push({
+        op: 'add_captions',
+        replace: true,
+        highlight: accent,
+        animIn: 'words-pop',
+        // Narrow, so two or three words stack on top of each other.
+        style: { font: 'Montserrat', weight: 'black', sizePct: vertical ? 6.5 : 8, color: '#FFFFFF', outline: 0, shadow: 22, uppercase: true, maxWidth: vertical ? 0.5 : 0.4, lineHeight: 0.95 },
+        // Below the face, above the apps' buttons.
+        transform: { y: vertical ? 0.66 : 0.78 },
+        lines: lines.map((l) => {
+          const marks = l.text
+            .split(/\s+/)
+            .filter((w) => stress.has(norm(w)))
+            .slice(0, 2)
+            .map((w) => ({ words: w, color: accent, scale: 1.3 }));
+          return { text: l.text, start: l.start, end: l.end, ...(l.words?.length ? { words: l.words } : {}), ...(marks.length ? { marks } : {}) };
+        }),
+      });
+    if (o.headline) {
+      sound(o.sfx?.whoosh, 0, 0.35);
+      ops.push({
+        op: 'add_text',
+        text: o.headline,
+        start: 0,
+        duration: Math.min(3, Math.max(2, end)),
+        animIn: 'words-up',
+        animOut: 'fade',
+        animSeconds: 0.5,
+        style: { font: 'Montserrat', weight: 'black', sizePct: vertical ? 7 : 10, color: '#FFFFFF', shadow: 24, uppercase: true, maxWidth: 0.86, lineHeight: 1 },
+        marks: headlineMarks('Montserrat', accent),
+        transform: { x: 0.5, y: vertical ? 0.16 : 0.2 },
+      });
+    }
+    if (o.endText || o.handle)
+      ops.push({
+        op: 'add_text',
+        text: [o.endText, o.handle].filter(Boolean).join('\n'),
+        start: r2(end),
+        duration: 2.5,
+        animIn: 'words-pop',
+        animOut: 'none',
+        animSeconds: 0.4,
+        style: { font: 'Montserrat', weight: 'black', sizePct: vertical ? 6 : 8, color: '#FFFFFF', shadow: 0, uppercase: true, maxWidth: 0.8 },
+        ...(o.handle ? { marks: [{ words: o.handle, color: accent, uppercase: false }] } : {}),
+        transform: { x: 0.5, y: 0.5 },
+      });
   } else {
     const accent = o.accent ?? '#E53935';
     ops.push({ op: 'set_project', background: '#000000' });

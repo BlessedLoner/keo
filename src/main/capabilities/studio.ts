@@ -1059,7 +1059,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       id: 'studio.brand',
       title: 'Remember the user’s brand',
       description:
-        'The user’s brand kit, kept on this PC for every video: name, handle (e.g. @name), accent colour, headline and body fonts, end card line, favourite style (podcast-frame or doc-serif), and spellings: words speech-to-text gets wrong and how they are written ([{heard:"KUI", say:"Keo"}]; send the whole list). When captions show a name misheard, fix the captions with studio__edit replace_words and offer to remember the spelling here so it is right next time. With no changes it returns what is saved. Save only what the user told you or confirmed (null forgets a value); styles use it for the end card and colours when you do not say otherwise.',
+        'The user’s brand kit, kept on this PC for every video: name, handle (e.g. @name), accent colour, headline and body fonts, end card line, favourite style (podcast-frame, doc-serif or bold-stack), and spellings: words speech-to-text gets wrong and how they are written ([{heard:"KUI", say:"Keo"}]; send the whole list). When captions show a name misheard, fix the captions with studio__edit replace_words and offer to remember the spelling here so it is right next time. With no changes it returns what is saved. Save only what the user told you or confirmed (null forgets a value); styles use it for the end card and colours when you do not say otherwise.',
       summary: 'Brand kit',
     }),
     input: BrandPatch,
