@@ -112,3 +112,29 @@ describe('Grid', () => {
     expect(() => momentOps(p, 'grid', { at: 3, assets: ['as_pic00001'] })).toThrow(MomentNeeds);
   });
 });
+
+describe('Sweep and new text motions', () => {
+  it('sweep: the words travel across the whole screen, behind the person on the talking video', () => {
+    const out = add(podcast(), 'sweep', { at: 4, text: 'never stop', direction: 'left' });
+    const t = out.tracks[idx(out, 'Behind text')]!.clips[0] as TextClip;
+    const xs = t.keys!.x!.map((k) => k.value);
+    // Starts fully off the right edge, ends fully off the left one.
+    expect(xs[0]!).toBeGreaterThan(1);
+    expect(xs[1]!).toBeLessThan(0);
+    expect(t.text).toBe('NEVER STOP');
+    expect(out.tracks[idx(out, 'Person cut-out')]!.clips).toHaveLength(1);
+    const up = add(podcast(), 'sweep', { at: 4, text: 'rise', direction: 'down' });
+    const ys = (up.tracks[idx(up, 'Behind text')]!.clips[0] as TextClip).keys!.y!.map((k) => k.value);
+    expect(ys[0]!).toBeLessThan(ys[1]!);
+  });
+
+  it('text takes the new entrances and exits', () => {
+    const p = podcast();
+    const out = applyEdits(p, [{ op: 'add_text', text: 'Fly in', start: 0, duration: 2, animIn: 'words-left', animOut: 'slide-right' }, { op: 'add_text', text: 'Spin', start: 0, duration: 2, animIn: 'spin', animOut: 'slide-up' }], { rand }).project;
+    const ts = out.tracks.flatMap((t) => t.clips).filter((c): c is TextClip => c.type === 'text');
+    expect(ts.map((c) => [c.animIn, c.animOut])).toEqual([
+      ['words-left', 'slide-right'],
+      ['spin', 'slide-up'],
+    ]);
+  });
+});

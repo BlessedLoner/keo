@@ -1353,6 +1353,15 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
               <option value="zoom">Zoom</option>
               <option value="wipe">Wipe</option>
               <option value="glitch">Glitch</option>
+              <option value="slide-left">Slide in from the right</option>
+              <option value="slide-right">Slide in from the left</option>
+              <option value="slide-down">Drop in from above</option>
+              <option value="spin">Spin in</option>
+              <option value="bounce">Bounce in</option>
+              <option value="words-left">Words fly in from the left</option>
+              <option value="words-right">Words fly in from the right</option>
+              <option value="words-up">Words rise in</option>
+              <option value="words-pop">Words pop in</option>
             </select>
           </label>
           <label className="insp-num">
@@ -1365,6 +1374,9 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
               <option value="blur-out">Blur out</option>
               <option value="zoom">Zoom</option>
               <option value="wipe">Wipe</option>
+              <option value="slide-left">Slide out to the left</option>
+              <option value="slide-right">Slide out to the right</option>
+              <option value="slide-up">Slide out upwards</option>
             </select>
           </label>
           <Num label="Seconds" value={clip.animSeconds} min={0} max={5} step={0.05} suffix="s" onCommit={(v) => set({ animSeconds: v })} />

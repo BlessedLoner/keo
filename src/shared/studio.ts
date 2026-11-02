@@ -118,8 +118,8 @@ export const Asset = z
 export type Asset = z.infer<typeof Asset>;
 
 /** How text comes in and goes out (Phase 1 set; more styles come with motion design). */
-export const TextAnimIn = z.enum(['none', 'fade', 'pop', 'slide-up', 'typewriter', 'blur-in', 'words', 'letters', 'drop', 'zoom', 'wipe', 'glitch', 'wave']);
-export const TextAnimOut = z.enum(['none', 'fade', 'pop', 'slide-down', 'blur-out', 'zoom', 'wipe']);
+export const TextAnimIn = z.enum(['none', 'fade', 'pop', 'slide-up', 'typewriter', 'blur-in', 'words', 'letters', 'drop', 'zoom', 'wipe', 'glitch', 'wave', 'slide-left', 'slide-right', 'slide-down', 'spin', 'bounce', 'words-left', 'words-right', 'words-up', 'words-pop']);
+export const TextAnimOut = z.enum(['none', 'fade', 'pop', 'slide-down', 'blur-out', 'zoom', 'wipe', 'slide-left', 'slide-right', 'slide-up']);
 
 // ---------------------------------------------------------------- motion (any visible layer)
 
@@ -179,7 +179,7 @@ export const TextStyle = z
     color2: Hex.nullable().default(null),
     align: z.enum(['left', 'center', 'right']).default('center'),
     /** Widest a line may get, as a fraction of the frame's width (it wraps after that). */
-    maxWidth: z.number().min(0.1).max(1).default(0.86),
+    maxWidth: z.number().min(0.1).max(6).default(0.86),
     outline: z.number().min(0).max(20).default(0),
     outlineColor: Hex.default('#000000'),
     /** A soft shadow (0: none). */

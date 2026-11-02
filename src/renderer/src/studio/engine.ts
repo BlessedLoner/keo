@@ -411,6 +411,9 @@ export async function fontsReady(p: Project): Promise<void> {
   await Promise.all([...want].map((f) => document.fonts.load(f).catch(() => [])));
 }
 
+/** Word-by-word entrances that move each word (the rest of 'words' is a fade). */
+const WORD_MOVES = new Set<string>(['words-left', 'words-right', 'words-up', 'words-pop']);
+
 /** How a word of a text is drawn: the text's style, or the rich text mark it is in. */
 function wordStyle(st: TextClip['style'], marks: TextClip['marks'], i: number, px: number): { font: string; size: number; color: string | null; upper: boolean } {
   const m = marks?.find((x) => i >= x.from && i < x.to);
@@ -533,6 +536,8 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   let alpha = m.opacity;
   let scale = 1;
   let dy = 0;
+  let dx = 0;
+  let turn = 0;
   let blur = m.blur;
   let wipe = 1;
   const e = easeOut(pin);
@@ -555,6 +560,28 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     case 'slide-up':
       dy += (1 - e) * 0.05 * H;
       alpha *= e;
+      break;
+    // In from a side: from the right moving left, from the left moving right, from above.
+    case 'slide-left':
+      dx += (1 - e) * 0.35 * W;
+      alpha *= clamp(pin * 2.5);
+      break;
+    case 'slide-right':
+      dx -= (1 - e) * 0.35 * W;
+      alpha *= clamp(pin * 2.5);
+      break;
+    case 'slide-down':
+      dy -= (1 - e) * 0.08 * H;
+      alpha *= e;
+      break;
+    case 'spin':
+      turn += (1 - e) * -180;
+      scale *= 0.3 + 0.7 * e;
+      alpha *= clamp(pin * 2);
+      break;
+    case 'bounce':
+      scale *= pin < 1 ? EASES.bounce(pin) : 1;
+      alpha *= clamp(pin * 4);
       break;
     case 'blur-in':
       blur += (1 - e) * px * 0.35;
@@ -584,6 +611,19 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
       dy += (1 - o) * 0.05 * H;
       alpha *= o;
       break;
+    // Out to a side.
+    case 'slide-left':
+      dx -= (1 - o) * 0.35 * W;
+      alpha *= clamp(pout * 2.5);
+      break;
+    case 'slide-right':
+      dx += (1 - o) * 0.35 * W;
+      alpha *= clamp(pout * 2.5);
+      break;
+    case 'slide-up':
+      dy -= (1 - o) * 0.08 * H;
+      alpha *= o;
+      break;
     case 'blur-out':
       blur += (1 - o) * px * 0.35;
       alpha *= o;
@@ -596,8 +636,8 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
     return;
   }
 
-  ctx.translate(m.x * W, m.y * H + dy);
-  if (m.rotation) ctx.rotate((m.rotation * Math.PI) / 180);
+  ctx.translate(m.x * W + dx, m.y * H + dy);
+  if (m.rotation || turn) ctx.rotate(((m.rotation + turn) * Math.PI) / 180);
   ctx.scale(scale * m.scaleX, scale * m.scaleY);
   if (wipe < 1) {
     // Revealed from the left (in) or hidden to the right (out) through a moving edge.
@@ -613,7 +653,7 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   // Caption word times are seconds from the clip's start.
   const rt = t - c.start;
   const wordReveal = (wi: number): number => {
-    if (c.animIn !== 'words') return 1;
+    if (c.animIn !== 'words' && !WORD_MOVES.has(c.animIn)) return 1;
     const timed = c.words?.[wi];
     if (timed) return clamp((rt - timed.start) / 0.22);
     const stagger = Math.min(0.2, (Math.max(0.2, c.animSeconds) * 1.6) / Math.max(1, wordCount));
@@ -744,6 +784,20 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
       const color = c.highlight && spoken(w.index) ? c.highlight : w.color;
       const x = x0 + w.x;
       if (!perLetter) {
+        // Word by word from a side (or popping): each word travels the last stretch on its own.
+        const k = 1 - easeOut(r);
+        if (WORD_MOVES.has(c.animIn) && k > 0) {
+          const wx = c.animIn === 'words-left' ? -k * px * 2.2 : c.animIn === 'words-right' ? k * px * 2.2 : 0;
+          const wy = c.animIn === 'words-up' ? k * px * 1.2 : 0;
+          const ws = c.animIn === 'words-pop' ? (r < 1 ? 0.4 + 0.6 * EASES.back(r) : 1) : 1;
+          ctx.save();
+          const cx = x + w.width / 2;
+          ctx.translate(cx + wx, y + wy);
+          ctx.scale(ws, ws);
+          paint(word, -w.width / 2, 0, color ?? fill, alpha * clamp(r * 2), blur, w.index, w.font, w.size);
+          ctx.restore();
+          continue;
+        }
         paint(word, x, y, color ?? fill, alpha * easeOut(r), blur + (1 - easeOut(r)) * px * 0.3, w.index, w.font, w.size);
         continue;
       }

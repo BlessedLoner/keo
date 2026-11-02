@@ -13,6 +13,7 @@ export const MOMENTS = {
   'image-pop': 'A picture or video pops in over the talking video as a rounded card with a shadow, tilted a little, floating',
   'circle-text': 'Words around a circle that slowly turns (around a round photo when assets has one, else around the middle of the frame)',
   grid: 'Two to four pictures or videos in a grid of rounded tiles on a plain background, popping in one by one (examples, results, a collection)',
+  sweep: 'Big words travelling across the whole screen while they are on (direction: left, right, up or down), like a fly-through or ticker; behind the person when on the talking video',
   'follow-card': 'End card: the name or @handle big in the middle and the platforms (text: "Instagram|TikTok|YouTube") popping in one by one as pills',
 } as const;
 export type MomentId = keyof typeof MOMENTS;
@@ -32,6 +33,8 @@ export interface MomentOptions {
   background?: string;
   /** Where (image-pop): left, right or centre. */
   side?: 'left' | 'right' | 'center';
+  /** sweep: which way the words travel. */
+  direction?: 'left' | 'right' | 'up' | 'down';
 }
 
 /** What is missing for a moment: Keo asks the user for it (or picks other clips of the project). */
@@ -270,6 +273,45 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
           enter: { kind: 'pop', seconds: 0.3 },
         });
       });
+      return ops;
+    }
+    case 'sweep': {
+      const d = o.duration ?? 2.5;
+      const text = words().toUpperCase();
+      const across = o.direction === 'up' || o.direction === 'down' ? false : true;
+      const sizePct = vertical ? 13 : 18;
+      // How wide the line is (a frame width is 1; Anton capitals are about 0.42 of their height
+      // wide), so it starts and ends just off screen.
+      const lineW = (text.length * 0.42 * (sizePct / 100) * p.height) / p.width;
+      const lineH = (sizePct / 100) * 1.1;
+      const far = across ? 1 + lineW / 2 : 1 + lineH / 2;
+      const near = across ? -lineW / 2 : -lineH / 2;
+      // Left and up travel from the far side to the near one; right and down the other way.
+      const [from, to] = o.direction === 'right' || o.direction === 'down' ? [near, far] : [far, near];
+      // On the talking video it goes behind the person, like the text-behind moment.
+      const c = talkingAt(p, at);
+      const ops: EditOp[] = [];
+      const [behind, person] = pairNames(p, 'Behind text', 'Person cut-out');
+      ops.push({
+        op: 'add_text',
+        text,
+        start: r2(at),
+        duration: r2(d),
+        ...(c ? { trackName: behind } : {}),
+        animIn: 'none',
+        animOut: 'none',
+        style: { font: 'Anton', weight: 'normal', sizePct, color: o.color ?? '#FFFFFF', uppercase: true, shadow: 0, maxWidth: Math.min(6, Math.max(1, lineW + 0.2)) },
+        transform: across ? { x: r2(from), y: vertical ? 0.4 : 0.45 } : { x: 0.5, y: r2(from) },
+        keys: { [across ? 'x' : 'y']: [
+          { at: 0, value: r2(from), ease: 'linear' },
+          { at: r2(d), value: r2(to), ease: 'linear' },
+        ] },
+      });
+      if (c) {
+        const span = Math.min(d, c.start + c.duration - at);
+        const offset = (at - c.start) * c.speed;
+        ops.push({ op: 'add_media', assetId: c.assetId, trackName: person, top: true, start: r2(at), in: r2(c.in + offset), duration: r2(span), fit: c.fit, transform: { ...c.transform }, cutout: true, ...(c.mask ? { mask: c.mask } : {}), ...(c.flipX ? { flipX: true } : {}), ...(c.color ? { color: c.color } : {}) });
+      }
       return ops;
     }
     case 'follow-card': {
