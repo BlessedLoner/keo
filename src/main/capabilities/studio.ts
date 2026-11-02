@@ -995,7 +995,9 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
       const { projectId: _p, moment: id, ...o } = i;
-      const r = run(() => s.moment(p.id, id, o));
+      const r = await s.moment(p.id, id, o).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
       return { ...state(s, r.project), changes: r.changes.slice(0, 10) };
     },
   });

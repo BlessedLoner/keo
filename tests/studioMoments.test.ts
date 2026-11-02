@@ -138,3 +138,19 @@ describe('Sweep and new text motions', () => {
     ]);
   });
 });
+
+describe('Pictures keep off the face', () => {
+  it('goes in the bigger free space: below the face, or above the head when the speaker sits low', () => {
+    const p = podcast();
+    const place = (person: { x0: number; y0: number; x1: number; y1: number }) => {
+      const out = add(p, 'image-pop', { at: 3, assets: ['as_pic00001'], person });
+      return out.tracks[idx(out, 'Pop-ins')]!.clips[0] as MediaClip;
+    };
+    // Face at the top (0.2–0.39): the picture goes below it.
+    const low = place({ x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 });
+    expect(low.transform.y).toBeGreaterThan(0.45);
+    // Speaker low in the frame (head from 0.55): the picture goes above their head.
+    const high = place({ x0: 0.2, y0: 0.55, x1: 0.8, y1: 1 });
+    expect(high.transform.y).toBeLessThan(0.4);
+  });
+});

@@ -33,6 +33,8 @@ export interface MomentOptions {
   background?: string;
   /** Where (image-pop): left, right or centre. */
   side?: 'left' | 'right' | 'center';
+  /** Where the speaker is at that time (fractions of the frame), when Keo found them: pictures keep off their face. */
+  person?: { x0: number; y0: number; x1: number; y1: number } | null;
   /** sweep: which way the words travel. */
   direction?: 'left' | 'right' | 'up' | 'down';
 }
@@ -354,7 +356,19 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
       const [asset] = media(1, 'a picture or video to show (what the speaker is talking about)');
       const d = o.duration ?? 3;
       const x = o.side === 'left' ? 0.3 : o.side === 'center' ? 0.5 : 0.7;
-      // Under the face, over the chest (a vertical talking video has the face in the upper half).
+      // Where it goes: under the face, over the chest (a vertical talking video has the face in
+      // the upper half), or, when Keo found the speaker, the bigger free space below their face or
+      // above their head.
+      let y = vertical ? 0.72 : 0.62;
+      let room = vertical ? 0.28 : 0.5;
+      if (o.person) {
+        const faceBottom = o.person.y0 + (o.person.y1 - o.person.y0) * 0.32;
+        const below = 0.88 - faceBottom;
+        const above = o.person.y0 - 0.06;
+        const [lo, hi] = below >= above ? [faceBottom + 0.02, 0.88] : [0.06, o.person.y0 - 0.01];
+        room = Math.max(0.12, Math.min(room, (hi - lo) * 0.9));
+        y = r2((lo + hi) / 2);
+      }
       return [
         {
           op: 'add_media',
@@ -366,7 +380,7 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
           fit: 'contain',
           mask: { shape: 'rounded', radius: 0.1 },
           shadow: 30,
-          transform: { x, y: vertical ? 0.72 : 0.62, scale: vertical ? fitScale(p, asset!, 0.5, 0.28) : fitScale(p, asset!, 0.36, 0.5), rotation: o.side === 'left' ? 4 : -4 },
+          transform: { x, y, scale: vertical ? fitScale(p, asset!, 0.5, room) : fitScale(p, asset!, 0.36, room), rotation: o.side === 'left' ? 4 : -4 },
           enter: { kind: 'pop', seconds: 0.35 },
           exit: { kind: 'zoom-out', seconds: 0.25 },
           loop: { kind: 'float', amount: 0.15, period: 3 },

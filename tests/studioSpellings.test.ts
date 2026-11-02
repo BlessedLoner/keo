@@ -17,6 +17,7 @@ describe('Fixing misheard words', () => {
     let p = applyEdits(newProject({ name: 'S', rand }), [
       {
         op: 'add_captions',
+        replace: true,
         lines: [
           { text: 'about KUI and', start: 0, end: 2, words: [{ text: 'about', start: 0, end: 0.5 }, { text: 'KUI', start: 0.5, end: 1.1 }, { text: 'and', start: 1.1, end: 1.5 }] },
         ],

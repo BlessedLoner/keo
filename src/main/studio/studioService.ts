@@ -1028,12 +1028,24 @@ export class StudioService {
     return { project: r.project, stressed, captions: style === 'doc-serif' ? lines.length : 0, needsWords: !words.length };
   }
 
+  /** Where the speaker is in the talking video at time t (null: no one found, or it could not be measured). */
+  private async personAt(id: string, t: number): Promise<ReviewSample['person']> {
+    try {
+      const [sample] = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times: [t] }, 60_000);
+      return sample?.person ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** A moment (text behind the speaker, a word card, a split, a picture popping in), in one edit. */
-  moment(id: string, moment: MomentId, given: MomentOptions): { project: Project; changes: string[] } {
+  async moment(id: string, moment: MomentId, given: MomentOptions): Promise<{ project: Project; changes: string[] }> {
     // The end card's name and colour come from the brand kit when not given.
     const b = this.brand();
-    const o = moment === 'follow-card' ? { ...given, text: given.text ?? b.handle ?? b.name, ...(given.color || !b.accent ? {} : { color: b.accent }) } : given;
+    let o = moment === 'follow-card' ? { ...given, text: given.text ?? b.handle ?? b.name, ...(given.color || !b.accent ? {} : { color: b.accent }) } : given;
     if (moment === 'follow-card' && !o.text) throw new StudioError('The follow card needs the user’s @handle or name: ask them (and offer to remember it with studio__brand).');
+    // A picture popping in keeps off the speaker's face: where they are then, found on this PC.
+    if (moment === 'image-pop' && o.person === undefined) o = { ...o, person: await this.personAt(id, o.at + 0.3) };
     let ops: EditOp[];
     try {
       ops = momentOps(this.get(id), moment, o);
@@ -1105,7 +1117,7 @@ export class StudioService {
         continue;
       }
       try {
-        res = this.moment(id, m.moment, { at: m.at, ...(m.text ? { text: m.text } : m.moment === 'follow-card' && o.endText && !brand.handle && !brand.name ? { text: o.endText } : {}) });
+        res = await this.moment(id, m.moment, { at: m.at, ...(m.text ? { text: m.text } : m.moment === 'follow-card' && o.endText && !brand.handle && !brand.name ? { text: o.endText } : {}) });
         moments++;
       } catch (e) {
         // One moment that does not fit (the video ends there) does not stop the others.
