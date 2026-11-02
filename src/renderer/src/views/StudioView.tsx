@@ -229,8 +229,19 @@ export function StudioView() {
       }),
     [],
   );
-  // An AI shot fal.ai finished (or failed) after Keo stopped waiting: said wherever the user is in Studio.
-  useEffect(() => subscribe('studio:aiShot', (m) => ui.toast(m.message, m.ok ? 'success' : 'error')), [ui]);
+  // AI shots fal.ai is still making: a bar until they land on the timeline (or fail), then a note.
+  const [aiWaiting, setAiWaiting] = useState<Record<string, number>>({});
+  useEffect(
+    () =>
+      subscribe('studio:aiShot', (m) => {
+        setAiWaiting((w) => {
+          const n = Math.max(0, (w[m.projectId] ?? 0) + (m.state === 'waiting' ? 1 : -1));
+          return { ...w, [m.projectId]: n };
+        });
+        if (m.state !== 'waiting') ui.toast(m.message, m.state === 'ready' ? 'success' : 'error');
+      }),
+    [ui],
+  );
   useEffect(
     () =>
       subscribe('studio:progress', (m) => {
@@ -781,6 +792,13 @@ export function StudioView() {
           Fit
         </button>
       </div>
+      {!!aiWaiting[project.id] && (
+        <div className="keo-live-bar" role="status" aria-live="polite">
+          <span className="dot" />
+          <strong>AI clip on its way</strong>
+          <span className="grow">fal.ai is making {aiWaiting[project.id] === 1 ? 'your clip' : `${aiWaiting[project.id]} clips`}. It goes on the AI shots track by itself when ready, usually within 10 minutes. Keep working.</span>
+        </div>
+      )}
       {keoStep && (
         <div className="keo-live-bar" role="status" aria-live="polite">
           <span className="dot" />

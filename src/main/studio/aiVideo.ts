@@ -53,6 +53,34 @@ export function estimateCost(model: AiVideoModelId, seconds: number, audio: bool
   return Math.ceil(modelSeconds(model, seconds) * (audio ? m.perSecond.audio : m.perSecond.silent) * 100 - 1e-6) / 100;
 }
 
+/** Swapping the person in a video for a character (fal.ai's Wan 2.2 Animate Replace). */
+export const SWAP_MODEL = {
+  label: 'Wan 2.2 Animate Replace',
+  endpoint: 'fal-ai/wan/v2.2-14b/animate/replace',
+  /** US dollars per "video second" (fal.ai bills 16 frames as one second; its list price when this was written). */
+  perSecond: { '480p': 0.04, '580p': 0.06, '720p': 0.08 },
+} as const;
+export type SwapResolution = keyof typeof SWAP_MODEL.perSecond;
+
+/** About what a swap costs (fal.ai counts the video's frames, 16 to a billed second). */
+export function swapCost(seconds: number, fps: number, resolution: SwapResolution): number {
+  return Math.ceil(((seconds * fps) / 16) * SWAP_MODEL.perSecond[resolution] * 100 - 1e-6) / 100;
+}
+
+export interface SwapRequest {
+  /** The video file's bytes (MP4, up to 90 MB) and the character's picture (JPEG). */
+  video: Buffer;
+  image: Buffer;
+  resolution: SwapResolution;
+  seconds: number;
+}
+
+interface RunOptions {
+  waitMs?: number;
+  context?: PendingShot['context'];
+  progress?: (stage: 'queued' | 'making' | 'saving', queuePosition?: number) => void;
+}
+
 export class AiVideoError extends Error {}
 
 export interface AiVideoRequest {
@@ -114,28 +142,64 @@ export class FalVideo {
    * (never paying twice). Waits up to `waitMs`; if fal.ai is not done by then, the request stays
    * remembered and AiVideoPending is thrown: finish() (or the background checks) get it later.
    */
-  async generate(
-    r: AiVideoRequest,
-    signal: AbortSignal,
-    o: { waitMs?: number; context?: PendingShot['context']; progress?: (stage: 'queued' | 'making' | 'saving', queuePosition?: number) => void } = {},
-  ): Promise<{ file: string; cached: boolean; seconds: number }> {
+  async generate(r: AiVideoRequest, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    const m = AI_VIDEO_MODELS[r.model];
     const seconds = modelSeconds(r.model, r.seconds);
-    const hash = this.hashOf(r);
-    const file = this.cacheFile(r);
+    return this.run(
+      { hash: this.hashOf(r), model: r.model, seconds, endpoint: m.endpoint, uploads: [{ bytes: r.image, type: 'image/jpeg', name: 'keo-picture.jpg' }], input: ([image]) => m.input({ ...r, image: image!, seconds }) },
+      signal,
+      o,
+    );
+  }
+
+  /** The same character swap (video, picture, quality) gives the same id. */
+  swapHash(r: SwapRequest): string {
+    const h = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+    return crypto.createHash('sha256').update(JSON.stringify([SWAP_MODEL.endpoint, h(r.video), h(r.image), r.resolution])).digest('hex').slice(0, 24);
+  }
+
+  /** The person in a video replaced by the character in a picture (their motion, expressions and light kept). */
+  async swap(r: SwapRequest, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    if (r.video.length > 90 * 1024 * 1024) throw new AiVideoError('That video file is over 90 MB: split it or export a shorter part first.');
+    return this.run(
+      {
+        hash: this.swapHash(r),
+        model: 'wan-animate-replace',
+        seconds: r.seconds,
+        endpoint: SWAP_MODEL.endpoint,
+        uploads: [
+          { bytes: r.video, type: 'video/mp4', name: 'keo-video.mp4' },
+          { bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' },
+        ],
+        input: ([video, image]) => ({ video_url: video!, image_url: image!, resolution: r.resolution, video_quality: 'high' }),
+      },
+      signal,
+      o,
+    );
+  }
+
+  /** Any fal.ai request done the safe way: kept if made before, remembered while made, cancelled on Stop. */
+  private async run(
+    spec: { hash: string; model: PendingShot['model']; seconds: number; endpoint: string; uploads: Array<{ bytes: Buffer; type: string; name: string }>; input: (urls: string[]) => Record<string, unknown> },
+    signal: AbortSignal,
+    o: RunOptions,
+  ): Promise<{ file: string; cached: boolean; seconds: number }> {
+    const { hash, seconds } = spec;
+    const file = path.join(this.d.dir, `ai-shot-${hash}.mp4`);
     if (fs.existsSync(file)) return { file, cached: true, seconds };
     const key = this.d.key();
-    if (!key) throw new AiVideoError('AI shots need a fal.ai API key: add one in Settings → Providers.');
+    if (!key) throw new AiVideoError('AI video needs a fal.ai API key: add one in Settings → Providers.');
     let job = this.pending().find((p) => p.hash === hash);
-    if (job) this.d.log.info('studio.ai_shot_resumed', { model: r.model });
+    if (job) this.d.log.info('studio.ai_shot_resumed', { model: spec.model });
     else {
-      const m = AI_VIDEO_MODELS[r.model];
-      // The picture goes to fal.ai's storage first and the model gets its link (fal.ai advises
-      // against sending pictures inside the request: large ones can make the request fail).
-      const image = await this.upload(r.image, key, signal);
-      const submitted = await this.call(key, `https://queue.fal.run/${m.endpoint}`, 'POST', signal, m.input({ ...r, image, seconds }));
+      // Pictures and videos go to fal.ai's storage first and the model gets their links (fal.ai
+      // advises against sending files inside the request: large ones can make the request fail).
+      const urls: string[] = [];
+      for (const u of spec.uploads) urls.push(await this.upload(u.bytes, u.type, u.name, key, signal));
+      const submitted = await this.call(key, `https://queue.fal.run/${spec.endpoint}`, 'POST', signal, spec.input(urls));
       job = {
         hash,
-        model: r.model,
+        model: spec.model,
         seconds,
         statusUrl: String(submitted.status_url ?? ''),
         resultUrl: String(submitted.response_url ?? ''),
@@ -144,7 +208,7 @@ export class FalVideo {
         ...(o.context ? { context: o.context } : {}),
       };
       this.savePending([...this.pending().filter((p) => p.hash !== hash), job]);
-      this.d.log.info('studio.ai_shot_submitted', { model: r.model, seconds });
+      this.d.log.info('studio.ai_shot_submitted', { model: spec.model, seconds });
     }
     try {
       const made = await this.finish(job, signal, { waitMs: o.waitMs ?? 5 * 60_000, ...(o.progress ? { progress: o.progress } : {}) });
@@ -234,19 +298,19 @@ export class FalVideo {
     return json;
   }
 
-  /** A JPEG put in fal.ai's storage (as fal.ai's own client does): its link for the model. */
-  private async upload(jpeg: Buffer, key: string, signal: AbortSignal): Promise<string> {
+  /** A file put in fal.ai's storage (as fal.ai's own client does): its link for the model. */
+  private async upload(bytes: Buffer, type: string, name: string, key: string, signal: AbortSignal): Promise<string> {
     const start = await this.d.fetch('https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3', {
       method: 'POST',
       headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content_type: 'image/jpeg', file_name: 'keo-picture.jpg' }),
+      body: JSON.stringify({ content_type: type, file_name: name }),
       signal,
     });
     const s = (await start.json().catch(() => ({}))) as { upload_url?: unknown; file_url?: unknown; detail?: unknown };
     if (!start.ok) throw new AiVideoError(falError(start.status, s as Record<string, unknown>));
     if (typeof s.upload_url !== 'string' || typeof s.file_url !== 'string' || !/^https:\/\//.test(s.upload_url) || !/^https:\/\//.test(s.file_url)) throw new AiVideoError('fal.ai did not give an address to upload the picture to.');
-    const put = await this.d.fetch(s.upload_url, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: new Uint8Array(jpeg), signal });
-    if (!put.ok) throw new AiVideoError(`The picture could not be uploaded to fal.ai (${put.status}).`);
+    const put = await this.d.fetch(s.upload_url, { method: 'PUT', headers: { 'Content-Type': type }, body: new Uint8Array(bytes), signal });
+    if (!put.ok) throw new AiVideoError(`The ${type.startsWith('video') ? 'video' : 'picture'} could not be uploaded to fal.ai (${put.status}).`);
     return s.file_url;
   }
 }
@@ -254,14 +318,14 @@ export class FalVideo {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId;
+  model: AiVideoModelId | 'wan-animate-replace';
   seconds: number;
   statusUrl: string;
   resultUrl: string;
   cancelUrl: string | null;
   submittedAt: string;
   /** Where the clip goes when it is ready. */
-  context?: { projectId: string; at: number; about: string };
+  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean };
 }
 
 /** fal.ai is still making the clip: it is remembered and arrives later. */

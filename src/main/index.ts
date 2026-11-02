@@ -88,6 +88,17 @@ function registerAppProtocol(): void {
     const preview = url.searchParams.get('preview') === '1';
     const probing = /^\/probe\/([0-9a-f]{24})$/.exec(url.pathname);
     // Studio's background removal: the WebAssembly files of the installed MediaPipe package (only these names).
+    // A picture of one of the user's characters (the Characters page): only those files, by number.
+    const character = /^\/character\/(ch_[A-Za-z0-9]{4,24})\/([0-3])$/.exec(url.pathname);
+    if (character) {
+      let file: string | undefined;
+      try {
+        file = services?.studio.character(character[1]!).pictures[Number(character[2])];
+      } catch {
+        file = undefined;
+      }
+      return file ? serveFile(file, request.headers.get('range')) : new Response('Not found', { status: 404 });
+    }
     // A sound of the user's library (to listen to before adding it).
     const sound = /^\/sound\/(sn_[A-Za-z0-9]{4,24})$/.exec(url.pathname);
     if (sound) {
@@ -1689,6 +1700,15 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Use the example'))?.click();`);
       await wait(900);
       fs.writeFileSync(path.join(dir, 'studio-faceless.png'), (await win.webContents.capturePage()).toPNG());
+      // Characters: one made for the screenshot, its editor open.
+      await js(`await call('studio:characters', { action: 'save', patch: { name: 'Kira', look: 'young woman, long blonde hair, black evening dress', voice: 'nova', notes: 'Confident and playful' } });`);
+      await js(`[...document.querySelectorAll('[role=tab]')].find((b) => b.textContent.startsWith('Characters'))?.click();`);
+      await wait(500);
+      await js(`[...document.querySelectorAll('.character-card')].find((b) => b.textContent.includes('Kira'))?.click();`);
+      await wait(500);
+      fs.writeFileSync(path.join(dir, 'studio-characters.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('[role=tab]')].find((b) => b.textContent === 'Script')?.click();`);
+      await wait(300);
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
       await wait(300);
     }

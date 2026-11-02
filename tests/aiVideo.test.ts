@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, type AiVideoRequest } from '../src/main/studio/aiVideo';
+import { AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, swapCost, type AiVideoRequest } from '../src/main/studio/aiVideo';
 import { StudioService } from '../src/main/studio/studioService';
 import { tempDir } from './helpers';
 
@@ -138,5 +138,41 @@ describe('A clip fal.ai takes long to make is never lost or paid twice', () => {
     const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-ai-'), fetch: f.fetch, log, sleep: async () => stop.abort() });
     await expect(fal.generate(req, stop.signal)).rejects.toThrow(/asked to cancel/);
     expect(fal.pending()).toEqual([]);
+  });
+});
+
+describe('Character swap (Wan Animate Replace, a fake fal.ai)', () => {
+  it('prices by frames, 16 to a billed second', () => {
+    // 10 s of 30 fps video = 300 frames = 18.75 billed seconds.
+    expect(swapCost(10, 30, '720p')).toBe(1.5);
+    expect(swapCost(10, 30, '480p')).toBe(0.75);
+  });
+
+  it('uploads the video and the picture, asks for the swap, keeps the result', async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    const base = 'https://queue.fal.run/fal-ai/wan/requests/s1';
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    let n = 0;
+    const fetch = async (url: string, init?: { method?: string; body?: string | Uint8Array }) => {
+      calls.push({ url, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        n++;
+        return json(200, { upload_url: `https://upload.fal.media/put/${n}`, file_url: `https://v3.fal.media/files/up${n}` });
+      }
+      if (url.startsWith('https://upload.fal.media/put/')) return json(200, {});
+      if (url === 'https://queue.fal.run/fal-ai/wan/v2.2-14b/animate/replace') return json(200, { request_id: 's1', status_url: `${base}/status`, response_url: base });
+      if (url === `${base}/status`) return json(200, { status: 'COMPLETED' });
+      if (url === base) return json(200, { video: { url: 'https://v3.fal.media/files/swapped.mp4' } });
+      if (url === 'https://v3.fal.media/files/swapped.mp4') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(4000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-swap-'), fetch, log, sleep: async () => undefined });
+    const r = await fal.swap({ video: Buffer.from('mp4'), image: Buffer.from('jpg'), resolution: '480p', seconds: 6 }, new AbortController().signal);
+    expect(r.cached).toBe(false);
+    const submit = calls.find((c) => c.url.endsWith('/animate/replace'))!;
+    expect(submit.body).toEqual({ video_url: 'https://v3.fal.media/files/up1', image_url: 'https://v3.fal.media/files/up2', resolution: '480p', video_quality: 'high' });
+    expect(calls.filter((c) => c.url.includes('storage/upload/initiate')).map((c) => (c.body as { content_type: string }).content_type)).toEqual(['video/mp4', 'image/jpeg']);
+    expect((await fal.swap({ video: Buffer.from('mp4'), image: Buffer.from('jpg'), resolution: '480p', seconds: 6 }, new AbortController().signal)).cached).toBe(true);
+    await expect(fal.swap({ video: Buffer.alloc(91 * 1024 * 1024), image: Buffer.from('jpg'), resolution: '480p', seconds: 6 }, new AbortController().signal)).rejects.toThrow(/over 90 MB/);
   });
 });

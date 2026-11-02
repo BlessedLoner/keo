@@ -9,6 +9,7 @@ import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
 import { Brand, patchBrand, respell, type BrandPatch } from '../../shared/studioBrand';
+import { Character, type CharacterPatch } from '../../shared/studioCharacters';
 import { reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
 import { MomentNeeds, momentOps, placeMoments, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
@@ -882,13 +883,22 @@ export class StudioService {
     return Buffer.from(await this.runJob<string>({ kind: 'asset_sheet', projectId: id, assetId }, 2 * 60_000), 'base64');
   }
   /** A clip an AI video model made: imported, marked as AI-made, and placed on the AI shots track at `at`. */
-  async addAiClip(id: string, file: string, o: { at: number; seconds: number; about: string }): Promise<{ project: Project; asset: Asset; clip: string }> {
-    const asset = (await this.importFiles(id, [file])).added[0];
+  async addAiClip(
+    id: string,
+    file: string,
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean },
+  ): Promise<{ project: Project; asset: Asset; clip: string }> {
+    // A clip used again (made before) is already media of the project.
+    const imported = await this.importFiles(id, [file]);
+    const asset = imported.added[0] ?? imported.project.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file).toLowerCase());
     if (!asset) throw new StudioError('Keo could not read the AI clip.');
     this.learn(id, asset.id, { aiMade: true, about: o.about.slice(0, 300) });
-    const r = this.edit(id, [{ op: 'add_media', assetId: asset.id, trackName: 'AI shots', start: Math.max(0, o.at), duration: Math.min(o.seconds, asset.duration), fit: 'cover' }]);
+    const from = Math.min(o.in ?? 0, Math.max(0, asset.duration - 0.1));
+    const r = this.edit(id, [{ op: 'add_media', assetId: asset.id, trackName: o.trackName ?? 'AI shots', start: Math.max(0, o.at), in: from, duration: Math.min(o.duration ?? o.seconds, asset.duration - from), fit: 'cover' }]);
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media' && c.assetId === asset.id).at(-1)!;
-    return { project: r.project, asset, clip: clip.id };
+    // A swapped video is silent over the original, whose sound carries on underneath (one undo).
+    const done = o.muted ? this.mergeLast(id, { op: 'set', clip: clip.id, volume: 0 }) : r;
+    return { project: done.project, asset, clip: clip.id };
   }
 
   /** What Keo saw in a media file, kept with it. */
@@ -911,6 +921,85 @@ export class StudioService {
   /** The timeline's spoken words, spelled the way the user writes them (their brand kit's spellings). */
   private spokenWords(p: Project): ReturnType<typeof timelineWords> {
     return respell(timelineWords(p), this.brand().spellings);
+  }
+
+  // ---------------------------------------------------------------- characters
+
+  private get charactersDir(): string {
+    return path.join(this.d.dir, 'library', 'characters');
+  }
+  /** The user's characters (for every project), oldest first. */
+  characters(): Character[] {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.charactersDir, 'characters.json'), 'utf8')) as unknown[];
+      return raw.flatMap((c) => {
+        const r = Character.safeParse(c);
+        // Pictures that are gone (deleted outside Keo) drop out.
+        return r.success ? [{ ...r.data, pictures: r.data.pictures.filter((f) => fs.existsSync(f)) }] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
+  character(id: string): Character {
+    const c = this.characters().find((x) => x.id === id);
+    if (!c) throw new StudioError('That character is not saved.');
+    return c;
+  }
+  private saveCharacters(list: Character[]): void {
+    fs.mkdirSync(this.charactersDir, { recursive: true });
+    const file = path.join(this.charactersDir, 'characters.json');
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(list));
+    fs.renameSync(`${file}.tmp`, file);
+  }
+  /** Adds a character (no id) or changes one. */
+  saveCharacter(patch: CharacterPatch): Character {
+    const list = this.characters();
+    const name = patch.name?.trim();
+    if (name && list.some((c) => c.id !== patch.id && c.name.toLowerCase() === name.toLowerCase())) throw new StudioError(`There is already a character called ${name}.`);
+    let next: Character;
+    if (patch.id) {
+      const old = list.find((c) => c.id === patch.id);
+      if (!old) throw new StudioError('That character is not saved.');
+      next = Character.parse({ ...old, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) });
+    } else {
+      if (!name) throw new StudioError('A new character needs a name.');
+      if (list.length >= 50) throw new StudioError('Keo keeps up to 50 characters: remove one first.');
+      next = Character.parse({ id: `ch_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, ...patch, name, createdAt: new Date().toISOString() });
+    }
+    this.saveCharacters([...list.filter((c) => c.id !== next.id), next].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+    this.d.log.info('studio.character_saved', { pictures: next.pictures.length });
+    return next;
+  }
+  deleteCharacter(id: string): void {
+    const list = this.characters();
+    if (!list.some((c) => c.id === id)) throw new StudioError('That character is not saved.');
+    this.saveCharacters(list.filter((c) => c.id !== id));
+    fs.rmSync(path.join(this.charactersDir, id), { recursive: true, force: true });
+  }
+  /** A picture of a character, copied into Keo's folder (so moving the original does not lose it). */
+  addCharacterPicture(id: string, file: string): Character {
+    const c = this.character(id);
+    if (c.pictures.length >= 4) throw new StudioError('A character can have up to 4 pictures: remove one first.');
+    const ext = path.extname(file).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) throw new StudioError('Choose a picture (JPG, PNG or WebP).');
+    if (!fs.existsSync(file)) throw new StudioError('That picture is not there any more.');
+    const dir = path.join(this.charactersDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const copy = path.join(dir, `${Date.now().toString(36)}${ext}`);
+    fs.copyFileSync(file, copy);
+    const next = Character.parse({ ...c, pictures: [...c.pictures, copy] });
+    this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
+    return next;
+  }
+  removeCharacterPicture(id: string, picture: string): Character {
+    const c = this.character(id);
+    if (!c.pictures.includes(picture)) throw new StudioError('That picture is not one of this character’s.');
+    const next = Character.parse({ ...c, pictures: c.pictures.filter((p) => p !== picture) });
+    this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
+    // Only Keo's own copy is deleted.
+    if (path.resolve(picture).startsWith(path.resolve(this.charactersDir) + path.sep)) fs.rmSync(picture, { force: true });
+    return next;
   }
 
   /** The user's brand kit (for every project). */

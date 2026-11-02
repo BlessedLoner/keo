@@ -2,6 +2,7 @@ import type { Sound } from './studioSounds';
 import type { Recipe } from './studioRecipe';
 import { Storyboard } from './studioFaceless';
 import { Brand, BrandPatch } from './studioBrand';
+import { Character, CharacterId, CharacterPatch } from './studioCharacters';
 import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
 import { z } from 'zod';
@@ -177,6 +178,10 @@ export const invokeSchemas = {
   'studio:watch': z.object({ id: studioProjectId, on: z.boolean() }).strict(),
   'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
   'studio:brand': z.object({ patch: BrandPatch.optional() }).strict(),
+  'studio:characters': z
+    .object({ action: z.enum(['list', 'save', 'delete', 'addPicture', 'removePicture']), patch: CharacterPatch.optional(), id: CharacterId.optional(), picture: z.string().min(3).max(1000).optional() })
+    .strict(),
+  'studio:characterVoice': z.object({ voice: z.string().regex(/^[a-z]{2,20}$/), text: z.string().trim().min(1).max(200) }).strict(),
   'studio:versions': z
     .object({ id: z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/), action: z.enum(['list', 'save', 'restore', 'delete']), name: z.string().trim().min(1).max(80).optional(), version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional() })
     .strict(),
@@ -515,6 +520,8 @@ export interface InvokeOutputs {
   'studio:soundUse': { clip: string };
   'studio:liveEdits': { on: boolean };
   'studio:brand': Brand;
+  'studio:characters': Character[];
+  'studio:characterVoice': { mimeType: string; base64: string };
   'studio:versions': import('./studio').StudioVersion[];
   'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };

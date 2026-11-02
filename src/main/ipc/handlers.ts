@@ -549,6 +549,25 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { ok: true as const };
     },
     'studio:brand': ({ patch }) => (patch ? s.studio.setBrand(patch) : s.studio.brand()),
+    // Characters for faceless videos (the user's clicks on the Characters page).
+    'studio:characters': async ({ action, patch, id, picture }) => {
+      if (action === 'save') {
+        if (!patch) throw new StudioError('Nothing to save.');
+        s.studio.saveCharacter(patch);
+      } else if (action === 'delete') s.studio.deleteCharacter(id ?? '');
+      else if (action === 'addPicture') {
+        const files = host.pickMedia ? await host.pickMedia() : [];
+        for (const f of files.filter((x) => /\.(jpe?g|png|webp)$/i.test(x)).slice(0, 4)) s.studio.addCharacterPicture(id ?? '', f);
+      } else if (action === 'removePicture') s.studio.removeCharacterPicture(id ?? '', picture ?? '');
+      return s.studio.characters();
+    },
+    // Hearing a character's voice before choosing it (one short line, spoken by that voice's service).
+    'studio:characterVoice': async ({ voice, text }) => {
+      const narrator = s.studioNarrator(voice);
+      if (!narrator) throw new StudioError(voice === 'female' || voice === 'male' ? 'Keo voices need your Keo account: sign in.' : 'OpenAI voices need an OpenAI API key in Settings → Providers.');
+      const r = await narrator.speak(text, new AbortController().signal);
+      return { mimeType: r.mimeType, base64: Buffer.from(r.audio).toString('base64') };
+    },
     'studio:versions': ({ id, action, name, version }) => {
       if (action === 'save') s.studio.saveVersion(id, name ?? 'Version');
       else if ((action === 'restore' || action === 'delete') && !version) throw new StudioError('Choose a version.');

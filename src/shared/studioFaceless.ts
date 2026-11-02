@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CAPTION_STYLE, FORMATS, LOOKS, type EditOp, type FormatId, type LookId, type Project, type Span, type TextStyle, type Zoom } from './studio';
+import { CharacterId, speakerOf, type Character } from './studioCharacters';
 
 /**
  * The faceless creator: a storyboard (narration and a picture per scene) becomes a finished
@@ -26,6 +27,8 @@ export const Scene = z
     transition: SceneCut.optional(),
     /** Seconds of picture after the narration ends. */
     hold: z.number().min(0).max(5).default(0.35),
+    /** The character who says this line (their voice, and their picture when the scene has none). */
+    speaker: CharacterId.optional(),
   })
   .strict();
 export type Scene = z.infer<typeof Scene>;
@@ -44,13 +47,18 @@ export const Storyboard = z
     music: AssetRef.optional(),
     musicVolume: z.number().min(0).max(1).default(0.25),
     soundEffects: z.boolean().default(true),
+    /** The characters in this video (lines starting with their name are theirs). */
+    cast: z.array(CharacterId).max(12).optional(),
     scenes: z.array(Scene).min(1).max(60),
   })
   .strict();
 export type Storyboard = z.infer<typeof Storyboard>;
 
-/** A storyboard from plain text: one scene per paragraph ("[picture: …]" lines describe the picture). */
-export function scenesFromScript(script: string): Scene[] {
+/**
+ * A storyboard from plain text: one scene per paragraph ("[picture: …]" lines describe the picture);
+ * a paragraph starting with a cast member's name ("Kira: …") is their line.
+ */
+export function scenesFromScript(script: string, cast: Array<Pick<Character, 'id' | 'name'>> = []): Scene[] {
   const paras = script
     .replace(/\r\n/g, '\n')
     .split(/\n\s*\n/)
@@ -64,7 +72,8 @@ export function scenesFromScript(script: string): Scene[] {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 1500);
-    return Scene.parse({ narration: narration || title?.[1]?.trim() || 'Scene', ...(pic ? { picture: { prompt: pic[1]!.trim() } } : {}), ...(title ? { title: title[1]!.trim().slice(0, 80) } : {}) });
+    const said = cast.length ? speakerOf(narration, cast) : null;
+    return Scene.parse({ narration: (said?.text ?? narration) || title?.[1]?.trim() || 'Scene', ...(pic ? { picture: { prompt: pic[1]!.trim() } } : {}), ...(title ? { title: title[1]!.trim().slice(0, 80) } : {}), ...(said ? { speaker: said.character } : {}) });
   });
 }
 

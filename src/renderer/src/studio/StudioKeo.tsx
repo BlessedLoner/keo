@@ -22,6 +22,7 @@ const CHIPS: Array<{ label: string; text: string; needs?: 'media' | 'speech' }> 
   { label: 'Translate captions', text: 'Translate all the captions on screen into another language. Ask me which language first, then keep the same timing and style.', needs: 'media' },
   { label: 'Make shorts', text: 'This is a long video: read the transcript and find the 3 best moments for shorts (each 15–90 seconds, a complete thought with a strong hook). Tell me the moments and why, then make each into its own vertical short with a hook title.', needs: 'speech' },
   { label: 'Check my video', text: 'Look at my video carefully and tell me what to improve before I post it. Do not change anything yet.', needs: 'media' },
+  { label: 'Swap in my character', text: 'Replace the person in the video clip I selected with one of my characters (ask me which one, and tell me the price before you start).', needs: 'media' },
 ];
 
 const OUTCOME_ICON: Record<ToolActivity['outcome'], string> = {

@@ -7,7 +7,8 @@ import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/stu
 import { STYLES, type StyleId } from '../../shared/studioStyles';
 import { MOMENTS, type MomentId } from '../../shared/studioMoments';
 import { BrandPatch } from '../../shared/studioBrand';
-import { AI_VIDEO_MODELS, estimateCost, modelSeconds, type AiVideoModelId } from '../studio/aiVideo';
+import { CHARACTER_VOICES, CharacterPatch } from '../../shared/studioCharacters';
+import { AI_VIDEO_MODELS, estimateCost, modelSeconds, swapCost, type AiVideoModelId, type SwapResolution } from '../studio/aiVideo';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
 import { SFX, type SfxKind } from '../studio/sfx';
@@ -52,6 +53,7 @@ export interface StudioToolDeps {
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** Why AI shots cannot be made (no fal.ai key), or null. */
   aiShotBlocked: () => string | null;
 }
@@ -1111,8 +1113,90 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         throw e instanceof StudioError ? fail('studio', e.message) : e;
       });
       // Still being made at fal.ai: it arrives on the timeline by itself (Keo checks every minute).
-      const note = r.pending ? 'fal.ai is still making this clip. It is paid for once and Keo adds it to the AI shots track by itself as soon as it is ready (Keo checks every minute, also after a restart): tell the user, and do not ask for it again.' : null;
+      const note = r.pending ? 'fal.ai is still making this clip. It is paid for once and Keo adds it to the AI shots track by itself as soon as it is ready (Keo checks every 20 seconds, also after a restart; Studio shows that it is on its way): tell the user, and do not ask for it again.' : null;
       return { ...state(s, s.get(p.id)), ...r, note };
+    },
+  });
+
+  const swapCharacter = defineCapability({
+    id: 'studio.swap_character',
+    version: '1.0.0',
+    title: 'Swap the person in a video for a character',
+    description:
+      'Clone a content video with the user’s character: the person in a video clip of the timeline is replaced by one of the user’s characters (their main picture) or a picture of the project, keeping the motion, expressions, timing and light (fal.ai, Wan 2.2 Animate Replace, paid from the user’s own fal.ai account: about $0.15 a second of 30 fps video at 720p, $0.075 at 480p). The new clip goes on the Character swap track over the original, silent, so the original sound carries on. Videos up to 60 s. Use only on videos the user has the right to use, and only with characters that are AI-made or people who agreed; never put a real person’s face into a video without their consent. Say the price first; for a first try suggest 480p. If fal.ai is still making it, it arrives by itself: do not ask again.',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/),
+        character: z.string().regex(/^ch_[A-Za-z0-9]{4,24}$/).optional(),
+        picture: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(),
+        resolution: z.enum(['480p', '580p', '720p']).default('720p'),
+      })
+      .strict(),
+    output: State.partial().extend({ clip: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() }),
+    risk: 'medium',
+    // It spends the user's money and sends their video and picture to fal.ai: they approve every one.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 12 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The new clip is downloaded, kept on this PC and placed over the original (one undo); one fal.ai is still making arrives when ready.',
+    unavailableReason: () => d.aiShotBlocked(),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a video and a picture to fal.ai' }),
+    preview: (i) => {
+      // The price from the clip's video length (fal.ai counts frames; 30 a second assumed).
+      const lengthOf = () => {
+        try {
+          const p = s.resolve(i.projectId);
+          const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === i.clip);
+          return c && c.type === 'media' ? (p.assets.find((a) => a.id === c.assetId)?.duration ?? 0) : 0;
+        } catch {
+          return 0;
+        }
+      };
+      const seconds = lengthOf();
+      const cost = swapCost(seconds, 30, i.resolution).toFixed(2);
+      return {
+        summary: `Swap the person in a ${Math.round(seconds)}-second video for your character at ${i.resolution} (about $${cost})`,
+        target: null,
+        consequences: [`Costs about $${cost} from your fal.ai account (nothing if the same swap was made before).`, 'Adds the new clip over the original on the Character swap track (can be undone).'],
+        dataExport: 'The video and the character’s picture are sent to fal.ai, which runs the AI video model.',
+      };
+    },
+    auditView: (i) => ({ resolution: i.resolution, character: !!i.character }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      if (!i.character && !i.picture) throw fail('studio', 'Say which character (character: ch_…) or picture (picture: as_…) to put in the video.');
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.swapCharacter(p.id, { clip: i.clip, ...(i.character ? { character: i.character } : {}), ...(i.picture ? { picture: i.picture } : {}), resolution: i.resolution }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      const note = r.pending ? 'fal.ai is still making the swapped clip. It is paid for once and Keo puts it over the original by itself as soon as it is ready (Studio shows that it is on its way): tell the user, and do not ask for it again.' : null;
+      return { ...state(s, s.get(p.id)), ...r, note };
+    },
+  });
+
+  const characters = defineCapability({
+    ...simple({
+      id: 'studio.characters',
+      title: 'The user’s characters',
+      description:
+        'The user’s characters for faceless videos (kept for every project): name, looks, voice (' +
+        CHARACTER_VOICES.map((v) => v.id).join(', ') +
+        '), personality notes; pictures are added by the user on the Characters page of the faceless video section. With no changes it lists them. Save only what the user asked for: a new character needs a name; give id to change one. In studio__faceless, set a scene’s speaker to a character id to use their voice and picture.',
+      summary: 'Characters',
+    }),
+    input: CharacterPatch,
+    output: z.object({ characters: z.array(z.object({ id: z.string(), name: z.string(), voice: z.string(), look: z.string(), notes: z.string(), pictures: z.number() })) }),
+    timeoutMs: 10_000,
+    auditView: (i) => ({ change: Object.keys(i).length > 0 }),
+    async execute(i) {
+      if (Object.keys(i).length) run(() => s.saveCharacter(i));
+      return { characters: s.characters().map((c) => ({ id: c.id, name: c.name, voice: c.voice, look: c.look, notes: c.notes, pictures: c.pictures.length })) };
     },
   });
 
@@ -1437,7 +1521,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, aiShot, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

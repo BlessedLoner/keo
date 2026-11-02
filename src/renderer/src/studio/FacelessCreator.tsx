@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FORMATS, LOOKS, type FormatId, type LookId } from '@shared/studio';
 import { scenesFromScript, type Storyboard } from '@shared/studioFaceless';
+import type { Character } from '@shared/studioCharacters';
+import { Characters } from './Characters';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -46,9 +48,19 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
   const [plan, setPlan] = useState<{ voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Step[] | null>(null);
+  const [tab, setTab] = useState<'script' | 'characters'>('script');
+  const [characters, setCharacters] = useState<Character[]>([]);
+  // Loaded again whenever the tab changes (Keo may have added a character from the chat).
+  useEffect(() => {
+    void invoke('studio:characters', { action: 'list' })
+      .then(setCharacters)
+      .catch(() => undefined);
+  }, [tab]);
 
-  const scenes = useMemo(() => (script.trim() ? scenesFromScript(script) : []), [script]);
-  const board: Storyboard | null = scenes.length ? { title: title.trim() || 'Faceless video', format, voice, pictureStyle, captions, look, musicVolume: 0.25, soundEffects: sfx, scenes } : null;
+  // Paragraphs starting with a character's name are theirs; the cast is whoever speaks.
+  const scenes = useMemo(() => (script.trim() ? scenesFromScript(script, characters) : []), [script, characters]);
+  const cast = [...new Set(scenes.map((sc) => sc.speaker).filter((x): x is string => !!x))];
+  const board: Storyboard | null = scenes.length ? { title: title.trim() || 'Faceless video', format, voice, pictureStyle, captions, look, musicVolume: 0.25, soundEffects: sfx, scenes, ...(cast.length ? { cast } : {}) } : null;
 
   // What it will use and send (updated as the script changes).
   useEffect(() => {
@@ -56,7 +68,7 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
     const t = setTimeout(() => void invoke('studio:facelessPlan', board).then(setPlan).catch(() => setPlan(null)), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [script, voice, format]);
+  }, [script, voice, format, characters]);
   useEffect(
     () =>
       subscribe('studio:progress', (m) => {
@@ -95,6 +107,17 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
         <Icon name="film" size={30} />
         <h2>Faceless video</h2>
         <p className="muted">Write the script — one scene per paragraph. Keo reads it in a voice, makes a picture for each scene, moves it, adds transitions and captions. Or ask Keo in the chat to write the script for you.</p>
+        <div className="side-tabs faceless-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'script'} className={tab === 'script' ? 'active' : ''} onClick={() => setTab('script')}>
+            Script
+          </button>
+          <button role="tab" aria-selected={tab === 'characters'} className={tab === 'characters' ? 'active' : ''} onClick={() => setTab('characters')}>
+            Characters{characters.length ? ` (${characters.length})` : ''}
+          </button>
+        </div>
+        {tab === 'characters' && <Characters list={characters} onChange={setCharacters} />}
+        {tab === 'script' && (
+        <>
         <div className="faceless-grid">
           <div className="field">
             <label htmlFor="fl-title">Title</label>
@@ -121,10 +144,20 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
               Use the example
             </button>
           )}
+          {characters.length > 0 && (
+            <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <span className="muted">Add a line for:</span>
+              {characters.map((c) => (
+                <button key={c.id} className={`btn sm${cast.includes(c.id) ? ' primary' : ''}`} disabled={busy} onClick={() => setScript((t) => `${t.trim() ? `${t.trimEnd()}\n\n` : ''}${c.name}: `)} title={`A new paragraph spoken by ${c.name}`}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="faceless-grid">
           <div className="field">
-            <label htmlFor="fl-voice">Voice</label>
+            <label htmlFor="fl-voice">{cast.length ? 'Narrator voice (other lines)' : 'Voice'}</label>
             <select id="fl-voice" className="select" value={voice} onChange={(e) => setVoice(e.target.value)} disabled={busy}>
               {VOICES.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -161,6 +194,8 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
         <label className="insp-check" style={{ justifyContent: 'flex-start' }}>
           <input type="checkbox" checked={sfx} onChange={(e) => setSfx(e.target.checked)} disabled={busy} /> Whoosh on transitions
         </label>
+        </>
+        )}
         {plan && (
           <p className={`small ${plan.reason ? 'warn-text' : 'muted'}`}>
             {plan.reason ?? `Voice: ${plan.voice} · ${plan.aiPictures ? `${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}: ${plan.pictures}` : 'no AI pictures'}`}

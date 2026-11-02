@@ -433,3 +433,16 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .keo-look:hover { border-color: var(--line-strong); background: var(--bg-hover); }
 .keo-look-card { width: 62px; height: 96px; flex: none; border-radius: 7px; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; gap: 2px; overflow: hidden; }
 .keo-look-text { display: flex; flex-direction: column; gap: 3px; justify-content: center; font-size: 12.5px; }
+.faceless-tabs { display: flex; gap: 4px; align-self: stretch; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.characters { display: flex; flex-direction: column; gap: 10px; align-self: stretch; text-align: left; }
+.character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.character-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-elev); color: var(--text); cursor: pointer; text-align: center; }
+.character-card:hover, .character-card.active { border-color: var(--line-strong); background: var(--bg-hover); }
+.character-card img, .character-blank { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; }
+.character-blank { display: flex; align-items: center; justify-content: center; background: var(--bg-inset); font-size: 26px; font-weight: 700; color: var(--text-2); }
+.character-card .small { line-height: 1.2; }
+.character-editor { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg-elev); }
+.character-pictures { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.character-picture { position: relative; }
+.character-picture img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; display: block; }
+.character-picture .btn { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; background: rgba(0, 0, 0, 0.65); }
