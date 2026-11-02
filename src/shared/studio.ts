@@ -895,6 +895,8 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('add_track'), kind: TrackKind, name: z.string().trim().min(1).max(60).optional() }).strict(),
   z.object({ op: z.literal('set_track'), track: TrackRef, hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional() }).strict(),
   z.object({ op: z.literal('delete_track'), track: TrackRef }).strict(),
+  /** Every whole-word match of a word or phrase, in all text and captions, replaced (e.g. a name speech-to-text misheard). */
+  z.object({ op: z.literal('replace_words'), find: z.string().trim().min(1).max(80), replace: z.string().trim().min(1).max(80) }).strict(),
   z.object({ op: z.literal('set_project'), name: z.string().trim().min(1).max(120).optional(), width: z.number().int().min(16).max(7680).optional(), height: z.number().int().min(16).max(7680).optional(), fps: z.number().int().min(1).max(120).optional(), background: Hex.optional(), loudness: z.enum(['off', 'social']).optional() }).strict(),
 ]);
 export type EditOp = z.infer<typeof EditOp>;
@@ -1916,6 +1918,42 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         p.tracks.splice(i, 1);
         break;
       }
+      case 'replace_words': {
+        let count = 0;
+        for (const t of p.tracks)
+          for (const c of t.clips) {
+            if (c.type !== 'text') continue;
+            const r = replaceWords(c.text, op.find, op.replace);
+            if (!r) continue;
+            const find = op.find.split(/\s+/).filter(Boolean);
+            const span = find.length;
+            const into = op.replace.split(/\s+/).filter(Boolean);
+            count += r.at.length;
+            c.text = r.text;
+            if (c.words?.length) {
+              // Timed words: the matched ones become the new ones, sharing their time.
+              const words: NonNullable<TextClip['words']> = [];
+              for (let i = 0; i < c.words.length; ) {
+                const hit = find.every((w, k) => plainWord(c.words![i + k]?.text ?? '') === plainWord(w));
+                if (!hit) {
+                  words.push(c.words[i++]!);
+                  continue;
+                }
+                const from = c.words[i]!.start;
+                const to = c.words[i + span - 1]!.end;
+                const each = (to - from) / into.length;
+                into.forEach((w, k) => words.push({ text: w.slice(0, 80), start: round(from + k * each), end: round(from + (k + 1) * each) }));
+                i += span;
+              }
+              c.words = words;
+            }
+            // Styled words keep their place only when the word count stays the same.
+            if (c.marks && span !== into.length) delete c.marks;
+          }
+        if (!count) throw new EditError(`“${op.find}” is not in any text or caption.`);
+        changes.push(`Replaced “${op.find}” with “${op.replace}” ${count} time${count === 1 ? '' : 's'}.`);
+        break;
+      }
       case 'set_project': {
         if (op.name) p.name = op.name;
         if (op.width) p.width = op.width;
@@ -2037,4 +2075,30 @@ export function trackTransition(tr: Track, t: number): { out: MediaClip; in: Med
     if (t >= from && t < from + d) return { out: prev, in: c, p: (t - from) / d, kind: c.transition.kind };
   }
   return null;
+}
+
+const plainWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+
+/**
+ * A text with every whole-word match of `find` (a word or phrase, any case, punctuation around it
+ * kept) replaced; null when nothing matched. Also says, per match, where it was among the words.
+ */
+export function replaceWords(text: string, find: string, replace: string): { text: string; at: number[] } | null {
+  const want = find.split(/\s+/).map(plainWord).filter(Boolean);
+  if (!want.length) return null;
+  const tokens = text.split(/(\s+)/);
+  const words = tokens.filter((t, i) => i % 2 === 0 && t.length);
+  const out: string[] = [];
+  const at: number[] = [];
+  for (let i = 0; i < words.length; ) {
+    if (want.every((w, k) => plainWord(words[i + k] ?? '') === w)) {
+      // Keep what was around the phrase ("KUI," → "Keo,").
+      const lead = /^[^\p{L}\p{N}]*/u.exec(words[i]!)![0];
+      const trail = /[^\p{L}\p{N}]*$/u.exec(words[i + want.length - 1]!)![0];
+      at.push(i);
+      out.push(`${lead}${replace}${trail}`);
+      i += want.length;
+    } else out.push(words[i++]!);
+  }
+  return at.length ? { text: out.join(' '), at } : null;
 }

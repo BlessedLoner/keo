@@ -8,7 +8,7 @@ import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studio
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
-import { Brand, patchBrand, type BrandPatch } from '../../shared/studioBrand';
+import { Brand, patchBrand, respell, type BrandPatch } from '../../shared/studioBrand';
 import { reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
 import { MomentNeeds, momentOps, placeMoments, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
@@ -836,7 +836,7 @@ export class StudioService {
   ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean }> {
     if (projectDuration(this.get(id)) === 0) throw new StudioError('The timeline is empty: add a video with speech first.');
     await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
-    const words = timelineWords(this.get(id));
+    const words = this.spokenWords(this.get(id));
     if (!words.length) throw new StudioError('No spoken words were found in the timeline’s sound.');
     const lines = captionLines(words, { maxWords: o.maxWords ?? 3 });
     const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
@@ -896,6 +896,11 @@ export class StudioService {
     const issues = reviewEdit(p, samples);
     this.d.log.info('studio.review', { samples: samples.length, issues: issues.length });
     return issues;
+  }
+
+  /** The timeline's spoken words, spelled the way the user writes them (their brand kit's spellings). */
+  private spokenWords(p: Project): ReturnType<typeof timelineWords> {
+    return respell(timelineWords(p), this.brand().spellings);
   }
 
   /** The user's brand kit (for every project). */
@@ -1004,7 +1009,7 @@ export class StudioService {
     // What the user did not say comes from their brand kit.
     const b = this.brand();
     const o = { ...(b.handle ? { handle: b.handle } : {}), ...(b.endText ? { endText: b.endText } : {}), ...(b.accent ? { accent: b.accent } : {}), ...given };
-    const words = timelineWords(p);
+    const words = this.spokenWords(p);
     const lines = words.length ? captionLines(words, { maxWords: 4 }) : [];
     const stressed = o.emphasis?.length ? o.emphasis : guessEmphasis(words);
     const make = (q: Project, sfx?: StyleOptions['sfx']) => {
@@ -1065,7 +1070,7 @@ export class StudioService {
     if (!candidates.length && r.shots.some((s) => s.kind === 'screen' || s.kind === 'graphic'))
       throw new StudioError('This template cuts to screen recordings or B-roll, but every other clip here is someone talking (or there are none). Import screen recordings or B-roll, or name the clips to cut to.');
     const cutaways = candidates.map((a) => ({ assetId: a.id, duration: a.duration, kind: a.kind === 'image' ? ('image' as const) : ('video' as const) }));
-    const words = timelineWords(p).filter((w) => w.start >= start - 0.05 && w.end <= end + 0.05);
+    const words = this.spokenWords(p).filter((w) => w.start >= start - 0.05 && w.end <= end + 0.05);
     const built = recipeOps(r, { main: { clip: mainClips[0]!.id, start, duration: end - start }, cutaways, words, endText: o.endText ?? r.endCard.text });
     const hasMoments = !!r.moments?.length || !!r.style;
     if (!built.ops.length && !hasMoments) throw new StudioError('There is nothing in this project the template can use: add screen recordings or other clips to cut to.');

@@ -257,7 +257,7 @@
 
 /* Timeline */
 .studio-timeline { height: 216px; flex: none; overflow: auto; background: var(--bg-inset); border-top: 1px solid var(--line); position: relative; user-select: none; }
-.tl-inner { position: relative; min-height: 100%; }
+.tl-inner { position: relative; min-height: 100%; min-width: 100%; }
 .studio-timeline::-webkit-scrollbar { width: 12px; height: 12px; }
 .studio-timeline::-webkit-scrollbar-track { background: var(--bg-inset); }
 .studio-timeline::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.22); border-radius: 6px; border: 2px solid var(--bg-inset); }
@@ -408,6 +408,9 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .keo-tools li.awaiting_authorization .keo-tool-mark { color: #ffbf47; }
 .keo-approval .approval { margin: 0; font-size: 12.5px; }
 .keo-approval .approval .row { flex-wrap: wrap; }
+.spelling-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
+.spelling-row .input { flex: 1; min-width: 0; height: 26px; font-size: 12px; }
+.spelling-row > span { flex: 1; }
 .keo-ask { border: 1px solid rgba(139, 107, 255, 0.55); background: var(--bg-elev); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .keo-ask p { margin: 0; }
 .keo-ask-q { font-weight: 600; line-height: 1.4; }

@@ -13,6 +13,7 @@ export function BrandKit() {
   const ui = useUi();
   const [brand, setBrand] = useState<Brand>({});
   const [draft, setDraft] = useState<Brand>({});
+  const [spell, setSpell] = useState({ heard: '', say: '' });
   useEffect(() => {
     void invoke('studio:brand', {})
       .then((b) => {
@@ -63,6 +64,36 @@ export function BrandKit() {
             <option value="doc-serif">Documentary serif</option>
           </select>
         </label>
+      </div>
+      <div className="insp-num wide">
+        <span>Spellings (words speech-to-text gets wrong)</span>
+        {(brand.spellings ?? []).map((s, i) => (
+          <div key={`${s.heard}-${i}`} className="spelling-row">
+            <span className="small">
+              “{s.heard}” → <strong>{s.say}</strong>
+            </span>
+            <button className="btn icon sm ghost" title="Remove this spelling" aria-label={`Remove ${s.heard}`} onClick={() => void save({ spellings: (brand.spellings ?? []).filter((_, k) => k !== i) })}>
+              ×
+            </button>
+          </div>
+        ))}
+        <form
+          className="spelling-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const heard = spell.heard.trim();
+            const say = spell.say.trim();
+            if (!heard || !say) return;
+            void save({ spellings: [...(brand.spellings ?? []).filter((x) => x.heard.toLowerCase() !== heard.toLowerCase()), { heard, say }] });
+            setSpell({ heard: '', say: '' });
+          }}
+        >
+          <input className="input" value={spell.heard} placeholder="Heard (KUI)" maxLength={60} onChange={(e) => setSpell({ ...spell, heard: e.target.value })} aria-label="Word as heard" />
+          <input className="input" value={spell.say} placeholder="Write (Keo)" maxLength={60} onChange={(e) => setSpell({ ...spell, say: e.target.value })} aria-label="Word as written" />
+          <button type="submit" className="btn sm">
+            Add
+          </button>
+        </form>
       </div>
       <label className="insp-num wide">
         <span>Headline font</span>
