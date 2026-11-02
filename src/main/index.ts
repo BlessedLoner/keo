@@ -1618,6 +1618,10 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       const fit = await js(`const el = document.querySelector('.studio-timeline'); return { scroll: el.scrollWidth, width: el.clientWidth };`);
       fs.writeFileSync(path.join(dir, 'studio-timeline.json'), JSON.stringify({ wheelScrolled: wheel, fit }));
       fs.writeFileSync(path.join(dir, 'studio-fit.png'), (await win.webContents.capturePage()).toPNG());
+      // Keo's looks, for someone who does not know what they want yet.
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Smart tools')?.click();`);
+      await wait(600);
+      fs.writeFileSync(path.join(dir, 'studio-looks.png'), (await win.webContents.capturePage()).toPNG());
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);
