@@ -92,6 +92,7 @@ import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/
 import { findQuote, nameMentioned } from './agent/quotes';
 import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
+import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, type AiVideoModelId } from './studio/aiVideo';
 
 export interface ServiceDeps {
   profile: ProfileInfo;
@@ -142,6 +143,8 @@ export interface ServiceDeps {
   pickMedia?: () => Promise<string[]>;
   /** A test voice for the faceless creator (the app uses Keo Cloud or OpenAI). */
   studioNarrate?: (text: string, voice: string, signal: AbortSignal) => Promise<{ audio: Uint8Array; mimeType: string }>;
+  /** Tests: a fake fal.ai (AI shots never reach the real service in tests). */
+  aiVideoFetch?: ConstructorParameters<typeof FalVideo>[0]['fetch'];
   /** The user's Videos folder (finished videos go to Videos\Keo). */
   videosDir?: string;
   /** IMAP and SMTP for the email account (tests inject fakes; no test reaches a mail server). */
@@ -294,6 +297,7 @@ export class Services {
   readonly profile: ProfileInfo;
   private push: Push = () => undefined;
   private retentionTimer: NodeJS.Timeout | null = null;
+  private aiShotTimer: NodeJS.Timeout | null = null;
   private readonly clipboard: { readText(): Promise<string>; writeText(text: string): Promise<void> };
   private readonly launchTestWindow: (title: string) => TestWindow;
   private selfTestRunning: Promise<SelfTestReport> | null = null;
@@ -311,6 +315,7 @@ export class Services {
     this.studioRoot = path.join(d.profile.userData, 'studio');
     this.profile = d.profile;
     this.log = d.logger ?? new Logger(d.profile.logsDir, d.logEcho ?? false);
+    this.ownsLog = !d.logger;
     this.db = openDatabase(d.profile.dbFile);
     this.settings = new SettingsStore(d.profile.userData, this.log);
     this.secrets = new SecretStore(d.profile.secretsDir, d.cipher);
@@ -489,6 +494,12 @@ export class Services {
       changed: (p) => this.push('studio:changed', p),
       keoAction: (a) => this.push('studio:keoAction', a),
       showProject: (projectId) => this.push('studio:show', { projectId }),
+    });
+    this.aiVideo = new FalVideo({
+      key: () => this.secrets.get('fal'),
+      dir: path.join(this.studioRoot, 'ai-shots'),
+      fetch: d.aiVideoFetch ?? ((url, init) => fetch(url, init)),
+      log: this.log,
     });
     this.email = new EmailService({
       settings: getSettings,
@@ -684,6 +695,8 @@ export class Services {
         userTexts: (conversationId) => this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user').map((m) => m.content),
         checklist: (projectId, steps) => this.emit('studio:progress', { projectId, stage: 'checklist', steps }),
         ask: (a) => this.emit('studio:ask', a),
+        aiShot: (projectId, o, signal) => this.studioAiShot(projectId, o, signal),
+        aiShotBlocked: () => (this.secrets.has('fal') ? null : 'AI shots need a fal.ai API key: the user adds one in Settings → Providers (fal.ai), paid from their own fal.ai account.'),
         captionSource: () => {
           const t = this.studioTranscriber();
           return t ? { destination: t.destination, exact: !!t.words } : null;
@@ -1270,6 +1283,69 @@ export class Services {
    * Speech-to-text for Studio captions: OpenAI with word times when the user has their own OpenAI key
    * (or a test transcriber), else Keo Cloud (text per piece of speech); null when neither is there.
    */
+  /**
+   * An AI shot: a picture of the project made into a short clip by an AI video model (fal.ai, the
+   * user's key and money), then placed on the timeline. A clip made before is reused, not paid again.
+   */
+  async studioAiShot(
+    id: string,
+    o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number },
+    signal: AbortSignal,
+  ): Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    const p = this.studio.get(id);
+    const a = p.assets.find((x) => x.id === o.assetId);
+    if (!a || a.kind !== 'image') throw new StudioError('Choose a picture of this project to bring to life.');
+    const jpeg = this.imageTools.jpeg?.(a.path, 1280) ?? null;
+    if (!jpeg) throw new StudioError('Keo could not read that picture.');
+    const aspect = p.width > p.height * 1.15 ? '16:9' : p.height > p.width * 1.15 ? '9:16' : '1:1';
+    const about = `AI clip (${AI_VIDEO_MODELS[o.model].label}) from ${a.name}: ${o.prompt}`;
+    const request = { model: o.model, image: jpeg, prompt: o.prompt, seconds: o.seconds, audio: o.audio, aspect } as const;
+    // The same request fal.ai is still making from an earlier try: picked up, not paid again.
+    const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.hashOf(request));
+    try {
+      const made = await this.aiVideo.generate(request, signal, { context: { projectId: id, at: o.at, about } });
+      const costUsd = made.cached || resumed ? 0 : estimateCost(o.model, o.seconds, o.audio);
+      if (!made.cached && !resumed) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: 'fal.ai', model: o.model, seconds: made.seconds, costUsd } });
+      const r = await this.studio.addAiClip(id, made.file, { at: o.at, seconds: made.seconds, about });
+      return { clip: r.clip, asset: r.asset.id, seconds: made.seconds, cached: made.cached, costUsd, pending: false };
+    } catch (e) {
+      // Still being made: remembered (paid once), checked in the background, added when ready.
+      if (e instanceof AiVideoPending) {
+        if (!resumed) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: 'fal.ai', model: o.model, seconds: e.job.seconds, costUsd: estimateCost(o.model, o.seconds, o.audio) } });
+        return { clip: null, asset: null, seconds: e.job.seconds, cached: false, costUsd: resumed ? 0 : estimateCost(o.model, o.seconds, o.audio), pending: true };
+      }
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /**
+   * AI shots fal.ai finished after Keo stopped waiting: downloaded and put on their project's
+   * timeline (once), with a note in Studio. Runs every minute while Keo is open.
+   */
+  async checkAiShots(): Promise<void> {
+    await this.aiVideo.checkPending(
+      (job, file) => {
+        const ctx = job.context;
+        if (!ctx) return;
+        void (async () => {
+          try {
+            const p = this.studio.get(ctx.projectId);
+            // Already on the timeline (the user asked again and it was added then): not twice.
+            const have = p.assets.find((x) => path.resolve(x.path).toLowerCase() === path.resolve(file).toLowerCase());
+            if (have && p.tracks.some((t) => t.clips.some((c) => c.type === 'media' && c.assetId === have.id))) return;
+            await this.studio.addAiClip(ctx.projectId, file, { at: ctx.at, seconds: job.seconds, about: ctx.about });
+            this.emit('studio:aiShot', { projectId: ctx.projectId, ok: true, message: 'Your AI clip is ready: Keo put it on the AI shots track.' });
+          } catch (e) {
+            this.log.warn('studio.ai_shot_place_failed', { error: e instanceof Error ? e.message : String(e) });
+          }
+        })();
+      },
+      (job, message) => {
+        if (job.context) this.emit('studio:aiShot', { projectId: job.context.projectId, ok: false, message });
+      },
+    );
+  }
+
   studioTranscriber(): { destination: string; words?: (wav: Buffer, signal: AbortSignal) => Promise<CaptionWord[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> } | null {
     const language = this.settings.get().wake.culture.split('-')[0]!.toLowerCase();
     const own = this.videoTranscribe;
@@ -2020,8 +2096,12 @@ export class Services {
   private readonly deps: ServiceDeps;
   /** The user's Keo account (Keo Cloud). */
   readonly account: KeoAccount;
+  /** Whether this created its own log (and so closes it at shutdown). */
+  private readonly ownsLog: boolean;
   /** Keo Studio: video projects edited by the user and by Keo. */
   readonly studio: StudioService;
+  /** AI shots: pictures made into video clips by AI video models through fal.ai (the user's key). */
+  readonly aiVideo: FalVideo;
   readonly fileSearch: FileSearch;
   /** Picture edits, animations and AI pictures. */
   readonly pictures: PictureStudio;
@@ -2201,6 +2281,10 @@ export class Services {
     }
     this.retentionTimer = setInterval(purge, 15 * 60 * 1000);
     this.retentionTimer.unref?.();
+    // AI shots fal.ai finished after Keo stopped waiting (or while Keo was closed): fetched every minute.
+    this.aiShotTimer = setInterval(() => void this.checkAiShots(), 60_000);
+    this.aiShotTimer.unref?.();
+    setTimeout(() => void this.checkAiShots(), 5_000).unref?.();
     // New-mail check (Settings → Email & calendar; off by default): it only runs when switched on.
     this.email.startWatcher();
     this.log.info('app.recovered', { interruptedMessages, ...recovery });
@@ -2286,6 +2370,7 @@ export class Services {
 
   async shutdown(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    if (this.aiShotTimer) clearInterval(this.aiShotTimer);
     this.schedule.stop();
     this.email.stopWatcher();
     this.googleAuth.cancelSignIn();
@@ -2306,7 +2391,8 @@ export class Services {
     this.desktop.backend.dispose();
     this.log.info('app.shutdown', {});
     this.db.close();
-    await this.log.close();
+    // A log handed in by the app (one for every account it opens) stays open for the next account.
+    if (this.ownsLog) await this.log.close();
   }
 }
 

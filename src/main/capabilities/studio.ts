@@ -7,6 +7,7 @@ import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/stu
 import { STYLES, type StyleId } from '../../shared/studioStyles';
 import { MOMENTS, type MomentId } from '../../shared/studioMoments';
 import { BrandPatch } from '../../shared/studioBrand';
+import { AI_VIDEO_MODELS, estimateCost, modelSeconds, type AiVideoModelId } from '../studio/aiVideo';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
 import { SFX, type SfxKind } from '../studio/sfx';
@@ -50,6 +51,9 @@ export interface StudioToolDeps {
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
+  aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  /** Why AI shots cannot be made (no fal.ai key), or null. */
+  aiShotBlocked: () => string | null;
 }
 
 const Step = z.object({ label: z.string().trim().min(1).max(80), status: z.enum(['pending', 'running', 'done', 'skipped', 'failed']), note: z.string().trim().max(160).optional() }).strict();
@@ -1054,6 +1058,64 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const aiShot = defineCapability({
+    id: 'studio.ai_shot',
+    version: '1.0.0',
+    title: 'Make an AI shot',
+    description:
+      'Bring a picture of the project to life as a short video clip made by an AI video model (fal.ai, paid per second from the user’s own fal.ai account), placed on the AI shots track at the given time. Use it for footage the user does not have: a character or product photo moving, a scene for a faceless video. Models: ' +
+      Object.entries(AI_VIDEO_MODELS)
+        .map(([k, m]) => `${k} (${m.label}, ${m.seconds[0]}–${m.seconds.at(-1)} s, about $${m.perSecond.silent}/s, $${m.perSecond.audio}/s with sound)`)
+        .join('; ') +
+      '. kling-3-pro is the everyday choice and keeps a character’s face steady; veo-3.1-fast for cheap drafts. prompt: what moves and how the camera moves, in plain words (e.g. "she turns to the camera and smiles, slow push in, soft daylight"); never ask for real people who have not agreed, or for anything sexual or violent. Every clip costs the user money: say the price and ask before making more than one, prefer short clips, and reuse clips already made (the same request is never paid twice). The clip is marked as AI-made: remind the user to turn on the AI label when they post.',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        assetId: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/),
+        prompt: z.string().trim().min(3).max(600),
+        model: z.enum(Object.keys(AI_VIDEO_MODELS) as [AiVideoModelId, ...AiVideoModelId[]]).default('kling-3-pro'),
+        seconds: z.number().min(3).max(10).default(5),
+        audio: z.boolean().default(false),
+        at: z.number().min(0).default(0),
+      })
+      .strict(),
+    output: State.partial().extend({ clip: z.string().nullable(), asset: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() }),
+    risk: 'medium',
+    // It spends the user's money and sends their picture to fal.ai: they approve every one.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 12 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The clip is downloaded, kept on this PC and placed on the timeline (one undo); one fal.ai is still making arrives on the timeline when ready.',
+    unavailableReason: () => d.aiShotBlocked(),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a picture to fal.ai' }),
+    preview: (i) => {
+      const m = AI_VIDEO_MODELS[i.model];
+      const cost = estimateCost(i.model, i.seconds, i.audio).toFixed(2);
+      return {
+        summary: `Make a ${modelSeconds(i.model, i.seconds)}-second AI clip with ${m.label} (about $${cost})`,
+        target: null,
+        consequences: [`Costs about $${cost} from your fal.ai account (nothing if the same clip was made before).`, 'Adds the clip on the AI shots track (can be undone).'],
+        dataExport: 'The picture and the description are sent to fal.ai, which runs the AI video model.',
+      };
+    },
+    auditView: (i) => ({ model: i.model, seconds: i.seconds, audio: i.audio }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.aiShot(p.id, { assetId: i.assetId, prompt: i.prompt, model: i.model, seconds: i.seconds, audio: i.audio, at: i.at }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      // Still being made at fal.ai: it arrives on the timeline by itself (Keo checks every minute).
+      const note = r.pending ? 'fal.ai is still making this clip. It is paid for once and Keo adds it to the AI shots track by itself as soon as it is ready (Keo checks every minute, also after a restart): tell the user, and do not ask for it again.' : null;
+      return { ...state(s, s.get(p.id)), ...r, note };
+    },
+  });
+
   const brand = defineCapability({
     ...simple({
       id: 'studio.brand',
@@ -1375,7 +1437,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, review, versions, aiShot, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

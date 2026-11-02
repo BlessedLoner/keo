@@ -229,6 +229,8 @@ export function StudioView() {
       }),
     [],
   );
+  // An AI shot fal.ai finished (or failed) after Keo stopped waiting: said wherever the user is in Studio.
+  useEffect(() => subscribe('studio:aiShot', (m) => ui.toast(m.message, m.ok ? 'success' : 'error')), [ui]);
   useEffect(
     () =>
       subscribe('studio:progress', (m) => {

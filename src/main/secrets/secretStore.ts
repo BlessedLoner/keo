@@ -18,6 +18,8 @@ export type SecretName =
   | 'local'
   | 'brave'
   | 'picovoice'
+  /** fal.ai: AI video models (AI shots in Studio), paid by the user. */
+  | 'fal'
   /** The email account's app password (IMAP and SMTP). */
   | 'email_password'
   /** Google OAuth client secret of the user's own "Desktop app" client, if it has one. */

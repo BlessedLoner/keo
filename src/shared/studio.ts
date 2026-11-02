@@ -103,6 +103,8 @@ export const Asset = z
     bpm: z.number().min(20).max(400).nullable().optional(),
     /** What Keo saw in it, in a sentence (so it can pick the right clip for a moment). */
     about: z.string().trim().min(1).max(300).optional(),
+    /** Made by an AI video model (Keo reminds the user to label the video as AI when they post it). */
+    aiMade: z.boolean().optional(),
     /** Degrees clockwise the video's frames are turned to stand upright (phone videos); width and height are upright. */
     rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
     /** A light copy (540p) the preview plays instead of a big video; the export always uses the original. */

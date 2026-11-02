@@ -282,6 +282,9 @@ export const invokeSchemas = {
   'web:status': empty,
   'web:setKey': z.object({ apiKey: z.string().trim().min(8).max(200) }).strict(),
   'web:clearKey': empty,
+  'aivideo:status': empty,
+  'aivideo:setKey': z.object({ apiKey: z.string().trim().min(8).max(300) }).strict(),
+  'aivideo:clearKey': empty,
   'web:test': empty,
 
   'email:status': empty,
@@ -565,6 +568,9 @@ export interface InvokeOutputs {
   'web:status': WebStatus;
   'web:setKey': WebStatus;
   'web:clearKey': WebStatus;
+  'aivideo:status': { hasKey: boolean; secretStorage: boolean };
+  'aivideo:setKey': { hasKey: boolean; secretStorage: boolean };
+  'aivideo:clearKey': { hasKey: boolean; secretStorage: boolean };
   'web:test': { ok: boolean; message: string; sample: Array<{ title: string; url: string }> };
   'email:status': EmailStatus;
   'email:save': EmailStatus;

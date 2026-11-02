@@ -24,6 +24,8 @@ export interface WindowCaptureSource {
 export interface ImageTools {
   /** Downscale so the longest side is at most maxSide; returns PNG bytes. */
   fit(png: Buffer, maxSide: number): Buffer;
+  /** A picture file as a JPEG at most maxSide pixels on its longest side (null: it could not be read). */
+  jpeg?(file: string, maxSide: number): Buffer | null;
 }
 
 export interface FreshObservation extends Observation {

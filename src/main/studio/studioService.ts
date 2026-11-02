@@ -745,7 +745,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about' | 'aiMade'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -881,6 +881,16 @@ export class StudioService {
     if (!a || a.kind === 'audio') throw new StudioError('Choose a picture or video of this project.');
     return Buffer.from(await this.runJob<string>({ kind: 'asset_sheet', projectId: id, assetId }, 2 * 60_000), 'base64');
   }
+  /** A clip an AI video model made: imported, marked as AI-made, and placed on the AI shots track at `at`. */
+  async addAiClip(id: string, file: string, o: { at: number; seconds: number; about: string }): Promise<{ project: Project; asset: Asset; clip: string }> {
+    const asset = (await this.importFiles(id, [file])).added[0];
+    if (!asset) throw new StudioError('Keo could not read the AI clip.');
+    this.learn(id, asset.id, { aiMade: true, about: o.about.slice(0, 300) });
+    const r = this.edit(id, [{ op: 'add_media', assetId: asset.id, trackName: 'AI shots', start: Math.max(0, o.at), duration: Math.min(o.seconds, asset.duration), fit: 'cover' }]);
+    const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media' && c.assetId === asset.id).at(-1)!;
+    return { project: r.project, asset, clip: clip.id };
+  }
+
   /** What Keo saw in a media file, kept with it. */
   noteAsset(id: string, assetId: string, about: string): Project {
     if (!this.get(id).assets.some((a) => a.id === assetId)) throw new StudioError('That media is not in this project.');

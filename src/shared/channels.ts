@@ -173,6 +173,9 @@ export const INVOKE_CHANNELS = [
   'web:status',
   'web:setKey',
   'web:clearKey',
+  'aivideo:status',
+  'aivideo:setKey',
+  'aivideo:clearKey',
   'web:test',
   'email:status',
   'email:save',
@@ -276,6 +279,7 @@ export const pushChannels = [
   'studio:keoAction',
   'studio:show',
   'studio:ask',
+  'studio:aiShot',
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

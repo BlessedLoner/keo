@@ -36,4 +36,12 @@ export const electronImageTools: ImageTools = {
     if (scale >= 1) return png;
     return img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' }).toPNG();
   },
+  jpeg(file, maxSide) {
+    const img = nativeImage.createFromPath(file);
+    if (img.isEmpty()) return null;
+    const { width, height } = img.getSize();
+    const scale = Math.min(1, maxSide / Math.max(width, height));
+    const out = scale < 1 ? img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' }) : img;
+    return out.toJPEG(85);
+  },
 };

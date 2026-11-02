@@ -778,6 +778,18 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       ].map((a) => ({ ...a, available: fs.existsSync(a.path) }));
     },
 
+    // fal.ai, for AI shots in Studio (the user's own account): the key is stored encrypted, never shown again.
+    'aivideo:status': () => ({ hasKey: s.secrets.has('fal'), secretStorage: s.secrets.available() }),
+    'aivideo:setKey': ({ apiKey }) => {
+      s.secrets.set('fal', apiKey.trim());
+      s.log.info('aivideo.key_set', {});
+      return { hasKey: true, secretStorage: s.secrets.available() };
+    },
+    'aivideo:clearKey': () => {
+      s.secrets.delete('fal');
+      s.log.info('aivideo.key_cleared', {});
+      return { hasKey: false, secretStorage: s.secrets.available() };
+    },
     'web:status': () => webStatus(),
     'web:setKey': ({ apiKey }) => {
       s.secrets.set('brave', apiKey.trim());

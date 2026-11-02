@@ -15,12 +15,23 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
   const bytes = ((size.width * size.height * size.fps * QUALITY_BPP[quality] + 192_000) * seconds) / 8;
   const mb = bytes / 1_000_000;
   const short = Math.min(project.width, project.height);
+  // AI-made clips on the timeline: the apps ask for an AI label on realistic AI video.
+  const aiAssets = new Set(project.assets.filter((a) => a.aiMade).map((a) => a.id));
+  const hasAi = project.tracks.some((t) => !t.hidden && t.clips.some((c) => (c.type === 'media' || c.type === 'audio') && aiAssets.has(c.assetId)));
   return (
     <div className="modal-back" role="dialog" aria-modal="true" aria-label="Export" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal export-dialog">
         <h3>
           <Icon name="download" size={18} /> Export video
         </h3>
+        {hasAi && (
+          <div className="banner info small" role="note">
+            <Icon name="info" size={15} />
+            <div className="grow">
+              This video has AI-made clips. When you post it, turn on the AI label: YouTube “Altered or synthetic content”, TikTok “AI-generated content”, Instagram “AI info”. Without it, platforms can hide or remove realistic AI videos.
+            </div>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="ex-name">File name</label>
           <input id="ex-name" className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />

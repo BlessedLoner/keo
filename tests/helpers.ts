@@ -286,6 +286,8 @@ export function makeHarness(
   const cipher = new FakeCipher();
   const clipboard = memoryClipboard('user clipboard before');
   desktop.clipboardSource = clipboard;
+  // The app's log is handed in, as the real app does: closed here, after the services shut down.
+  const logger = new Logger(profile.logsDir, false);
   const services = new Services({
     profile,
     cipher,
@@ -293,7 +295,7 @@ export function makeHarness(
     captureSource: capture,
     imageTools: passthroughImages,
     testProvider: provider,
-    logger: new Logger(profile.logsDir, false),
+    logger,
     focusSettleMs: 0,
     speechEngine: opts.speech ?? new FakeSpeech(),
     clipboard,
@@ -318,7 +320,7 @@ export function makeHarness(
     capture,
     cipher,
     clipboard,
-    close: () => services.shutdown(),
+    close: () => services.shutdown().finally(() => logger.close()),
   };
 }
 

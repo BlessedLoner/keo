@@ -878,7 +878,8 @@ app.on('before-quit', (e) => {
     .catch(() => undefined)
     .finally(() => {
       services = null;
-      app.quit();
+      // The app's log (shared by every account it opened) is closed last, after everything is written.
+      void log.close().finally(() => app.quit());
     });
 });
 
@@ -1622,6 +1623,9 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Smart tools')?.click();`);
       await wait(600);
       fs.writeFileSync(path.join(dir, 'studio-looks.png'), (await win.webContents.capturePage()).toPNG());
+      // Back to where the next steps expect to be: History closed, Keo's chat on the right, Media on the left.
+      await js(`document.querySelector('.history-wrap > button')?.click(); [...document.querySelectorAll('.side-tabs button')].find((b) => b.textContent.includes('Keo'))?.click(); [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Media')?.click();`);
+      await wait(500);
       // Watching Keo edit: three cuts made through Keo's own tool, caught in the middle of the second.
       await js(`const ta = document.querySelector('.keo-input textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '/tool studio.edit {"ops":[{"op":"cut_ranges","ranges":[{"from":1,"to":1.6},{"from":3,"to":3.6},{"from":4.4,"to":5}]}]}'); ta.dispatchEvent(new Event('input', { bubbles: true }));`);
       await wait(200);
@@ -1699,6 +1703,12 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Web search'))?.click();`);
   await wait(700);
   fs.writeFileSync(path.join(dir, 'settings-web.png'), (await win.webContents.capturePage()).toPNG());
+  // AI video (fal.ai) in Providers.
+  await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Providers'))?.click();`);
+  await wait(700);
+  await js(`document.querySelector('section[aria-label="AI video"]')?.scrollIntoView({ block: 'center' });`);
+  await wait(400);
+  fs.writeFileSync(path.join(dir, 'settings-aivideo.png'), (await win.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('[role=tab]')].find(b => b.textContent.includes('Voice'))?.click();`);
   await wait(1500);
   fs.writeFileSync(path.join(dir, 'settings-voice.png'), (await win.webContents.capturePage()).toPNG());

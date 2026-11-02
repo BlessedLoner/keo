@@ -439,7 +439,53 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
         ))}
         <SmartRouting s={s} patch={patch} list={list} />
       </details>
+      <AiVideoKey />
     </>
+  );
+}
+
+/** fal.ai, for AI shots in Studio: the user's own account and key (paid per second of video). */
+function AiVideoKey() {
+  const ui = useUi();
+  const [status, setStatus] = useState<{ hasKey: boolean; secretStorage: boolean } | null>(null);
+  const [key, setKey] = useState('');
+  useEffect(() => {
+    void invoke('aivideo:status').then(setStatus, (e) => ui.error(errText(e)));
+  }, [ui]);
+  const save = async () => {
+    try {
+      setStatus(await invoke('aivideo:setKey', { apiKey: key }));
+      setKey('');
+      ui.toast('fal.ai key saved (encrypted)', 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <section className="card" aria-label="AI video">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>AI video (fal.ai)</h2>
+        {status?.hasKey ? <span className="chip ok">Key stored</span> : <span className="chip">Not set up</span>}
+      </div>
+      <p className="muted small">
+        Lets Keo bring pictures to life as short AI video clips in Studio (Kling, Veo and more), paid per second from your own fal.ai account. Keo shows the price and asks before every clip, and keeps each clip so it is never paid for twice. The key is encrypted with Windows (DPAPI) and never shown again.
+      </p>
+      <div className="field">
+        <label htmlFor="fal-key">fal.ai API key</label>
+        <div className="row">
+          <input id="fal-key" className="input" type="password" autoComplete="off" spellCheck={false} placeholder={status?.hasKey ? 'Replace stored key…' : 'Paste your fal.ai API key'} value={key} onChange={(e) => setKey(e.target.value)} />
+          <button className="btn primary" disabled={key.trim().length < 8} onClick={() => void save()}>
+            Save
+          </button>
+          {status?.hasKey && (
+            <button className="btn ghost" onClick={() => void invoke('aivideo:clearKey').then(setStatus, (e) => ui.error(errText(e)))}>
+              Remove
+            </button>
+          )}
+        </div>
+        <span className="muted small">Get one at fal.ai: sign in, add credit under Billing, then create a key under API Keys.</span>
+      </div>
+    </section>
   );
 }
 
