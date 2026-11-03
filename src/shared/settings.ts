@@ -298,6 +298,14 @@ export const SettingsSchema = z
       })
       .strict()
       .prefault({}),
+    /** AI video through the user's own fal.ai account (Settings → Providers). */
+    aiVideo: z
+      .object({
+        /** Keo refuses fal.ai requests that would take this month's spending past this (null: no limit). */
+        monthlyLimitUsd: z.number().min(1).max(100000).nullable().default(null),
+      })
+      .strict()
+      .prefault({}),
     /** Finding the user's files anywhere in the folders they allowed (Settings → Files). */
     files: z
       .object({

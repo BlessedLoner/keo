@@ -58,6 +58,17 @@ export class AuditRepo {
     }));
   }
 
+  /** US dollars Keo spent on the user's fal.ai account since a time (from what it recorded for each paid request). */
+  falSpentSince(since: string): number {
+    const rows = this.db.all<{ detail: string }>("SELECT detail FROM audit_log WHERE ts >= ? AND kind IN ('studio.ai_shot', 'studio.character_swap', 'studio.character_picture') AND decision = 'sent'", [since]);
+    let total = 0;
+    for (const r of rows) {
+      const d = parseJson<{ destination?: unknown; costUsd?: unknown }>(r.detail, {});
+      if (d.destination === 'fal.ai' && typeof d.costUsd === 'number' && Number.isFinite(d.costUsd)) total += d.costUsd;
+    }
+    return Math.round(total * 100) / 100;
+  }
+
   recordUsage(u: { providerId: string; model: string; inputTokens: number; outputTokens: number; correlationId?: string }): void {
     this.db.run(
       'INSERT INTO usage_log (id, ts, provider_id, model, input_tokens, output_tokens, correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?)',

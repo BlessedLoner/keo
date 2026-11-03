@@ -179,6 +179,7 @@ export const INVOKE_CHANNELS = [
   'aivideo:status',
   'aivideo:setKey',
   'aivideo:clearKey',
+  'aivideo:setLimit',
   'web:test',
   'email:status',
   'email:save',

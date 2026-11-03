@@ -1,7 +1,7 @@
 import { AccountPanel, useAccount } from '../components/AccountPanel';
 import { useCallback, useEffect, useState } from 'react';
 import type { PhotoIndexState, ProviderDiagnostic, ProviderInfo, SelfTestResult, VideoToolsSetup } from '@shared/domain';
-import type { WakeStatusInfo, WebStatus } from '@shared/ipc';
+import type { AiVideoStatus, WakeStatusInfo, WebStatus } from '@shared/ipc';
 import { subscribe } from '../lib/api';
 import type { Settings } from '@shared/settings';
 import { Icon } from '../components/Icon';
@@ -447,11 +447,25 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
 /** fal.ai, for AI shots in Studio: the user's own account and key (paid per second of video). */
 function AiVideoKey() {
   const ui = useUi();
-  const [status, setStatus] = useState<{ hasKey: boolean; secretStorage: boolean } | null>(null);
+  const [status, setStatus] = useState<AiVideoStatus | null>(null);
   const [key, setKey] = useState('');
+  const [limit, setLimit] = useState('');
   useEffect(() => {
-    void invoke('aivideo:status').then(setStatus, (e) => ui.error(errText(e)));
+    void invoke('aivideo:status').then((st) => {
+      setStatus(st);
+      setLimit(st.limitUsd === null ? '' : String(st.limitUsd));
+    }, (e) => ui.error(errText(e)));
   }, [ui]);
+  const saveLimit = async (value: number | null) => {
+    try {
+      const st = await invoke('aivideo:setLimit', { monthlyLimitUsd: value });
+      setStatus(st);
+      setLimit(st.limitUsd === null ? '' : String(st.limitUsd));
+      ui.toast(value === null ? 'No monthly limit for AI video.' : `Keo will not spend more than $${value} a month on fal.ai.`, 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
   const save = async () => {
     try {
       setStatus(await invoke('aivideo:setKey', { apiKey: key }));
@@ -485,6 +499,27 @@ function AiVideoKey() {
         </div>
         <span className="muted small">Get one at fal.ai: sign in, add credit under Billing, then create a key under API Keys.</span>
       </div>
+      {status && (
+        <div className="field">
+          <label htmlFor="fal-limit">Monthly limit (US dollars)</label>
+          <p className="small" style={{ margin: '0 0 6px' }}>
+            Spent through Keo: <strong>${status.todayUsd.toFixed(2)}</strong> today, <strong>${status.monthUsd.toFixed(2)}</strong> this month
+            {status.limitUsd !== null ? ` of your $${status.limitUsd.toFixed(2)} limit` : ''}.
+          </p>
+          <div className="row">
+            <input id="fal-limit" className="input" type="number" min={1} step={1} placeholder="No limit" value={limit} onChange={(e) => setLimit(e.target.value)} style={{ maxWidth: 160 }} />
+            <button className="btn" disabled={!(Number(limit) >= 1)} onClick={() => void saveLimit(Math.round(Number(limit) * 100) / 100)}>
+              Set limit
+            </button>
+            {status.limitUsd !== null && (
+              <button className="btn ghost" onClick={() => void saveLimit(null)}>
+                No limit
+              </button>
+            )}
+          </div>
+          <span className="muted small">Keo refuses a clip or picture that would go past it, before anything is paid. These are Keo’s own estimates from fal.ai’s list prices: your fal.ai dashboard shows the exact charges.</span>
+        </div>
+      )}
     </section>
   );
 }

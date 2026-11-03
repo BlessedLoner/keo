@@ -111,6 +111,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     }
   };
   /** For promise chains: a Studio refusal as a plain message, anything else as it is. */
+  const aiVideoStatus = () => ({ hasKey: s.secrets.has('fal'), secretStorage: s.secrets.available(), ...s.falSpending() });
   const studioErr = (e: unknown): never => {
     if (e instanceof StudioError) throw new KeoError('studio', e.message);
     throw e;
@@ -803,16 +804,20 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
 
     // fal.ai, for AI shots in Studio (the user's own account): the key is stored encrypted, never shown again.
-    'aivideo:status': () => ({ hasKey: s.secrets.has('fal'), secretStorage: s.secrets.available() }),
+    'aivideo:status': () => aiVideoStatus(),
     'aivideo:setKey': ({ apiKey }) => {
       s.secrets.set('fal', apiKey.trim());
       s.log.info('aivideo.key_set', {});
-      return { hasKey: true, secretStorage: s.secrets.available() };
+      return aiVideoStatus();
     },
     'aivideo:clearKey': () => {
       s.secrets.delete('fal');
       s.log.info('aivideo.key_cleared', {});
-      return { hasKey: false, secretStorage: s.secrets.available() };
+      return aiVideoStatus();
+    },
+    'aivideo:setLimit': ({ monthlyLimitUsd }) => {
+      s.settings.update({ aiVideo: { monthlyLimitUsd } });
+      return aiVideoStatus();
     },
     'web:status': () => webStatus(),
     'web:setKey': ({ apiKey }) => {

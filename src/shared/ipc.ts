@@ -2,6 +2,15 @@ import type { Sound } from './studioSounds';
 import type { Recipe } from './studioRecipe';
 import { Storyboard } from './studioFaceless';
 import { Brand, BrandPatch } from './studioBrand';
+
+/** The user's fal.ai set-up and what Keo spent on it. */
+export interface AiVideoStatus {
+  hasKey: boolean;
+  secretStorage: boolean;
+  todayUsd: number;
+  monthUsd: number;
+  limitUsd: number | null;
+}
 import { Character, CharacterId, CharacterPatch } from './studioCharacters';
 import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
@@ -291,6 +300,7 @@ export const invokeSchemas = {
   'aivideo:status': empty,
   'aivideo:setKey': z.object({ apiKey: z.string().trim().min(8).max(300) }).strict(),
   'aivideo:clearKey': empty,
+  'aivideo:setLimit': z.object({ monthlyLimitUsd: z.number().min(1).max(100000).nullable() }).strict(),
   'web:test': empty,
 
   'email:status': empty,
@@ -577,9 +587,10 @@ export interface InvokeOutputs {
   'web:status': WebStatus;
   'web:setKey': WebStatus;
   'web:clearKey': WebStatus;
-  'aivideo:status': { hasKey: boolean; secretStorage: boolean };
-  'aivideo:setKey': { hasKey: boolean; secretStorage: boolean };
-  'aivideo:clearKey': { hasKey: boolean; secretStorage: boolean };
+  'aivideo:status': AiVideoStatus;
+  'aivideo:setKey': AiVideoStatus;
+  'aivideo:clearKey': AiVideoStatus;
+  'aivideo:setLimit': AiVideoStatus;
   'web:test': { ok: boolean; message: string; sample: Array<{ title: string; url: string }> };
   'email:status': EmailStatus;
   'email:save': EmailStatus;

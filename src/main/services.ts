@@ -1303,6 +1303,7 @@ export class Services {
     const request = { model: o.model, image: jpeg, prompt: o.prompt, seconds: o.seconds, audio: o.audio, aspect } as const;
     // The same request fal.ai is still making from an earlier try: picked up, not paid again.
     const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.hashOf(request));
+    if (!resumed && !fs.existsSync(this.aiVideo.cacheFile(request))) this.falBudget(estimateCost(o.model, o.seconds, o.audio));
     try {
       const made = await this.aiVideo.generate(request, signal, { context: { projectId: id, at: o.at, about } });
       const costUsd = made.cached || resumed ? 0 : estimateCost(o.model, o.seconds, o.audio);
@@ -1351,6 +1352,7 @@ export class Services {
     const request = { video, image, resolution: o.resolution, seconds: a.duration };
     const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.swapHash(request));
     const cost = swapCost(a.duration, 30, o.resolution);
+    if (!resumed && !fs.existsSync(this.aiVideo.cacheFileOf(this.aiVideo.swapHash(request)))) this.falBudget(cost);
     const who = o.character ? this.studio.character(o.character).name : 'the chosen picture';
     const placement = { at: c.start, in: c.in, duration: c.duration, trackName: 'Character swap', muted: true, about: `Character swap (${SWAP_MODEL.label}): ${a.name} with ${who}` };
     try {
@@ -1366,6 +1368,21 @@ export class Services {
       }
       throw e instanceof AiVideoError ? new StudioError(e.message) : e;
     }
+  }
+
+  /** What Keo spent on the user's fal.ai account today and this calendar month (local time), and their limit. */
+  falSpending(): { todayUsd: number; monthUsd: number; limitUsd: number | null } {
+    const now = new Date();
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const month = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    return { todayUsd: this.audit.falSpentSince(day), monthUsd: this.audit.falSpentSince(month), limitUsd: this.settings.get().aiVideo.monthlyLimitUsd };
+  }
+
+  /** Stops a fal.ai request that would take this month past the user's limit (before anything is paid). */
+  private falBudget(costUsd: number): void {
+    const { monthUsd, limitUsd } = this.falSpending();
+    if (limitUsd !== null && costUsd > 0 && monthUsd + costUsd > limitUsd + 1e-9)
+      throw new StudioError(`This would cost about $${costUsd.toFixed(2)}, and you have spent $${monthUsd.toFixed(2)} of your $${limitUsd.toFixed(2)} monthly fal.ai limit. Raise the limit in Settings → Providers → AI video, or wait for next month.`);
   }
 
   /**
@@ -1390,6 +1407,7 @@ export class Services {
     if (!this.secrets.has('fal')) throw new StudioError('More poses use fal.ai: add your fal.ai key in Settings → Providers.');
     const image = this.imageTools.jpeg?.(c.pictures[0]!, 1280);
     if (!image) throw new StudioError(`Keo could not read ${c.name}’s picture.`);
+    this.falBudget(PICTURE_MODEL.perPicture);
     try {
       const made = await this.aiVideo.characterPicture({ image, prompt: `${c.name}, ${pose}. Keep exactly the same face, hair and body as in the picture.`, aspect: '4:5' }, signal);
       // A copy for the character (Keo's own folder keeps it even if the AI file is cleared).
@@ -1592,6 +1610,7 @@ export class Services {
       // A character's scenes with their own description: a new picture of them, the same face (fal.ai).
       const sameFace = this.secrets.has('fal') ? cast.references : new Map<number, string>();
       if (sameFace.size) {
+        this.falBudget(plan.characterCostUsd);
         await inBatches([...sameFace.entries()], 2, async ([i, ref]) => {
           if (signal.aborted) throw new StudioError('Stopped.');
           const image = this.imageTools.jpeg?.(ref, 1280);
