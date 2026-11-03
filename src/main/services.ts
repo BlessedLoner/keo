@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { StudioError, StudioService, type ProbeResult, type RenderJob } from './studio/studioService';
 import type { CaptionLine, Word as CaptionWord } from './studio/captions';
-import { findClip as findStudioClip, projectDuration, type Project as StudioProject, type TextStyle } from '../shared/studio';
+import { findClip as findStudioClip, projectDuration, type Asset as StudioAsset, type Project as StudioProject, type TextStyle } from '../shared/studio';
 import { describeBrand } from '../shared/studioBrand';
 import { facelessOps, lookOps, pictureSize, type SceneMedia, type Storyboard } from '../shared/studioFaceless';
 import { KeoAccount } from './cloud/account';
@@ -1337,34 +1337,39 @@ export class Services {
     if (!c || c.type !== 'media') throw new StudioError('Choose a video clip on the timeline.');
     const a = p.assets.find((x) => x.id === c.assetId);
     if (!a || a.kind !== 'video') throw new StudioError('Choose a video clip on the timeline (not a picture).');
-    if (a.duration > 60.5) throw new StudioError(`That video is ${Math.round(a.duration)} s long: character swap takes videos up to 60 s. Split out the part you want as its own file first.`);
+    if (c.duration > 60.5) throw new StudioError(`That clip is ${Math.round(c.duration)} s long: character swap takes up to 60 s. Split the clip and swap each part.`);
+    if (Math.abs(c.speed - 1) > 0.01) throw new StudioError('Set the clip back to normal speed for the character swap (change the speed after).');
     // The character's look: their main picture, or a picture of the project.
     const pictureFile = o.character ? this.studio.character(o.character).pictures[0] : p.assets.find((x) => x.id === o.picture && x.kind === 'image')?.path;
     if (!pictureFile) throw new StudioError(o.character ? 'That character has no picture yet: add one on the Characters page.' : 'Choose a character, or a picture of the project.');
     const image = this.imageTools.jpeg?.(pictureFile, 1280) ?? null;
     if (!image) throw new StudioError('Keo could not read the character’s picture.');
+    // Only the part of the video the clip shows is sent (and paid for): the whole file when the clip
+    // is all of it, else that part exported once (and kept, so asking again sends the same bytes).
+    const whole = c.in < 0.05 && Math.abs(c.duration - a.duration) < 0.1 && a.duration <= 60.5;
     let video: Buffer;
     try {
-      video = fs.readFileSync(a.path);
-    } catch {
-      throw new StudioError('Keo could not read that video file.');
+      video = fs.readFileSync(whole ? a.path : await this.swapPart(a, c.in, c.duration, signal));
+    } catch (e) {
+      throw e instanceof StudioError ? e : new StudioError('Keo could not read that video file.');
     }
-    const request = { video, image, resolution: o.resolution, seconds: a.duration };
+    const seconds = whole ? a.duration : c.duration;
+    const request = { video, image, resolution: o.resolution, seconds };
     const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.swapHash(request));
-    const cost = swapCost(a.duration, 30, o.resolution);
+    const cost = swapCost(seconds, 30, o.resolution);
     if (!resumed && !fs.existsSync(this.aiVideo.cacheFileOf(this.aiVideo.swapHash(request)))) this.falBudget(cost);
     const who = o.character ? this.studio.character(o.character).name : 'the chosen picture';
-    const placement = { at: c.start, in: c.in, duration: c.duration, trackName: 'Character swap', muted: true, about: `Character swap (${SWAP_MODEL.label}): ${a.name} with ${who}` };
+    const placement = { at: c.start, in: whole ? c.in : 0, duration: c.duration, trackName: 'Character swap', muted: true, about: `Character swap (${SWAP_MODEL.label}): ${a.name} with ${who}` };
     try {
       const made = await this.aiVideo.swap(request, signal, { context: { projectId: id, ...placement } });
-      if (!made.cached && !resumed) this.audit.record({ kind: 'studio.character_swap', decision: 'sent', detail: { destination: 'fal.ai', seconds: Math.round(a.duration), resolution: o.resolution, costUsd: cost } });
+      if (!made.cached && !resumed) this.audit.record({ kind: 'studio.character_swap', decision: 'sent', detail: { destination: 'fal.ai', seconds: Math.round(seconds), resolution: o.resolution, costUsd: cost } });
       const r = await this.studio.addAiClip(id, made.file, { ...placement, seconds: made.seconds });
       return { clip: r.clip, seconds: made.seconds, cached: made.cached, costUsd: made.cached || resumed ? 0 : cost, pending: false };
     } catch (e) {
       if (e instanceof AiVideoPending) {
-        if (!resumed) this.audit.record({ kind: 'studio.character_swap', decision: 'sent', detail: { destination: 'fal.ai', seconds: Math.round(a.duration), resolution: o.resolution, costUsd: cost } });
+        if (!resumed) this.audit.record({ kind: 'studio.character_swap', decision: 'sent', detail: { destination: 'fal.ai', seconds: Math.round(seconds), resolution: o.resolution, costUsd: cost } });
         this.emit('studio:aiShot', { projectId: id, state: 'waiting', message: 'fal.ai is swapping the character. The new clip goes over the original by itself when it is ready: keep working.' });
-        return { clip: null, seconds: a.duration, cached: false, costUsd: resumed ? 0 : cost, pending: true };
+        return { clip: null, seconds, cached: false, costUsd: resumed ? 0 : cost, pending: true };
       }
       throw e instanceof AiVideoError ? new StudioError(e.message) : e;
     }
@@ -1415,6 +1420,38 @@ export class Services {
       if (!made.cached) this.audit.record({ kind: 'studio.character_picture', decision: 'sent', detail: { destination: 'fal.ai', costUsd: PICTURE_MODEL.perPicture } });
     } catch (e) {
       throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /**
+   * A part of a video as its own MP4 (for a character swap of just that part), made once in a
+   * throw-away project and kept in Keo's AI folder; the export never lands in the user's Videos.
+   */
+  private async swapPart(a: StudioAsset, from: number, seconds: number, signal: AbortSignal): Promise<string> {
+    const dir = path.join(this.studioRoot, 'ai-shots', 'parts');
+    const file = path.join(dir, `part-${facelessKey(path.resolve(a.path).toLowerCase(), String(fs.statSync(a.path).size), from.toFixed(2), seconds.toFixed(2))}.mp4`);
+    if (fs.existsSync(file)) return file;
+    if (signal.aborted) throw new StudioError('Stopped.');
+    const tmp = this.studio.create('Character swap part', a.width > a.height ? 'landscape' : 'vertical');
+    try {
+      const added = (await this.studio.importFiles(tmp.id, [a.path])).added[0];
+      if (!added) throw new StudioError('Keo could not read that video file.');
+      this.studio.edit(tmp.id, [
+        { op: 'set_project', width: Math.max(16, Math.round(a.width / 2) * 2), height: Math.max(16, Math.round(a.height / 2) * 2) },
+        { op: 'add_media', assetId: added.id, start: 0, in: from, duration: seconds },
+      ]);
+      const out = await this.studio.exportVideo(tmp.id, { quality: 'high' });
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        fs.renameSync(out.file, file);
+      } catch {
+        // Another drive: copied, then the export removed.
+        fs.copyFileSync(out.file, file);
+        fs.rmSync(out.file, { force: true });
+      }
+      return file;
+    } finally {
+      this.studio.delete(tmp.id);
     }
   }
 

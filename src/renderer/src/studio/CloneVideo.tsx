@@ -43,11 +43,6 @@ export function CloneVideo({ onDone, onCancel, onCharacters }: { onDone: (projec
         if (r.added.length || r.skipped.length) ui.error('Choose a video file (MP4 or MOV).');
         return;
       }
-      if (video.duration > 60.5) {
-        await invoke('studio:delete', { id: p.id }).catch(() => undefined);
-        ui.error(`That video is ${Math.round(video.duration)} s long: cloning takes videos up to 60 s. Trim it first.`);
-        return;
-      }
       // The project takes the video's shape, then the video goes on the timeline.
       const wide = video.width > video.height * 1.15;
       const square = !wide && video.height <= video.width * 1.15;
@@ -55,7 +50,8 @@ export function CloneVideo({ onDone, onCancel, onCharacters }: { onDone: (projec
         id: p.id,
         ops: [
           { op: 'set_project', name: `Cloned ${video.name.replace(/\.[^.]+$/, '')}`.slice(0, 120), width: wide ? 1920 : 1080, height: wide ? 1080 : square ? 1080 : 1920 },
-          { op: 'add_media', assetId: video.id, start: 0 },
+          // Up to a minute of it (only that part is sent to fal.ai and paid for).
+          { op: 'add_media', assetId: video.id, start: 0, duration: Math.min(60, video.duration) },
         ],
       });
       const clip = shaped.project.tracks.flatMap((t) => t.clips).find((c) => c.type === 'media' && c.assetId === video.id);
@@ -68,7 +64,8 @@ export function CloneVideo({ onDone, onCancel, onCharacters }: { onDone: (projec
   };
 
   const who = characters.find((c) => c.id === character);
-  const price = picked ? swapCost(picked.asset.duration, 30, resolution) : 0;
+  const seconds = picked ? Math.min(60, picked.asset.duration) : 0;
+  const price = picked ? swapCost(seconds, 30, resolution) : 0;
   const clone = async () => {
     if (!picked || !who) return;
     const ok = await ui.confirm({
@@ -129,10 +126,10 @@ export function CloneVideo({ onDone, onCancel, onCharacters }: { onDone: (projec
           </div>
         )}
         <div className="field">
-          <label>Content video (up to 60 seconds)</label>
+          <label>Content video (up to a minute is cloned)</label>
           {picked ? (
             <p className="small">
-              <strong>{picked.asset.name}</strong> · {picked.asset.duration.toFixed(1)} s · about <strong>${price.toFixed(2)}</strong> at {resolution}
+              <strong>{picked.asset.name}</strong> · {seconds.toFixed(1)} s{picked.asset.duration > 60.5 ? ` (the first minute of ${Math.round(picked.asset.duration)} s: trim it in Studio to choose another part)` : ''} · about <strong>${price.toFixed(2)}</strong> at {resolution}
             </p>
           ) : (
             <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => void pick()} disabled={!!busy}>
