@@ -446,3 +446,5 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .character-picture { position: relative; }
 .character-picture img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; display: block; }
 .character-picture .btn { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; background: rgba(0, 0, 0, 0.65); }
+.clone-who { display: flex; align-items: center; gap: 10px; align-self: stretch; }
+.clone-who img { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }

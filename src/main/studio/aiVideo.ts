@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { CHARACTER_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
 
 /**
  * AI shots: a picture turned into a short video clip by an AI video model, through fal.ai (one
@@ -57,15 +58,10 @@ export function estimateCost(model: AiVideoModelId, seconds: number, audio: bool
 export const SWAP_MODEL = {
   label: 'Wan 2.2 Animate Replace',
   endpoint: 'fal-ai/wan/v2.2-14b/animate/replace',
-  /** US dollars per "video second" (fal.ai bills 16 frames as one second; its list price when this was written). */
-  perSecond: { '480p': 0.04, '580p': 0.06, '720p': 0.08 },
+  /** US dollars per "video second" (fal.ai bills 16 frames as one second). */
+  perSecond: SWAP_PER_SECOND,
 } as const;
-export type SwapResolution = keyof typeof SWAP_MODEL.perSecond;
-
-/** About what a swap costs (fal.ai counts the video's frames, 16 to a billed second). */
-export function swapCost(seconds: number, fps: number, resolution: SwapResolution): number {
-  return Math.ceil(((seconds * fps) / 16) * SWAP_MODEL.perSecond[resolution] * 100 - 1e-6) / 100;
-}
+export { swapCost, type SwapResolution };
 
 export interface SwapRequest {
   /** The video file's bytes (MP4, up to 90 MB) and the character's picture (JPEG). */
@@ -79,8 +75,8 @@ export interface SwapRequest {
 export const PICTURE_MODEL = {
   label: 'Nano Banana',
   endpoint: 'fal-ai/nano-banana/edit',
-  /** US dollars a picture (fal.ai's list price when this was written). */
-  perPicture: 0.0398,
+  /** US dollars a picture. */
+  perPicture: CHARACTER_PICTURE_USD,
 } as const;
 
 export interface CharacterPictureRequest {

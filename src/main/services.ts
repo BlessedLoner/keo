@@ -1369,6 +1369,38 @@ export class Services {
   }
 
   /**
+   * A first picture of a character, made from their looks by the user's picture maker (Keo Cloud
+   * or OpenAI), added to the character.
+   */
+  async characterCreatePicture(id: string, signal: AbortSignal): Promise<void> {
+    const c = this.studio.character(id);
+    if (!c.look.trim()) throw new StudioError(`Describe how ${c.name} looks first (Looks), then Keo can make their picture.`);
+    if (!this.pictures.aiAvailable()) throw new StudioError('Making pictures needs your Keo account (sign in) or an OpenAI API key.');
+    const prompt = `Portrait photo of a person called ${c.name}: ${c.look}. Looking at the camera, head and shoulders, soft natural light, plain background. No text or letters.`;
+    const r = await this.pictures.generate(prompt, { name: `${c.name} character`, size: '1024x1536', quality: this.settings.get().pictures.aiQuality, background: 'opaque' }, signal);
+    this.studio.addCharacterPicture(id, r.path);
+    this.audit.record({ kind: 'studio.character_picture', decision: 'sent', detail: { destination: 'picture maker' } });
+  }
+
+  /** Another picture of a character in a new pose or place, keeping their face (fal.ai, about $0.04). */
+  async characterMorePose(id: string, pose: string, signal: AbortSignal): Promise<void> {
+    const c = this.studio.character(id);
+    if (!c.pictures.length) throw new StudioError(`Add or create a picture of ${c.name} first.`);
+    if (c.pictures.length >= 4) throw new StudioError('A character can have up to 4 pictures: remove one first.');
+    if (!this.secrets.has('fal')) throw new StudioError('More poses use fal.ai: add your fal.ai key in Settings → Providers.');
+    const image = this.imageTools.jpeg?.(c.pictures[0]!, 1280);
+    if (!image) throw new StudioError(`Keo could not read ${c.name}’s picture.`);
+    try {
+      const made = await this.aiVideo.characterPicture({ image, prompt: `${c.name}, ${pose}. Keep exactly the same face, hair and body as in the picture.`, aspect: '4:5' }, signal);
+      // A copy for the character (Keo's own folder keeps it even if the AI file is cleared).
+      this.studio.addCharacterPicture(id, made.file);
+      if (!made.cached) this.audit.record({ kind: 'studio.character_picture', decision: 'sent', detail: { destination: 'fal.ai', costUsd: PICTURE_MODEL.perPicture } });
+    } catch (e) {
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /**
    * AI shots fal.ai finished after Keo stopped waiting: downloaded and put on their project's
    * timeline (once), with a note in Studio. Runs every minute while Keo is open.
    */

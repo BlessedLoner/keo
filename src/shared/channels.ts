@@ -85,6 +85,7 @@ export const INVOKE_CHANNELS = [
   'studio:brand',
   'studio:characters',
   'studio:characterVoice',
+  'studio:swap',
   'studio:versions',
   'studio:skipShow',
   'studio:track',

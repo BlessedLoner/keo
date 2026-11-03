@@ -35,7 +35,7 @@ const VOICES = [
   { id: 'alloy', label: 'OpenAI — Alloy' },
 ];
 
-export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: string) => void; onCancel: () => void }) {
+export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onDone: (projectId: string) => void; onCancel: () => void; startTab?: 'script' | 'characters' }) {
   const ui = useUi();
   const [title, setTitle] = useState('My faceless video');
   const [format, setFormat] = useState<FormatId>('vertical');
@@ -48,7 +48,7 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
   const [plan, setPlan] = useState<{ voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null; characterPictures: number; characterCostUsd: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Step[] | null>(null);
-  const [tab, setTab] = useState<'script' | 'characters'>('script');
+  const [tab, setTab] = useState<'script' | 'characters'>(startTab);
   const [characters, setCharacters] = useState<Character[]>([]);
   // Loaded again whenever the tab changes (Keo may have added a character from the chat).
   useEffect(() => {

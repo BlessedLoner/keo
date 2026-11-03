@@ -1711,6 +1711,12 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await wait(300);
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
       await wait(300);
+      // Clone a video with a character (from the same home screen), then back.
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Clone a video with your character'))?.click();`);
+      await wait(700);
+      fs.writeFileSync(path.join(dir, 'studio-clone.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(300);
     }
     if (name === 'settings') {
       await js(`document.querySelector('section[aria-label="OpenRouter"]')?.scrollIntoView({ block: 'start' });`);

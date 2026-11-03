@@ -13,6 +13,7 @@ import { StudioKeo } from '../studio/StudioKeo';
 import { BrandKit } from '../studio/BrandKit';
 import { Versions } from '../studio/Versions';
 import { FacelessCreator } from '../studio/FacelessCreator';
+import { CloneVideo } from '../studio/CloneVideo';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import '../styles/studio.css';
@@ -87,7 +88,8 @@ export function StudioView() {
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [captioning, setCaptioning] = useState(false);
-  const [faceless, setFaceless] = useState(false);
+  const [faceless, setFaceless] = useState<false | 'script' | 'characters'>(false);
+  const [cloning, setCloning] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [tlHeight, setTlHeight] = useState(() => {
@@ -494,10 +496,30 @@ export function StudioView() {
       </div>
     );
   }
+  if (cloning) {
+    return (
+      <div className="view studio">
+        <CloneVideo
+          onCancel={() => setCloning(false)}
+          onCharacters={() => {
+            setCloning(false);
+            setFaceless('characters');
+          }}
+          onDone={(id) => {
+            setCloning(false);
+            setCreating(false);
+            refreshList();
+            void openProject(id);
+          }}
+        />
+      </div>
+    );
+  }
   if (faceless) {
     return (
       <div className="view studio">
         <FacelessCreator
+          startTab={faceless}
           onCancel={() => setFaceless(false)}
           onDone={(id) => {
             setFaceless(false);
@@ -513,7 +535,7 @@ export function StudioView() {
     return (
       <div className="view studio">
         <div className="studio-home">
-          <NewProject onCreate={create} onFaceless={() => setFaceless(true)} onCancel={project ? () => setCreating(false) : undefined} />
+          <NewProject onCreate={create} onFaceless={() => setFaceless('script')} onClone={() => setCloning(true)} onCancel={project ? () => setCreating(false) : undefined} />
           <ProjectGrid
             projects={list}
             current={project?.id ?? null}
@@ -838,7 +860,7 @@ function listProjects() {
   return invoke('studio:list', {});
 }
 
-function NewProject({ onCreate, onFaceless, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onCancel?: () => void }) {
+function NewProject({ onCreate, onFaceless, onClone, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onClone: () => void; onCancel?: () => void }) {
   const [name, setName] = useState('My video');
   const [format, setFormat] = useState<FormatId>('vertical');
   return (
@@ -876,6 +898,9 @@ function NewProject({ onCreate, onFaceless, onCancel }: { onCreate: (name: strin
           <span className="muted small">No footage? Make a video from a script:</span>
           <button className="btn sm" onClick={onFaceless}>
             <Icon name="text" size={13} /> Faceless video from a script
+          </button>
+          <button className="btn sm" onClick={onClone} title="Replace the person in a content video with your character">
+            <Icon name="sparkle" size={13} /> Clone a video with your character
           </button>
         </div>
       </div>

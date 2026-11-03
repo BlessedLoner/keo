@@ -550,7 +550,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'studio:brand': ({ patch }) => (patch ? s.studio.setBrand(patch) : s.studio.brand()),
     // Characters for faceless videos (the user's clicks on the Characters page).
-    'studio:characters': async ({ action, patch, id, picture }) => {
+    'studio:characters': async ({ action, patch, id, picture, pose }) => {
       if (action === 'save') {
         if (!patch) throw new StudioError('Nothing to save.');
         s.studio.saveCharacter(patch);
@@ -559,8 +559,13 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
         const files = host.pickMedia ? await host.pickMedia() : [];
         for (const f of files.filter((x) => /\.(jpe?g|png|webp)$/i.test(x)).slice(0, 4)) s.studio.addCharacterPicture(id ?? '', f);
       } else if (action === 'removePicture') s.studio.removeCharacterPicture(id ?? '', picture ?? '');
+      // The user's click after seeing what it costs (the page asks first).
+      else if (action === 'createPicture') await s.characterCreatePicture(id ?? '', new AbortController().signal).catch(studioErr);
+      else if (action === 'morePose') await s.characterMorePose(id ?? '', pose ?? 'standing, smiling at the camera', new AbortController().signal).catch(studioErr);
       return s.studio.characters();
     },
+    // Clone a video: the user's click after the page showed the price.
+    'studio:swap': async ({ id, clip, character, resolution }) => s.studioSwapCharacter(id, { clip, character, resolution }, new AbortController().signal).catch(studioErr),
     // Hearing a character's voice before choosing it (one short line, spoken by that voice's service).
     'studio:characterVoice': async ({ voice, text }) => {
       const narrator = s.studioNarrator(voice);

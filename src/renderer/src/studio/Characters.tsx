@@ -11,7 +11,8 @@ import { errText, invoke } from '../lib/api';
 export function Characters({ list, onChange }: { list: Character[]; onChange: (list: Character[]) => void }) {
   const ui = useUi();
   const [editing, setEditing] = useState<string | 'new' | null>(null);
-  const act = async (input: { action: 'list' | 'save' | 'delete' | 'addPicture' | 'removePicture'; patch?: CharacterPatch; id?: string; picture?: string }) => {
+  const [making, setMaking] = useState(false);
+  const act = async (input: { action: 'list' | 'save' | 'delete' | 'addPicture' | 'removePicture' | 'createPicture' | 'morePose'; patch?: CharacterPatch; id?: string; picture?: string; pose?: string }) => {
     try {
       onChange(await invoke('studio:characters', input));
       return true;
@@ -55,6 +56,27 @@ export function Characters({ list, onChange }: { list: Character[]; onChange: (l
             if (await act({ action: 'delete', id: current.id })) setEditing(null);
           }}
           onAddPicture={() => current && void act({ action: 'addPicture', id: current.id })}
+          making={making}
+          onCreatePicture={async () => {
+            if (!current) return;
+            const ok = await ui.confirm({
+              title: `Make a picture of ${current.name}?`,
+              body: `Keo makes a portrait from their looks (“${current.look || 'no description yet'}”) with your picture maker: it counts toward your Keo plan or your own OpenAI account.`,
+              confirmLabel: 'Make the picture',
+            });
+            if (!ok) return;
+            setMaking(true);
+            await act({ action: 'createPicture', id: current.id });
+            setMaking(false);
+          }}
+          onMorePose={async () => {
+            if (!current) return;
+            const pose = await ui.prompt({ title: `Another picture of ${current.name}`, label: 'What should the new picture show? (about $0.04 from your fal.ai account, the same face)', initial: 'sitting in a café, laughing, warm evening light', confirmLabel: 'Make it' });
+            if (!pose?.trim()) return;
+            setMaking(true);
+            await act({ action: 'morePose', id: current.id, pose: pose.trim() });
+            setMaking(false);
+          }}
           onRemovePicture={(picture) => current && void act({ action: 'removePicture', id: current.id, picture })}
           onClose={() => setEditing(null)}
         />
@@ -70,7 +92,13 @@ function CharacterEditor({
   onAddPicture,
   onRemovePicture,
   onClose,
+  making,
+  onCreatePicture,
+  onMorePose,
 }: {
+  making: boolean;
+  onCreatePicture: () => Promise<void>;
+  onMorePose: () => Promise<void>;
   character: Character | null;
   onSave: (patch: { name: string; look: string; voice: string; notes: string }) => Promise<void>;
   onDelete: () => Promise<void>;
@@ -145,8 +173,18 @@ function CharacterEditor({
               </span>
             ))}
             {character.pictures.length < 4 && (
-              <button className="btn sm" onClick={onAddPicture}>
+              <button className="btn sm" onClick={onAddPicture} disabled={making}>
                 <Icon name="plus" size={13} /> Add pictures
+              </button>
+            )}
+            {character.pictures.length === 0 && (
+              <button className="btn sm" onClick={() => void onCreatePicture()} disabled={making} title="Make a portrait from their looks">
+                {making ? <span className="spinner tiny" /> : <Icon name="sparkle" size={13} />} Create a picture
+              </button>
+            )}
+            {character.pictures.length > 0 && character.pictures.length < 4 && (
+              <button className="btn sm" onClick={() => void onMorePose()} disabled={making} title="Another picture with the same face (fal.ai)">
+                {making ? <span className="spinner tiny" /> : <Icon name="sparkle" size={13} />} More poses
               </button>
             )}
           </div>

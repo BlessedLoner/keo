@@ -179,9 +179,10 @@ export const invokeSchemas = {
   'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
   'studio:brand': z.object({ patch: BrandPatch.optional() }).strict(),
   'studio:characters': z
-    .object({ action: z.enum(['list', 'save', 'delete', 'addPicture', 'removePicture']), patch: CharacterPatch.optional(), id: CharacterId.optional(), picture: z.string().min(3).max(1000).optional() })
+    .object({ action: z.enum(['list', 'save', 'delete', 'addPicture', 'removePicture', 'createPicture', 'morePose']), patch: CharacterPatch.optional(), id: CharacterId.optional(), picture: z.string().min(3).max(1000).optional(), pose: z.string().trim().min(3).max(300).optional() })
     .strict(),
   'studio:characterVoice': z.object({ voice: z.string().regex(/^[a-z]{2,20}$/), text: z.string().trim().min(1).max(200) }).strict(),
+  'studio:swap': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), character: CharacterId, resolution: z.enum(['480p', '580p', '720p']) }).strict(),
   'studio:versions': z
     .object({ id: z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/), action: z.enum(['list', 'save', 'restore', 'delete']), name: z.string().trim().min(1).max(80).optional(), version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional() })
     .strict(),
@@ -522,6 +523,7 @@ export interface InvokeOutputs {
   'studio:brand': Brand;
   'studio:characters': Character[];
   'studio:characterVoice': { mimeType: string; base64: string };
+  'studio:swap': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:versions': import('./studio').StudioVersion[];
   'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };
