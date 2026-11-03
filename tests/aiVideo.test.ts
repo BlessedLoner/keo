@@ -176,3 +176,27 @@ describe('Character swap (Wan Animate Replace, a fake fal.ai)', () => {
     await expect(fal.swap({ video: Buffer.alloc(91 * 1024 * 1024), image: Buffer.from('jpg'), resolution: '480p', seconds: 6 }, new AbortController().signal)).rejects.toThrow(/over 90 MB/);
   });
 });
+
+describe('Same-face pictures of a character (Nano Banana, a fake fal.ai)', () => {
+  it('sends the character’s picture as the reference and keeps the new picture', async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const base = 'https://queue.fal.run/fal-ai/nano-banana/requests/p1';
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { method?: string; body?: string | Uint8Array }) => {
+      calls.push({ url, ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) return json(200, { upload_url: 'https://upload.fal.media/put/1', file_url: 'https://v3.fal.media/files/kira.jpg' });
+      if (url === 'https://upload.fal.media/put/1') return json(200, {});
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana/edit') return json(200, { request_id: 'p1', status_url: `${base}/status`, response_url: base });
+      if (url === `${base}/status`) return json(200, { status: 'COMPLETED' });
+      if (url === base) return json(200, { images: [{ url: 'https://v3.fal.media/files/new.png' }] });
+      if (url === 'https://v3.fal.media/files/new.png') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(3000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-pic-'), fetch, log, sleep: async () => undefined });
+    const r = await fal.characterPicture({ image: Buffer.from('kira'), prompt: 'Kira on a rooftop at sunset', aspect: '9:16' }, new AbortController().signal);
+    expect(r.file.endsWith('.png')).toBe(true);
+    expect(fs.readFileSync(r.file).length).toBe(3000);
+    expect(calls.find((c) => c.url.endsWith('/nano-banana/edit'))!.body).toEqual({ prompt: 'Kira on a rooftop at sunset', image_urls: ['https://v3.fal.media/files/kira.jpg'], num_images: 1, output_format: 'png', aspect_ratio: '9:16' });
+    expect((await fal.characterPicture({ image: Buffer.from('kira'), prompt: 'Kira on a rooftop at sunset', aspect: '9:16' }, new AbortController().signal)).cached).toBe(true);
+  });
+});

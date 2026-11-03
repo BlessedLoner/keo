@@ -75,6 +75,21 @@ export interface SwapRequest {
   seconds: number;
 }
 
+/** New pictures of a character from their own picture (the same face): fal.ai's Nano Banana edit. */
+export const PICTURE_MODEL = {
+  label: 'Nano Banana',
+  endpoint: 'fal-ai/nano-banana/edit',
+  /** US dollars a picture (fal.ai's list price when this was written). */
+  perPicture: 0.0398,
+} as const;
+
+export interface CharacterPictureRequest {
+  /** The character's own picture (JPEG) and what the new picture shows. */
+  image: Buffer;
+  prompt: string;
+  aspect: '9:16' | '16:9' | '1:1' | '4:5';
+}
+
 interface RunOptions {
   waitMs?: number;
   context?: PendingShot['context'];
@@ -106,6 +121,11 @@ export class FalVideo {
       sleep?: (ms: number) => Promise<void>;
     },
   ) {}
+
+  /** The file a request with this id is (or will be) kept in. */
+  cacheFileOf(hash: string, ext: 'mp4' | 'png' = 'mp4'): string {
+    return path.join(this.d.dir, `ai-shot-${hash}.${ext}`);
+  }
 
   /** The file a request was (or will be) kept in. */
   cacheFile(r: AiVideoRequest): string {
@@ -178,14 +198,37 @@ export class FalVideo {
     );
   }
 
+  /** The same picture request gives the same id. */
+  pictureHash(r: CharacterPictureRequest): string {
+    return crypto.createHash('sha256').update(JSON.stringify([PICTURE_MODEL.endpoint, crypto.createHash('sha256').update(r.image).digest('hex'), r.prompt, r.aspect])).digest('hex').slice(0, 24);
+  }
+
+  /** A new picture of a character, keeping their face: from their own picture and a description. */
+  async characterPicture(r: CharacterPictureRequest, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+    const made = await this.run(
+      {
+        hash: this.pictureHash(r),
+        model: 'nano-banana-edit',
+        seconds: 0,
+        ext: 'png',
+        endpoint: PICTURE_MODEL.endpoint,
+        uploads: [{ bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' }],
+        input: ([image]) => ({ prompt: r.prompt, image_urls: [image!], num_images: 1, output_format: 'png', aspect_ratio: r.aspect }),
+      },
+      signal,
+      { waitMs: 3 * 60_000 },
+    );
+    return { file: made.file, cached: made.cached };
+  }
+
   /** Any fal.ai request done the safe way: kept if made before, remembered while made, cancelled on Stop. */
   private async run(
-    spec: { hash: string; model: PendingShot['model']; seconds: number; endpoint: string; uploads: Array<{ bytes: Buffer; type: string; name: string }>; input: (urls: string[]) => Record<string, unknown> },
+    spec: { hash: string; model: PendingShot['model']; seconds: number; ext?: 'mp4' | 'png'; endpoint: string; uploads: Array<{ bytes: Buffer; type: string; name: string }>; input: (urls: string[]) => Record<string, unknown> },
     signal: AbortSignal,
     o: RunOptions,
   ): Promise<{ file: string; cached: boolean; seconds: number }> {
     const { hash, seconds } = spec;
-    const file = path.join(this.d.dir, `ai-shot-${hash}.mp4`);
+    const file = path.join(this.d.dir, `ai-shot-${hash}.${spec.ext ?? 'mp4'}`);
     if (fs.existsSync(file)) return { file, cached: true, seconds };
     const key = this.d.key();
     if (!key) throw new AiVideoError('AI video needs a fal.ai API key: add one in Settings → Providers.');
@@ -205,6 +248,7 @@ export class FalVideo {
         resultUrl: String(submitted.response_url ?? ''),
         cancelUrl: typeof submitted.cancel_url === 'string' ? submitted.cancel_url : null,
         submittedAt: new Date().toISOString(),
+        ...(spec.ext && spec.ext !== 'mp4' ? { ext: spec.ext } : {}),
         ...(o.context ? { context: o.context } : {}),
       };
       this.savePending([...this.pending().filter((p) => p.hash !== hash), job]);
@@ -231,7 +275,7 @@ export class FalVideo {
   async finish(job: PendingShot, signal: AbortSignal, o: { waitMs: number; progress?: (stage: 'queued' | 'making' | 'saving', queuePosition?: number) => void }): Promise<string> {
     const key = this.d.key();
     if (!key) throw new AiVideoError('AI shots need a fal.ai API key: add one in Settings → Providers.');
-    const file = path.join(this.d.dir, `ai-shot-${job.hash}.mp4`);
+    const file = path.join(this.d.dir, `ai-shot-${job.hash}.${job.ext ?? 'mp4'}`);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
     const started = Date.now();
     try {
@@ -247,13 +291,14 @@ export class FalVideo {
         await sleep(4000);
       }
       const result = await this.call(key, job.resultUrl, 'GET', signal);
-      const url = (result.video as { url?: unknown } | undefined)?.url;
-      if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new AiVideoError('fal.ai finished but sent no video.');
+      // A video model answers with video.url, a picture model with images[0].url.
+      const url = (result.video as { url?: unknown } | undefined)?.url ?? (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url;
+      if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new AiVideoError('fal.ai finished but sent nothing to download.');
       o.progress?.('saving');
       const video = await this.d.fetch(url, { signal });
       if (!video.ok) throw new AiVideoError(`The finished clip could not be downloaded (${video.status}).`);
       const bytes = Buffer.from(await video.arrayBuffer());
-      if (bytes.length < 1000) throw new AiVideoError('fal.ai sent an empty video.');
+      if (bytes.length < 1000) throw new AiVideoError('fal.ai sent an empty file.');
       fs.mkdirSync(this.d.dir, { recursive: true });
       fs.writeFileSync(`${file}.tmp`, bytes);
       fs.renameSync(`${file}.tmp`, file);
@@ -318,7 +363,9 @@ export class FalVideo {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit';
+  /** What the result is saved as (a video unless said). */
+  ext?: 'mp4' | 'png';
   seconds: number;
   statusUrl: string;
   resultUrl: string;

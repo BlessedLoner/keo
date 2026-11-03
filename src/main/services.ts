@@ -92,7 +92,7 @@ import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/
 import { findQuote, nameMentioned } from './agent/quotes';
 import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
-import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, SWAP_MODEL, swapCost, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
+import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, PICTURE_MODEL, SWAP_MODEL, swapCost, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 
 export interface ServiceDeps {
   profile: ProfileInfo;
@@ -1432,9 +1432,12 @@ export class Services {
    * their scenes without one (the k-th line of a character shows their k-th picture, round and
    * round), and their look added to AI picture descriptions of their scenes.
    */
-  private castBoard(board: Storyboard): { board: Storyboard; voiceOf: (i: number) => string; pictureFiles: Map<number, string> } {
+  private castBoard(board: Storyboard): { board: Storyboard; voiceOf: (i: number) => string; pictureFiles: Map<number, string>; references: Map<number, string> } {
     const cast = new Map(this.studio.characters().map((c) => [c.id, c] as const));
     const pictureFiles = new Map<number, string>();
+    // Scenes with their own picture description said by a character who has pictures: made from
+    // the character's main picture (the same face) when fal.ai is set up.
+    const references = new Map<number, string>();
     const seen = new Map<string, number>();
     const scenes = board.scenes.map((sc, i) => {
       const c = sc.speaker ? cast.get(sc.speaker) : undefined;
@@ -1445,6 +1448,7 @@ export class Services {
         pictureFiles.set(i, c.pictures[k % c.pictures.length]!);
         return sc;
       }
+      if (sc.picture && 'prompt' in sc.picture && c.pictures.length) references.set(i, c.pictures[0]!);
       const look = `The person in it is ${c.name}${c.look ? `: ${c.look}` : ''}.`;
       if (!sc.picture) return { ...sc, picture: { prompt: `A picture for this moment of a video: ${sc.narration}. ${look}`.slice(0, 2000) } };
       if ('prompt' in sc.picture) return { ...sc, picture: { prompt: `${sc.picture.prompt}. ${look}`.slice(0, 2000) } };
@@ -1454,18 +1458,25 @@ export class Services {
       const sp = board.scenes[i]?.speaker;
       return (sp && cast.get(sp)?.voice) || board.voice;
     };
-    return { board: { ...board, scenes }, voiceOf, pictureFiles };
+    return { board: { ...board, scenes }, voiceOf, pictureFiles, references };
   }
 
-  facelessPlan(given: Storyboard): { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null } {
-    const { board, voiceOf, pictureFiles } = this.castBoard(given);
+  facelessPlan(given: Storyboard): { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null; characterPictures: number; characterCostUsd: number } {
+    const { board, voiceOf, pictureFiles, references: refs } = this.castBoard(given);
+    // Same-face pictures of characters go through fal.ai (only with its key); the rest as before.
+    const references = this.secrets.has('fal') ? refs : new Map<number, string>();
+    const newCharacterPictures = [...references.entries()].filter(([i, f]) => {
+      const jpeg = this.imageTools.jpeg?.(f, 1280);
+      const sc = board.scenes[i]!;
+      return !jpeg || !fs.existsSync(this.aiVideo.cacheFileOf(this.aiVideo.pictureHash({ image: jpeg, prompt: facelessPrompt(board, sc), aspect: facelessAspect(board.format) }), 'png'));
+    }).length;
     const voices = [...new Set(board.scenes.map((_, i) => voiceOf(i)))];
     const narrators = voices.map((v) => this.studioNarrator(v));
     const narrator = narrators.every(Boolean) ? narrators[0]! : null;
-    const aiPictures = board.scenes.filter((s, i) => !pictureFiles.has(i) && (!s.picture || 'prompt' in s.picture)).length;
+    const aiPictures = board.scenes.filter((s, i) => !pictureFiles.has(i) && !references.has(i) && (!s.picture || 'prompt' in s.picture)).length;
     const pictures = aiPictures ? (this.pictures.aiAvailable() ? (this.settings.get().pictures.aiSource !== 'keo' && this.secrets.has('openai') ? 'OpenAI' : 'Keo Cloud') : null) : null;
     // Pictures and voice already made for this script (an earlier try) are used again and cost nothing.
-    const newPictures = board.scenes.filter((s, i) => !pictureFiles.has(i) && (!s.picture || 'prompt' in s.picture) && !this.facelessCachedPicture(board, s)).length;
+    const newPictures = board.scenes.filter((s, i) => !pictureFiles.has(i) && !references.has(i) && (!s.picture || 'prompt' in s.picture) && !this.facelessCachedPicture(board, s)).length;
     const newVoiceSeconds = board.scenes.filter((s, i) => !this.facelessCachedVoice(voiceOf(i), s.narration)).reduce((t, s) => t + s.narration.split(/\s+/).length / 2.6, 0);
     let reason = !narrator ? (voices.length > 1 ? `The voices ${voices.filter((_, k) => !narrators[k]).join(', ')} need your Keo account (sign in) or an OpenAI API key.` : 'The voice needs your Keo account (sign in) or an OpenAI API key.') : aiPictures && !pictures ? 'Making pictures needs your Keo account (sign in) or an OpenAI API key — or use your own pictures for every scene.' : null;
     const st = this.account.status();
@@ -1484,7 +1495,7 @@ export class Services {
         else if (newVoiceSeconds > left) reason = `The voice-over is about ${Math.ceil(newVoiceSeconds)} s, and your plan has ${Math.floor(left)} s of voice left today. Shorten the script, upgrade, or try tomorrow.`;
       }
     }
-    return { voice: narrator?.destination ?? null, pictures, aiPictures, narrations: board.scenes.length, reason };
+    return { voice: narrator?.destination ?? null, pictures, aiPictures, narrations: board.scenes.length, reason, characterPictures: references.size, characterCostUsd: Math.round(newCharacterPictures * PICTURE_MODEL.perPicture * 100) / 100 };
   }
 
   /**
@@ -1504,7 +1515,7 @@ export class Services {
     const id = p.id;
     const steps: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> = [
       { label: 'Write the voice-over', status: 'running', note: `0 of ${board.scenes.length}` },
-      { label: 'Make the pictures', status: plan.aiPictures ? 'pending' : 'skipped', ...(plan.aiPictures ? { note: `0 of ${plan.aiPictures}` } : {}) },
+      { label: 'Make the pictures', status: plan.aiPictures || plan.characterPictures ? 'pending' : 'skipped', ...(plan.aiPictures ? { note: `0 of ${plan.aiPictures}` } : plan.characterPictures ? { note: `${plan.characterPictures} of your characters` } : {}) },
       { label: 'Find where the voice speaks', status: 'pending' },
       { label: 'Build scenes, motion and transitions', status: 'pending' },
       { label: board.captions === 'none' ? 'Captions (off)' : 'Captions', status: board.captions === 'none' ? 'skipped' : 'pending' },
@@ -1546,10 +1557,26 @@ export class Services {
       }
       // 2. The pictures the storyboard does not give: two at a time.
       const pictureFiles: Array<string | null> = board.scenes.map(() => null);
+      // A character's scenes with their own description: a new picture of them, the same face (fal.ai).
+      const sameFace = this.secrets.has('fal') ? cast.references : new Map<number, string>();
+      if (sameFace.size) {
+        await inBatches([...sameFace.entries()], 2, async ([i, ref]) => {
+          if (signal.aborted) throw new StudioError('Stopped.');
+          const image = this.imageTools.jpeg?.(ref, 1280);
+          if (!image) throw new StudioError('Keo could not read a character’s picture.');
+          try {
+            const made = await this.aiVideo.characterPicture({ image, prompt: facelessPrompt(board, board.scenes[i]!), aspect: facelessAspect(board.format) }, signal);
+            pictureFiles[i] = made.file;
+            if (!made.cached) this.audit.record({ kind: 'studio.character_picture', decision: 'sent', detail: { destination: 'fal.ai', costUsd: PICTURE_MODEL.perPicture } });
+          } catch (e) {
+            throw e instanceof AiVideoError ? new StudioError(`A picture of a character could not be made: ${e.message}`) : e;
+          }
+        });
+      }
       if (plan.aiPictures) {
         step(1, 'running', `0 of ${plan.aiPictures}`);
         let made = 0;
-        const todo = board.scenes.map((s, i) => ({ s, i })).filter(({ s }) => !s.picture || 'prompt' in s.picture);
+        const todo = board.scenes.map((s, i) => ({ s, i })).filter(({ s, i }) => !sameFace.has(i) && (!s.picture || 'prompt' in s.picture));
         await inBatches(todo, 2, async ({ s, i }) => {
           if (signal.aborted) throw new StudioError('Stopped.');
           const cached = this.facelessCachedPicture(board, s);
@@ -2510,6 +2537,11 @@ async function inBatches<T>(items: T[], n: number, f: (item: T, index: number) =
 }
 
 /** The picture description sent for a faceless scene. */
+/** The shape of a faceless video's pictures, as picture models name it. */
+function facelessAspect(format: Storyboard['format']): '9:16' | '16:9' | '1:1' | '4:5' {
+  return format === 'vertical' ? '9:16' : format === 'landscape' ? '16:9' : format === 'portrait' ? '4:5' : '1:1';
+}
+
 function facelessPrompt(board: Storyboard, s: Storyboard['scenes'][number]): string {
   const prompt = s.picture && 'prompt' in s.picture ? s.picture.prompt : `A picture for this moment of a video: ${s.narration}`;
   return `${prompt}.${board.pictureStyle ? ` Style: ${board.pictureStyle}.` : ''} No text or letters in the picture.`;

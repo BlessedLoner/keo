@@ -60,3 +60,23 @@ describe('Characters', () => {
     }
   });
 });
+
+describe('Same-face pictures in a faceless video', () => {
+  it('with a fal.ai key, a character’s described scenes are made from their picture and priced', async () => {
+    const h = makeHarness();
+    try {
+      const kira = h.services.studio.saveCharacter({ name: 'Kira', voice: 'nova' });
+      const photo = path.join(h.dir, 'kira.png');
+      fs.writeFileSync(photo, 'png');
+      h.services.studio.addCharacterPicture(kira.id, photo);
+      const scenes = scenesFromScript('Kira: Watch this.\n[picture: Kira on a rooftop at sunset]\n\nAnd that is the story.', h.services.studio.characters());
+      const board = { title: 'T', format: 'vertical' as const, voice: 'female', pictureStyle: '', captions: 'bold' as const, look: 'off' as const, musicVolume: 0.25, soundEffects: true, scenes, cast: [kira.id] };
+      // Without a fal.ai key: an ordinary AI picture, described with Kira's looks.
+      expect(h.services.facelessPlan(board)).toMatchObject({ aiPictures: 2, characterPictures: 0 });
+      h.services.secrets.set('fal', 'fal-test-key-123');
+      expect(h.services.facelessPlan(board)).toMatchObject({ aiPictures: 1, characterPictures: 1, characterCostUsd: 0.04 });
+    } finally {
+      await h.close();
+    }
+  });
+});

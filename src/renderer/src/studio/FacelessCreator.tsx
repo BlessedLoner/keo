@@ -45,7 +45,7 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
   const [captions, setCaptions] = useState<Storyboard['captions']>('bold');
   const [look, setLook] = useState<LookId | 'off'>('off');
   const [sfx, setSfx] = useState(true);
-  const [plan, setPlan] = useState<{ voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null } | null>(null);
+  const [plan, setPlan] = useState<{ voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null; characterPictures: number; characterCostUsd: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [tab, setTab] = useState<'script' | 'characters'>('script');
@@ -81,7 +81,13 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
   const create = async () => {
     if (!board || !plan) return;
     if (plan.reason) return ui.error(plan.reason);
-    const sends = [plan.voice ? `the narration to ${plan.voice} for the voice` : null, plan.aiPictures ? `${plan.aiPictures} picture description${plan.aiPictures === 1 ? '' : 's'} to ${plan.pictures}` : null].filter(Boolean).join(' and ');
+    const sends = [
+      plan.voice ? `the narration to ${plan.voice} for the voice` : null,
+      plan.aiPictures ? `${plan.aiPictures} picture description${plan.aiPictures === 1 ? '' : 's'} to ${plan.pictures}` : null,
+      plan.characterPictures ? `${plan.characterPictures} picture${plan.characterPictures === 1 ? '' : 's'} of your characters with their descriptions to fal.ai (about $${plan.characterCostUsd.toFixed(2)} from your fal.ai account)` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
     const ok = await ui.confirm({
       title: 'Make this video?',
       body: `Keo sends ${sends}. ${plan.narrations} voice clip${plan.narrations === 1 ? '' : 's'}${plan.aiPictures ? ` and ${plan.aiPictures} picture${plan.aiPictures === 1 ? '' : 's'}` : ''} count toward your plan (or your own OpenAI account). It takes a minute or two.`,
@@ -198,7 +204,7 @@ export function FacelessCreator({ onDone, onCancel }: { onDone: (projectId: stri
         )}
         {plan && (
           <p className={`small ${plan.reason ? 'warn-text' : 'muted'}`}>
-            {plan.reason ?? `Voice: ${plan.voice} · ${plan.aiPictures ? `${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}: ${plan.pictures}` : 'no AI pictures'}`}
+            {plan.reason ?? `Voice: ${plan.voice} · ${plan.aiPictures ? `${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}: ${plan.pictures}` : 'no AI pictures'}${plan.characterPictures ? ` · ${plan.characterPictures} same-face picture${plan.characterPictures === 1 ? '' : 's'} of your characters: fal.ai, about $${plan.characterCostUsd.toFixed(2)}` : ''}`}
           </p>
         )}
         {steps && (

@@ -499,7 +499,7 @@ export interface InvokeOutputs {
   'studio:focus': { ok: true };
   'studio:conversation': { conversationId: string };
   'studio:assetIssue': { ok: true };
-  'studio:facelessPlan': { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null };
+  'studio:facelessPlan': { voice: string | null; pictures: string | null; aiPictures: number; narrations: number; reason: string | null; characterPictures: number; characterCostUsd: number };
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };
   'studio:exportCancel': { cancelled: boolean };
