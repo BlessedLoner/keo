@@ -6,6 +6,7 @@ export interface PushPayloads {
   'tasks:changed': { taskId: string | null };
   'memory:changed': { memoryId: string | null };
   'projects:changed': { projectId: string | null };
+  'builds:changed': { buildId: string | null };
   'conversations:changed': { conversationId: string | null };
   'observations:changed': { observationId: string | null };
   'settings:changed': Record<string, never>;

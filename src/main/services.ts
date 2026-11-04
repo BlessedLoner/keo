@@ -639,7 +639,10 @@ export class Services {
       root: () => path.join(this.keoOutputRoot(d), 'Builds'),
       modules: () => d.modulesDir ?? path.join(process.cwd(), 'node_modules'),
       log: this.log,
-      changed: (id) => this.buildHost?.changed?.(id),
+      changed: (id) => {
+        this.buildHost?.changed?.(id);
+        this.push('builds:changed', { buildId: id });
+      },
     });
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- read later by the builder tools (the preview is set after start-up)
     const self = this;

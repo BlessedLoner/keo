@@ -1,11 +1,12 @@
 import { StudioError } from '../studio/studioService';
+import { BuildError, type BuildManifest } from '../build/projects';
 import { CALENDAR_SCOPE, MAIL_SCOPE } from '../calendar/googleAuth';
 import type { AttachmentView } from '../../shared/ipc';
 import type { PreparedAttachment } from '../chat/attachments';
 import type { AppInfo } from '../../shared/domain';
 import { LINKS } from '../../shared/release';
 import type { UpdateInfo } from '../../shared/domain';
-import type { InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc';
+import type { BuildSummary, InvokeChannel, InvokeOutputs, ParsedInput } from '../../shared/ipc';
 import { LATEST_SCHEMA_VERSION } from '../db/database';
 import { KeoError } from '../util/errors';
 import { validateWakePhrase } from '../voice/wakeService';
@@ -35,6 +36,8 @@ export interface HostHooks {
   broadcastPresence?(channel: 'presence:level', payload: unknown): void;
   appInfo(): Omit<AppInfo, 'schemaVersion' | 'secretStorage' | 'userDataPath' | 'profile'>;
   openPath(p: string): Promise<boolean>;
+  /** Moves a file or folder to the Recycle Bin (it can be restored from there). */
+  trashItem?(p: string): Promise<void>;
   /** Opens one of Keo's allow-listed web pages in the default browser. */
   openExternal?(url: string): Promise<void>;
   /** Writes text to the clipboard (the renderer's own clipboard access is not granted). Write-only. */
@@ -111,6 +114,24 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     }
   };
   /** For promise chains: a Studio refusal as a plain message, anything else as it is. */
+  /** A build as the Builds page shows it. */
+  const buildSummary = (m: BuildManifest): BuildSummary => {
+    let files: number;
+    try {
+      files = s.builds.files(m.id).length;
+    } catch {
+      files = 0;
+    }
+    return { id: m.id, title: m.title, kind: m.kind, brief: m.brief, libraries: m.libraries, backend: m.backend, todo: m.todo, files, createdAt: m.createdAt, updatedAt: m.updatedAt };
+  };
+  const buildErr = <T>(f: () => T): T => {
+    try {
+      return f();
+    } catch (e) {
+      if (e instanceof BuildError) throw new KeoError('build', e.message);
+      throw e;
+    }
+  };
   const aiVideoStatus = async () => {
     const own = s.secrets.has('fal');
     const keo = !own && s.account.signedIn();
@@ -577,6 +598,48 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return s.studio.characters();
     },
     // Clone a video: the user's click after the page showed the price.
+    'builds:list': () => s.builds.list().map((m) => buildSummary(m)),
+    'builds:get': ({ id }) => {
+      const m = buildErr(() => s.builds.manifest(id));
+      const folder = s.builds.dir(id);
+      let guide: string | null;
+      try {
+        guide = fs.readFileSync(path.join(folder, 'PUT-IT-ONLINE.md'), 'utf8');
+      } catch {
+        guide = null;
+      }
+      return { build: buildSummary(m), folder, files: s.builds.files(id), pages: s.builds.pages(id), guide };
+    },
+    'builds:open': async ({ id, page }) => {
+      if (!s.buildHost) throw new KeoError('unavailable', 'The preview is not available here.');
+      await s.buildHost.open(id, page ?? '').catch((e: unknown) => {
+        throw new KeoError('build', e instanceof Error ? e.message : String(e));
+      });
+      return { opened: true };
+    },
+    'builds:folder': async ({ id, file }) => {
+      const dir = buildErr(() => s.builds.dir(id));
+      if (file) {
+        const full = buildErr(() => s.builds.file(id, file));
+        if (host.showInFolder && fs.existsSync(full)) {
+          host.showInFolder(full);
+          return { opened: true };
+        }
+      }
+      return { opened: await host.openPath(dir) };
+    },
+    'builds:todo': ({ id, index, done }) => {
+      const m = buildErr(() => s.builds.manifest(id));
+      if (!m.todo[index]) throw new KeoError('build', 'That to-do item is not there any more.');
+      return buildSummary(s.builds.update(id, { todo: m.todo.map((t, i) => (i === index ? { ...t, done } : t)) }));
+    },
+    'builds:delete': async ({ id }) => {
+      const dir = buildErr(() => s.builds.dir(id));
+      if (!host.trashItem) throw new KeoError('unavailable', 'Keo cannot move folders to the Recycle Bin here.');
+      await host.trashItem(dir);
+      s.builds.forget(id);
+      return { deleted: true };
+    },
     'studio:aiVideoPlan': async (o) => s.aiVideoPlanShots(o, new AbortController().signal).catch(studioErr),
     // The user's click after seeing the shots and the price.
     'studio:aiVideoMake': async ({ plan }) => s.aiVideoCreate(plan, new AbortController().signal, { background: true }).catch(studioErr),

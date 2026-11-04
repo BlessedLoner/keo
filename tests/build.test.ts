@@ -93,3 +93,20 @@ describe('Keo’s builder: tools', () => {
     expect(start.description).toContain('three.js');
   });
 });
+
+describe('Keo’s builder: the Builds page', () => {
+  it('lists the pages (home first) and takes a build off the list', () => {
+    const { p } = make();
+    const m = p.create({ title: 'Site', kind: 'website' });
+    p.write(m.id, [
+      { path: 'shop.html', content: '<html><body>Shop</body></html>' },
+      { path: 'index.html', content: '<html><body>Home</body></html>' },
+      { path: 'blog/index.html', content: '<html><body>Blog</body></html>' },
+    ]);
+    expect(p.pages(m.id)).toEqual(['index.html', 'blog/index.html', 'shop.html']);
+    const dir = p.forget(m.id);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(p.list()).toEqual([]);
+    expect(() => p.dir(m.id)).toThrow(/no such build/);
+  });
+});

@@ -7,7 +7,7 @@ import { invoke, subscribe } from '../lib/api';
 import { useInvoke, type Query } from '../lib/hooks';
 import { voice, type VoiceState } from '../lib/voice';
 
-export type ViewId = 'chat' | 'call' | 'tasks' | 'memory' | 'projects' | 'vision' | 'capabilities' | 'studio' | 'settings' | 'diagnostics';
+export type ViewId = 'chat' | 'call' | 'tasks' | 'memory' | 'projects' | 'builds' | 'vision' | 'capabilities' | 'studio' | 'settings' | 'diagnostics';
 
 export interface TurnInfo {
   messageId: string;

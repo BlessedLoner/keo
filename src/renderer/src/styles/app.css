@@ -560,3 +560,24 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 .plan-step.done .grow { color: var(--text-2); }
 .plan-step.failed .plan-mark { color: var(--danger, #ff5d6c); }
 .plan-step.skipped .grow { color: var(--text-3); text-decoration: line-through; }
+
+/* Builds */
+.builds-empty { flex: 1; overflow: auto; padding: 24px; }
+.builds-ideas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; max-width: 980px; margin: 8px auto 0; }
+.build-idea { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-elev); color: inherit; font: inherit; cursor: pointer; }
+.build-idea:hover { border-color: var(--line-strong); }
+.builds-ideas-small { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.build-detail { overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+.build-head { display: flex; gap: 12px; align-items: center; }
+.build-head h2 { margin: 0; font-size: 20px; }
+.build-head p { margin: 2px 0 0; }
+.build-kind { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: var(--bg-elev); border: 1px solid var(--line); }
+.build-brief { margin: 0; color: var(--text-2); }
+.build-todo { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.build-todo li { display: flex; gap: 10px; align-items: flex-start; }
+.build-todo li input { margin-top: 3px; }
+.build-todo li p { margin: 2px 0 0; }
+.build-todo li.done strong { text-decoration: line-through; color: var(--text-3); }
+.build-guide { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-height: 420px; overflow: auto; }
+.build-files { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.build-files li { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }

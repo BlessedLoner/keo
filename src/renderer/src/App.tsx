@@ -17,6 +17,7 @@ import { SettingsView } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
 import { VisionView } from './views/VisionView';
 import { StudioView } from './views/StudioView';
+import { BuildsView } from './views/BuildsView';
 
 const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', key: '1' },
@@ -26,6 +27,7 @@ const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'projects', label: 'Projects', icon: 'projects', key: '4' },
   { id: 'vision', label: 'Vision', icon: 'vision', key: '5' },
   { id: 'studio', label: 'Studio', icon: 'film', key: '9' },
+  { id: 'builds', label: 'Builds', icon: 'rocket', key: '' },
   { id: 'capabilities', label: 'Access', icon: 'shield', key: '6' },
 ];
 
@@ -102,7 +104,7 @@ export function App() {
       <nav className="rail" aria-label="Main">
         <div className="rail-group" role="group" aria-label="Views">
           {NAV.map((n) => (
-            <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={`Ctrl+${n.key}`} badge={badgeFor(n.id, app)} live={n.id === 'call' && !!app.presence?.voiceMode.active} />
+            <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={n.key ? `Ctrl+${n.key}` : undefined} badge={badgeFor(n.id, app)} live={n.id === 'call' && !!app.presence?.voiceMode.active} />
           ))}
         </div>
         <div className="rail-group rail-foot" role="group" aria-label="Diagnose and settings">
@@ -116,6 +118,7 @@ export function App() {
         {app.view === 'tasks' && <TasksView />}
         {app.view === 'memory' && <MemoryView />}
         {app.view === 'projects' && <ProjectsView />}
+        {app.view === 'builds' && <BuildsView />}
         {app.view === 'vision' && <VisionView />}
         {app.view === 'capabilities' && <CapabilitiesView />}
         {app.view === 'studio' && <StudioView />}
@@ -225,10 +228,10 @@ function badgeFor(id: ViewId, app: ReturnType<typeof useApp>): { n: number; tone
   return null;
 }
 
-function RailButton({ id, label, icon, shortcut, badge, live }: { id: ViewId; label: string; icon: string; shortcut: string; badge?: { n: number; tone: 'warn' | 'info' } | null; live?: boolean }) {
+function RailButton({ id, label, icon, shortcut, badge, live }: { id: ViewId; label: string; icon: string; shortcut?: string; badge?: { n: number; tone: 'warn' | 'info' } | null; live?: boolean }) {
   const app = useApp();
   return (
-    <button aria-current={app.view === id ? 'page' : undefined} className={live ? 'live' : undefined} onClick={() => app.setView(id)} title={`${label} (${shortcut})`}>
+    <button aria-current={app.view === id ? 'page' : undefined} className={live ? 'live' : undefined} onClick={() => app.setView(id)} title={shortcut ? `${label} (${shortcut})` : label}>
       <span className="rail-ico">
         <Icon name={icon} size={19} />
       </span>

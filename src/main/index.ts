@@ -720,6 +720,7 @@ app.whenReady().then(() => {
           testProviderEnabled: TEST_PROVIDER,
         }),
         openPath: async (p) => (await shell.openPath(p)) === '',
+        trashItem: (p) => shell.trashItem(p),
         displays: () => {
           const main = screen.getPrimaryDisplay().id;
           return screen.getAllDisplays().map((d) => ({ width: d.size.width, height: d.size.height, scale: d.scaleFactor, primary: d.id === main }));
@@ -1119,7 +1120,10 @@ async function studioSmoke(): Promise<Record<string, unknown>> {
   };
   const withFont = await typeFrame('Instrument Serif');
   const noFont = await typeFrame('No Such Font Keo');
-  if (process.env.KEO_SMOKE_SHOTS) fs.writeFileSync(path.join(process.env.KEO_SMOKE_SHOTS, 'studio-rich-text.png'), withFont);
+  if (process.env.KEO_SMOKE_SHOTS) {
+    fs.mkdirSync(process.env.KEO_SMOKE_SHOTS, { recursive: true });
+    fs.writeFileSync(path.join(process.env.KEO_SMOKE_SHOTS, 'studio-rich-text.png'), withFont);
+  }
   out.richText = { differs: !withFont.equals(noFont), bytes: withFont.length };
   // Shot changes: a video made of two shots (the picture, then a red frame from 1.5 s), decoded
   // in the render window, split where the red starts.
@@ -1561,6 +1565,7 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
     ['tasks', 'Tasks'],
     ['memory', 'Memory'],
     ['projects', 'Projects'],
+    ['builds', 'Builds'],
     ['access', 'Access'],
     ['studio', 'Studio'],
     ['settings', 'Settings'],
@@ -1824,8 +1829,18 @@ document.getElementById('out').textContent = 'done';
     },
     { path: 'api/schema.sql', content: 'CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, total REAL);' },
   ]);
-  const first = await buildHost.check(m.id, '', { waitMs: 4000 });
-  const again = await buildHost.check(m.id, '', { waitMs: 4000 });
+  let first: Awaited<ReturnType<BuildHost['check']>>;
+  let again: Awaited<ReturnType<BuildHost['check']>>;
+  let dbSaved = false;
+  try {
+    first = await buildHost.check(m.id, '', { waitMs: 4000 });
+    again = await buildHost.check(m.id, '', { waitMs: 4000 });
+    dbSaved = fs.existsSync(path.join(b.dir(m.id), 'data', 'preview.sqlite'));
+  } finally {
+    // The smoke build is the test's own: it does not stay in the user's Builds.
+    const dir = b.forget(m.id);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   const parse = (t: string) => {
     try {
       return JSON.parse(t.replace(/^RESULT /, '')) as Record<string, unknown>;
@@ -1838,7 +1853,7 @@ document.getElementById('out').textContent = 'done';
     again: parse(again.title),
     errors: [...first.errors, ...again.errors].slice(0, 5),
     missing: first.missing,
-    dbSaved: fs.existsSync(path.join(b.dir(m.id), 'data', 'preview.sqlite')),
+    dbSaved,
     screenshot: (first.screenshot?.length ?? 0) > 1000,
   };
 }

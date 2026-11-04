@@ -4,6 +4,20 @@ import { Storyboard } from './studioFaceless';
 import { Brand, BrandPatch } from './studioBrand';
 
 /** The user's fal.ai set-up and what Keo spent on it. */
+/** A website, app or game Keo built (Documents\\Keo\\Builds). */
+export interface BuildSummary {
+  id: string;
+  title: string;
+  kind: 'website' | 'app' | 'game';
+  brief: string;
+  libraries: string[];
+  backend: boolean;
+  todo: Array<{ what: string; how: string; who: 'you' | 'keo'; done: boolean }>;
+  files: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AiVideoStatus {
   hasKey: boolean;
   secretStorage: boolean;
@@ -206,6 +220,13 @@ export const invokeSchemas = {
     })
     .strict(),
   'studio:characterVoice': z.object({ voice: z.string().regex(/^[a-z]{2,20}$/), text: z.string().trim().min(1).max(200), character: CharacterId.optional() }).strict(),
+  // Keo's builder: the websites, apps and games Keo built.
+  'builds:list': empty,
+  'builds:get': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
+  'builds:open': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), page: z.string().max(300).optional() }).strict(),
+  'builds:folder': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), file: z.string().max(300).optional() }).strict(),
+  'builds:todo': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), index: z.number().int().min(0).max(39), done: z.boolean() }).strict(),
+  'builds:delete': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
   // Real AI video from a description: the shot plan (Keo's model, nothing paid yet), then the video.
   'studio:aiVideoPlan': z.object({ description: z.string().trim().min(10).max(8000), seconds: z.number().int().min(5).max(60), model: z.enum(['kling-3-pro', 'veo-3.1-fast']), cast: z.array(CharacterId).max(3) }).strict(),
   'studio:aiVideoMake': z.object({ plan: AiVideoPlan }).strict(),
@@ -553,6 +574,12 @@ export interface InvokeOutputs {
   'studio:brand': Brand;
   'studio:characters': Character[];
   'studio:characterVoice': { mimeType: string; base64: string };
+  'builds:list': BuildSummary[];
+  'builds:get': { build: BuildSummary; folder: string; files: Array<{ path: string; bytes: number }>; pages: string[]; guide: string | null };
+  'builds:open': { opened: boolean };
+  'builds:folder': { opened: boolean };
+  'builds:todo': BuildSummary;
+  'builds:delete': { deleted: boolean };
   'studio:aiVideoPlan': { title: string; style: string; shots: AiShot[] };
   'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
   'studio:aiJobs': Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>;

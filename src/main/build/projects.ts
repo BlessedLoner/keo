@@ -88,6 +88,24 @@ export class BuildProjects {
     fs.renameSync(`${this.indexFile()}.tmp`, this.indexFile());
   }
 
+  /** Takes a build off Keo's list (its folder is handled by the caller: the Recycle Bin). */
+  forget(id: string): string {
+    const dir = this.dir(id);
+    const ix = this.index();
+    delete ix[id];
+    this.saveIndex(ix);
+    this.d.log.info('build.forgotten', {});
+    return dir;
+  }
+
+  /** The pages a visitor can open (HTML files, the home page first). */
+  pages(id: string): string[] {
+    const html = this.files(id)
+      .map((f) => f.path)
+      .filter((p) => /\.html$/i.test(p) && !p.startsWith('api/'));
+    return [...html.filter((p) => p === 'index.html'), ...html.filter((p) => p !== 'index.html')];
+  }
+
   /** The project's folder. */
   dir(id: string): string {
     const folder = this.index()[id];
