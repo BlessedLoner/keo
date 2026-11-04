@@ -206,7 +206,16 @@ export class OpenAICompatProvider implements ChatProvider {
         try {
           return { id, name: p.name, input: p.args ? JSON.parse(p.args) : {} };
         } catch {
-          return { id, name: p.name, input: null, parseError: 'Tool arguments were not valid JSON.' };
+          // Cut off at the reply limit: say so, and how to fit (a smaller call), so the model does not repeat it.
+          return {
+            id,
+            name: p.name,
+            input: null,
+            parseError:
+              finish === 'length'
+                ? `This tool call was cut off: it was longer than one reply can be (about ${Math.round((p.args?.length ?? 0) / 1000)}k characters were sent). Do not send it again. Send much less per call: for files, one file per call and under 8,000 characters, and write a longer file in parts (build__write the first part, then build__append each next part).`
+                : 'Tool arguments were not valid JSON.',
+          };
         }
       });
     const stopReason: StopReason =

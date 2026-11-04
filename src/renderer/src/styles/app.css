@@ -581,3 +581,5 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 .build-guide { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-height: 420px; overflow: auto; }
 .build-files { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
 .build-files li { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.dialog.build-request { width: min(720px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+.dialog.build-request textarea { resize: vertical; min-height: 160px; }

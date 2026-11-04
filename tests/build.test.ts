@@ -5,6 +5,7 @@ import { BUILD_LIBRARIES, withImportMap } from '../src/main/build/libraries';
 import { BuildProjects, onlineGuide } from '../src/main/build/projects';
 import { buildCapabilities } from '../src/main/capabilities/build';
 import { groupOf } from '../src/main/agent/toolGroups';
+import type { ChatResult } from '../src/main/providers/types';
 import { tempDir } from './helpers';
 
 const log = { info: () => undefined };
@@ -85,7 +86,7 @@ describe('Keo’s builder: tools', () => {
   it('are in the create group, and the start tool teaches how to build', () => {
     const { p } = make();
     const caps = buildCapabilities({ projects: p, host: null });
-    expect(caps.map((c) => c.id)).toEqual(['build.start', 'build.write', 'build.edit', 'build.read', 'build.update', 'build.picture', 'build.check', 'build.open', 'build.list']);
+    expect(caps.map((c) => c.id)).toEqual(['build.start', 'build.write', 'build.append', 'build.edit', 'build.read', 'build.update', 'build.picture', 'build.check', 'build.open', 'build.list']);
     expect(groupOf('build__start')).toBe('create');
     const start = caps[0]!;
     expect(start.description).toContain('Cloudflare Worker');
@@ -109,4 +110,45 @@ describe('Keo’s builder: the Builds page', () => {
     expect(p.list()).toEqual([]);
     expect(() => p.dir(m.id)).toThrow(/no such build/);
   });
+});
+
+describe('Keo builds a site in one turn, in small steps', () => {
+  it('runs past the usual 8 steps once building, writes a long file in parts, and is told plainly when a call was cut off', async () => {
+    const { makeHarness } = await import('./helpers');
+    const reply = (text: string, extra: Partial<ChatResult> = {}): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage: { inputTokens: 10, outputTokens: 5 }, model: 'keo-test-1', native: undefined, ...extra });
+    let n = 0;
+    const call = (name: string, input: unknown) => reply('', { toolCalls: [{ id: `c${++n}`, name, input }], stopReason: 'tool_use' });
+    let id = '';
+    const seen: string[] = [];
+    const h = makeHarness({
+      script: (req) => {
+        const last = req.messages[req.messages.length - 1];
+        const result = last?.content.find((b) => b.type === 'tool_result') as { content: string } | undefined;
+        if (result) seen.push(result.content);
+        const m = /"id":"(bd_[a-z0-9]+)"/.exec(result?.content ?? '');
+        if (m) id = m[1]!;
+        const step = seen.length;
+        if (step === 0) return call('build__start', { title: 'Haven Homes', kind: 'website', brief: 'Real estate', libraries: ['gsap'] });
+        // A call that was cut off at the reply limit (the provider reports it).
+        if (step === 1) return reply('', { toolCalls: [{ id: `c${++n}`, name: 'build__write', input: null, parseError: 'This tool call was cut off: it was longer than one reply can be. Send much less per call.' }], stopReason: 'tool_use' });
+        if (step === 2) return call('build__write', { build: id, files: [{ path: 'index.html', content: '<!doctype html><html><head><title>Haven</title></head><body><main>' }] });
+        // Ten more parts: past the usual 8 rounds.
+        if (step < 13) return call('build__append', { build: id, path: 'index.html', content: `<section id="s${step}">Section ${step}</section>` });
+        if (step === 13) return call('build__append', { build: id, path: 'index.html', content: '</main></body></html>' });
+        return reply('Built Haven Homes.');
+      },
+    });
+    try {
+      h.services.settings.update({ agent: { maxToolIterations: 8 } });
+      const c = h.services.conversations.create();
+      const msg = await h.services.agent.send(c.id, 'Build a real estate website').done;
+      expect(msg.content).toContain('Built Haven Homes.');
+      expect(seen[1]).toContain('cut off');
+      const html = h.services.builds.read(id, 'index.html');
+      expect(html).toContain('<section id="s12">');
+      expect(html.trim().endsWith('</html>')).toBe(true);
+    } finally {
+      await h.close();
+    }
+  }, 60_000);
 });

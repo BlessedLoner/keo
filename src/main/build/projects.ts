@@ -95,6 +95,7 @@ export class BuildProjects {
     delete ix[id];
     this.saveIndex(ix);
     this.d.log.info('build.forgotten', {});
+    this.d.changed?.(id);
     return dir;
   }
 
@@ -224,6 +225,22 @@ export class BuildProjects {
     }
     const r = this.write(id, [{ path: rel, content: text }]);
     return { path: r.written[0]!, bytes: r.bytes };
+  }
+
+  /**
+   * Adds the next part of a long file (written in parts, so each part fits in one reply of the model).
+   * The file must have been started with write.
+   */
+  append(id: string, rel: string, content: string): { path: string; bytes: number } {
+    const full = this.file(id, rel, { writing: true });
+    let text: string;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch {
+      throw new BuildError(`${rel} does not exist yet: write its first part with build__write, then add the rest with build__append.`);
+    }
+    const r = this.write(id, [{ path: rel, content: text + content }]);
+    return { path: r.written[0]!, bytes: Buffer.byteLength(text + content) };
   }
 
   /** The project's own files (not the copied libraries or the preview data). */

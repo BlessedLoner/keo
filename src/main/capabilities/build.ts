@@ -33,8 +33,10 @@ const LIB_HELP = BUILD_LIBRARY_IDS.map((id) => `${id}: ${BUILD_LIBRARIES[id].lab
 
 const HOW_TO_BUILD = [
   'How Keo builds (follow it):',
+  '0. One build per request: when the user continues ("continue", "are you done?", "fix it", "add…"), use build__list and keep working on that build; never start a second build for the same thing.',
   '1. Plan first: the pages or screens, the features, the look (colours, fonts, motion), the data the backend keeps. Build the whole thing, not a demo: every page, every button working, real content (no lorem ipsum), mobile and desktop layouts.',
-  '2. Files: index.html at the root (and other pages: about.html, shop.html…), css/, js/, assets/. Pages link files by root paths (/css/site.css, /js/app.js). Keep each file under ~800 kB; split big scripts into modules.',
+  '2. Files: index.html at the root (and other pages: about.html, shop.html…), css/, js/, assets/. Pages link files by root paths (/css/site.css, /js/app.js). Split the code into several focused files (css/base.css, css/sections.css, js/motion.js, js/form.js…), never one huge file.',
+  '   SMALL CALLS (a reply has a length limit; a call that is too long is cut off and fails): one file per build__write call, under 8,000 characters. A longer file is written in parts: build__write its first part, then build__append the next parts, each under 8,000 characters, in order. Never put a whole site in one call.',
   '3. Libraries come with Keo (never from the internet): list them in build__start or build__update and Keo copies them into /lib. No CDN links, no Google Fonts (use system font stacks, or fonts drawn as SVG), no remote images: make pictures with build__picture, SVG, CSS or canvas.',
   '4. Backend (websites and apps that keep data, have accounts, forms, orders…): api/index.js written like a Cloudflare Worker — export default { async fetch(request, env) { … } } routing on new URL(request.url).pathname under /api/…, answering with Response.json(...). The database is env.DB, like Cloudflare D1: await env.DB.prepare("SELECT … WHERE id = ?").bind(id).all() → { results }, .first(), .run() → { meta: { last_row_id } }, env.DB.batch([...]). Tables in api/schema.sql (CREATE TABLE IF NOT EXISTS …), made automatically. Hash passwords with crypto.subtle (PBKDF2), keep sessions in a table with a random token in an HttpOnly cookie. Pages call it with fetch("/api/…"). Settings go in build__update vars (env.NAME); secrets (payment keys) never in files: put them on the to-do list.',
   '5. Check your work: build__check loads a page like a visitor, reports errors, missing files and what it looks like. Fix everything it finds (build__edit for small changes), check again until clean. Check every page, and the API by using the pages.',
@@ -86,7 +88,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     ...base,
     id: 'build.write',
     title: 'Write files of a build',
-    description: 'Write (create or replace) files of a build: pages, styles, scripts, SVG pictures, api/index.js, api/schema.sql. Up to 40 files a call; complete file contents. For small changes to an existing file use build__edit.',
+    description: 'Write (create or replace) files of a build: pages, styles, scripts, SVG pictures, api/index.js, api/schema.sql. Keep each call small: one file, under 8,000 characters (a longer file: its first part here, then build__append the rest). For small changes to an existing file use build__edit.',
     input: z
       .object({
         build: BuildId,
@@ -105,6 +107,26 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     async execute(i) {
       const r = run(() => d.projects.write(i.build, i.files));
       return { ...r, next: 'When the pages are written, build__check them.' };
+    },
+  });
+
+  const append = defineCapability({
+    ...base,
+    id: 'build.append',
+    title: 'Add the next part of a file',
+    description: 'Add the next part of a long file of a build (written in parts so each call stays small): the file was started with build__write; each part under 8,000 characters, in order.',
+    input: z.object({ build: BuildId, path: z.string().min(3).max(300), content: z.string().min(1).max(60_000) }).strict(),
+    output: z.object({ path: z.string(), bytes: z.number() }),
+    approval: 'never',
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 30_000,
+    verificationPolicy: 'The part is added at the end of the file.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: (i) => ({ summary: `Add to ${i.path}`, target: null, consequences: [`${Math.round(i.content.length / 100) / 10}k characters`], dataExport: null }),
+    auditView: () => ({}),
+    async execute(i) {
+      return run(() => d.projects.append(i.build, i.path, i.content));
     },
   });
 
@@ -299,5 +321,5 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     },
   });
 
-  return [start, write, edit, read, update, picture, check, open, list];
+  return [start, write, append, edit, read, update, picture, check, open, list];
 }

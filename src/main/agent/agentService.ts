@@ -60,6 +60,8 @@ const STUDIO_STEPS_TOOL = 'studio__checklist';
 const FREE_STEP_ROUNDS = 6;
 /** Smart routing moves a fast-model reply to the strong model after this many tool rounds. */
 const ESCALATE_AFTER_ROUNDS = 3;
+/** Tool rounds a turn may take once Keo's builder is in use (a site is written one file at a time). */
+const BUILD_ROUNDS = 60;
 
 interface ActiveTurn {
   controller: AbortController;
@@ -493,15 +495,19 @@ export class AgentService {
       let freeRounds = 0;
       let freeStepRounds = 0;
       let toolRounds = 0;
-      const maxRounds = Math.max(settings.agent.maxToolIterations, this.minToolRounds?.(conversationId) ?? 0);
+      const baseRounds = Math.max(settings.agent.maxToolIterations, this.minToolRounds?.(conversationId) ?? 0);
+      // Building a website or game is many small steps (one file per call): once the builder is in use
+      // the turn may take up to BUILD_ROUNDS of them.
+      let building = false;
+      const roundLimit = () => (building ? Math.max(baseRounds, BUILD_ROUNDS) : baseRounds);
       const note = (s: string) => {
         text += s;
         this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: s });
       };
       for (let iteration = 0; ; iteration++) {
         const used = iteration - freeRounds;
-        if (used >= maxRounds) {
-          text += `${text ? '\n\n' : ''}_Stopped after ${maxRounds} tool rounds (limit set in Settings). Say “continue” to carry on._`;
+        if (used >= roundLimit()) {
+          text += `${text ? '\n\n' : ''}_Stopped after ${roundLimit()} tool rounds (limit set in Settings). Say “continue” to carry on._`;
           break;
         }
         // On long runs, older tool results are shortened so the request, the plan and recent results stay in view.
@@ -561,7 +567,7 @@ export class AgentService {
           if (result.stopReason === 'max_tokens') text += '\n\n_Response reached the output limit and may be incomplete._';
           // Honesty guard: the reply claims an action that no capability performed.
           const claims = unsupportedClaims(result.text, succeeded());
-          if (claims.length && tools.length && !claimNudged && used + 1 < maxRounds) {
+          if (claims.length && tools.length && !claimNudged && used + 1 < roundLimit()) {
             claimNudged = true;
             this.log.warn('agent.unsupported_claim', { claims, nudged: true }, correlationId);
             const note = `\n\n> ⚠ Keo: the text above says Keo ${claims.join(' and ')}, but no such action was run. Keo asked the model to actually do it or correct itself.\n\n`;
@@ -589,7 +595,7 @@ export class AgentService {
           }
           // Finishing properly: no open plan steps, and no "done" over an action that failed or was not verified.
           const issue = claims.length || !tools.length ? null : finishIssues(result.text, meta.plan, [...problems.values()]);
-          if (issue && !finishNudged && used + 1 < maxRounds) {
+          if (issue && !finishNudged && used + 1 < roundLimit()) {
             finishNudged = true;
             this.log.warn('agent.finish_checked', { openSteps: issue.open.length, problems: issue.problems.length }, correlationId);
             if (issue.problems.length) note(`\n\n> Keo: not everything above worked — ${describeProblems(issue.problems)}. Keo asked the model to fix it or say so.\n\n`);
@@ -628,6 +634,7 @@ export class AgentService {
         };
         let blockedNow = 0;
         let failedNow = false;
+        if (result.toolCalls.some((c) => c.name.startsWith('build__'))) building = true;
         for (const call of result.toolCalls) {
           if (call.name === LOAD_TOOLS) {
             // Groups this conversation leaves out (the old video pipeline inside Studio) stay out.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { BuildSummary } from '@shared/ipc';
 import { Icon } from '../components/Icon';
 import { Empty, ErrorBanner, useUi } from '../components/ui';
@@ -47,15 +47,9 @@ export function BuildsView() {
       ui.error(errText(e));
     }
   };
-  const buildNew = async (start = '') => {
-    const what = await ui.prompt({
-      title: 'What should Keo build?',
-      label: 'Describe it: what it is for, the pages or levels, the look. Keo plans it, builds every part, tests it and shows it to you.',
-      initial: start,
-      confirmLabel: 'Build it',
-    });
-    if (what?.trim()) await askKeo(`Build ${what.trim()}`);
-  };
+  // The request box: what the user types is exactly what Keo is asked (starter ideas only fill it in).
+  const [request, setRequest] = useState<null | { text: string; change?: { id: string; title: string } }>(null);
+  const buildNew = (start = '') => setRequest({ text: start });
 
   return (
     <div className="view">
@@ -106,9 +100,75 @@ export function BuildsView() {
               ))}
             </div>
           </div>
-          {selected && <BuildDetail key={selected} id={selected} onAsk={(t) => void askKeo(t)} onDeleted={() => setSelected(null)} />}
+          {selected && builds.data?.some((b) => b.id === selected) && <BuildDetail key={selected} id={selected} onChange={(b) => setRequest({ text: '', change: b })} onDeleted={() => { setSelected(null); void builds.refresh(); }} />}
         </div>
       )}
+      {request && (
+        <RequestBox
+          initial={request.text}
+          change={request.change ?? null}
+          onCancel={() => setRequest(null)}
+          onSend={(text) => {
+            setRequest(null);
+            void askKeo(request.change ? `In my build “${request.change.title}” (${request.change.id}): ${text}` : /^build\b/i.test(text) ? text : `Build ${text}`);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** What to build (or change), in the user's own words: several lines, sent exactly as typed. */
+function RequestBox({ initial, change, onCancel, onSend }: { initial: string; change: { id: string; title: string } | null; onCancel: () => void; onSend: (text: string) => void }) {
+  const [text, setText] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    el?.focus();
+    el?.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  const send = () => text.trim().length >= 5 && onSend(text.trim());
+  return (
+    <div className="dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
+      <div className="dialog build-request" role="dialog" aria-modal="true" aria-labelledby="br-title">
+        <h2 id="br-title">{change ? `Change “${change.title}”` : 'What should Keo build?'}</h2>
+        <p className="small muted">
+          {change
+            ? 'Say what to change or add. Keo edits the build, checks every page it touched, and shows you the result.'
+            : 'Describe it like you would to a designer: what it is for, the pages or levels, the features, the look and feel, sites you like. Keo plans it, builds every part, tests it in its preview, fixes what it finds and shows it to you.'}
+        </p>
+        <textarea
+          ref={ref}
+          className="textarea"
+          rows={8}
+          maxLength={6000}
+          value={text}
+          placeholder={change ? 'Make the hero darker, add a testimonials section, and send me an email copy of every contact message.' : 'A motion website for my real estate agency (like Douglas Elliman): Buy, Rent and Sell sections with property listings, a property page, smooth scroll animations, and a contact form that saves messages.'}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
+          }}
+        />
+        {!change && (
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <span className="small muted">Ideas:</span>
+            {IDEAS.map((i) => (
+              <button key={i.title} className="btn sm ghost" onClick={() => setText(i.ask)} title="Fills the box: change it as you like">
+                {i.title}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="actions">
+          <span className="small muted grow">{text.trim().length} / 6000 · Ctrl+Enter to send</span>
+          <button className="btn ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={text.trim().length < 5} onClick={send}>
+            <Icon name="send" size={14} /> {change ? 'Ask Keo' : 'Build it'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -127,12 +187,12 @@ function Ideas({ onPick }: { onPick: (ask: string) => void }) {
   );
 }
 
-function BuildDetail({ id, onAsk, onDeleted }: { id: string; onAsk: (text: string) => void; onDeleted: () => void }) {
+function BuildDetail({ id, onChange, onDeleted }: { id: string; onChange: (b: { id: string; title: string }) => void; onDeleted: () => void }) {
   const ui = useUi();
   const detail = useInvoke('builds:get', { id }, { refreshOn: ['builds:changed'] });
   const [opening, setOpening] = useState(false);
   const d = detail.data;
-  if (detail.error) return <ErrorBanner error={detail.error} onRetry={() => void detail.refresh()} />;
+  if (detail.error) return /no such build/i.test(errText(detail.error)) ? null : <ErrorBanner error={detail.error} onRetry={() => void detail.refresh()} />;
   if (!d) return <div className="muted small" style={{ padding: 24 }}>Loading…</div>;
   const b = d.build;
   const yours = b.todo.map((t, index) => ({ ...t, index })).filter((t) => t.who === 'you');
@@ -148,10 +208,7 @@ function BuildDetail({ id, onAsk, onDeleted }: { id: string; onAsk: (text: strin
       setOpening(false);
     }
   };
-  const change = async () => {
-    const what = await ui.prompt({ title: `Change “${b.title}”`, label: 'What should Keo change or add? (Keo edits the build, checks it and shows you the result.)', confirmLabel: 'Ask Keo' });
-    if (what?.trim()) onAsk(`In my build “${b.title}” (${b.id}): ${what.trim()}`);
-  };
+  const change = () => onChange({ id: b.id, title: b.title });
   const remove = async () => {
     const ok = await ui.confirm({ title: `Delete “${b.title}”?`, body: 'Its folder goes to the Recycle Bin (you can restore it from there) and it leaves this list.', confirmLabel: 'Move to Recycle Bin' });
     if (!ok) return;
@@ -191,7 +248,7 @@ function BuildDetail({ id, onAsk, onDeleted }: { id: string; onAsk: (text: strin
         <button className="btn primary" onClick={() => void open()} disabled={opening || !d.pages.length} title={d.pages.length ? 'Opens it in Keo’s preview window' : 'Keo has not written a page yet'}>
           {opening ? <span className="spinner tiny" /> : <Icon name="play" size={14} />} {b.kind === 'game' ? 'Play' : 'Open preview'}
         </button>
-        <button className="btn" onClick={() => void change()}>
+        <button className="btn" onClick={change}>
           <Icon name="magic" size={14} /> Ask Keo to change it
         </button>
         <button className="btn" onClick={() => void invoke('builds:folder', { id }).catch((e: unknown) => ui.error(errText(e)))}>

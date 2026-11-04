@@ -1752,6 +1752,16 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
       await wait(300);
     }
+    if (name === 'builds') {
+      // The request box, filled from a starter idea.
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Build something')?.click();`);
+      await wait(400);
+      await js(`[...document.querySelectorAll('.build-request button')].find((b) => b.textContent.includes('Motion landing page'))?.click();`);
+      await wait(300);
+      fs.writeFileSync(path.join(dir, 'builds-request.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('.build-request button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(300);
+    }
     if (name === 'settings') {
       await js(`document.querySelector('section[aria-label="OpenRouter"]')?.scrollIntoView({ block: 'start' });`);
       await wait(500);
