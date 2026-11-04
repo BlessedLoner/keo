@@ -14,6 +14,8 @@ import { FileSearch, isInside, type IndexBackend } from './files/fileSearch';
 import { WindowsSearchIndex } from './files/windowsSearch';
 import { findFileCapabilities, looksSecret } from './capabilities/findFiles';
 import { createCapabilities } from './capabilities/create';
+import { buildCapabilities, type BuildDeps } from './capabilities/build';
+import { BuildProjects } from './build/projects';
 import { CreatedFiles } from './create/output';
 import { webAppCapabilities } from './capabilities/webApps';
 import { KeoBrowser, type BrowserChoice } from './web/keoBrowser';
@@ -97,6 +99,8 @@ import { CHARACTER_PICTURE_USD, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost,
 import { aiVideoCost, parseShotPlan, SHOT_MODELS, shotPlanPrompt, shotSeconds, type AiShot, type AiVideoPlan, type ShotModelId } from '../shared/studioAiVideo';
 
 export interface ServiceDeps {
+  /** Where Keo's installed packages are (the builder's libraries); default: ./node_modules. */
+  modulesDir?: string;
   profile: ProfileInfo;
   cipher: SecretCipher;
   desktopBackend: DesktopBackend;
@@ -631,6 +635,14 @@ export class Services {
       log: (event, detail) => this.log.info(event, detail),
     });
     this.calendar = new GoogleCalendar(this.googleAuth, () => getSettings().calendar.calendarId, { ...(d.googleFetch ? { fetch: d.googleFetch } : {}), ...(d.calendarApi ? { base: d.calendarApi } : {}) });
+    this.builds = new BuildProjects({
+      root: () => path.join(this.keoOutputRoot(d), 'Builds'),
+      modules: () => d.modulesDir ?? path.join(process.cwd(), 'node_modules'),
+      log: this.log,
+      changed: (id) => this.buildHost?.changed?.(id),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- read later by the builder tools (the preview is set after start-up)
+    const self = this;
     for (const cap of [
       ...builtinCapabilities(capDeps),
       ...advancedCapabilities({ ...capDeps, snapshots: this.snapshots }),
@@ -735,6 +747,24 @@ export class Services {
         readAloud: (projectId, clipId, voice, signal) => this.studioReadAloud(projectId, clipId, voice, signal),
         // Keo's own output (made pictures, documents, exported videos).
         keoMade: (file) => isInside(file, this.keoOutputRoot(d)) || isInside(file, this.videoOutputRoot()),
+      }),
+      ...buildCapabilities({
+        projects: this.builds,
+        // The preview windows exist only in the app (set by it after start-up).
+        get host() {
+          return self.buildHost;
+        },
+        look: async (png, brief, signal) =>
+          this.askVision(
+            [png],
+            `This is a screenshot of a ${brief.slice(0, 400)} that Keo built, as a visitor sees it. In a few short lines: what it shows, and anything that looks broken, empty, unfinished, overlapping, unreadable, off-screen or ugly (be specific: where and what). Say "Looks right." if nothing is wrong.`,
+            signal,
+          ),
+        picture: async (prompt, size, signal) => {
+          if (!this.pictures.aiAvailable()) throw new StudioError('Making pictures needs your Keo account (sign in) or an OpenAI API key.');
+          const r = await this.pictures.generate(prompt, { name: 'Keo build picture', size, quality: this.settings.get().pictures.aiQuality, background: 'opaque' }, signal);
+          return fs.readFileSync(r.path);
+        },
       }),
       ...createCapabilities({
         outputRoot: () => (this.documentsDir ? path.join(this.documentsDir, 'Keo') : path.join(d.profile.userData, 'created')),
@@ -2632,6 +2662,10 @@ export class Services {
   private readonly ownsLog: boolean;
   /** Keo Studio: video projects edited by the user and by Keo. */
   readonly studio: StudioService;
+  /** Keo's builder: websites, apps and games as projects in Documents\\Keo\\Builds. */
+  readonly builds: BuildProjects;
+  /** Its preview and sandbox windows (set by the app; none in tests). */
+  buildHost: BuildDeps['host'] = null;
   /** AI shots: pictures made into video clips by AI video models through fal.ai (the user's key). */
   readonly aiVideo: FalVideo;
   readonly fileSearch: FileSearch;

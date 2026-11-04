@@ -1,4 +1,5 @@
 import { Mp4Reader } from './studio/mp4';
+import { BUILD_SCHEMES, BuildHost } from './build/host';
 import { voicedSpans, wavOf } from './studio/captions';
 import { LOOKS, projectDuration, type EditOp } from '../shared/studio';
 import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
@@ -52,7 +53,10 @@ const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
 // stream: Keo's own videos (the sign-in intro) play from app://keo like any other bundled file.
 // corsEnabled: Studio's media is read by Keo's own pages, which in development come from the dev server's origin.
-protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }, ...BUILD_SCHEMES.map((s) => ({ scheme: s.scheme, privileges: { ...s.privileges } }))]);
+
+/** Keo's builder previews (websites, apps and games Keo builds), in their own sandboxed sessions. */
+let buildHost: BuildHost | null = null;
 
 const log = new Logger(profile.logsDir, !app.isPackaged && !SMOKE);
 const updates = new UpdateService(app.getVersion(), log);
@@ -570,6 +574,8 @@ async function switchInPlace(): Promise<void> {
     services = null;
     await old?.shutdown().catch((e: unknown) => log.warn('app.switch_shutdown', { error: errorMessage(e) }));
     startServices();
+    const reopened = services as Services | null;
+    if (reopened && buildHost) reopened.buildHost = buildHost;
     if (!SMOKE && !E2E_DESKTOP) startPresence();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
     else mainWindow = createWindow();
@@ -634,6 +640,8 @@ app.whenReady().then(() => {
         sessionSecrets: opened.sessionSecrets,
         // Another account signed in, or signed out: start again on that account's own data.
         onAccountChange: (userId) => switchAccountFolder(userId ? { mode: 'account', userId } : { mode: 'signed-out', userId: null }),
+        // The builder's libraries come with Keo (three.js, GSAP, Phaser, Rapier, sql.js).
+        modulesDir: path.join(app.getAppPath(), 'node_modules'),
       studioJob: (jobId, job) => sendRenderJob(jobId, job),
         desktopBackend: new Win32Backend(profile.runtimeDir, log),
         captureSource: new ElectronWindowCapture(),
@@ -850,6 +858,9 @@ app.whenReady().then(() => {
       });
     };
     startServices();
+    // One preview host for the whole run: it always works on the open account's builds.
+    buildHost = new BuildHost({ projects: () => services!.builds, modules: () => path.join(app.getAppPath(), 'node_modules'), log });
+    if (services) services.buildHost = buildHost;
     mainWindow = createWindow();
     if (E2E_DESKTOP && !app.isPackaged) {
       const out = process.env.KEO_E2E_OUT ?? path.join(profile.userData, 'e2e-desktop.json');
@@ -884,6 +895,7 @@ app.on('before-quit', (e) => {
   shuttingDown = true;
   presenceWindows?.shutdown();
   presenceWindows = null;
+  buildHost?.close();
   services
     .shutdown()
     .catch(() => undefined)
@@ -1770,6 +1782,67 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
  * nobody else is likely to hold (not Ctrl+K) so the check never collides with
  * the user's other applications, and tears everything down again.
  */
+/**
+ * Smoke: Keo's builder in the real sandbox. A small shop with an API and a database: the page loads
+ * a library (GSAP) from its own lib/, posts an order to /api/, reads it back, and tries the network
+ * (which must be blocked); the database is kept in the build's data/.
+ */
+async function buildSmoke(): Promise<Record<string, unknown>> {
+  if (!services || !buildHost) return { error: 'no services' };
+  const b = services.builds;
+  const m = b.create({ title: 'Smoke shop', kind: 'website', libraries: ['gsap', 'three'] });
+  b.write(m.id, [
+    {
+      path: 'index.html',
+      content: `<!doctype html><html><head><title>Smoke shop</title></head><body><h1 id="h">Shop</h1><p id="out">waiting</p>
+<script src="/lib/gsap/gsap.min.js"></script>
+<script type="module">
+import * as THREE from 'three';
+const r = { gsap: typeof gsap, three: typeof THREE.Scene };
+const post = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: 'coffee', total: 3.5 }) }).then((x) => x.json());
+r.created = post.id;
+r.orders = (await fetch('/api/orders').then((x) => x.json())).orders.length;
+try { await fetch('https://example.com'); r.network = 'allowed'; } catch { r.network = 'blocked'; }
+document.title = 'RESULT ' + JSON.stringify(r);
+document.getElementById('out').textContent = 'done';
+</script></body></html>`,
+    },
+    {
+      path: 'api/index.js',
+      content: `export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/api/orders' && request.method === 'POST') {
+      const o = await request.json();
+      const r = await env.DB.prepare('INSERT INTO orders (item, total) VALUES (?, ?)').bind(o.item, o.total).run();
+      return Response.json({ id: r.meta.last_row_id });
+    }
+    if (url.pathname === '/api/orders') return Response.json({ orders: (await env.DB.prepare('SELECT * FROM orders').all()).results });
+    return new Response('Not found', { status: 404 });
+  },
+};`,
+    },
+    { path: 'api/schema.sql', content: 'CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, total REAL);' },
+  ]);
+  const first = await buildHost.check(m.id, '', { waitMs: 4000 });
+  const again = await buildHost.check(m.id, '', { waitMs: 4000 });
+  const parse = (t: string) => {
+    try {
+      return JSON.parse(t.replace(/^RESULT /, '')) as Record<string, unknown>;
+    } catch {
+      return { title: t };
+    }
+  };
+  return {
+    first: parse(first.title),
+    again: parse(again.title),
+    errors: [...first.errors, ...again.errors].slice(0, 5),
+    missing: first.missing,
+    dbSaved: fs.existsSync(path.join(b.dir(m.id), 'data', 'preview.sqlite')),
+    screenshot: (first.screenshot?.length ?? 0) > 1000,
+  };
+}
+
 async function presenceSmoke(shots: string | undefined): Promise<Record<string, unknown>> {
   const svc = services;
   const pw = presenceWindows;
@@ -2080,6 +2153,11 @@ function runSmoke(win: BrowserWindow): void {
         result.studio = await studioSmoke();
       } catch (e) {
         result.studio = { error: errorMessage(e) };
+      }
+      try {
+        result.build = await buildSmoke();
+      } catch (e) {
+        result.build = { error: errorMessage(e) };
       }
       try {
         result.presence = await presenceSmoke(process.env.KEO_SMOKE_SHOTS);

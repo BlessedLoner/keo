@@ -40,6 +40,7 @@ export function groupOf(toolName: string): ToolGroup {
     case 'files':
       return op === 'search' ? 'core' : op === 'look_at_pictures' ? 'pictures' : 'files';
     case 'create':
+    case 'build':
       return 'create';
     case 'picture':
       return 'pictures';
@@ -66,7 +67,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   webapps: "work inside websites in Keo's browser window (forms, uploads, Google Docs/Slides, marketplaces)",
   research: 'deeper research with sub-agents, product comparisons, saving results',
   files: 'read, open, show, write files; project workspace files and scripts',
-  create: 'make Word, PowerPoint, Excel files, web games, 3D models',
+  create: 'make Word, PowerPoint, Excel files; build websites (with backend and database), web apps, 2D/3D games and motion sites; 3D models',
   pictures: 'edit, animate or make pictures; look at photos',
   video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
@@ -84,7 +85,7 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   webapps: /\b(website|web ?site|site|web ?app|google (docs?|slides|sheets|forms)|ebay|amazon|jumia|etsy|form|forms|log ?in|sign ?in|upload|browser|tab|tabs|online|listing|post on|checkout|portal)\b/,
   research: /\b(research|compare|comparison|best|cheapest|price|prices|deal|deals|buy|review|reviews|vs|versus|which (one|is better)|recommend|options|look up|find out)\b/,
   files: /\b(files?|folders?|documents?|docs?|pdf|docx|downloads?|read (the|this|my)|open (the|my)|save (it|this|to)|script|scripts|code|repo|workspace|txt|csv|json)\b/,
-  create: /\b(make|create|write|draft|build|generate|design)\b.*\b(presentation|slides?|deck|powerpoint|pptx|word|document|docx|report|letter|cv|resume|essay|proposal|spreadsheet|excel|xlsx|budget|invoice|game|app|page|3d|stl|model)\b|\b(presentation|slides|deck|spreadsheet|powerpoint|word document|excel sheet)\b/,
+  create: /\b(make|create|write|draft|build|generate|design)\b.*\b(presentation|slides?|deck|powerpoint|pptx|word|document|docx|report|letter|cv|resume|essay|proposal|spreadsheet|excel|xlsx|budget|invoice|game|games|app|page|3d|stl|model|website|web ?site|site|landing page|shop|store|dashboard|portfolio|blog)\b|\b(presentation|slides|deck|spreadsheet|powerpoint|word document|excel sheet|website|web ?site|landing page|online (shop|store)|web ?app|3d game|2d game)\b/,
   pictures: /\b(pictures?|images?|photos?|logo|png|jpe?g|gif|crop|animate|animated|background|redesign|illustration|poster|banner|thumbnail|wallpaper|icon|edit (the|this|my) (pic|image|photo|logo))\b/,
   video: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?)\b/,
   studio: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?|voice-?over|green ?screen|transition|thumbnail)\b/,
