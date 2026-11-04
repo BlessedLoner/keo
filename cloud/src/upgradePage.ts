@@ -70,6 +70,11 @@ export function upgradePage(): Response {
     <button class="btn" id="card">Update card</button>
     <button class="btn" id="cancel">Cancel renewal</button>
   </div>
+  <div id="packs-wrap" hidden>
+    <h1 style="margin-top:36px">Studio credits</h1>
+    <p class="lead">Keo Studio’s AI (AI clips, Clone a video, same-face pictures, character voices) uses credits. Your plan’s credits renew every month; credits you buy never expire and are used after them.</p>
+    <div class="plans" id="packs"></div>
+  </div>
   <p class="note" id="note" hidden></p>
   <p class="fine"><span class="lock"></span>Payments are made securely with Paystack. Keo never sees or stores your card details. Plans renew every month; cancel any time and keep your plan until the end of the month you paid for. Daily allowances reset at midnight UTC. Payments are not refunded. By upgrading you agree to Keo’s <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refunds">Refund Policy</a>.</p>
 </div>
@@ -83,7 +88,7 @@ export function upgradePage(): Response {
   history.replaceState(null, '', location.pathname);
   var $ = function (id) { return document.getElementById(id); };
   var state = { prices: null, me: null, currency: 'USD', busy: false };
-  var tier = { free: 'Keo Fast model', pro: 'Keo Fast and Keo Strong models', max: 'All models, including Keo Best' };
+  var tier = { free: 'Keo Fast model', pro: 'Keo Fast and Keo Strong models', creator: 'Keo Fast and Keo Strong models', max: 'All models, including Keo Best' };
 
   function note(text, kind) { var n = $('note'); n.hidden = !text; n.className = 'note ' + (kind || ''); n.textContent = text || ''; }
   function api(method, path, body) {
@@ -103,6 +108,7 @@ export function upgradePage(): Response {
     out.push([f.images > 0, f.images > 0 ? f.images + ' AI pictures a day' : 'AI pictures']);
     out.push([f.voice_minutes > 0, f.voice_minutes > 0 ? f.voice_minutes + ' minutes of Keo’s voice a day' : 'Keo’s voice']);
     out.push([!!f.video, 'Video making']);
+    out.push([f.studio_credits > 0, f.studio_credits > 0 ? f.studio_credits.toLocaleString() + ' Studio credits a month (AI clips, Clone a video, character voices)' : 'Studio credits included']);
     return out;
   }
 
@@ -120,12 +126,12 @@ export function upgradePage(): Response {
     P.plans.forEach(function (p) {
       var el = document.createElement('section'); el.className = 'plan' + (p.id === 'pro' ? ' best' : '');
       var amount = p.prices[state.currency];
-      el.innerHTML = (p.id === 'pro' ? '<span class="tag">Most popular</span>' : '') + '<h2></h2><div class="price"></div><div class="sub"></div><ul></ul>';
+      el.innerHTML = (p.id === 'pro' ? '<span class="tag">Most popular</span>' : p.id === 'creator' ? '<span class="tag">For creators</span>' : '') + '<h2></h2><div class="price"></div><div class="sub"></div><ul></ul>';
       el.querySelector('h2').textContent = p.name;
       var priceEl = el.querySelector('.price');
       priceEl.appendChild(document.createTextNode(p.id === 'free' ? money(0, state.currency) : amount ? money(amount, state.currency) : '—'));
       if (p.id !== 'free') { var s = document.createElement('small'); s.textContent = ' / month'; priceEl.appendChild(s); }
-      el.querySelector('.sub').textContent = p.id === 'free' ? 'For trying Keo' : p.id === 'pro' ? 'For everyday work' : 'For heavy use';
+      el.querySelector('.sub').textContent = p.id === 'free' ? 'For trying Keo' : p.id === 'pro' ? 'For everyday work' : p.id === 'creator' ? 'For faceless videos and Keo Studio' : 'For heavy use';
       var ul = el.querySelector('ul');
       features(p).forEach(function (f) { var li = document.createElement('li'); li.textContent = f[1]; if (!f[0]) li.className = 'no'; ul.appendChild(li); });
       var b = document.createElement('button'); b.className = 'btn';
@@ -140,6 +146,23 @@ export function upgradePage(): Response {
         b.className = 'btn primary'; b.onclick = function () { pay(p); };
       }
       el.appendChild(b); box.appendChild(el);
+    });
+    // Studio credit packs: one payment each, the credits never expire.
+    var packs = $('packs'); packs.innerHTML = '';
+    $('packs-wrap').hidden = !(P.packs && P.packs.length);
+    (P.packs || []).forEach(function (k) {
+      var el = document.createElement('section'); el.className = 'plan';
+      el.innerHTML = '<h2></h2><div class="price"></div><div class="sub"></div>';
+      el.querySelector('h2').textContent = k.credits.toLocaleString() + ' credits';
+      var amount = k.prices[state.currency];
+      el.querySelector('.price').textContent = amount ? money(amount, state.currency) : '—';
+      el.querySelector('.sub').textContent = 'About ' + Math.round(k.credits / 120) + ' clips of 15 seconds, or ' + Math.round(k.credits / 112) + ' AI shots';
+      var b = document.createElement('button'); b.className = 'btn'; b.style.marginTop = '16px';
+      if (!amount) { b.textContent = 'Not available in ' + state.currency; b.disabled = true; }
+      else if (!ticket) { b.textContent = 'Buy from the Keo app'; b.disabled = true; }
+      else if (!P.payments) { b.textContent = 'Coming soon'; b.disabled = true; }
+      else { b.textContent = 'Buy ' + k.credits.toLocaleString() + ' credits'; b.className = 'btn primary'; b.onclick = function () { buy(k); }; }
+      el.appendChild(b); packs.appendChild(el);
     });
     var who = $('who');
     if (me) {
@@ -173,7 +196,7 @@ export function upgradePage(): Response {
     (function again() {
       api('POST', '/v1/billing/confirm', { reference: reference })
         .then(function (r) {
-          if (r.ok) { note('Done! Your plan is active. Go back to Keo — it updates within a minute (or click Refresh in Settings → Providers).', 'ok'); return load(); }
+          if (r.ok) { note(r.credits ? 'Done! ' + r.credits.toLocaleString() + ' Studio credits were added. Go back to Keo: they show within a minute.' : 'Done! Your plan is active. Go back to Keo — it updates within a minute (or click Refresh in Settings → Providers).', 'ok'); return load(); }
           if (++tries < 5) return setTimeout(again, 3000);
           note('Paystack has not confirmed the payment yet. If you were charged, your plan switches within a few minutes.', 'warn');
         })
@@ -200,6 +223,15 @@ export function upgradePage(): Response {
     if (state.busy) return;
     state.busy = true; note('Opening secure checkout…', '');
     api('POST', '/v1/billing/checkout', { plan: p.id, currency: state.currency })
+      .then(function (c) { note('', ''); return popup(c); })
+      .catch(function (e) { note(e.message, 'bad'); })
+      .then(function () { state.busy = false; });
+  }
+
+  function buy(k) {
+    if (state.busy) return;
+    state.busy = true; note('Opening secure checkout…', '');
+    api('POST', '/v1/billing/credits', { pack: k.id, currency: state.currency })
       .then(function (c) { note('', ''); return popup(c); })
       .catch(function (e) { note(e.message, 'bad'); })
       .then(function () { state.busy = false; });

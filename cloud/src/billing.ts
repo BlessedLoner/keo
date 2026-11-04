@@ -130,7 +130,7 @@ async function paystackPlan(db: Supabase, ps: Paystack, price: Price, planName: 
 }
 
 /** Paystack sends metadata as an object or as a JSON string. */
-function metaOf(c: { metadata?: unknown }): { user_id?: string; plan?: string } {
+function metaOf(c: { metadata?: unknown }): { user_id?: string; plan?: string; pack?: string } {
   let m = c.metadata;
   if (typeof m === 'string') {
     try {
@@ -139,7 +139,7 @@ function metaOf(c: { metadata?: unknown }): { user_id?: string; plan?: string } 
       return {};
     }
   }
-  return m && typeof m === 'object' ? (m as { user_id?: string; plan?: string }) : {};
+  return m && typeof m === 'object' ? (m as { user_id?: string; plan?: string; pack?: string }) : {};
 }
 
 interface Charge {
@@ -148,7 +148,7 @@ interface Charge {
   amount: number;
   currency: string;
   paid_at?: string | null;
-  metadata?: { user_id?: string; plan?: string } | string | null;
+  metadata?: { user_id?: string; plan?: string; pack?: string } | string | null;
   customer?: { customer_code?: string; email?: string };
   plan?: { plan_code?: string } | string | null;
 }
@@ -157,9 +157,10 @@ interface Charge {
  * A successful charge: the account gets (or keeps) its plan for another month. Only a charge for
  * a Keo plan, of exactly that plan's price and currency, counts. Recorded once per reference.
  */
-async function applyCharge(db: Supabase, c: Charge, now: number): Promise<{ applied: boolean; why?: string; userId?: string; plan?: string }> {
+async function applyCharge(db: Supabase, c: Charge, now: number): Promise<{ applied: boolean; why?: string; userId?: string; plan?: string; credits?: number }> {
   if (c.status !== 'success') return { applied: false, why: 'not successful' };
   const meta = metaOf(c);
+  if (meta.pack && !c.plan) return applyCreditPack(db, c, meta, now);
   const planCode = typeof c.plan === 'object' && c.plan ? c.plan.plan_code : typeof c.plan === 'string' ? c.plan : undefined;
   const known = planCode ? (await db.rest<Array<{ plan: string; currency: string; amount: number }>>(`paystack_plans?plan_code=eq.${encodeURIComponent(planCode)}&select=plan,currency,amount`))[0] : undefined;
   if (!known) return { applied: false, why: 'not a Keo plan' };
@@ -185,6 +186,26 @@ async function applyCharge(db: Supabase, c: Charge, now: number): Promise<{ appl
     ...(c.customer?.customer_code ? { paystack_customer: c.customer.customer_code } : {}),
   });
   return { applied: true, userId: profile.id, plan: known.plan };
+}
+
+/**
+ * A paid credit pack: its credits are added once. Only a Keo pack, of exactly its price and
+ * currency, counts; recorded once per reference like plan payments.
+ */
+async function applyCreditPack(db: Supabase, c: Charge, meta: { user_id?: string; pack?: string }, now: number): Promise<{ applied: boolean; why?: string; userId?: string; credits?: number }> {
+  const pack = (await db.rest<Array<{ credits: number; amount: number }>>(`credit_packs?id=eq.${encodeURIComponent(meta.pack ?? '')}&currency=eq.${encodeURIComponent(c.currency)}&select=credits,amount`))[0];
+  if (!pack) return { applied: false, why: 'not a Keo credit pack' };
+  if (Number(pack.amount) !== Number(c.amount)) return { applied: false, why: 'amount does not match the pack' };
+  const profile = meta.user_id ? await profileBy(db, 'id', meta.user_id) : null;
+  if (!profile) return { applied: false, why: 'no Keo account for this payment' };
+  const inserted = await db.rest<unknown[]>('payments?on_conflict=reference', {
+    method: 'POST',
+    body: JSON.stringify({ reference: c.reference, user_id: profile.id, plan: null, credits: Number(pack.credits), currency: c.currency, amount: c.amount, status: 'success', paid_at: c.paid_at ?? new Date(now).toISOString() }),
+    headers: { prefer: 'resolution=ignore-duplicates,return=representation' },
+  });
+  if (!inserted?.length) return { applied: false, why: 'already recorded', userId: profile.id, credits: Number(pack.credits) };
+  await db.rest('rpc/add_credits', { method: 'POST', body: JSON.stringify({ p_user: profile.id, p_amount: Number(pack.credits) }) });
+  return { applied: true, userId: profile.id, credits: Number(pack.credits) };
 }
 
 // ---------------------------------------------------------------- routes
@@ -246,7 +267,7 @@ export async function handleBilling(
   // Public: plans and prices, in the visitor's currency first.
   if (req.method === 'GET' && route === '/v1/billing/prices') {
     const country = (req as Request & { cf?: { country?: string } }).cf?.country ?? null;
-    const [plans, list] = await Promise.all([db.plans(), prices(db)]);
+    const [plans, list, packs] = await Promise.all([db.plans(), prices(db), db.rest<Array<{ id: string; credits: number; currency: string; amount: number }>>('credit_packs?select=id,credits,currency,amount&order=credits').catch(() => [])]);
     return json(200, {
       country,
       currency: currencyFor(country),
@@ -260,6 +281,11 @@ export async function handleBilling(
         features: p.features,
         prices: Object.fromEntries(list.filter((x) => x.plan === p.id).map((x) => [x.currency, x.amount])),
       })),
+      // Studio credit packs (bought credits never expire).
+      packs: [...new Set(packs.map((k) => k.id))].map((id) => {
+        const rows = packs.filter((k) => k.id === id);
+        return { id, credits: Number(rows[0]!.credits), prices: Object.fromEntries(rows.map((k) => [k.currency, Number(k.amount)])) };
+      }),
     });
   }
 
@@ -291,7 +317,7 @@ export async function handleBilling(
   if (req.method === 'POST' && route === '/v1/billing/checkout') {
     const body = (await req.json().catch(() => ({}))) as { plan?: unknown; currency?: unknown };
     const plan = (await db.plans()).find((p) => p.id === body.plan && p.id !== 'free');
-    if (!plan) return fail(400, 'Choose Pro or Max.', 'bad_plan', 'invalid_request_error');
+    if (!plan) return fail(400, 'Choose a paid plan.', 'bad_plan', 'invalid_request_error');
     const currency = typeof body.currency === 'string' ? body.currency : 'USD';
     const price = (await prices(db)).find((p) => p.plan === plan.id && p.currency === currency);
     if (!price) return fail(400, `${plan.name} cannot be paid in ${currency}.`, 'bad_currency', 'invalid_request_error');
@@ -312,6 +338,24 @@ export async function handleBilling(
     return json(200, { accessCode: init.access_code, reference: init.reference, url: init.authorization_url });
   }
 
+  // Buying a Studio credit pack: one payment (not a subscription).
+  if (req.method === 'POST' && route === '/v1/billing/credits') {
+    const body = (await req.json().catch(() => ({}))) as { pack?: unknown; currency?: unknown };
+    const currency = typeof body.currency === 'string' ? body.currency : 'USD';
+    const pack = (await db.rest<Array<{ id: string; credits: number; amount: number }>>(`credit_packs?id=eq.${encodeURIComponent(String(body.pack ?? ''))}&currency=eq.${encodeURIComponent(currency)}&select=id,credits,amount`))[0];
+    if (!pack) return fail(400, 'Choose a credit pack.', 'bad_pack', 'invalid_request_error');
+    if (!who.email) return fail(400, 'Your Keo account has no email address.', 'no_email');
+    const init = await ps.call<{ access_code: string; reference: string; authorization_url: string }>('POST', '/transaction/initialize', {
+      email: who.email,
+      amount: Number(pack.amount),
+      currency,
+      channels: ['card', 'bank', 'ussd', 'bank_transfer'],
+      callback_url: new URL('/upgrade', req.url).toString(),
+      metadata: { user_id: who.id, pack: pack.id, credits: pack.credits, keo: true },
+    });
+    return json(200, { accessCode: init.access_code, reference: init.reference, url: init.authorization_url });
+  }
+
   // Right after paying: check with Paystack instead of waiting for the webhook.
   if (req.method === 'POST' && route === '/v1/billing/confirm') {
     const body = (await req.json().catch(() => ({}))) as { reference?: unknown };
@@ -320,7 +364,7 @@ export async function handleBilling(
     const charge = await ps.call<Charge>('GET', `/transaction/verify/${encodeURIComponent(ref)}`);
     if (metaOf(charge).user_id !== who.id) return fail(403, 'This payment belongs to another account.', 'not_yours');
     const r = await applyCharge(db, charge, now);
-    return json(200, { ok: charge.status === 'success', plan: r.plan ?? null, applied: r.applied });
+    return json(200, { ok: charge.status === 'success', plan: r.plan ?? null, credits: r.credits ?? null, applied: r.applied });
   }
 
   if (req.method === 'POST' && route === '/v1/billing/cancel') {

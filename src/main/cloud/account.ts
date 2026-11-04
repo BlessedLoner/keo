@@ -119,6 +119,16 @@ export class KeoAccount {
     if (before !== after) this.d.accountChanged?.(after);
   }
 
+  /** Keo Cloud's gateway address (…/v1). */
+  gatewayUrl(): string {
+    return this.cfg.gatewayUrl;
+  }
+
+  /** The Studio credits left (Keo Studio's AI is paid with them), and the credit packs. */
+  async studioCredits(): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number; ready: boolean; plan: string }> {
+    return this.gateway('/studio/credits');
+  }
+
   signedIn(): boolean {
     return !!this.session;
   }

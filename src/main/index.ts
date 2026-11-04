@@ -1695,7 +1695,7 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       // The faceless creator with the example script.
       await js(`[...document.querySelectorAll('.studio-bar button')].find((b) => b.textContent.includes('New'))?.click();`);
       await wait(500);
-      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Faceless video from a script'))?.click();`);
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Narrated video from a script'))?.click();`);
       await wait(500);
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Use the example'))?.click();`);
       await wait(900);
@@ -1707,6 +1707,15 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('.character-card')].find((b) => b.textContent.includes('Kira'))?.click();`);
       await wait(500);
       fs.writeFileSync(path.join(dir, 'studio-characters.png'), (await win.webContents.capturePage()).toPNG());
+      // A new character: one form with pictures and their own voice before it is saved.
+      await js(`[...document.querySelectorAll('.character-card')].find((b) => b.textContent.includes('Add a character'))?.click();`);
+      await wait(400);
+      await js(`const set = (el, v) => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, v); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); };
+        set(document.getElementById('ch-name'), 'Nova');
+        set(document.getElementById('ch-look'), 'woman in her thirties, short dark curly hair, denim jacket');
+        set(document.getElementById('ch-voice'), 'own');`);
+      await wait(400);
+      fs.writeFileSync(path.join(dir, 'studio-character-new.png'), (await win.webContents.capturePage()).toPNG());
       await js(`[...document.querySelectorAll('[role=tab]')].find((b) => b.textContent === 'Script')?.click();`);
       await wait(300);
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
@@ -1715,6 +1724,14 @@ async function captureViews(win: BrowserWindow, dir: string): Promise<void> {
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Clone a video with your character'))?.click();`);
       await wait(700);
       fs.writeFileSync(path.join(dir, 'studio-clone.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
+      await wait(300);
+      // Real AI video from a description (Kira named in it is picked as the cast).
+      await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Real AI video from a description'))?.click();`);
+      await wait(500);
+      await js(`const el = document.getElementById('av-desc'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, 'Kira sits at an outdoor café in Paris with her fluffy Alaskan Malamute. The camera slowly moves towards her; she sips her coffee and smiles. Cinematic, photorealistic.'); el.dispatchEvent(new Event('input', { bubbles: true }));`);
+      await wait(400);
+      fs.writeFileSync(path.join(dir, 'studio-ai-video.png'), (await win.webContents.capturePage()).toPNG());
       await js(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')?.click();`);
       await wait(300);
     }

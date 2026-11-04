@@ -446,5 +446,24 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .character-picture { position: relative; }
 .character-picture img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; display: block; }
 .character-picture .btn { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; background: rgba(0, 0, 0, 0.65); }
+.character-editor-title { margin: 0; font-size: 14px; }
+.character-main { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: 6px; font-size: 10px; background: rgba(0, 0, 0, 0.65); color: #fff; }
+.character-picture.making { width: 84px; height: 84px; border-radius: 8px; border: 1px dashed var(--line-strong); display: flex; align-items: center; justify-content: center; }
+.character-voice { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+.character-voice .rec-dot { display: inline-block; width: 8px; height: 8px; }
+.character-picture-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .clone-who { display: flex; align-items: center; gap: 10px; align-self: stretch; }
 .clone-who img { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
+
+.studio-credits { gap: 10px; flex-wrap: wrap; align-items: center; }
+
+.ai-video { max-width: 860px; }
+.chip-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--bg-elev); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.chip-btn img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
+.chip-btn.on { border-color: var(--accent, #fff); background: var(--bg); box-shadow: 0 0 0 1px var(--accent, #fff) inset; }
+.chip-btn:disabled { opacity: 0.5; cursor: default; }
+.ai-shots { display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; }
+.ai-shot { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-elev); }
+.video-brief { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent, #6b5a2f); background: var(--bg-elev); }
+.ai-jobs { display: flex; flex-direction: column; gap: 2px; }
+.clone-steps { text-align: left; align-self: center; min-width: 360px; }

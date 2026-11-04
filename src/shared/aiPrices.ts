@@ -12,5 +12,42 @@ export function swapCost(seconds: number, fps: number, resolution: SwapResolutio
   return Math.ceil(((seconds * fps) / 16) * SWAP_PER_SECOND[resolution] * 100 - 1e-6) / 100;
 }
 
+/** A line in a character's own voice (Chatterbox, from their voice sample): US dollars per 1000 letters. */
+export const OWN_VOICE_PER_1K_CHARS = 0.025;
+
+/** About what speaking this text in a character's own voice costs. */
+export function ownVoiceCost(text: string): number {
+  return Math.ceil((text.length / 1000) * OWN_VOICE_PER_1K_CHARS * 1000 - 1e-6) / 1000;
+}
+
+/** Designing a voice from a description (MiniMax Voice Design: $30 per million letters of the sample line). */
+export const VOICE_DESIGN_PER_1M_CHARS = 30;
+
 /** A new picture of a character with the same face (Nano Banana edit), US dollars. */
 export const CHARACTER_PICTURE_USD = 0.0398;
+
+/** Keo Cloud's Studio credits: 1 credit is 1 US cent and covers half a cent of fal.ai's price. */
+export const CREDITS_PER_USD = 200;
+
+/** fal.ai's price in Studio credits (as Keo Cloud charges it). */
+export function usdToCredits(usd: number): number {
+  return Math.max(1, Math.ceil(usd * CREDITS_PER_USD - 1e-6));
+}
+
+/** A price as the user pays it: Studio credits through Keo Cloud, dollars on their own fal.ai key. */
+export function studioPrice(usd: number, via: 'own' | 'keo' | null): string {
+  if (via === 'own') return `$${usd < 0.1 ? usd.toFixed(3).replace(/0$/, '') : usd.toFixed(2)}`;
+  const n = usdToCredits(usd);
+  return `${n.toLocaleString()} credit${n === 1 ? '' : 's'}`;
+}
+
+/** A realistic frame or picture (Nano Banana Pro, 1K or 2K), US dollars. */
+export const REAL_PICTURE_USD = 0.15;
+
+/** Clone with Kling Motion Control (the character performs the video's moves): US dollars a second. */
+export const MOTION_CLONE_PER_SECOND = 0.112;
+
+/** About what a stable clone costs: the character placed into the video's first frame, then filmed doing its moves. */
+export function motionCloneCost(seconds: number): number {
+  return Math.ceil((REAL_PICTURE_USD + Math.max(1, seconds) * MOTION_CLONE_PER_SECOND) * 100 - 1e-6) / 100;
+}

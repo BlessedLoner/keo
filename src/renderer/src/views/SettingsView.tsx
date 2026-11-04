@@ -10,6 +10,7 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 import { EmailCalendarSettings } from './EmailCalendarSettings';
+import { StudioCredits, useStudioAi } from '../studio/StudioCredits';
 
 type Section = 'providers' | 'web' | 'email' | 'files' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
 
@@ -422,6 +423,7 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
         </div>
         <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the daily allowance.</p>
         <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
+        <StudioCreditsLine />
       </section>
       <details className="card">
         <summary>
@@ -438,13 +440,30 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
           <ProviderCard key={p.id} p={p} active={s.activeProvider === p.id} s={s} patch={patch} />
         ))}
         <SmartRouting s={s} patch={patch} list={list} />
+        <AiVideoKey />
       </details>
-      <AiVideoKey />
     </>
   );
 }
 
-/** fal.ai, for AI shots in Studio: the user's own account and key (paid per second of video). */
+/** Keo Studio's AI (AI clips, Clone a video, same-face pictures, character voices) in Studio credits. */
+function StudioCreditsLine() {
+  const { status } = useStudioAi();
+  if (!status || status.via !== 'keo') return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p className="muted small" style={{ margin: '0 0 6px' }}>
+        Keo Studio’s AI (AI clips, Clone a video, character pictures and voices) uses Studio credits: your plan adds some every month, and you can buy more any time.
+      </p>
+      <StudioCredits status={status} />
+    </div>
+  );
+}
+
+/**
+ * The user's own fal.ai account for Keo Studio's AI instead of Keo Cloud's Studio credits (under
+ * Advanced: Keo users never need it).
+ */
 function AiVideoKey() {
   const ui = useUi();
   const [status, setStatus] = useState<AiVideoStatus | null>(null);
@@ -478,11 +497,11 @@ function AiVideoKey() {
   return (
     <section className="card" aria-label="AI video">
       <div className="row">
-        <h2 style={{ margin: 0 }}>AI video (fal.ai)</h2>
+        <h2 style={{ margin: 0 }}>Your own fal.ai key (Keo Studio’s AI)</h2>
         {status?.hasKey ? <span className="chip ok">Key stored</span> : <span className="chip">Not set up</span>}
       </div>
       <p className="muted small">
-        Lets Keo bring pictures to life as short AI video clips in Studio (Kling, Veo and more), paid per second from your own fal.ai account. Keo shows the price and asks before every clip, and keeps each clip so it is never paid for twice. The key is encrypted with Windows (DPAPI) and never shown again.
+        Keo Studio’s AI normally runs on Keo Cloud and is paid with Studio credits. If you have your own fal.ai account, add its key here and Keo uses it instead, paid per use in dollars from that account. Keo shows the price and asks first, and keeps every result so it is never paid for twice. The key is encrypted with Windows (DPAPI) and never shown again.
       </p>
       <div className="field">
         <label htmlFor="fal-key">fal.ai API key</label>

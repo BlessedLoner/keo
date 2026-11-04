@@ -10,8 +10,13 @@ export interface AiVideoStatus {
   todayUsd: number;
   monthUsd: number;
   limitUsd: number | null;
+  /** Where Studio's AI goes: the user's own fal.ai key, Keo Cloud (Studio credits), or nowhere yet (signed out). */
+  via: 'own' | 'keo' | null;
+  /** Studio credits left (through Keo Cloud), or null when unknown. */
+  credits: { total: number; monthlyLeft: number; monthlyAllowance: number; bought: number; plan: string; ready: boolean } | null;
 }
 import { Character, CharacterId, CharacterPatch } from './studioCharacters';
+import { AiVideoPlan, type AiShot } from './studioAiVideo';
 import { EditOp, ExportOptions, type Asset as StudioAsset, type Project as StudioProject, type ProjectSummary } from './studio';
 import type { AccountStatus } from './cloud';
 import { z } from 'zod';
@@ -188,10 +193,25 @@ export const invokeSchemas = {
   'studio:liveEdits': z.object({ on: z.boolean().optional() }).strict(),
   'studio:brand': z.object({ patch: BrandPatch.optional() }).strict(),
   'studio:characters': z
-    .object({ action: z.enum(['list', 'save', 'delete', 'addPicture', 'removePicture', 'createPicture', 'morePose']), patch: CharacterPatch.optional(), id: CharacterId.optional(), picture: z.string().min(3).max(1000).optional(), pose: z.string().trim().min(3).max(300).optional() })
+    .object({
+      action: z.enum(['list', 'save', 'delete', 'addPicture', 'removePicture', 'createPicture', 'morePose', 'setVoice', 'removeVoice', 'designVoice']),
+      patch: CharacterPatch.optional(),
+      id: CharacterId.optional(),
+      picture: z.string().min(3).max(1000).optional(),
+      pose: z.string().trim().min(3).max(300).optional(),
+      /** A voice sample as base64 WAV (30 s of mono 24 kHz is under 2 MB). */
+      audio: z.string().max(8_000_000).optional(),
+      /** A voice to design, in words. */
+      about: z.string().trim().min(5).max(300).optional(),
+    })
     .strict(),
-  'studio:characterVoice': z.object({ voice: z.string().regex(/^[a-z]{2,20}$/), text: z.string().trim().min(1).max(200) }).strict(),
-  'studio:swap': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), character: CharacterId, resolution: z.enum(['480p', '580p', '720p']) }).strict(),
+  'studio:characterVoice': z.object({ voice: z.string().regex(/^[a-z]{2,20}$/), text: z.string().trim().min(1).max(200), character: CharacterId.optional() }).strict(),
+  // Real AI video from a description: the shot plan (Keo's model, nothing paid yet), then the video.
+  'studio:aiVideoPlan': z.object({ description: z.string().trim().min(10).max(8000), seconds: z.number().int().min(5).max(60), model: z.enum(['kling-3-pro', 'veo-3.1-fast']), cast: z.array(CharacterId).max(3) }).strict(),
+  'studio:aiVideoMake': z.object({ plan: AiVideoPlan }).strict(),
+  /** AI requests still being made for a project (they survive closing Keo). */
+  'studio:aiJobs': z.object({ id: studioProjectId }).strict(),
+  'studio:swap': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), character: CharacterId, resolution: z.enum(['480p', '580p', '720p']), smooth: z.boolean().optional(), mode: z.enum(['stable', 'quick']).optional() }).strict(),
   'studio:versions': z
     .object({ id: z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/), action: z.enum(['list', 'save', 'restore', 'delete']), name: z.string().trim().min(1).max(80).optional(), version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional() })
     .strict(),
@@ -533,6 +553,9 @@ export interface InvokeOutputs {
   'studio:brand': Brand;
   'studio:characters': Character[];
   'studio:characterVoice': { mimeType: string; base64: string };
+  'studio:aiVideoPlan': { title: string; style: string; shots: AiShot[] };
+  'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
+  'studio:aiJobs': Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>;
   'studio:swap': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:versions': import('./studio').StudioVersion[];
   'studio:skipShow': { ok: true };

@@ -630,8 +630,13 @@ export class StudioService {
     }
   }
 
+  /** AI clips still being made for a project (set by the app): Keo is told, so it never guesses. */
+  aiPending: ((projectId: string) => string[]) | null = null;
+
   describe(id?: string): string {
-    return describeProject(this.resolve(id));
+    const p = this.resolve(id);
+    const waiting = this.aiPending?.(p.id) ?? [];
+    return describeProject(p) + (waiting.length ? `\nStill being made by AI (not on the timeline yet; each is added by itself when ready, do not ask for it again): ${waiting.join('; ')}.` : '');
   }
 
   // ---------------------------------------------------------------- compressed frames for the render window
@@ -883,7 +888,18 @@ export class StudioService {
     return Buffer.from(await this.runJob<string>({ kind: 'asset_sheet', projectId: id, assetId }, 2 * 60_000), 'base64');
   }
   /** A clip an AI video model made: imported, marked as AI-made, and placed on the AI shots track at `at`. */
-  async addAiClip(
+  /** AI clips arriving together are added one after another (each import and edit sees the last one). */
+  private aiClipQueue: Promise<unknown> = Promise.resolve();
+  addAiClip(
+    id: string,
+    file: string,
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean },
+  ): Promise<{ project: Project; asset: Asset; clip: string }> {
+    const next = this.aiClipQueue.then(() => this.addAiClipNow(id, file, o));
+    this.aiClipQueue = next.catch(() => undefined);
+    return next;
+  }
+  private async addAiClipNow(
     id: string,
     file: string,
     o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean },
@@ -967,6 +983,7 @@ export class StudioService {
       if (list.length >= 50) throw new StudioError('Keo keeps up to 50 characters: remove one first.');
       next = Character.parse({ id: `ch_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, ...patch, name, createdAt: new Date().toISOString() });
     }
+    if (next.voice === 'own' && !next.voiceSample) throw new StudioError(`Add ${next.name}’s own voice first (upload, record or design it), or choose another voice.`);
     this.saveCharacters([...list.filter((c) => c.id !== next.id), next].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
     this.d.log.info('studio.character_saved', { pictures: next.pictures.length });
     return next;
@@ -999,6 +1016,34 @@ export class StudioService {
     this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
     // Only Keo's own copy is deleted.
     if (path.resolve(picture).startsWith(path.resolve(this.charactersDir) + path.sep)) fs.rmSync(picture, { force: true });
+    return next;
+  }
+
+  /**
+   * A character's own voice: a recording (WAV or MP3) kept in Keo's folder, and their voice set to
+   * it. A sample Keo kept before is removed.
+   */
+  setCharacterVoice(id: string, audio: Buffer, o: { ext: 'wav' | 'mp3'; about?: string }): Character {
+    const c = this.character(id);
+    if (audio.length < 4000) throw new StudioError('That recording is too short: 5 to 30 seconds of the voice talking works best.');
+    if (audio.length > 15 * 1024 * 1024) throw new StudioError('That recording is too big: use 30 seconds or less.');
+    const dir = path.join(this.charactersDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `voice-${Date.now().toString(36)}.${o.ext}`);
+    fs.writeFileSync(file, audio);
+    const next = Character.parse({ ...c, voice: 'own', voiceSample: file, ...(o.about ? { voiceAbout: o.about } : { voiceAbout: undefined }) });
+    this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
+    if (c.voiceSample && path.resolve(c.voiceSample).startsWith(path.resolve(this.charactersDir) + path.sep)) fs.rmSync(c.voiceSample, { force: true });
+    this.d.log.info('studio.character_voice', { designed: !!o.about });
+    return next;
+  }
+  /** Back to a ready-made voice: the sample is removed. */
+  removeCharacterVoice(id: string): Character {
+    const c = this.character(id);
+    const { voiceSample, voiceAbout: _about, ...rest } = c;
+    const next = Character.parse({ ...rest, voice: c.voice === 'own' ? 'female' : c.voice });
+    this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
+    if (voiceSample && path.resolve(voiceSample).startsWith(path.resolve(this.charactersDir) + path.sep)) fs.rmSync(voiceSample, { force: true });
     return next;
   }
 
@@ -1716,6 +1761,15 @@ export class StudioService {
     if (role === 'music' && clip.duration > 3) r = this.mergeLast(id, { op: 'set', clip: clip.id, fadeIn: 0.5, fadeOut: 1.5 });
     this.d.log.info('studio.sound_used', { role, builtIn: !!s.builtIn });
     return { project: r.project, clip: clip.id };
+  }
+
+  /** The picture at `time` as PNG bytes, full size (for AI work on what the video shows). */
+  async framePng(id: string, time: number): Promise<Buffer> {
+    const p = this.get(id);
+    if (projectDuration(p) === 0) throw new StudioError('The timeline is empty.');
+    const f = (await this.runJob<Array<{ time: number; pngBase64: string }>>({ kind: 'frames', projectId: id, times: [Math.max(0, Math.min(time, projectDuration(p) - 0.02))], width: p.width }, 120_000))[0];
+    if (!f) throw new StudioError('The frame could not be drawn.');
+    return Buffer.from(f.pngBase64, 'base64');
   }
 
   /** The picture at `time`, full size, saved as a new PNG next to the exports (a cover or thumbnail). */

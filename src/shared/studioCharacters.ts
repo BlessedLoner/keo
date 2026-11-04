@@ -14,8 +14,12 @@ export const Character = z
     name: z.string().trim().min(1).max(40),
     /** What they look like, in words (added to AI picture descriptions of their scenes). */
     look: z.string().trim().max(500).default(''),
-    /** Their voice: Keo's voices (female, male), or an OpenAI voice name with the user's own key. */
+    /** Their voice: Keo's voices (female, male), an OpenAI voice name with the user's own key, or own (their voice sample). */
     voice: z.string().regex(/^[a-z]{2,20}$/).default('female'),
+    /** Their own voice: a short recording (uploaded, recorded or designed) every line is spoken like. */
+    voiceSample: z.string().min(3).max(1000).optional(),
+    /** How a designed voice was described (shown again in the form). */
+    voiceAbout: z.string().trim().max(300).optional(),
     /** Personality, way of speaking, anything Keo should keep in mind when writing for them. */
     notes: z.string().trim().max(800).default(''),
     /** Their pictures (files Keo keeps in its own folder), the first one the main one. */
@@ -47,7 +51,11 @@ export const CHARACTER_VOICES = [
   { id: 'echo', label: 'OpenAI: Echo (calm, male)' },
   { id: 'onyx', label: 'OpenAI: Onyx (deep, male)' },
   { id: 'fable', label: 'OpenAI: Fable (storyteller)' },
+  { id: 'own', label: 'Their own voice (upload, record or design one)' },
 ] as const;
+
+/** A voice sample is 5 to 30 seconds of one person talking (more is cut, less sounds unlike them). */
+export const VOICE_SAMPLE_SECONDS = { min: 5, max: 30 } as const;
 
 /**
  * A script line's speaker: "Kira: Welcome back!" is Kira's line (when Kira is in the cast). The

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CHARACTER_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
+import { CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
 
 /**
  * AI shots: a picture turned into a short video clip by an AI video model, through fal.ai (one
@@ -69,6 +69,8 @@ export interface SwapRequest {
   image: Buffer;
   resolution: SwapResolution;
   seconds: number;
+  /** Frames a second of the video sent (fal.ai bills every 16 frames). */
+  fps?: number;
 }
 
 /** New pictures of a character from their own picture (the same face): fal.ai's Nano Banana edit. */
@@ -78,6 +80,15 @@ export const PICTURE_MODEL = {
   /** US dollars a picture. */
   perPicture: CHARACTER_PICTURE_USD,
 } as const;
+
+/** Realistic pictures (Nano Banana Pro): the first frames of AI video shots, and a character put into a video's scene. */
+export const REAL_PICTURE_MODEL = { label: 'Nano Banana Pro', edit: 'fal-ai/nano-banana-pro/edit', text: 'fal-ai/nano-banana-pro', perPicture: REAL_PICTURE_USD } as const;
+
+/** A stable clone: the character performs the video's moves (Kling 2.6 Pro Motion Control, up to 30 s). */
+export const MOTION_CLONE_MODEL = { label: 'Kling Motion Control', endpoint: 'fal-ai/kling-video/v2.6/pro/motion-control', perSecond: MOTION_CLONE_PER_SECOND, maxSeconds: 30 } as const;
+
+/** A picture from words alone (fal.ai's Nano Banana), for AI video shots without a character. */
+export const FRAME_MODEL = { label: 'Nano Banana', endpoint: 'fal-ai/nano-banana', perPicture: CHARACTER_PICTURE_USD } as const;
 
 export interface CharacterPictureRequest {
   /** The character's own picture (JPEG) and what the new picture shows. */
@@ -109,7 +120,10 @@ type Fetch = (url: string, init?: { method?: string; headers?: Record<string, st
 export class FalVideo {
   constructor(
     private readonly d: {
+      /** The user's own fal.ai key (Settings → Advanced), used instead of Keo Cloud when set. */
       key: () => string | null;
+      /** Keo Cloud: its gateway address and the user's fresh sign-in (null when signed out). Paid with Studio credits. */
+      cloud?: { base: string; token: () => Promise<string | null> };
       dir: string;
       fetch: Fetch;
       log: { info: (event: string, data?: Record<string, unknown>) => void; warn: (event: string, data?: Record<string, unknown>) => void };
@@ -119,7 +133,7 @@ export class FalVideo {
   ) {}
 
   /** The file a request with this id is (or will be) kept in. */
-  cacheFileOf(hash: string, ext: 'mp4' | 'png' = 'mp4'): string {
+  cacheFileOf(hash: string, ext: ShotExt = 'mp4'): string {
     return path.join(this.d.dir, `ai-shot-${hash}.${ext}`);
   }
 
@@ -188,6 +202,7 @@ export class FalVideo {
           { bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' },
         ],
         input: ([video, image]) => ({ video_url: video!, image_url: image!, resolution: r.resolution, video_quality: 'high' }),
+        meter: { seconds: r.seconds, fps: r.fps ?? 30 },
       },
       signal,
       o,
@@ -217,25 +232,130 @@ export class FalVideo {
     return { file: made.file, cached: made.cached };
   }
 
+  /**
+   * The first frame of an AI video shot: from the characters' pictures (and the shot before, so the
+   * place, clothes and light carry on) when there are any, else from the words alone.
+   */
+  async frame(r: { references: Buffer[]; prompt: string; aspect: '9:16' | '16:9' | '1:1'; quality?: 'real' | 'draft' }, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+    const refs = r.references.slice(0, 4);
+    // Real: Nano Banana Pro at 2K (true skin, light and detail); draft: the fast, cheaper Nano Banana.
+    const real = (r.quality ?? 'real') === 'real';
+    const hash = crypto.createHash('sha256').update(JSON.stringify(['frame', real ? 'pro' : 'draft', refs.map((b) => crypto.createHash('sha256').update(b).digest('hex')), r.prompt, r.aspect])).digest('hex').slice(0, 24);
+    const extra = real ? { resolution: '2K' } : {};
+    const made = await this.run(
+      refs.length
+        ? {
+            hash,
+            model: real ? 'nano-banana-pro-edit' : 'nano-banana-edit',
+            seconds: 0,
+            ext: 'png',
+            endpoint: real ? REAL_PICTURE_MODEL.edit : PICTURE_MODEL.endpoint,
+            uploads: refs.map((bytes, i) => ({ bytes, type: 'image/jpeg', name: `keo-reference-${i + 1}.jpg` })),
+            input: (urls) => ({ prompt: r.prompt, image_urls: urls, num_images: 1, output_format: 'png', aspect_ratio: r.aspect, ...extra }),
+          }
+        : { hash, model: real ? 'nano-banana-pro' : 'nano-banana', seconds: 0, ext: 'png', endpoint: real ? REAL_PICTURE_MODEL.text : FRAME_MODEL.endpoint, uploads: [], input: () => ({ prompt: r.prompt, num_images: 1, output_format: 'png', aspect_ratio: r.aspect, ...extra }) },
+      signal,
+      { waitMs: 4 * 60_000 },
+    );
+    return { file: made.file, cached: made.cached };
+  }
+
+  /** The same stable clone (video, picture) gives the same id. */
+  motionHash(r: { video: Buffer; image: Buffer }): string {
+    return crypto.createHash('sha256').update(JSON.stringify([MOTION_CLONE_MODEL.endpoint, crypto.createHash('sha256').update(r.video).digest('hex'), crypto.createHash('sha256').update(r.image).digest('hex')])).digest('hex').slice(0, 24);
+  }
+
+  /**
+   * A stable clone: the character (a picture of them, ideally already in the video's place and pose)
+   * performs exactly the moves of the video (Kling Motion Control). The whole picture is made
+   * anew, so the character is the same in every frame: no flicker back to the original person.
+   */
+  async motionClone(r: { video: Buffer; image: Buffer; seconds: number }, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    if (r.video.length > 90 * 1024 * 1024) throw new AiVideoError('That video file is over 90 MB: choose a shorter part.');
+    return this.run(
+      {
+        hash: this.motionHash(r),
+        model: 'kling-motion-control',
+        seconds: r.seconds,
+        endpoint: MOTION_CLONE_MODEL.endpoint,
+        uploads: [
+          { bytes: r.video, type: 'video/mp4', name: 'keo-moves.mp4' },
+          { bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' },
+        ],
+        input: ([video, image]) => ({ video_url: video!, image_url: image!, character_orientation: 'video', keep_original_sound: false }),
+        meter: { seconds: r.seconds, fps: 30 },
+      },
+      signal,
+      o,
+    );
+  }
+
+  /** The same line in the same voice sample gives the same id. */
+  speechHash(r: OwnVoiceRequest): string {
+    return crypto.createHash('sha256').update(JSON.stringify([OWN_VOICE_MODEL.endpoint, crypto.createHash('sha256').update(r.sample).digest('hex'), r.text])).digest('hex').slice(0, 24);
+  }
+
+  /** A line spoken in a character's own voice: like their voice sample (Chatterbox). */
+  async speak(r: OwnVoiceRequest, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+    const made = await this.run(
+      {
+        hash: this.speechHash(r),
+        model: 'chatterbox',
+        seconds: 0,
+        ext: 'wav',
+        endpoint: OWN_VOICE_MODEL.endpoint,
+        uploads: [{ bytes: r.sample, type: r.sampleType, name: `keo-voice.${r.sampleType.includes('mpeg') ? 'mp3' : 'wav'}` }],
+        input: ([sample]) => ({ text: r.text, audio_url: sample!, exaggeration: 0.35, temperature: 0.7, cfg: 0.5 }),
+      },
+      signal,
+      { waitMs: 3 * 60_000 },
+    );
+    return { file: made.file, cached: made.cached };
+  }
+
+  /** A new voice from a description: a sample of it saying the given line (MiniMax Voice Design). */
+  async designVoice(r: { about: string; line: string }, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+    const hash = crypto.createHash('sha256').update(JSON.stringify([VOICE_DESIGN_MODEL.endpoint, r.about, r.line])).digest('hex').slice(0, 24);
+    const made = await this.run(
+      { hash, model: 'minimax-voice-design', seconds: 0, ext: 'mp3', endpoint: VOICE_DESIGN_MODEL.endpoint, uploads: [], input: () => ({ prompt: r.about, preview_text: r.line }) },
+      signal,
+      { waitMs: 3 * 60_000 },
+    );
+    return { file: made.file, cached: made.cached };
+  }
+
   /** Any fal.ai request done the safe way: kept if made before, remembered while made, cancelled on Stop. */
   private async run(
-    spec: { hash: string; model: PendingShot['model']; seconds: number; ext?: 'mp4' | 'png'; endpoint: string; uploads: Array<{ bytes: Buffer; type: string; name: string }>; input: (urls: string[]) => Record<string, unknown> },
+    spec: { hash: string; model: PendingShot['model']; seconds: number; ext?: ShotExt; endpoint: string; uploads: Array<{ bytes: Buffer; type: string; name: string }>; input: (urls: string[]) => Record<string, unknown>; meter?: { seconds: number; fps: number } },
     signal: AbortSignal,
     o: RunOptions,
   ): Promise<{ file: string; cached: boolean; seconds: number }> {
     const { hash, seconds } = spec;
     const file = path.join(this.d.dir, `ai-shot-${hash}.${spec.ext ?? 'mp4'}`);
     if (fs.existsSync(file)) return { file, cached: true, seconds };
-    const key = this.d.key();
-    if (!key) throw new AiVideoError('AI video needs a fal.ai API key: add one in Settings → Providers.');
+    const route = await this.route();
+    if (!route) throw new AiVideoError(NO_ROUTE);
     let job = this.pending().find((p) => p.hash === hash);
     if (job) this.d.log.info('studio.ai_shot_resumed', { model: spec.model });
     else {
       // Pictures and videos go to fal.ai's storage first and the model gets their links (fal.ai
       // advises against sending files inside the request: large ones can make the request fail).
-      const urls: string[] = [];
-      for (const u of spec.uploads) urls.push(await this.upload(u.bytes, u.type, u.name, key, signal));
-      const submitted = await this.call(key, `https://queue.fal.run/${spec.endpoint}`, 'POST', signal, spec.input(urls));
+      let submitted: Record<string, unknown>;
+      try {
+        const urls: string[] = [];
+        for (const u of spec.uploads) urls.push(await this.retried(signal, () => this.upload(u.bytes, u.type, u.name, route, signal)));
+        // Through Keo Cloud the gateway prices the request, takes the credits and runs it with Keo's key.
+        submitted = await this.retried(signal, () =>
+          route.kind === 'own'
+            ? this.call(`https://queue.fal.run/${spec.endpoint}`, 'POST', signal, spec.input(urls))
+            : this.call(`${route.base}/studio/run`, 'POST', signal, { endpoint: spec.endpoint, input: spec.input(urls), ...(spec.meter ?? {}) }),
+        );
+      } catch (e) {
+        if (signal.aborted) throw new AiVideoError('Stopped.');
+        const message = e instanceof AiVideoError ? e.message : offline(e);
+        this.d.log.warn('studio.ai_shot_not_sent', { model: spec.model, reason: message.slice(0, 300) });
+        throw new AiVideoError(message);
+      }
       job = {
         hash,
         model: spec.model,
@@ -256,7 +376,7 @@ export class FalVideo {
     } catch (e) {
       // Stopped by the user: ask fal.ai not to finish (and charge for) it, and forget it.
       if (signal.aborted) {
-        if (job.cancelUrl) await this.d.fetch(job.cancelUrl, { method: 'PUT', headers: { Authorization: `Key ${key}` } }).catch(() => undefined);
+        if (job.cancelUrl) await this.call(job.cancelUrl, 'PUT', new AbortController().signal).catch(() => undefined);
         this.forget(hash);
         throw new AiVideoError('Stopped: fal.ai was asked to cancel the clip.');
       }
@@ -269,15 +389,13 @@ export class FalVideo {
    * if fal.ai is still making it, AiVideoError if it failed (then it is forgotten).
    */
   async finish(job: PendingShot, signal: AbortSignal, o: { waitMs: number; progress?: (stage: 'queued' | 'making' | 'saving', queuePosition?: number) => void }): Promise<string> {
-    const key = this.d.key();
-    if (!key) throw new AiVideoError('AI shots need a fal.ai API key: add one in Settings → Providers.');
     const file = path.join(this.d.dir, `ai-shot-${job.hash}.${job.ext ?? 'mp4'}`);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
     const started = Date.now();
     try {
       for (;;) {
         if (signal.aborted) throw new AiVideoError('Stopped.');
-        const st = await this.call(key, job.statusUrl, 'GET', signal);
+        const st = await this.retried(signal, () => this.call(job.statusUrl, 'GET', signal));
         if (st.status === 'COMPLETED') {
           if (st.error) throw new AiVideoError(`fal.ai could not make the clip: ${String(st.error).slice(0, 200)}`);
           break;
@@ -286,9 +404,9 @@ export class FalVideo {
         if (Date.now() - started >= o.waitMs) throw new AiVideoPending(job);
         await sleep(4000);
       }
-      const result = await this.call(key, job.resultUrl, 'GET', signal);
-      // A video model answers with video.url, a picture model with images[0].url.
-      const url = (result.video as { url?: unknown } | undefined)?.url ?? (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url;
+      const result = await this.retried(signal, () => this.call(job.resultUrl, 'GET', signal));
+      // A video model answers with video.url, a picture model with images[0].url, a voice with audio.url.
+      const url = (result.video as { url?: unknown } | undefined)?.url ?? (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url ?? (result.audio as { url?: unknown } | undefined)?.url;
       if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new AiVideoError('fal.ai finished but sent nothing to download.');
       o.progress?.('saving');
       const video = await this.d.fetch(url, { signal });
@@ -303,7 +421,11 @@ export class FalVideo {
       return file;
     } catch (e) {
       // A request fal.ai failed is forgotten; one still being made (or a network hiccup) is kept.
-      if (e instanceof AiVideoError && !(e instanceof AiVideoPending) && !signal.aborted) this.forget(job.hash);
+      // Why it failed is written down, so it can be told to the user and looked into.
+      if (e instanceof AiVideoError && !(e instanceof AiVideoPending) && !signal.aborted) {
+        this.forget(job.hash);
+        this.d.log.warn('studio.ai_shot_failed', { model: job.model, seconds: job.seconds, reason: e.message.slice(0, 300) });
+      }
       throw e;
     }
   }
@@ -313,7 +435,7 @@ export class FalVideo {
    * handed to onReady (Keo puts them on the timeline). Run at start-up and every minute or so.
    */
   async checkPending(onReady: (job: PendingShot, file: string) => void, onFailed: (job: PendingShot, message: string) => void): Promise<void> {
-    if (this.checking || !this.d.key()) return;
+    if (this.checking || !this.pending().length) return;
     this.checking = true;
     try {
       for (const job of this.pending()) {
@@ -331,24 +453,66 @@ export class FalVideo {
   }
   private checking = false;
 
-  private async call(key: string, url: string, method: string, signal: AbortSignal, body?: unknown): Promise<Record<string, unknown>> {
-    if (!url.startsWith('https://queue.fal.run/')) throw new AiVideoError('fal.ai answered with an unexpected address.');
-    const res = await this.d.fetch(url, { method, headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
+  /** Tries again (up to 3 times, a few seconds apart) when the network drops; fal.ai's own answers are not retried. */
+  private async retried<T>(signal: AbortSignal, f: () => Promise<T>): Promise<T> {
+    const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await f();
+      } catch (e) {
+        if (e instanceof AiVideoError || signal.aborted || attempt >= 3) throw e;
+        this.d.log.info('studio.ai_shot_retry', { attempt, reason: String((e as Error)?.message ?? e).slice(0, 120) });
+        await sleep(3000 * attempt);
+      }
+    }
+  }
+
+  /** Which way requests go now: the user's own fal.ai key if set, else Keo Cloud if signed in. */
+  async route(): Promise<Route | null> {
+    const key = this.d.key();
+    if (key) return { kind: 'own', key };
+    const token = this.d.cloud ? await this.d.cloud.token() : null;
+    return token && this.d.cloud ? { kind: 'keo', base: this.d.cloud.base, token } : null;
+  }
+
+  /**
+   * The sign-in for an address: fal.ai's queue with the user's key, Keo Cloud's Studio addresses
+   * with their Keo sign-in. Missing (signed out, key removed) is not a failure of the request: it
+   * stays remembered and is tried again later.
+   */
+  private async authFor(url: string): Promise<{ header: string; keo: boolean }> {
+    if (url.startsWith('https://queue.fal.run/')) {
+      const key = this.d.key();
+      if (!key) throw new NoRoute();
+      return { header: `Key ${key}`, keo: false };
+    }
+    if (this.d.cloud && url.startsWith(`${this.d.cloud.base}/studio/`)) {
+      const token = await this.d.cloud.token();
+      if (!token) throw new NoRoute();
+      return { header: `Bearer ${token}`, keo: true };
+    }
+    throw new AiVideoError('The AI service answered with an unexpected address.');
+  }
+
+  private async call(url: string, method: string, signal: AbortSignal, body?: unknown): Promise<Record<string, unknown>> {
+    const auth = await this.authFor(url);
+    const res = await this.d.fetch(url, { method, headers: { Authorization: auth.header, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) throw new AiVideoError(falError(res.status, json));
+    if (!res.ok) throw new AiVideoError(auth.keo ? falReason(json) || `Keo Cloud answered with an error (${res.status}).` : falError(res.status, json));
     return json;
   }
 
   /** A file put in fal.ai's storage (as fal.ai's own client does): its link for the model. */
-  private async upload(bytes: Buffer, type: string, name: string, key: string, signal: AbortSignal): Promise<string> {
-    const start = await this.d.fetch('https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3', {
+  private async upload(bytes: Buffer, type: string, name: string, route: Route, signal: AbortSignal): Promise<string> {
+    // Through Keo Cloud the gateway asks fal.ai for the upload address (Keo's key never leaves it).
+    const start = await this.d.fetch(route.kind === 'own' ? 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3' : `${route.base}/studio/upload`, {
       method: 'POST',
-      headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: route.kind === 'own' ? `Key ${route.key}` : `Bearer ${route.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ content_type: type, file_name: name }),
       signal,
     });
     const s = (await start.json().catch(() => ({}))) as { upload_url?: unknown; file_url?: unknown; detail?: unknown };
-    if (!start.ok) throw new AiVideoError(falError(start.status, s as Record<string, unknown>));
+    if (!start.ok) throw new AiVideoError(route.kind === 'own' ? falError(start.status, s as Record<string, unknown>) : falReason(s as Record<string, unknown>) || `Keo Cloud answered with an error (${start.status}).`);
     if (typeof s.upload_url !== 'string' || typeof s.file_url !== 'string' || !/^https:\/\//.test(s.upload_url) || !/^https:\/\//.test(s.file_url)) throw new AiVideoError('fal.ai did not give an address to upload the picture to.');
     const put = await this.d.fetch(s.upload_url, { method: 'PUT', headers: { 'Content-Type': type }, body: new Uint8Array(bytes), signal });
     if (!put.ok) throw new AiVideoError(`The ${type.startsWith('video') ? 'video' : 'picture'} could not be uploaded to fal.ai (${put.status}).`);
@@ -356,12 +520,39 @@ export class FalVideo {
   }
 }
 
+/** Which way AI requests go: the user's own fal.ai key, or Keo Cloud (Studio credits). */
+export type Route = { kind: 'own'; key: string } | { kind: 'keo'; base: string; token: string };
+
+const NO_ROUTE = 'Keo Studio’s AI needs your Keo account: sign in (Settings → Providers → Keo account). Or add your own fal.ai key under Settings → Advanced.';
+
+/** No way to reach the request right now (signed out, key removed): it is kept and tried again later. */
+class NoRoute extends Error {
+  constructor() {
+    super(NO_ROUTE);
+  }
+}
+
+/** What a finished request is saved as. */
+export type ShotExt = 'mp4' | 'png' | 'wav' | 'mp3';
+
+/** Speaking like a voice sample (fal.ai's Chatterbox: any voice from 5 to 30 seconds of it). */
+export const OWN_VOICE_MODEL = { label: 'Chatterbox', endpoint: 'fal-ai/chatterbox/text-to-speech' } as const;
+/** A voice made from a description (fal.ai's MiniMax Voice Design). */
+export const VOICE_DESIGN_MODEL = { label: 'MiniMax Voice Design', endpoint: 'fal-ai/minimax/voice-design' } as const;
+
+export interface OwnVoiceRequest {
+  /** The voice sample (WAV or MP3). */
+  sample: Buffer;
+  sampleType: 'audio/wav' | 'audio/mpeg';
+  text: string;
+}
+
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'chatterbox' | 'minimax-voice-design';
   /** What the result is saved as (a video unless said). */
-  ext?: 'mp4' | 'png';
+  ext?: ShotExt;
   seconds: number;
   statusUrl: string;
   resultUrl: string;
@@ -378,9 +569,29 @@ export class AiVideoPending extends AiVideoError {
   }
 }
 
+/** A network failure (no answer at all), in words for the user. */
+function offline(e: unknown): string {
+  return `Keo could not reach fal.ai (${String((e as Error)?.message ?? e).slice(0, 80)}). Check the internet connection and try again: nothing was paid.`;
+}
+
+/** fal.ai's reason, from the shapes it answers with ({detail: "…"}, {detail: [{msg}]}, {error}, {message}). */
+export function falReason(json: Record<string, unknown>): string {
+  const d = json.detail;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) {
+    const msgs = d.map((x) => (x && typeof x === 'object' && typeof (x as { msg?: unknown }).msg === 'string' ? (x as { msg: string }).msg : typeof x === 'string' ? x : '')).filter(Boolean);
+    return (msgs.length ? msgs.join('; ') : JSON.stringify(d)).slice(0, 300);
+  }
+  for (const k of ['error', 'message'] as const) if (typeof json[k] === 'string') return json[k] as string;
+  // Keo Cloud's errors: {error: {message}}.
+  const e = json.error as { message?: unknown } | undefined;
+  if (e && typeof e.message === 'string') return e.message;
+  return '';
+}
+
 /** fal.ai's error, in words for the user. */
 function falError(status: number, json: Record<string, unknown>): string {
-  const detail = typeof json.detail === 'string' ? json.detail : Array.isArray(json.detail) ? JSON.stringify(json.detail).slice(0, 200) : '';
+  const detail = falReason(json);
   if (status === 401 || status === 403) return 'fal.ai did not accept the API key: check it in Settings → Providers.';
   if (status === 402) return 'The fal.ai account has no credit left: add credit at fal.ai/dashboard/billing.';
   if (status === 422) return `fal.ai could not use this request${detail ? `: ${detail}` : ''}.`;

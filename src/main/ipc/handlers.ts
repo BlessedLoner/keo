@@ -111,7 +111,12 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     }
   };
   /** For promise chains: a Studio refusal as a plain message, anything else as it is. */
-  const aiVideoStatus = () => ({ hasKey: s.secrets.has('fal'), secretStorage: s.secrets.available(), ...s.falSpending() });
+  const aiVideoStatus = async () => {
+    const own = s.secrets.has('fal');
+    const keo = !own && s.account.signedIn();
+    const credits = keo ? await s.account.studioCredits().catch(() => null) : null;
+    return { hasKey: own, secretStorage: s.secrets.available(), ...s.falSpending(), via: own ? ('own' as const) : keo ? ('keo' as const) : null, credits };
+  };
   const studioErr = (e: unknown): never => {
     if (e instanceof StudioError) throw new KeoError('studio', e.message);
     throw e;
@@ -551,7 +556,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'studio:brand': ({ patch }) => (patch ? s.studio.setBrand(patch) : s.studio.brand()),
     // Characters for faceless videos (the user's clicks on the Characters page).
-    'studio:characters': async ({ action, patch, id, picture, pose }) => {
+    'studio:characters': async ({ action, patch, id, picture, pose, audio, about }) => {
       if (action === 'save') {
         if (!patch) throw new StudioError('Nothing to save.');
         s.studio.saveCharacter(patch);
@@ -562,15 +567,34 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       } else if (action === 'removePicture') s.studio.removeCharacterPicture(id ?? '', picture ?? '');
       // The user's click after seeing what it costs (the page asks first).
       else if (action === 'createPicture') await s.characterCreatePicture(id ?? '', new AbortController().signal).catch(studioErr);
+      // A voice sample the page recorded or read from the user's file (as WAV), or one designed from words.
+      else if (action === 'setVoice') {
+        if (!audio) throw new StudioError('No recording to use.');
+        s.studio.setCharacterVoice(id ?? '', Buffer.from(audio, 'base64'), { ext: 'wav' });
+      } else if (action === 'removeVoice') s.studio.removeCharacterVoice(id ?? '');
+      else if (action === 'designVoice') await s.characterDesignVoice(id ?? '', about ?? '', new AbortController().signal).catch(studioErr);
       else if (action === 'morePose') await s.characterMorePose(id ?? '', pose ?? 'standing, smiling at the camera', new AbortController().signal).catch(studioErr);
       return s.studio.characters();
     },
     // Clone a video: the user's click after the page showed the price.
-    'studio:swap': async ({ id, clip, character, resolution }) => s.studioSwapCharacter(id, { clip, character, resolution }, new AbortController().signal).catch(studioErr),
+    'studio:aiVideoPlan': async (o) => s.aiVideoPlanShots(o, new AbortController().signal).catch(studioErr),
+    // The user's click after seeing the shots and the price.
+    'studio:aiVideoMake': async ({ plan }) => s.aiVideoCreate(plan, new AbortController().signal, { background: true }).catch(studioErr),
+    'studio:aiJobs': ({ id }) =>
+      s.aiVideo
+        .pending()
+        .filter((j) => j.context?.projectId === id)
+        .map((j) => ({ about: j.context?.about ?? 'AI clip', submittedAt: j.submittedAt, kind: j.model === 'wan-animate-replace' ? ('swap' as const) : j.ext && j.ext !== 'mp4' ? ('other' as const) : ('shot' as const) })),
+    'studio:swap': async ({ id, clip, character, resolution, smooth, mode }) => s.studioSwapCharacter(id, { clip, character, resolution, ...(smooth ? { smooth } : {}), ...(mode ? { mode } : {}) }, new AbortController().signal).catch(studioErr),
     // Hearing a character's voice before choosing it (one short line, spoken by that voice's service).
-    'studio:characterVoice': async ({ voice, text }) => {
+    'studio:characterVoice': async ({ voice, text, character }) => {
+      if (voice === 'own') {
+        const c = character ? s.studio.character(character) : null;
+        if (!c?.voiceSample) throw new StudioError('Add their own voice first: upload, record or design it.');
+        voice = `own:${c.id}:sample`;
+      }
       const narrator = s.studioNarrator(voice);
-      if (!narrator) throw new StudioError(voice === 'female' || voice === 'male' ? 'Keo voices need your Keo account: sign in.' : 'OpenAI voices need an OpenAI API key in Settings → Providers.');
+      if (!narrator) throw new StudioError(voice.startsWith('own:') ? 'Their own voice needs your Keo account: sign in (Settings → Providers → Keo account).' : voice === 'female' || voice === 'male' ? 'Keo voices need your Keo account: sign in.' : 'OpenAI voices need an OpenAI API key in Settings → Providers.');
       const r = await narrator.speak(text, new AbortController().signal);
       return { mimeType: r.mimeType, base64: Buffer.from(r.audio).toString('base64') };
     },

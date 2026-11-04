@@ -14,6 +14,7 @@ import { BrandKit } from '../studio/BrandKit';
 import { Versions } from '../studio/Versions';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { CloneVideo } from '../studio/CloneVideo';
+import { AiVideoCreator } from '../studio/AiVideoCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import '../styles/studio.css';
@@ -90,6 +91,8 @@ export function StudioView() {
   const [captioning, setCaptioning] = useState(false);
   const [faceless, setFaceless] = useState<false | 'script' | 'characters'>(false);
   const [cloning, setCloning] = useState(false);
+  // Real AI video from a description (with the text the faceless page passed on, if any).
+  const [aiVideo, setAiVideo] = useState<false | { text: string }>(false);
   const [exporting, setExporting] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [tlHeight, setTlHeight] = useState(() => {
@@ -231,18 +234,27 @@ export function StudioView() {
       }),
     [],
   );
-  // AI shots fal.ai is still making: a bar until they land on the timeline (or fail), then a note.
-  const [aiWaiting, setAiWaiting] = useState<Record<string, number>>({});
+  // AI clips still being made for the open project (AI shots, character swaps): Keo's own list,
+  // so it is right after switching pages or restarting Keo. Checked again while any are left.
+  const [aiJobs, setAiJobs] = useState<Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>>([]);
+  const projectId = project?.id ?? null;
+  const loadAiJobs = useCallback(() => {
+    if (!projectId) return setAiJobs([]);
+    void invoke('studio:aiJobs', { id: projectId }).then(setAiJobs, () => undefined);
+  }, [projectId]);
+  useEffect(loadAiJobs, [loadAiJobs]);
+  useEffect(() => {
+    if (!aiJobs.length) return;
+    const t = setInterval(loadAiJobs, 15_000);
+    return () => clearInterval(t);
+  }, [aiJobs.length, loadAiJobs]);
   useEffect(
     () =>
       subscribe('studio:aiShot', (m) => {
-        setAiWaiting((w) => {
-          const n = Math.max(0, (w[m.projectId] ?? 0) + (m.state === 'waiting' ? 1 : -1));
-          return { ...w, [m.projectId]: n };
-        });
+        loadAiJobs();
         if (m.state !== 'waiting') ui.toast(m.message, m.state === 'ready' ? 'success' : 'error');
       }),
-    [ui],
+    [ui, loadAiJobs],
   );
   useEffect(
     () =>
@@ -496,6 +508,26 @@ export function StudioView() {
       </div>
     );
   }
+  if (aiVideo) {
+    return (
+      <div className="view studio">
+        <AiVideoCreator
+          initial={aiVideo.text}
+          onCancel={() => setAiVideo(false)}
+          onCharacters={() => {
+            setAiVideo(false);
+            setFaceless('characters');
+          }}
+          onDone={(id) => {
+            setAiVideo(false);
+            setCreating(false);
+            refreshList();
+            void openProject(id);
+          }}
+        />
+      </div>
+    );
+  }
   if (cloning) {
     return (
       <div className="view studio">
@@ -521,6 +553,10 @@ export function StudioView() {
         <FacelessCreator
           startTab={faceless}
           onCancel={() => setFaceless(false)}
+          onAiVideo={(text) => {
+            setFaceless(false);
+            setAiVideo({ text });
+          }}
           onDone={(id) => {
             setFaceless(false);
             setCreating(false);
@@ -535,7 +571,7 @@ export function StudioView() {
     return (
       <div className="view studio">
         <div className="studio-home">
-          <NewProject onCreate={create} onFaceless={() => setFaceless('script')} onClone={() => setCloning(true)} onCancel={project ? () => setCreating(false) : undefined} />
+          <NewProject onCreate={create} onFaceless={() => setFaceless('script')} onClone={() => setCloning(true)} onAiVideo={() => setAiVideo({ text: '' })} onCancel={project ? () => setCreating(false) : undefined} />
           <ProjectGrid
             projects={list}
             current={project?.id ?? null}
@@ -814,11 +850,18 @@ export function StudioView() {
           Fit
         </button>
       </div>
-      {!!aiWaiting[project.id] && (
+      {aiJobs.length > 0 && (
         <div className="keo-live-bar" role="status" aria-live="polite">
           <span className="dot" />
-          <strong>AI clip on its way</strong>
-          <span className="grow">fal.ai is making {aiWaiting[project.id] === 1 ? 'your clip' : `${aiWaiting[project.id]} clips`}. It goes on the AI shots track by itself when ready, usually within 10 minutes. Keep working.</span>
+          <strong>{aiJobs.length === 1 ? 'AI clip being made' : `${aiJobs.length} AI clips being made`}</strong>
+          <span className="grow ai-jobs">
+            {aiJobs.slice(0, 4).map((j, i) => (
+              <span key={i} className="small">
+                {j.about.length > 110 ? `${j.about.slice(0, 110)}…` : j.about} · {minutesAgo(j.submittedAt)}
+              </span>
+            ))}
+            <span className="small muted">Each goes on the timeline by itself when ready (usually 5 to 10 minutes; busy times longer). Keep working, or close Keo: nothing is lost or paid twice.</span>
+          </span>
         </div>
       )}
       {keoStep && (
@@ -860,7 +903,7 @@ function listProjects() {
   return invoke('studio:list', {});
 }
 
-function NewProject({ onCreate, onFaceless, onClone, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onClone: () => void; onCancel?: () => void }) {
+function NewProject({ onCreate, onFaceless, onClone, onAiVideo, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onClone: () => void; onAiVideo: () => void; onCancel?: () => void }) {
   const [name, setName] = useState('My video');
   const [format, setFormat] = useState<FormatId>('vertical');
   return (
@@ -895,9 +938,12 @@ function NewProject({ onCreate, onFaceless, onClone, onCancel }: { onCreate: (na
           </button>
         </div>
         <div className="faceless-offer">
-          <span className="muted small">No footage? Make a video from a script:</span>
-          <button className="btn sm" onClick={onFaceless}>
-            <Icon name="text" size={13} /> Faceless video from a script
+          <span className="muted small">No footage? Make one with AI:</span>
+          <button className="btn sm primary" onClick={onAiVideo} title="Describe a video: Keo films it with AI, with your character’s face">
+            <Icon name="film" size={13} /> Real AI video from a description
+          </button>
+          <button className="btn sm" onClick={onFaceless} title="A voice-over with a picture per scene">
+            <Icon name="text" size={13} /> Narrated video from a script
           </button>
           <button className="btn sm" onClick={onClone} title="Replace the person in a content video with your character">
             <Icon name="sparkle" size={13} /> Clone a video with your character
@@ -1549,4 +1595,10 @@ function ProjectSettings({ project, onEdit }: { project: Project; onEdit: (ops: 
       <p className="small muted insp-tip">Or ask Keo in the chat, for example: “Cut the silences, add captions and soft background music.”</p>
     </div>
   );
+}
+
+/** "sent 4 min ago". */
+function minutesAgo(iso: string): string {
+  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  return m < 1 ? 'sent just now' : `sent ${m} min ago`;
 }

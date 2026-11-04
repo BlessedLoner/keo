@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FORMATS, LOOKS, type FormatId, type LookId } from '@shared/studio';
 import { scenesFromScript, type Storyboard } from '@shared/studioFaceless';
+import { looksLikeVideoBrief } from '@shared/studioAiVideo';
 import type { Character } from '@shared/studioCharacters';
+import { studioPrice } from '@shared/aiPrices';
 import { Characters } from './Characters';
+import { useStudioAi } from './StudioCredits';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -35,7 +38,7 @@ const VOICES = [
   { id: 'alloy', label: 'OpenAI — Alloy' },
 ];
 
-export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onDone: (projectId: string) => void; onCancel: () => void; startTab?: 'script' | 'characters' }) {
+export function FacelessCreator({ onDone, onCancel, onAiVideo, startTab = 'script' }: { onDone: (projectId: string) => void; onCancel: () => void; onAiVideo?: (text: string) => void; startTab?: 'script' | 'characters' }) {
   const ui = useUi();
   const [title, setTitle] = useState('My faceless video');
   const [format, setFormat] = useState<FormatId>('vertical');
@@ -49,6 +52,7 @@ export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onD
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [tab, setTab] = useState<'script' | 'characters'>(startTab);
+  const ai = useStudioAi();
   const [characters, setCharacters] = useState<Character[]>([]);
   // Loaded again whenever the tab changes (Keo may have added a character from the chat).
   useEffect(() => {
@@ -84,7 +88,7 @@ export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onD
     const sends = [
       plan.voice ? `the narration to ${plan.voice} for the voice` : null,
       plan.aiPictures ? `${plan.aiPictures} picture description${plan.aiPictures === 1 ? '' : 's'} to ${plan.pictures}` : null,
-      plan.characterPictures ? `${plan.characterPictures} picture${plan.characterPictures === 1 ? '' : 's'} of your characters with their descriptions to fal.ai (about $${plan.characterCostUsd.toFixed(2)} from your fal.ai account)` : null,
+      plan.characterPictures ? `${plan.characterPictures} picture${plan.characterPictures === 1 ? '' : 's'} of your characters with their descriptions to the AI picture service (about ${studioPrice(plan.characterCostUsd, ai.status?.via ?? null)})` : null,
     ]
       .filter(Boolean)
       .join(', ');
@@ -111,7 +115,7 @@ export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onD
     <div className="studio-empty">
       <div className="studio-new faceless">
         <Icon name="film" size={30} />
-        <h2>Faceless video</h2>
+        <h2>Narrated video</h2>
         <p className="muted">Write the script — one scene per paragraph. Keo reads it in a voice, makes a picture for each scene, moves it, adds transitions and captions. Or ask Keo in the chat to write the script for you.</p>
         <div className="side-tabs faceless-tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'script'} className={tab === 'script' ? 'active' : ''} onClick={() => setTab('script')}>
@@ -145,6 +149,17 @@ export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onD
             Script <span className="muted small">· {scenes.length} scene{scenes.length === 1 ? '' : 's'}, about {Math.round(words / 2.6)} s · optional lines: [picture: …] [title: …]</span>
           </label>
           <textarea id="fl-script" className="textarea" rows={9} value={script} placeholder={EXAMPLE} maxLength={60000} onChange={(e) => setScript(e.target.value)} disabled={busy} />
+          {/* A description of a video (camera, shots, look) is not words to read aloud: offer real AI video. */}
+          {onAiVideo && looksLikeVideoBrief(script) && (
+            <div className="video-brief small">
+              <span className="grow">
+                <strong>This reads like a video description, not a voice-over.</strong> A narrated video would read it aloud over still pictures. Make it as real AI video instead: filmed shots with your character’s own face.
+              </span>
+              <button className="btn sm primary" onClick={() => onAiVideo(script)} disabled={busy}>
+                <Icon name="film" size={13} /> Make it as real AI video
+              </button>
+            </div>
+          )}
           {!script && (
             <button className="btn sm ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setScript(EXAMPLE)}>
               Use the example
@@ -204,7 +219,7 @@ export function FacelessCreator({ onDone, onCancel, startTab = 'script' }: { onD
         )}
         {plan && (
           <p className={`small ${plan.reason ? 'warn-text' : 'muted'}`}>
-            {plan.reason ?? `Voice: ${plan.voice} · ${plan.aiPictures ? `${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}: ${plan.pictures}` : 'no AI pictures'}${plan.characterPictures ? ` · ${plan.characterPictures} same-face picture${plan.characterPictures === 1 ? '' : 's'} of your characters: fal.ai, about $${plan.characterCostUsd.toFixed(2)}` : ''}`}
+            {plan.reason ?? `Voice: ${plan.voice} · ${plan.aiPictures ? `${plan.aiPictures} AI picture${plan.aiPictures === 1 ? '' : 's'}: ${plan.pictures}` : 'no AI pictures'}${plan.characterPictures ? ` · ${plan.characterPictures} same-face picture${plan.characterPictures === 1 ? '' : 's'} of your characters: about ${studioPrice(plan.characterCostUsd, ai.status?.via ?? null)}` : ''}`}
           </p>
         )}
         {steps && (

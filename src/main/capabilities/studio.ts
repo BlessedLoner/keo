@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { motionCloneCost, studioPrice } from '../../shared/aiPrices';
 import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project, type StudioAsk } from '../../shared/studio';
@@ -53,9 +54,11 @@ export interface StudioToolDeps {
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
-  swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
-  /** Why AI shots cannot be made (no fal.ai key), or null. */
+  swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution; smooth?: boolean; mode?: 'stable' | 'quick' }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  /** Why AI shots cannot be made (signed out, no own key), or null. */
   aiShotBlocked: () => string | null;
+  /** How Studio's AI is paid now: Keo Cloud's Studio credits, or the user's own fal.ai key. */
+  aiVia?: () => 'own' | 'keo' | null;
 }
 
 const Step = z.object({ label: z.string().trim().min(1).max(80), status: z.enum(['pending', 'running', 'done', 'skipped', 'failed']), note: z.string().trim().max(160).optional() }).strict();
@@ -1096,11 +1099,12 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a picture to fal.ai' }),
     preview: (i) => {
       const m = AI_VIDEO_MODELS[i.model];
-      const cost = estimateCost(i.model, i.seconds, i.audio).toFixed(2);
+      const via = d.aiVia?.() ?? 'own';
+      const cost = studioPrice(estimateCost(i.model, i.seconds, i.audio), via);
       return {
-        summary: `Make a ${modelSeconds(i.model, i.seconds)}-second AI clip with ${m.label} (about $${cost})`,
+        summary: `Make a ${modelSeconds(i.model, i.seconds)}-second AI clip with ${m.label} (about ${cost})`,
         target: null,
-        consequences: [`Costs about $${cost} from your fal.ai account (nothing if the same clip was made before).`, 'Adds the clip on the AI shots track (can be undone).'],
+        consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'} (nothing if the same clip was made before).`, 'Adds the clip on the AI shots track (can be undone).'],
         dataExport: 'The picture and the description are sent to fal.ai, which runs the AI video model.',
       };
     },
@@ -1123,7 +1127,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Swap the person in a video for a character',
     description:
-      'Clone a content video with the user’s character: the person in a video clip of the timeline is replaced by one of the user’s characters (their main picture) or a picture of the project, keeping the motion, expressions, timing and light (fal.ai, Wan 2.2 Animate Replace, paid from the user’s own fal.ai account: about $0.15 a second of 30 fps video at 720p, $0.075 at 480p). The new clip goes on the Character swap track over the original, silent, so the original sound carries on. Clips up to 60 s at normal speed: only the part of the video the clip shows is sent and paid for (split a longer clip and swap each part). Use only on videos the user has the right to use, and only with characters that are AI-made or people who agreed; never put a real person’s face into a video without their consent. Say the price first; for a first try suggest 480p. If fal.ai is still making it, it arrives by itself: do not ask again.',
+      'Clone a content video with the user’s character: the person in a video clip of the timeline is replaced by one of the user’s characters (their main picture) or a picture of the project, keeping the motion, expressions, timing and light (fal.ai, Wan 2.2 Animate Replace, paid from the user’s own fal.ai account: the clip is sent at 16 frames a second, about $0.08 a second at 720p and $0.04 at 480p; smooth: true sends 30 frames a second for almost twice the price). The new clip goes on the Character swap track over the original, silent, so the original sound carries on. Clips up to 60 s at normal speed: only the part of the video the clip shows is sent and paid for (split a longer clip and swap each part). Use only on videos the user has the right to use, and only with characters that are AI-made or people who agreed; never put a real person’s face into a video without their consent. Say the price first; for a first try suggest 480p. If fal.ai is still making it, it arrives by itself: do not ask again.',
     input: z
       .object({
         projectId: ProjectId.optional(),
@@ -1131,6 +1135,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         character: z.string().regex(/^ch_[A-Za-z0-9]{4,24}$/).optional(),
         picture: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(),
         resolution: z.enum(['480p', '580p', '720p']).default('720p'),
+        smooth: z.boolean().default(false).describe('Quick swap only: 30 frames a second instead of 16 (smoother motion, almost twice the price)'),
+        mode: z.enum(['stable', 'quick']).default('stable').describe('stable (default): the character performs the video’s moves, the same person in every frame, up to 30 s, about $0.11 a second + $0.15; quick: painted over the person frame by frame, cheaper but can flicker'),
       })
       .strict(),
     output: State.partial().extend({ clip: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() }),
@@ -1147,22 +1153,23 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     unavailableReason: () => d.aiShotBlocked(),
     autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a video and a picture to fal.ai' }),
     preview: (i) => {
-      // The price from the clip's video length (fal.ai counts frames; 30 a second assumed).
+      // The price from the clip's length (fal.ai counts frames: Keo sends 16 or 30 a second).
       const lengthOf = () => {
         try {
           const p = s.resolve(i.projectId);
           const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === i.clip);
-          return c && c.type === 'media' ? (p.assets.find((a) => a.id === c.assetId)?.duration ?? 0) : 0;
+          return c && c.type === 'media' ? c.duration : 0;
         } catch {
           return 0;
         }
       };
       const seconds = lengthOf();
-      const cost = swapCost(seconds, 30, i.resolution).toFixed(2);
+      const via = d.aiVia?.() ?? 'own';
+      const cost = studioPrice(i.mode === 'quick' ? swapCost(seconds, i.smooth ? 30 : 16, i.resolution) : motionCloneCost(seconds), via);
       return {
-        summary: `Swap the person in a ${Math.round(seconds)}-second video for your character at ${i.resolution} (about $${cost})`,
+        summary: `Swap the person in a ${Math.round(seconds)}-second clip for your character at ${i.resolution} (about ${cost})`,
         target: null,
-        consequences: [`Costs about $${cost} from your fal.ai account (nothing if the same swap was made before).`, 'Adds the new clip over the original on the Character swap track (can be undone).'],
+        consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'} (nothing if the same swap was made before).`, 'Adds the new clip over the original on the Character swap track (can be undone).'],
         dataExport: 'The video and the character’s picture are sent to fal.ai, which runs the AI video model.',
       };
     },
@@ -1172,7 +1179,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       if (blocked) throw fail('ai_video_unavailable', blocked);
       if (!i.character && !i.picture) throw fail('studio', 'Say which character (character: ch_…) or picture (picture: as_…) to put in the video.');
       const p = run(() => s.resolve(i.projectId));
-      const r = await d.swapCharacter(p.id, { clip: i.clip, ...(i.character ? { character: i.character } : {}), ...(i.picture ? { picture: i.picture } : {}), resolution: i.resolution }, ctx.signal).catch((e: unknown) => {
+      const r = await d.swapCharacter(p.id, { clip: i.clip, ...(i.character ? { character: i.character } : {}), ...(i.picture ? { picture: i.picture } : {}), resolution: i.resolution, smooth: i.smooth, mode: i.mode }, ctx.signal).catch((e: unknown) => {
         throw e instanceof StudioError ? fail('studio', e.message) : e;
       });
       const note = r.pending ? 'fal.ai is still making the swapped clip. It is paid for once and Keo puts it over the original by itself as soon as it is ready (Studio shows that it is on its way): tell the user, and do not ask for it again.' : null;

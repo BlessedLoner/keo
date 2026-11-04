@@ -61,7 +61,7 @@ describe('AI shots through fal.ai (a fake fal.ai: nothing is paid)', () => {
   });
 
   it('says clearly what went wrong', async () => {
-    await expect(make(fakeFal(), null).fal.generate(req, new AbortController().signal)).rejects.toThrow(/fal.ai API key/);
+    await expect(make(fakeFal(), null).fal.generate(req, new AbortController().signal)).rejects.toThrow(/needs your Keo account.*own fal.ai key/);
     await expect(make(fakeFal({ submitStatus: 401 })).fal.generate(req, new AbortController().signal)).rejects.toThrow(/did not accept the API key/);
     await expect(make(fakeFal({ submitStatus: 402 })).fal.generate(req, new AbortController().signal)).rejects.toThrow(/no credit left/);
     await expect(make(fakeFal({ statuses: [{ status: 'COMPLETED', error: 'Content blocked' }] })).fal.generate(req, new AbortController().signal)).rejects.toThrow(/could not make the clip: Content blocked/);
@@ -198,5 +198,143 @@ describe('Same-face pictures of a character (Nano Banana, a fake fal.ai)', () =>
     expect(fs.readFileSync(r.file).length).toBe(3000);
     expect(calls.find((c) => c.url.endsWith('/nano-banana/edit'))!.body).toEqual({ prompt: 'Kira on a rooftop at sunset', image_urls: ['https://v3.fal.media/files/kira.jpg'], num_images: 1, output_format: 'png', aspect_ratio: '9:16' });
     expect((await fal.characterPicture({ image: Buffer.from('kira'), prompt: 'Kira on a rooftop at sunset', aspect: '9:16' }, new AbortController().signal)).cached).toBe(true);
+  });
+});
+
+describe('fal.ai failures are explained and written down; network drops are retried', () => {
+  it('a dropped connection while uploading is tried again, then the clip is made', async () => {
+    const f = fakeFal();
+    let drops = 2;
+    const fetch: typeof f.fetch = async (url, init) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate') && drops-- > 0) throw new TypeError('fetch failed');
+      return f.fetch(url, init);
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-ai-'), fetch, log, sleep: async () => undefined });
+    const r = await fal.generate(req, new AbortController().signal);
+    expect(fs.existsSync(r.file)).toBe(true);
+  });
+
+  it('when the network stays down, says so (nothing paid) and logs why', async () => {
+    const warned: Array<[string, Record<string, unknown> | undefined]> = [];
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-ai-'), fetch: async () => { throw new TypeError('fetch failed'); }, log: { ...log, warn: (e, d) => warned.push([e, d]) }, sleep: async () => undefined });
+    await expect(fal.generate(req, new AbortController().signal)).rejects.toThrow(/could not reach fal.ai.*nothing was paid/);
+    expect(warned[0]?.[0]).toBe('studio.ai_shot_not_sent');
+  });
+
+  it('a request fal.ai fails is logged with fal.ai’s own reason', async () => {
+    const f = fakeFal();
+    const base = 'https://queue.fal.run/fal-ai/kling-video/requests/r1';
+    const fetch: typeof f.fetch = async (url, init) => (url === base ? { ok: false, status: 422, json: async () => ({ detail: [{ loc: ['body'], msg: 'No face found in the image' }] }), arrayBuffer: async () => new ArrayBuffer(0) } : f.fetch(url, init));
+    const warned: Array<[string, Record<string, unknown> | undefined]> = [];
+    const dir = tempDir('keo-ai-');
+    const fal = new FalVideo({ key: () => 'k-123456789', dir, fetch, log: { ...log, warn: (e, d) => warned.push([e, d]) }, sleep: async () => undefined });
+    await expect(fal.generate(req, new AbortController().signal)).rejects.toThrow(/No face found in the image/);
+    expect(warned.find(([e]) => e === 'studio.ai_shot_failed')?.[1]?.reason).toMatch(/No face found/);
+    expect(fal.pending()).toEqual([]);
+  });
+});
+
+describe('Lines in a character’s own voice (Chatterbox, a fake fal.ai)', () => {
+  it('uploads the voice sample, asks for the line, keeps the audio; the same line is never paid twice', async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const base = 'https://queue.fal.run/fal-ai/chatterbox/requests/v1';
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { method?: string; body?: string | Uint8Array }) => {
+      calls.push({ url, ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) return json(200, { upload_url: 'https://upload.fal.media/put/v', file_url: 'https://v3.fal.media/files/voice.wav' });
+      if (url === 'https://upload.fal.media/put/v') return json(200, {});
+      if (url === 'https://queue.fal.run/fal-ai/chatterbox/text-to-speech') return json(200, { status_url: `${base}/status`, response_url: base });
+      if (url === `${base}/status`) return json(200, { status: 'COMPLETED' });
+      if (url === base) return json(200, { audio: { url: 'https://v3.fal.media/files/line.wav' } });
+      if (url === 'https://v3.fal.media/files/line.wav') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(4000).fill(3).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-voice-'), fetch, log, sleep: async () => undefined });
+    const req = { sample: Buffer.from('wav-bytes'), sampleType: 'audio/wav' as const, text: 'Welcome back!' };
+    const r = await fal.speak(req, new AbortController().signal);
+    expect(r.file.endsWith('.wav')).toBe(true);
+    expect(fs.readFileSync(r.file).length).toBe(4000);
+    expect(calls.find((c) => c.url.endsWith('/chatterbox/text-to-speech'))?.body).toMatchObject({ text: 'Welcome back!', audio_url: 'https://v3.fal.media/files/voice.wav' });
+    const n = calls.length;
+    expect((await fal.speak(req, new AbortController().signal)).cached).toBe(true);
+    expect(calls.length).toBe(n);
+  });
+});
+
+describe('Through Keo Cloud (signed in, no own key: Studio credits)', () => {
+  it('uploads and runs through the gateway with the Keo sign-in; fal.ai is never called with a key from the app', async () => {
+    const base = 'https://cloud.test/v1';
+    const calls: Array<{ url: string; auth?: string; body?: unknown }> = [];
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }) => {
+      calls.push({ url, ...(init?.headers?.Authorization ? { auth: init.headers.Authorization } : {}), ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (url === `${base}/studio/upload`) return json(200, { upload_url: 'https://upload.fal.media/put/k', file_url: 'https://v3.fal.media/files/pic.jpg' });
+      if (url === 'https://upload.fal.media/put/k') return json(200, {});
+      if (url === `${base}/studio/run`) return json(200, { request_id: 'q1', status_url: `${base}/studio/requests/q1/status`, response_url: `${base}/studio/requests/q1`, cancel_url: `${base}/studio/requests/q1/cancel`, credits: 112 });
+      if (url === `${base}/studio/requests/q1/status`) return json(200, { status: 'COMPLETED' });
+      if (url === `${base}/studio/requests/q1`) return json(200, { video: { url: 'https://v3.fal.media/files/clip.mp4' } });
+      if (url === 'https://v3.fal.media/files/clip.mp4') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(5000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => null, cloud: { base, token: async () => 'keo-token' }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });
+    expect(await fal.route()).toMatchObject({ kind: 'keo' });
+    const r = await fal.generate(req, new AbortController().signal);
+    expect(fs.existsSync(r.file)).toBe(true);
+    expect(calls.filter((c) => c.auth).every((c) => c.auth === 'Bearer keo-token')).toBe(true);
+    expect(calls.some((c) => c.url.startsWith('https://queue.fal.run') || c.url.startsWith('https://rest.fal.ai'))).toBe(false);
+    expect(calls.find((c) => c.url === `${base}/studio/run`)?.body).toMatchObject({ endpoint: 'fal-ai/kling-video/v3/pro/image-to-video', input: { start_image_url: 'https://v3.fal.media/files/pic.jpg', duration: '5' } });
+  });
+
+  it('out of credits: Keo Cloud’s own words are shown; signed out: says to sign in', async () => {
+    const fetch = async (url: string) => ({ ok: url.endsWith('/upload') || url.startsWith('https://upload'), status: url.endsWith('/run') ? 402 : 200, json: async () => (url.endsWith('/run') ? { error: { message: 'This needs 112 Studio credits and you have 40. Buy more credits.' } } : { upload_url: 'https://upload.fal.media/x', file_url: 'https://v3.fal.media/files/a.jpg' }), arrayBuffer: async () => new ArrayBuffer(0) });
+    const fal = new FalVideo({ key: () => null, cloud: { base: 'https://cloud.test/v1', token: async () => 't' }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });
+    await expect(fal.generate(req, new AbortController().signal)).rejects.toThrow(/needs 112 Studio credits and you have 40/);
+    const out = new FalVideo({ key: () => null, cloud: { base: 'https://cloud.test/v1', token: async () => null }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });
+    await expect(out.generate(req, new AbortController().signal)).rejects.toThrow(/needs your Keo account/);
+  });
+});
+
+describe('Stable clone (Kling Motion Control, a fake fal.ai)', () => {
+  it('sends the video’s moves and the character picture; the character performs them; never paid twice', async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const base = 'https://queue.fal.run/fal-ai/kling-video/requests/m1';
+    let n = 0;
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { method?: string; body?: string | Uint8Array }) => {
+      calls.push({ url, ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) return json(200, { upload_url: `https://upload.fal.media/${++n}`, file_url: `https://v3.fal.media/files/u${n}` });
+      if (url.startsWith('https://upload.fal.media/')) return json(200, {});
+      if (url === 'https://queue.fal.run/fal-ai/kling-video/v2.6/pro/motion-control') return json(200, { status_url: `${base}/status`, response_url: base });
+      if (url === `${base}/status`) return json(200, { status: 'COMPLETED' });
+      if (url === base) return json(200, { video: { url: 'https://v3.fal.media/files/clone.mp4' } });
+      if (url === 'https://v3.fal.media/files/clone.mp4') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(6000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-motion-'), fetch, log, sleep: async () => undefined });
+    const r = await fal.motionClone({ video: Buffer.from('mp4-moves'), image: Buffer.from('jpeg-kira'), seconds: 12 }, new AbortController().signal);
+    expect(fs.existsSync(r.file)).toBe(true);
+    expect(calls.find((c) => c.url.endsWith('/motion-control'))?.body).toEqual({ video_url: 'https://v3.fal.media/files/u1', image_url: 'https://v3.fal.media/files/u2', character_orientation: 'video', keep_original_sound: false });
+    const count = calls.length;
+    expect((await fal.motionClone({ video: Buffer.from('mp4-moves'), image: Buffer.from('jpeg-kira'), seconds: 12 }, new AbortController().signal)).cached).toBe(true);
+    expect(calls.length).toBe(count);
+  });
+
+  it('realistic frames use Nano Banana Pro at 2K; drafts the fast model', async () => {
+    const seen: string[] = [];
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { body?: string | Uint8Array }) => {
+      if (url.startsWith('https://queue.fal.run/fal-ai/nano-banana')) {
+        seen.push(`${url.slice(29)} ${typeof init?.body === 'string' ? (JSON.parse(init.body) as { resolution?: string }).resolution ?? '-' : ''}`);
+        return json(200, { status_url: 'https://queue.fal.run/fal-ai/x/requests/f/status', response_url: 'https://queue.fal.run/fal-ai/x/requests/f' });
+      }
+      if (url.endsWith('/status')) return json(200, { status: 'COMPLETED' });
+      if (url.includes('/requests/')) return json(200, { images: [{ url: 'https://v3.fal.media/files/f.png' }] });
+      if (url === 'https://v3.fal.media/files/f.png') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(3000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => 'k-123456789', dir: tempDir('keo-frame-'), fetch, log, sleep: async () => undefined });
+    await fal.frame({ references: [], prompt: 'a café table', aspect: '9:16' }, new AbortController().signal);
+    await fal.frame({ references: [], prompt: 'a café table', aspect: '9:16', quality: 'draft' }, new AbortController().signal);
+    expect(seen).toEqual(['nano-banana-pro 2K', 'nano-banana -']);
   });
 });

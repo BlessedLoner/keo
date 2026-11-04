@@ -80,3 +80,26 @@ describe('Same-face pictures in a faceless video', () => {
     }
   });
 });
+
+describe('A character’s own voice', () => {
+  it('a voice sample is kept in Keo’s folder; a new one replaces it; removing goes back to a ready-made voice', () => {
+    const { s } = service();
+    const kira = s.saveCharacter({ name: 'Kira', voice: 'nova' });
+    // Their own voice needs its sample first.
+    expect(() => s.saveCharacter({ id: kira.id, voice: 'own' })).toThrow(/own voice first/);
+    expect(() => s.setCharacterVoice(kira.id, Buffer.alloc(100), { ext: 'wav' })).toThrow(/too short/);
+    const one = s.setCharacterVoice(kira.id, Buffer.alloc(50_000, 1), { ext: 'wav' });
+    expect(one.voice).toBe('own');
+    expect(fs.existsSync(one.voiceSample!)).toBe(true);
+    const two = s.setCharacterVoice(kira.id, Buffer.alloc(60_000, 2), { ext: 'mp3', about: 'deep calm voice' });
+    expect(two).toMatchObject({ voice: 'own', voiceAbout: 'deep calm voice' });
+    expect(fs.existsSync(one.voiceSample!)).toBe(false);
+    // Saving other details keeps the voice.
+    s.saveCharacter({ id: kira.id, look: 'red coat' });
+    expect(s.character(kira.id)).toMatchObject({ voice: 'own', look: 'red coat' });
+    const back = s.removeCharacterVoice(kira.id);
+    expect(back.voice).toBe('female');
+    expect(back.voiceSample).toBeUndefined();
+    expect(fs.existsSync(two.voiceSample!)).toBe(false);
+  });
+});

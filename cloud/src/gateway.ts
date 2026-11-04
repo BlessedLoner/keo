@@ -11,6 +11,7 @@ import { handleBilling, readTicket } from './billing';
 import { accountPage } from './pages';
 import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
+import { handleStudio } from './studio';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -23,6 +24,8 @@ export interface Env {
   /** Secret: Paystack's secret key (test or live). Without it, payments are off. */
   PAYSTACK_SECRET_KEY?: string;
   PAYSTACK_URL?: string;
+  /** Secret: Keo's fal.ai key (Keo Studio's AI video, pictures and voices, paid with Studio credits). Without it, Studio AI is off. */
+  FAL_KEY?: string;
   /** Shown on the Terms, Privacy and Refund pages (optional until the address exists). */
   KEO_SUPPORT_EMAIL?: string;
   /** Which OpenRouter models do web search, pictures and voice (wrangler.toml [vars]; change any time). */
@@ -368,6 +371,10 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       },
     });
     if (billing) return billing;
+
+    // Keo Studio's AI (fal.ai with Keo's key), paid with Studio credits.
+    const studio = await handleStudio(req, route, env, { fetch: deps.fetch, now, db, waitUntil: deps.waitUntil, account: () => account(req, db, now) });
+    if (studio) return studio;
 
     if (req.method === 'GET' && route === '/v1/models') {
       const a = await account(req, db, now);
