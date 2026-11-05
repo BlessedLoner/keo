@@ -286,3 +286,19 @@ describe('Talking characters through Keo Cloud', () => {
     expect(w.fal.some((x) => x.url.includes('ai-avatar'))).toBe(false);
   });
 });
+
+describe('AI music and sound effects through Keo Cloud', () => {
+  it('music is priced by each started minute; sound effects by the second; limits checked on the server', async () => {
+    const music = (ms: number) => call('POST', '/v1/studio/run', { endpoint: 'elevenlabs/music/v2.5', input: { prompt: 'calm lo-fi', music_length_ms: ms, force_instrumental: true } });
+    // 45 s → 1 minute × $0.60 → 120 credits; 90 s → 2 minutes → 240.
+    expect((await music(45000)).body.credits).toBe(120);
+    expect((await music(90000)).body.credits).toBe(240);
+    expect((await music(400000)).status).toBe(400);
+    expect(w.fal.at(-1)!.body).toMatchObject({ music_length_ms: 90000, force_instrumental: true });
+    const sfx = await call('POST', '/v1/studio/run', { endpoint: 'elevenlabs/sound-effects/v3', input: { text: 'door creak', duration_seconds: 4, loop: true } });
+    // 4 s × $0.002 = $0.008 → 2 credits.
+    expect(sfx.body.credits).toBe(2);
+    expect(w.fal.at(-1)!.body).toEqual({ text: 'door creak', duration_seconds: 4, loop: true, prompt_influence: 0.3, output_format: 'mp3_44100_128' });
+    expect((await call('POST', '/v1/studio/run', { endpoint: 'elevenlabs/sound-effects/v3', input: { text: 'x', duration_seconds: 45 } })).status).toBe(400);
+  });
+});

@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { motionCloneCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
+import { motionCloneCost, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
 import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, MOTION_ICONS, MOTION_PIECE_INFO, MOTION_PIECES, MOTION_PLACES, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project, type StudioAsk } from '../../shared/studio';
@@ -57,6 +57,8 @@ export interface StudioToolDeps {
   swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution; smooth?: boolean; mode?: 'stable' | 'quick' }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** A talking character (lip-synced): its plan and price, and making it. */
   talkPlan?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality }) => { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
+  aiMusic?: (projectId: string, o: { prompt: string; seconds?: number; vocals?: boolean; at?: number; volume?: number }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  aiSound?: (projectId: string, o: { prompt: string; seconds: number; at: number; loop?: boolean; volume?: number }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   talk?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality; at?: number; prompt?: string }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** Why AI shots cannot be made (signed out, no own key), or null. */
   aiShotBlocked: () => string | null;
@@ -1261,6 +1263,106 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const AiAudioOut = State.partial().extend({ clip: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() });
+  const aiMusic = defineCapability({
+    id: 'studio.ai_music',
+    version: '1.0.0',
+    title: 'Make music for the video',
+    description: `Original music made for this video by AI (ElevenLabs Music, Keo Cloud's Studio credits or the user's own fal.ai key; about $0.60 a started minute of music). Describe it like a music supervisor: genre, mood, tempo (BPM), instruments, how it builds (e.g. "uplifting lo-fi hip hop, 85 BPM, warm keys and soft drums, calm intro, builds at 0:20, gentle ending"). It is as long as the video from \`at\` unless seconds is given (${MUSIC_SECONDS.min}–${MUSIC_SECONDS.max} s), instrumental unless vocals: true. It goes on the Music track at volume 0.3, quieter while someone speaks. Prefer the free music library (studio__sounds) when the user did not ask for original music; say the price first.`,
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        prompt: z.string().trim().min(3).max(2000),
+        seconds: z.number().min(MUSIC_SECONDS.min).max(MUSIC_SECONDS.max).optional(),
+        vocals: z.boolean().default(false),
+        at: z.number().min(0).default(0),
+        volume: z.number().min(0).max(1).default(0.3),
+      })
+      .strict(),
+    output: AiAudioOut,
+    risk: 'low',
+    // It spends the user's money (or credits) and sends the description to fal.ai.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 6 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The music is downloaded, kept on this PC and placed on the Music track (one undo).',
+    unavailableReason: () => (d.aiMusic ? d.aiShotBlocked() : 'AI music is not available here.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends the description to fal.ai' }),
+    preview: (i) => {
+      const via = d.aiVia?.() ?? 'own';
+      let seconds = i.seconds ?? 0;
+      if (!seconds) {
+        try {
+          seconds = Math.max(MUSIC_SECONDS.min, projectDuration(s.resolve(i.projectId)) - i.at);
+        } catch {
+          seconds = 60;
+        }
+      }
+      const cost = studioPrice(musicCost(Math.min(MUSIC_SECONDS.max, seconds)), via);
+      return { summary: `Make ${Math.round(seconds)} s of original music (about ${cost})`, target: null, consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'} (nothing if the same music was made before).`, 'Adds the music on the Music track, quieter under speech (can be undone).'], dataExport: 'The music description is sent to fal.ai, which runs the music model.' };
+    },
+    auditView: (i) => ({ seconds: i.seconds ?? null, vocals: i.vocals }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      if (!d.aiMusic) throw fail('studio', 'AI music is not available here.');
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.aiMusic(p.id, { prompt: i.prompt, at: i.at, volume: i.volume, ...(i.seconds ? { seconds: i.seconds } : {}), ...(i.vocals ? { vocals: true } : {}) }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, s.get(p.id)), ...r, note: r.pending ? 'The music is still being made; it goes on the Music track by itself when ready: tell the user, do not ask again.' : null };
+    },
+  });
+
+  const aiSound = defineCapability({
+    id: 'studio.ai_sound',
+    version: '1.0.0',
+    title: 'Make a sound effect',
+    description: `A sound effect made from a description by AI (ElevenLabs Sound Effects, about $0.002 a second): any sound the library does not have ("a heavy wooden door creaks open in an empty hall", "crowd gasps then cheers", "sci-fi interface beep, short"). seconds 0.5–${SFX_MAX_SECONDS}; loop: true makes it repeat seamlessly (ambience). It goes on the Effects track at \`at\`. Try the free library (studio__sounds) first for common sounds.`,
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        prompt: z.string().trim().min(3).max(450),
+        seconds: z.number().min(0.5).max(SFX_MAX_SECONDS).default(3),
+        at: z.number().min(0),
+        loop: z.boolean().default(false),
+        volume: z.number().min(0).max(2).default(0.8),
+      })
+      .strict(),
+    output: AiAudioOut,
+    risk: 'low',
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 3 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The sound is downloaded, kept on this PC and placed on the Effects track (one undo).',
+    unavailableReason: () => (d.aiSound ? d.aiShotBlocked() : 'AI sound effects are not available here.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends the description to fal.ai' }),
+    preview: (i) => {
+      const via = d.aiVia?.() ?? 'own';
+      const cost = studioPrice(sfxCost(i.seconds), via);
+      return { summary: `Make a ${i.seconds}-second sound effect (about ${cost})`, target: null, consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'}.`, 'Adds it on the Effects track (can be undone).'], dataExport: 'The sound description is sent to fal.ai, which runs the sound model.' };
+    },
+    auditView: (i) => ({ seconds: i.seconds, loop: i.loop }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      if (!d.aiSound) throw fail('studio', 'AI sound effects are not available here.');
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.aiSound(p.id, { prompt: i.prompt, seconds: i.seconds, at: i.at, volume: i.volume, ...(i.loop ? { loop: true } : {}) }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, s.get(p.id)), ...r, note: r.pending ? 'The sound is still being made; it goes on the Effects track by itself when ready.' : null };
+    },
+  });
+
   const characters = defineCapability({
     ...simple({
       id: 'studio.characters',
@@ -1602,7 +1704,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, talkingCharacter, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

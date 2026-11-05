@@ -471,3 +471,10 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 /* Motion graphics buttons (Elements panel). */
 .motion-pieces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 6px 0; }
 .motion-pieces .btn { justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* AI music and sound effects (Audio tab). */
+.ai-audio .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.ai-audio-ideas { display: flex; flex-wrap: wrap; gap: 4px; }
+.ai-audio-ideas .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
+.ai-audio-ideas .chip:hover { color: var(--text); border-color: var(--text-3); }
+.ai-audio .btn { align-self: flex-start; }

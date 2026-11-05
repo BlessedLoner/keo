@@ -11,6 +11,7 @@ import { EMOJI, TEXT_STYLES, Tile } from './Bin';
 import { ElementsPanel } from './MotionFields';
 import { TRANSITION_LABEL } from './Timeline';
 import { VoiceRecorder } from './VoiceTools';
+import { AiAudio } from './AiAudio';
 
 /**
  * The Studio's library on the left, laid out like CapCut: a row of tabs (Media, Audio, Text,
@@ -40,6 +41,7 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
   audio: [
     ['music', 'Music'],
     ['effect', 'Sound effects'],
+    ['ai', 'Make with AI'],
     ['project', 'In this project'],
     ['record', 'Record voice'],
   ],
@@ -142,6 +144,7 @@ export function Library({
           {tab === 'media' && <MediaItems project={project} time={time} kind={now as 'all' | 'video' | 'image'} onImport={onImport} onAddAsset={onAddAsset} onEdit={onEdit} />}
           {tab === 'audio' && (now === 'music' || now === 'effect') && <SoundItems key={now} project={project} kind={now} time={time} />}
           {tab === 'audio' && now === 'project' && <ProjectSounds project={project} onAddAsset={onAddAsset} sel={sel} onEdit={run} />}
+          {tab === 'audio' && now === 'ai' && <AiAudio project={project} time={time} />}
           {tab === 'audio' && now === 'record' && (
             <div className="lib-pad">
               <p className="small muted">Record a voice-over straight onto the Voice track at the playhead.</p>

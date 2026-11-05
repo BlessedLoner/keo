@@ -60,7 +60,7 @@ export class AuditRepo {
 
   /** US dollars Keo spent on the user's fal.ai account since a time (from what it recorded for each paid request). */
   falSpentSince(since: string): number {
-    const rows = this.db.all<{ detail: string }>("SELECT detail FROM audit_log WHERE ts >= ? AND kind IN ('studio.ai_shot', 'studio.character_swap', 'studio.character_picture', 'studio.character_voice', 'studio.talking_character') AND decision = 'sent'", [since]);
+    const rows = this.db.all<{ detail: string }>("SELECT detail FROM audit_log WHERE ts >= ? AND kind IN ('studio.ai_shot', 'studio.character_swap', 'studio.character_picture', 'studio.character_voice', 'studio.talking_character', 'studio.ai_music', 'studio.ai_sound') AND decision = 'sent'", [since]);
     let total = 0;
     for (const r of rows) {
       const d = parseJson<{ destination?: unknown; costUsd?: unknown }>(r.detail, {});

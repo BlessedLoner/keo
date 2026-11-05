@@ -94,10 +94,10 @@ import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/
 import { findQuote, nameMentioned } from './agent/quotes';
 import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
-import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, MOTION_CLONE_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
+import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 import { wavOf } from './studio/captions';
 import { audioSeconds, speakingSeconds } from '../shared/audioLength';
-import { CHARACTER_PICTURE_USD, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
+import { CHARACTER_PICTURE_USD, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
 import { aiVideoCost, parseShotPlan, SHOT_MODELS, shotPlanPrompt, shotSeconds, type AiShot, type AiVideoPlan, type ShotModelId } from '../shared/studioAiVideo';
 
 export interface ServiceDeps {
@@ -739,6 +739,8 @@ export class Services {
         swapCharacter: (projectId, o, signal) => this.studioSwapCharacter(projectId, o, signal),
         talkPlan: (projectId, o) => this.studioTalkPlan(projectId, o),
         talk: (projectId, o, signal) => this.studioTalkingCharacter(projectId, o, signal),
+        aiMusic: (projectId, o, signal) => this.studioAiMusic(projectId, o, signal),
+        aiSound: (projectId, o, signal) => this.studioAiSound(projectId, o, signal),
         aiVia: () => (this.secrets.has('fal') ? 'own' : this.account.signedIn() ? 'keo' : null),
         aiShotBlocked: () => (this.studioAiReady() ? null : 'Keo Studio’s AI needs the user’s Keo account: they sign in (Settings → Providers → Keo account) and it is paid with Studio credits. (Or their own fal.ai key under Settings → Advanced.)'),
         captionSource: () => {
@@ -1505,6 +1507,59 @@ export class Services {
     }
   }
 
+  /**
+   * Music made for the video from a description (ElevenLabs Music, through Keo Cloud or the user's
+   * fal.ai key): as long as the video unless said (5 s to 5 min), instrumental unless vocals are
+   * asked for. It goes on the Music track, quieter while someone speaks.
+   */
+  async studioAiMusic(id: string, o: { prompt: string; seconds?: number; vocals?: boolean; at?: number; volume?: number }, signal: AbortSignal): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    if (!this.studioAiReady()) throw new StudioError('AI music needs your Keo account: sign in (Settings → Providers → Keo account).');
+    const p = this.studio.get(id);
+    const at = Math.max(0, o.at ?? 0);
+    const want = o.seconds ?? Math.max(MUSIC_SECONDS.min, projectDuration(p) - at);
+    if (want > MUSIC_SECONDS.max + 0.5) throw new StudioError(`Music is up to ${MUSIC_SECONDS.max / 60} minutes a piece: make it in parts (one after the other).`);
+    const seconds = Math.round(Math.min(MUSIC_SECONDS.max, Math.max(MUSIC_SECONDS.min, want)));
+    const cost = musicCost(seconds);
+    this.falBudget(cost);
+    const placement = { at, in: 0, duration: seconds, trackName: 'Music', volume: o.volume ?? 0.3, duck: -14, about: `AI music (${MUSIC_MODEL.label}): ${o.prompt.slice(0, 200)}` };
+    try {
+      const made = await this.aiVideo.music({ prompt: o.prompt, seconds, ...(o.vocals ? { vocals: true } : {}) }, signal, { context: { projectId: id, ...placement } });
+      if (!made.cached) this.audit.record({ kind: 'studio.ai_music', decision: 'sent', detail: { destination: this.aiVia(), seconds, costUsd: cost } });
+      const r = await this.studio.addAiClip(id, made.file, { ...placement, seconds });
+      return { clip: r.clip, seconds, cached: made.cached, costUsd: made.cached ? 0 : cost, pending: false };
+    } catch (e) {
+      if (e instanceof AiVideoPending) {
+        this.audit.record({ kind: 'studio.ai_music', decision: 'sent', detail: { destination: this.aiVia(), seconds, costUsd: cost } });
+        this.emit('studio:aiShot', { projectId: id, state: 'waiting', message: 'Your music is being made. It goes on the Music track by itself when it is ready: keep working.' });
+        return { clip: null, seconds, cached: false, costUsd: cost, pending: true };
+      }
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /** A sound effect made from a description (ElevenLabs Sound Effects), placed at `at` on the Effects track. */
+  async studioAiSound(id: string, o: { prompt: string; seconds: number; at: number; loop?: boolean; volume?: number }, signal: AbortSignal): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    if (!this.studioAiReady()) throw new StudioError('AI sound effects need your Keo account: sign in (Settings → Providers → Keo account).');
+    this.studio.get(id);
+    if (o.seconds > SFX_MAX_SECONDS + 0.01) throw new StudioError(`A sound effect is up to ${SFX_MAX_SECONDS} s: for longer, make it loop (loop: true) and repeat it.`);
+    const seconds = Math.round(Math.min(SFX_MAX_SECONDS, Math.max(0.5, o.seconds)) * 10) / 10;
+    const cost = sfxCost(seconds);
+    this.falBudget(cost);
+    const placement = { at: Math.max(0, o.at), in: 0, duration: seconds, trackName: 'Effects', volume: o.volume ?? 0.8, about: `AI sound effect (${SFX_MODEL.label}): ${o.prompt.slice(0, 200)}` };
+    try {
+      const made = await this.aiVideo.soundEffect({ prompt: o.prompt, seconds, ...(o.loop ? { loop: true } : {}) }, signal, { context: { projectId: id, ...placement } });
+      if (!made.cached) this.audit.record({ kind: 'studio.ai_sound', decision: 'sent', detail: { destination: this.aiVia(), seconds, costUsd: cost } });
+      const r = await this.studio.addAiClip(id, made.file, { ...placement, seconds });
+      return { clip: r.clip, seconds, cached: made.cached, costUsd: made.cached ? 0 : cost, pending: false };
+    } catch (e) {
+      if (e instanceof AiVideoPending) {
+        this.audit.record({ kind: 'studio.ai_sound', decision: 'sent', detail: { destination: this.aiVia(), seconds, costUsd: cost } });
+        return { clip: null, seconds, cached: false, costUsd: cost, pending: true };
+      }
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
   /** The voice a character speaks in (their own voice sample, or a Keo or OpenAI voice). */
   private characterVoice(c: { id: string; voice: string; voiceSample?: string | undefined }): string {
     return c.voice === 'own' && c.voiceSample ? `own:${c.id}:${path.basename(c.voiceSample)}` : c.voice === 'own' ? 'female' : c.voice;
@@ -1944,10 +1999,10 @@ export class Services {
             const p = this.studio.get(ctx.projectId);
             // Already on the timeline (the user asked again and it was added then): not twice.
             const have = p.assets.find((x) => path.resolve(x.path).toLowerCase() === path.resolve(file).toLowerCase());
-            if (have && p.tracks.some((t) => t.clips.some((c) => c.type === 'media' && c.assetId === have.id))) return;
+            if (have && p.tracks.some((t) => t.clips.some((c) => (c.type === 'media' || c.type === 'audio') && c.assetId === have.id))) return;
             await this.studio.addAiClip(ctx.projectId, file, { ...ctx, seconds: job.seconds });
             this.aiSettle.get(ctx.projectId)?.();
-            this.emit('studio:aiShot', { projectId: ctx.projectId, state: 'ready', message: ctx.trackName === 'Character swap' ? 'Your clone is ready: Keo put it over the original.' : 'An AI shot is ready: Keo put it on the timeline.' });
+            this.emit('studio:aiShot', { projectId: ctx.projectId, state: 'ready', message: ctx.trackName === 'Character swap' ? 'Your clone is ready: Keo put it over the original.' : ctx.trackName === 'Music' ? 'Your AI music is ready: Keo put it on the Music track.' : ctx.trackName === 'Effects' ? 'Your sound effect is ready: Keo put it on the Effects track.' : 'An AI shot is ready: Keo put it on the timeline.' });
           } catch (e) {
             this.log.warn('studio.ai_shot_place_failed', { error: e instanceof Error ? e.message : String(e) });
           }

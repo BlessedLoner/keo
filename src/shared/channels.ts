@@ -87,6 +87,8 @@ export const INVOKE_CHANNELS = [
   'studio:characterVoice',
   'studio:swap',
   'studio:talk',
+  'studio:aiMusic',
+  'studio:aiSound',
   'studio:talkPlan',
   'builds:list',
   'builds:get',

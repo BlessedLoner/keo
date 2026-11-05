@@ -112,6 +112,23 @@ const ENDPOINTS: Record<string, Pricer> = {
   // A talking character: their picture lip-synced to a voice.
   'fal-ai/kling-video/ai-avatar/v2/pro': talking(0.115),
   'fal-ai/kling-video/ai-avatar/v2/standard': talking(0.0562),
+  // Music made for a video: each started minute of music counted.
+  'elevenlabs/music/v2.5': (i) => {
+    const prompt = String(i.prompt ?? '').trim().slice(0, 2000);
+    const ms = Number(i.music_length_ms);
+    if (!prompt) return 'Describe the music.';
+    if (!Number.isFinite(ms) || ms < 5000 || ms > 300000) return 'Music is 5 seconds to 5 minutes long.';
+    return { input: { prompt, music_length_ms: Math.round(ms), force_instrumental: i.force_instrumental !== false, output_format: 'mp3_48000_192' }, credits: credits(Math.ceil(ms / 60000 - 1e-9) * 0.6) };
+  },
+  // A sound effect from words, up to 30 seconds.
+  'elevenlabs/sound-effects/v3': (i) => {
+    const text = String(i.text ?? '').trim().slice(0, 450);
+    const seconds = Number(i.duration_seconds);
+    if (!text) return 'Describe the sound.';
+    if (!Number.isFinite(seconds) || seconds < 0.5 || seconds > 30) return 'A sound effect is 0.5 to 30 seconds long.';
+    const influence = typeof i.prompt_influence === 'number' && Number.isFinite(i.prompt_influence) ? Math.min(1, Math.max(0, i.prompt_influence)) : 0.3;
+    return { input: { text, duration_seconds: seconds, loop: i.loop === true, prompt_influence: influence, output_format: 'mp3_44100_128' }, credits: credits(Math.ceil(seconds) * 0.002) };
+  },
   // A line in a character's own voice (from their voice sample).
   'fal-ai/chatterbox/text-to-speech': (i) => {
     const text = String(i.text ?? '').trim().slice(0, 5000);

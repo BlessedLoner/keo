@@ -67,3 +67,18 @@ export function talkCost(seconds: number, quality: TalkQuality, o: { picture?: b
   const usd = Math.max(1, Math.ceil(seconds)) * TALK_PER_SECOND[quality] + (o.picture ? REAL_PICTURE_USD : 0) + (o.ownVoiceUsd ?? 0);
   return Math.ceil(usd * 100 - 1e-6) / 100;
 }
+
+/** Music made for the video (ElevenLabs Music v2.5): US dollars a minute of music, each started minute counted. */
+export const MUSIC_PER_MINUTE = 0.6;
+/** A piece of music is 5 seconds to 5 minutes long. */
+export const MUSIC_SECONDS = { min: 5, max: 300 } as const;
+export function musicCost(seconds: number): number {
+  return Math.max(1, Math.ceil(seconds / 60 - 1e-9)) * MUSIC_PER_MINUTE;
+}
+
+/** A sound effect made from words (ElevenLabs Sound Effects v3): US dollars a second, up to 30 seconds. */
+export const SFX_PER_SECOND = 0.002;
+export const SFX_MAX_SECONDS = 30;
+export function sfxCost(seconds: number): number {
+  return Math.ceil(Math.max(1, Math.ceil(seconds)) * SFX_PER_SECOND * 1000 - 1e-6) / 1000;
+}

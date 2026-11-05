@@ -922,7 +922,7 @@ export class StudioService {
   addAiClip(
     id: string,
     file: string,
-    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean },
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null },
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
     const next = this.aiClipQueue.then(() => this.addAiClipNow(id, file, o));
     this.aiClipQueue = next.catch(() => undefined);
@@ -931,7 +931,7 @@ export class StudioService {
   private async addAiClipNow(
     id: string,
     file: string,
-    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean },
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null },
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
     // A clip used again (made before) is already media of the project.
     const imported = await this.importFiles(id, [file]);
@@ -939,6 +939,12 @@ export class StudioService {
     if (!asset) throw new StudioError('Keo could not read the AI clip.');
     this.learn(id, asset.id, { aiMade: true, about: o.about.slice(0, 300) });
     const from = Math.min(o.in ?? 0, Math.max(0, asset.duration - 0.1));
+    // AI music and sound effects go on an audio track (music under the speech).
+    if (asset.kind === 'audio') {
+      const r = this.edit(id, [{ op: 'add_audio', assetId: asset.id, trackName: o.trackName ?? 'Music', start: Math.max(0, o.at), in: from, duration: Math.min(o.duration ?? o.seconds, asset.duration - from), volume: o.volume ?? 1, ...(o.duck !== undefined ? { duck: o.duck } : {}) }]);
+      const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'audio' && c.assetId === asset.id).at(-1)!;
+      return { project: r.project, asset, clip: clip.id };
+    }
     const r = this.edit(id, [{ op: 'add_media', assetId: asset.id, trackName: o.trackName ?? 'AI shots', start: Math.max(0, o.at), in: from, duration: Math.min(o.duration ?? o.seconds, asset.duration - from), fit: 'cover' }]);
     const clip = r.project.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media' && c.assetId === asset.id).at(-1)!;
     // A swapped video is silent over the original, whose sound carries on underneath (one undo).

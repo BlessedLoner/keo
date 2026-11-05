@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
+import { MUSIC_SECONDS, SFX_MAX_SECONDS, TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
 
 /**
  * AI shots: a picture turned into a short video clip by an AI video model, through fal.ai (one
@@ -89,6 +89,11 @@ export const MOTION_CLONE_MODEL = { label: 'Kling Motion Control', endpoint: 'fa
 
 /** A picture from words alone (fal.ai's Nano Banana), for AI video shots without a character. */
 export const FRAME_MODEL = { label: 'Nano Banana', endpoint: 'fal-ai/nano-banana', perPicture: CHARACTER_PICTURE_USD } as const;
+
+/** Music made for a video from a description (ElevenLabs Music v2.5). */
+export const MUSIC_MODEL = { label: 'ElevenLabs Music', endpoint: 'elevenlabs/music/v2.5' } as const;
+/** Sound effects from a description (ElevenLabs Sound Effects v3). */
+export const SFX_MODEL = { label: 'ElevenLabs Sound Effects', endpoint: 'elevenlabs/sound-effects/v3' } as const;
 
 /** Talking characters: a picture lip-synced to a voice (Kling AI Avatar v2); the clip is as long as the voice. */
 export const TALK_MODEL = {
@@ -333,6 +338,48 @@ export class FalVideo {
       },
       signal,
       o,
+    );
+  }
+
+  /** Music for a video: `seconds` long, instrumental unless vocals are asked for (an MP3). */
+  async music(r: { prompt: string; seconds: number; vocals?: boolean }, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    const seconds = Math.round(Math.min(MUSIC_SECONDS.max, Math.max(MUSIC_SECONDS.min, r.seconds)));
+    const prompt = r.prompt.trim().slice(0, 2000);
+    const hash = crypto.createHash('sha256').update(JSON.stringify([MUSIC_MODEL.endpoint, prompt, seconds, !!r.vocals])).digest('hex').slice(0, 24);
+    return this.run(
+      {
+        hash,
+        model: 'elevenlabs-music',
+        seconds,
+        ext: 'mp3',
+        endpoint: MUSIC_MODEL.endpoint,
+        uploads: [],
+        input: () => ({ prompt, music_length_ms: seconds * 1000, force_instrumental: !r.vocals, output_format: 'mp3_48000_192' }),
+        meter: { seconds, fps: 0 },
+      },
+      signal,
+      { waitMs: 4 * 60_000, ...o },
+    );
+  }
+
+  /** A sound effect: `seconds` long (up to 30), looping smoothly when asked (an MP3). */
+  async soundEffect(r: { prompt: string; seconds: number; loop?: boolean }, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    const seconds = Math.round(Math.min(SFX_MAX_SECONDS, Math.max(0.5, r.seconds)) * 10) / 10;
+    const text = r.prompt.trim().slice(0, 450);
+    const hash = crypto.createHash('sha256').update(JSON.stringify([SFX_MODEL.endpoint, text, seconds, !!r.loop])).digest('hex').slice(0, 24);
+    return this.run(
+      {
+        hash,
+        model: 'elevenlabs-sfx',
+        seconds,
+        ext: 'mp3',
+        endpoint: SFX_MODEL.endpoint,
+        uploads: [],
+        input: () => ({ text, duration_seconds: seconds, loop: !!r.loop, prompt_influence: 0.4, output_format: 'mp3_44100_128' }),
+        meter: { seconds, fps: 0 },
+      },
+      signal,
+      { waitMs: 2 * 60_000, ...o },
     );
   }
 
@@ -596,7 +643,7 @@ export interface OwnVoiceRequest {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'chatterbox' | 'minimax-voice-design';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'elevenlabs-music' | 'elevenlabs-sfx' | 'chatterbox' | 'minimax-voice-design';
   /** What the result is saved as (a video unless said). */
   ext?: ShotExt;
   seconds: number;
@@ -605,7 +652,7 @@ export interface PendingShot {
   cancelUrl: string | null;
   submittedAt: string;
   /** Where the clip goes when it is ready. */
-  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean };
+  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null };
 }
 
 /** fal.ai is still making the clip: it is remembered and arrives later. */

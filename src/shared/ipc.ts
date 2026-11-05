@@ -232,6 +232,8 @@ export const invokeSchemas = {
   'studio:aiVideoMake': z.object({ plan: AiVideoPlan }).strict(),
   /** AI requests still being made for a project (they survive closing Keo). */
   'studio:aiJobs': z.object({ id: studioProjectId }).strict(),
+  'studio:aiMusic': z.object({ id: studioProjectId, prompt: z.string().trim().min(3).max(2000), seconds: z.number().min(5).max(300).optional(), vocals: z.boolean().optional(), at: z.number().min(0).optional(), volume: z.number().min(0).max(1).optional() }).strict(),
+  'studio:aiSound': z.object({ id: studioProjectId, prompt: z.string().trim().min(3).max(450), seconds: z.number().min(0.5).max(30), at: z.number().min(0), loop: z.boolean().optional(), volume: z.number().min(0).max(2).optional() }).strict(),
   'studio:talk': z.object({ id: studioProjectId, character: CharacterId, text: z.string().trim().min(1).max(1500).optional(), audioAsset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(), scene: z.string().trim().min(3).max(300).optional(), prompt: z.string().trim().max(300).optional(), quality: z.enum(['pro', 'standard']), at: z.number().min(0).optional() }).strict(),
   'studio:talkPlan': z.object({ id: studioProjectId, character: CharacterId, text: z.string().trim().max(1500).optional(), audioAsset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(), scene: z.string().trim().max(300).optional(), quality: z.enum(['pro', 'standard']) }).strict(),
   'studio:swap': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), character: CharacterId, resolution: z.enum(['480p', '580p', '720p']), smooth: z.boolean().optional(), mode: z.enum(['stable', 'quick']).optional() }).strict(),
@@ -586,6 +588,8 @@ export interface InvokeOutputs {
   'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
   'studio:aiJobs': Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>;
   'studio:swap': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
+  'studio:aiMusic': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
+  'studio:aiSound': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:talk': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:talkPlan': { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
   'studio:versions': import('./studio').StudioVersion[];
