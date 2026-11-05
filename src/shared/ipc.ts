@@ -232,6 +232,8 @@ export const invokeSchemas = {
   'studio:aiVideoMake': z.object({ plan: AiVideoPlan }).strict(),
   /** AI requests still being made for a project (they survive closing Keo). */
   'studio:aiJobs': z.object({ id: studioProjectId }).strict(),
+  'studio:talk': z.object({ id: studioProjectId, character: CharacterId, text: z.string().trim().min(1).max(1500).optional(), audioAsset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(), scene: z.string().trim().min(3).max(300).optional(), prompt: z.string().trim().max(300).optional(), quality: z.enum(['pro', 'standard']), at: z.number().min(0).optional() }).strict(),
+  'studio:talkPlan': z.object({ id: studioProjectId, character: CharacterId, text: z.string().trim().max(1500).optional(), audioAsset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(), scene: z.string().trim().max(300).optional(), quality: z.enum(['pro', 'standard']) }).strict(),
   'studio:swap': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), character: CharacterId, resolution: z.enum(['480p', '580p', '720p']), smooth: z.boolean().optional(), mode: z.enum(['stable', 'quick']).optional() }).strict(),
   'studio:versions': z
     .object({ id: z.string().regex(/^pr_[A-Za-z0-9]{4,24}$/), action: z.enum(['list', 'save', 'restore', 'delete']), name: z.string().trim().min(1).max(80).optional(), version: z.string().regex(/^vr_[A-Za-z0-9]{4,24}$/).optional() })
@@ -584,6 +586,8 @@ export interface InvokeOutputs {
   'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
   'studio:aiJobs': Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>;
   'studio:swap': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
+  'studio:talk': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
+  'studio:talkPlan': { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
   'studio:versions': import('./studio').StudioVersion[];
   'studio:skipShow': { ok: true };
   'studio:track': { points: number; lost: number };

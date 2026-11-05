@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
+import { TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
 
 /**
  * AI shots: a picture turned into a short video clip by an AI video model, through fal.ai (one
@@ -89,6 +89,25 @@ export const MOTION_CLONE_MODEL = { label: 'Kling Motion Control', endpoint: 'fa
 
 /** A picture from words alone (fal.ai's Nano Banana), for AI video shots without a character. */
 export const FRAME_MODEL = { label: 'Nano Banana', endpoint: 'fal-ai/nano-banana', perPicture: CHARACTER_PICTURE_USD } as const;
+
+/** Talking characters: a picture lip-synced to a voice (Kling AI Avatar v2); the clip is as long as the voice. */
+export const TALK_MODEL = {
+  label: 'Kling AI Avatar',
+  endpoints: { pro: 'fal-ai/kling-video/ai-avatar/v2/pro', standard: 'fal-ai/kling-video/ai-avatar/v2/standard' },
+  maxSeconds: TALK_MAX_SECONDS,
+} as const;
+
+export interface TalkRequest {
+  /** The character's picture (JPEG), already in the video's shape. */
+  image: Buffer;
+  /** What they say (WAV or MP3), at most TALK_MAX_SECONDS long. */
+  audio: Buffer;
+  audioType: 'audio/wav' | 'audio/mpeg';
+  seconds: number;
+  quality: TalkQuality;
+  /** How they speak (expression, gestures); optional. */
+  prompt?: string;
+}
 
 export interface CharacterPictureRequest {
   /** The character's own picture (JPEG) and what the new picture shows. */
@@ -283,6 +302,33 @@ export class FalVideo {
           { bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' },
         ],
         input: ([video, image]) => ({ video_url: video!, image_url: image!, character_orientation: 'video', keep_original_sound: false }),
+        meter: { seconds: r.seconds, fps: 30 },
+      },
+      signal,
+      o,
+    );
+  }
+
+  /** The same picture, voice and quality give the same id. */
+  talkHash(r: TalkRequest): string {
+    const h = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+    return crypto.createHash('sha256').update(JSON.stringify([TALK_MODEL.endpoints[r.quality], h(r.image), h(r.audio), r.prompt ?? ''])).digest('hex').slice(0, 24);
+  }
+
+  /** A talking character: their picture brought to life saying the voice, lips in sync (Kling AI Avatar). */
+  async talk(r: TalkRequest, signal: AbortSignal, o: RunOptions = {}): Promise<{ file: string; cached: boolean; seconds: number }> {
+    if (r.seconds > TALK_MODEL.maxSeconds + 0.5) throw new AiVideoError(`A talking clip is up to ${TALK_MODEL.maxSeconds} seconds: make the script shorter or split it.`);
+    return this.run(
+      {
+        hash: this.talkHash(r),
+        model: 'kling-avatar',
+        seconds: r.seconds,
+        endpoint: TALK_MODEL.endpoints[r.quality],
+        uploads: [
+          { bytes: r.image, type: 'image/jpeg', name: 'keo-character.jpg' },
+          { bytes: r.audio, type: r.audioType, name: `keo-voice.${r.audioType === 'audio/mpeg' ? 'mp3' : 'wav'}` },
+        ],
+        input: ([image, audio]) => ({ image_url: image!, audio_url: audio!, prompt: (r.prompt ?? '').trim().slice(0, 1000) || '.' }),
         meter: { seconds: r.seconds, fps: 30 },
       },
       signal,
@@ -550,7 +596,7 @@ export interface OwnVoiceRequest {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'chatterbox' | 'minimax-voice-design';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'chatterbox' | 'minimax-voice-design';
   /** What the result is saved as (a video unless said). */
   ext?: ShotExt;
   seconds: number;

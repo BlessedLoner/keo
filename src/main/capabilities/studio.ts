@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { motionCloneCost, studioPrice } from '../../shared/aiPrices';
+import { motionCloneCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
 import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, MOTION_ICONS, MOTION_PIECE_INFO, MOTION_PIECES, MOTION_PLACES, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project, type StudioAsk } from '../../shared/studio';
@@ -55,6 +55,9 @@ export interface StudioToolDeps {
   ask: (a: StudioAsk) => void;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution; smooth?: boolean; mode?: 'stable' | 'quick' }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  /** A talking character (lip-synced): its plan and price, and making it. */
+  talkPlan?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality }) => { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
+  talk?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality; at?: number; prompt?: string }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** Why AI shots cannot be made (signed out, no own key), or null. */
   aiShotBlocked: () => string | null;
   /** How Studio's AI is paid now: Keo Cloud's Studio credits, or the user's own fal.ai key. */
@@ -1195,6 +1198,69 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const talkingCharacter = defineCapability({
+    id: 'studio.talking_character',
+    version: '1.0.0',
+    title: 'Make a character talk',
+    description: `One of the user's characters says a script (in the character's own voice) or a recording of the project (audioAsset: an audio or video asset with sound), with real lip-sync: their main picture is brought to life (Kling AI Avatar v2, Keo Cloud's Studio credits or the user's own fal.ai key; pro about $0.115 a second, standard about $0.056). When the picture's shape differs from the video's (or a scene is given), a realistic new picture of them is made first (about $0.15). Up to ${TALK_MAX_SECONDS} s a clip: split longer scripts into parts (one call each, at one after the other). The clip lands on the Talking track at \`at\` (default: the end), with its sound. Write the lines the way the character speaks (their notes). Say the price first. Takes several minutes: if it is still being made it arrives by itself, do not ask again.`,
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        character: z.string().regex(/^ch_[A-Za-z0-9]{4,24}$/),
+        text: z.string().trim().min(1).max(1500).optional().describe('What they say (about 2.6 words a second)'),
+        audioAsset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional().describe('Or: a recording of the project they lip-sync to'),
+        scene: z.string().trim().min(3).max(300).optional().describe('Where they are (e.g. "a cosy podcast studio with a microphone"): a new picture of them there is made first'),
+        prompt: z.string().trim().max(300).optional().describe('How they speak: expression, gestures (e.g. "smiling, warm, small hand gestures")'),
+        quality: z.enum(['pro', 'standard']).default('pro'),
+        at: z.number().min(0).optional(),
+      })
+      .strict(),
+    output: State.partial().extend({ clip: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() }),
+    risk: 'medium',
+    // It spends the user's money and sends the picture and voice to fal.ai: they approve every one.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 12 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The clip is downloaded, kept on this PC and placed on the Talking track (one undo); one still being made arrives when ready.',
+    unavailableReason: () => (d.talk ? d.aiShotBlocked() : 'Talking characters are not available here.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a picture and a voice to fal.ai' }),
+    preview: (i) => {
+      const via = d.aiVia?.() ?? 'own';
+      let plan: ReturnType<NonNullable<typeof d.talkPlan>> | null = null;
+      try {
+        plan = d.talkPlan?.(s.resolve(i.projectId).id, { character: i.character, ...(i.text ? { text: i.text } : {}), ...(i.audioAsset ? { audioAsset: i.audioAsset } : {}), ...(i.scene ? { scene: i.scene } : {}), quality: i.quality }) ?? null;
+      } catch {
+        plan = null;
+      }
+      const cost = plan ? studioPrice(plan.costUsd, via) : 'a few credits a second';
+      return {
+        summary: `Make your character talk for about ${plan ? Math.round(plan.seconds) : '?'} s (${i.quality}, about ${cost})`,
+        target: null,
+        consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'} (nothing if the same clip was made before).`, ...(plan?.picture ? ['A new realistic picture of the character is made first, in the video’s shape.'] : []), 'Adds the clip on the Talking track (can be undone).'],
+        dataExport: 'The character’s picture and the voice are sent to fal.ai, which runs the lip-sync model.',
+      };
+    },
+    auditView: (i) => ({ quality: i.quality, recording: !!i.audioAsset, scene: !!i.scene }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      if (!d.talk) throw fail('studio', 'Talking characters are not available here.');
+      if (!i.text && !i.audioAsset) throw fail('studio', 'Give the script (text) or a recording (audioAsset).');
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d
+        .talk(p.id, { character: i.character, quality: i.quality, ...(i.text ? { text: i.text } : {}), ...(i.audioAsset ? { audioAsset: i.audioAsset } : {}), ...(i.scene ? { scene: i.scene } : {}), ...(i.prompt ? { prompt: i.prompt } : {}), ...(i.at !== undefined ? { at: i.at } : {}) }, ctx.signal)
+        .catch((e: unknown) => {
+          throw e instanceof StudioError ? fail('studio', e.message) : e;
+        });
+      const note = r.pending ? 'fal.ai is still making the talking clip. It is paid for once and Keo puts it on the Talking track by itself as soon as it is ready (Studio shows that it is on its way): tell the user, and do not ask for it again.' : null;
+      return { ...state(s, s.get(p.id)), ...r, note };
+    },
+  });
+
   const characters = defineCapability({
     ...simple({
       id: 'studio.characters',
@@ -1536,7 +1602,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, talkingCharacter, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

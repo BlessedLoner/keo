@@ -232,3 +232,57 @@ describe('New Studio models through Keo Cloud', () => {
     expect(w.fal.at(-1)!.body).toMatchObject({ resolution: '2K' });
   });
 });
+
+/** A 16-bit mono WAV header (and a little of its data) for a recording `seconds` long at 16 kHz. */
+function wavHead(seconds: number): { bytes: Uint8Array; total: number } {
+  const data = Math.round(seconds * 16000) * 2;
+  const b = new Uint8Array(44 + 2000);
+  const v = new DataView(b.buffer);
+  const put = (at: number, s: string) => [...s].forEach((ch, i) => (b[at + i] = ch.charCodeAt(0)));
+  put(0, 'RIFF');
+  v.setUint32(4, 36 + data, true);
+  put(8, 'WAVE');
+  put(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  put(36, 'data');
+  v.setUint32(40, data, true);
+  return { bytes: b, total: 44 + data };
+}
+
+describe('Talking characters through Keo Cloud', () => {
+  const avatar = { endpoint: 'fal-ai/kling-video/ai-avatar/v2/pro', input: { image_url: 'https://v3.fal.media/files/a.jpg', audio_url: 'https://v3.fal.media/files/voice.wav', prompt: 'smiling' } };
+  /** fal.ai's storage serves the uploaded voice (its first bytes, and its size in the range answer). */
+  const serveVoice = (seconds: number) => {
+    const plain = w.fetch;
+    const { bytes, total } = wavHead(seconds);
+    w.fetch = async (input: string, init: RequestInit = {}) =>
+      input === 'https://v3.fal.media/files/voice.wav' ? new Response(bytes.slice().buffer, { status: 206, headers: { 'content-range': `bytes 0-${bytes.length - 1}/${total}` } }) : plain(input, init);
+  };
+
+  it('is priced by the uploaded voice’s own length, never less than the app says', async () => {
+    serveVoice(20);
+    // The app says 5 s; the file is 20 s: 20 × $0.115 = $2.30 → 460 credits.
+    const r = await call('POST', '/v1/studio/run', { ...avatar, seconds: 5 });
+    expect(r.status).toBe(200);
+    expect(r.body.credits).toBe(460);
+    expect(w.fal.find((x) => x.url === 'https://queue.fal.run/fal-ai/kling-video/ai-avatar/v2/pro')!.body).toEqual(avatar.input);
+    // Standard: 20 × $0.0562 = $1.124 → 225 credits.
+    expect((await call('POST', '/v1/studio/run', { ...avatar, endpoint: 'fal-ai/kling-video/ai-avatar/v2/standard', seconds: 5 })).body.credits).toBe(225);
+  });
+
+  it('refuses a voice it cannot read, and one over a minute', async () => {
+    // Not served (unreadable): refused before anything is paid.
+    const r = await call('POST', '/v1/studio/run', { ...avatar, seconds: 5 });
+    expect(r.status).toBe(400);
+    expect(r.body.error.message).toMatch(/could not read the voice/);
+    serveVoice(75);
+    expect((await call('POST', '/v1/studio/run', { ...avatar, seconds: 5 })).status).toBe(400);
+    expect(w.fal.some((x) => x.url.includes('ai-avatar'))).toBe(false);
+  });
+});

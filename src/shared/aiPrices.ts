@@ -51,3 +51,19 @@ export const MOTION_CLONE_PER_SECOND = 0.112;
 export function motionCloneCost(seconds: number): number {
   return Math.ceil((REAL_PICTURE_USD + Math.max(1, seconds) * MOTION_CLONE_PER_SECOND) * 100 - 1e-6) / 100;
 }
+
+/** A talking character (Kling AI Avatar v2: a picture lip-synced to a voice): US dollars a second, by quality. */
+export const TALK_PER_SECOND = { pro: 0.115, standard: 0.0562 } as const;
+export type TalkQuality = keyof typeof TALK_PER_SECOND;
+/** A talking clip is up to a minute long (longer scripts are made in parts). */
+export const TALK_MAX_SECONDS = 60;
+
+/**
+ * About what a talking character costs: the lip-sync by the second of the voice, a new framed
+ * picture of them when one is made (their picture in another shape, or in a scene), and their own
+ * voice when it is spoken in it.
+ */
+export function talkCost(seconds: number, quality: TalkQuality, o: { picture?: boolean; ownVoiceUsd?: number } = {}): number {
+  const usd = Math.max(1, Math.ceil(seconds)) * TALK_PER_SECOND[quality] + (o.picture ? REAL_PICTURE_USD : 0) + (o.ownVoiceUsd ?? 0);
+  return Math.ceil(usd * 100 - 1e-6) / 100;
+}

@@ -648,6 +648,16 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
         .pending()
         .filter((j) => j.context?.projectId === id)
         .map((j) => ({ about: j.context?.about ?? 'AI clip', submittedAt: j.submittedAt, kind: j.model === 'wan-animate-replace' ? ('swap' as const) : j.ext && j.ext !== 'mp4' ? ('other' as const) : ('shot' as const) })),
+    // The user's own click (after the page showed the price and what is sent).
+    'studio:talk': async ({ id, character, text, audioAsset, scene, prompt, quality, at }) =>
+      s.studioTalkingCharacter(id, { character, quality, ...(text ? { text } : {}), ...(audioAsset ? { audioAsset } : {}), ...(scene ? { scene } : {}), ...(prompt ? { prompt } : {}), ...(at !== undefined ? { at } : {}) }, new AbortController().signal).catch(studioErr),
+    'studio:talkPlan': async ({ id, character, text, audioAsset, scene, quality }) => {
+      try {
+        return s.studioTalkPlan(id, { character, quality, ...(text ? { text } : {}), ...(audioAsset ? { audioAsset } : {}), ...(scene?.trim() ? { scene } : {}) });
+      } catch (e) {
+        return studioErr(e);
+      }
+    },
     'studio:swap': async ({ id, clip, character, resolution, smooth, mode }) => s.studioSwapCharacter(id, { clip, character, resolution, ...(smooth ? { smooth } : {}), ...(mode ? { mode } : {}) }, new AbortController().signal).catch(studioErr),
     // Hearing a character's voice before choosing it (one short line, spoken by that voice's service).
     'studio:characterVoice': async ({ voice, text, character }) => {

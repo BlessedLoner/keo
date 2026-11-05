@@ -94,8 +94,10 @@ import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/
 import { findQuote, nameMentioned } from './agent/quotes';
 import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
-import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, MOTION_CLONE_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
-import { CHARACTER_PICTURE_USD, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, usdToCredits, VOICE_DESIGN_PER_1M_CHARS } from '../shared/aiPrices';
+import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, MOTION_CLONE_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
+import { wavOf } from './studio/captions';
+import { audioSeconds, speakingSeconds } from '../shared/audioLength';
+import { CHARACTER_PICTURE_USD, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
 import { aiVideoCost, parseShotPlan, SHOT_MODELS, shotPlanPrompt, shotSeconds, type AiShot, type AiVideoPlan, type ShotModelId } from '../shared/studioAiVideo';
 
 export interface ServiceDeps {
@@ -735,6 +737,8 @@ export class Services {
         ask: (a) => this.emit('studio:ask', a),
         aiShot: (projectId, o, signal) => this.studioAiShot(projectId, o, signal),
         swapCharacter: (projectId, o, signal) => this.studioSwapCharacter(projectId, o, signal),
+        talkPlan: (projectId, o) => this.studioTalkPlan(projectId, o),
+        talk: (projectId, o, signal) => this.studioTalkingCharacter(projectId, o, signal),
         aiVia: () => (this.secrets.has('fal') ? 'own' : this.account.signedIn() ? 'keo' : null),
         aiShotBlocked: () => (this.studioAiReady() ? null : 'Keo Studio’s AI needs the user’s Keo account: they sign in (Settings → Providers → Keo account) and it is paid with Studio credits. (Or their own fal.ai key under Settings → Advanced.)'),
         captionSource: () => {
@@ -1496,6 +1500,155 @@ export class Services {
         this.emit('studio:aiShot', { projectId: id, state: 'waiting', message: `${who} is being put into the video. The new clip goes over the original by itself when it is ready: keep working.` });
         return { clip: null, seconds, cached: false, costUsd: resumed ? 0 : stable ? motionCloneCost(seconds) : swapCost(seconds, fps, o.resolution), pending: true };
       }
+      failAt(e);
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /** The voice a character speaks in (their own voice sample, or a Keo or OpenAI voice). */
+  private characterVoice(c: { id: string; voice: string; voiceSample?: string | undefined }): string {
+    return c.voice === 'own' && c.voiceSample ? `own:${c.id}:${path.basename(c.voiceSample)}` : c.voice === 'own' ? 'female' : c.voice;
+  }
+
+  /**
+   * What a talking character will cost and use, before anything is made: the voice's length (the
+   * recording's, or about how long the script takes to say), whether a new picture is made first,
+   * and the price.
+   */
+  studioTalkPlan(id: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality }): { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string } {
+    const p = this.studio.get(id);
+    const c = this.studio.character(o.character);
+    const asset = o.audioAsset ? p.assets.find((a) => a.id === o.audioAsset) : undefined;
+    const seconds = asset ? asset.duration : speakingSeconds(o.text ?? '');
+    const picture = !!o.scene?.trim() || this.talkNeedsFraming(c.pictures[0], p);
+    const voice = asset ? `the recording “${asset.name}”` : this.characterVoice(c).startsWith('own:') ? `${c.name}’s own voice` : 'their voice';
+    const ownVoiceUsd = !asset && this.characterVoice(c).startsWith('own:') ? ownVoiceCost(o.text ?? '') : 0;
+    return { seconds, picture, costUsd: talkCost(seconds, o.quality, { picture, ownVoiceUsd }), voice, destination: this.aiVia() };
+  }
+
+  /** A character's picture needs a new framing when its shape is far from the video's. */
+  private talkNeedsFraming(file: string | undefined, p: { width: number; height: number }): boolean {
+    const jpeg = file ? this.imageTools.jpeg?.(file, 1280) : null;
+    const size = jpeg ? jpegSize(jpeg) : null;
+    if (!size) return false;
+    return Math.abs(Math.log(size.width / size.height) - Math.log(p.width / p.height)) > 0.25;
+  }
+
+  /**
+   * A talking character: one of the user's characters says a script (in their voice) or a
+   * recording of the project, lips in sync (Kling AI Avatar, through Keo Cloud or the user's fal.ai
+   * key). Their picture is first re-framed to the video's shape (or put in a described scene) when
+   * needed. The clip lands on the Talking track at `at`, with its sound.
+   */
+  async studioTalkingCharacter(
+    id: string,
+    o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality; at?: number; prompt?: string },
+    signal: AbortSignal,
+  ): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    if (!this.studioAiReady()) throw new StudioError('Talking characters need your Keo account: sign in (Settings → Providers → Keo account).');
+    const p = this.studio.get(id);
+    const c = this.studio.character(o.character);
+    if (!c.pictures[0]) throw new StudioError(`${c.name} has no picture yet: add one on the Characters page.`);
+    const text = o.text?.trim() ?? '';
+    const asset = o.audioAsset ? p.assets.find((a) => a.id === o.audioAsset) : undefined;
+    if (o.audioAsset && (!asset || !asset.hasAudio)) throw new StudioError('Choose a recording (or a video with sound) of this project.');
+    if (!asset && !text) throw new StudioError(`Write what ${c.name} says, or choose a recording.`);
+    const plan = this.studioTalkPlan(id, o);
+    if (plan.seconds > TALK_MAX_SECONDS + 0.5) throw new StudioError(`That is about ${Math.round(plan.seconds)} s: a talking clip is up to ${TALK_MAX_SECONDS} s. Split it into parts.`);
+    const steps: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> = [
+      { label: asset ? `Take the voice from “${asset.name}”` : `Say the script in ${plan.voice}`, status: 'running' },
+      { label: o.scene?.trim() ? `Put ${c.name} in the scene: ${o.scene.trim().slice(0, 60)}` : `Frame ${c.name}’s picture for the video`, status: plan.picture ? 'pending' : 'skipped' },
+      { label: `Bring ${c.name} to life, lips in sync (${TALK_MODEL.label}${o.quality === 'pro' ? ' Pro' : ''})`, status: 'pending', note: 'usually 3 to 8 minutes' },
+    ];
+    const step = (i: number, status: (typeof steps)[number]['status'], note?: string) => {
+      steps[i] = { label: steps[i]!.label, status, ...(note ? { note } : {}) };
+      this.emit('studio:progress', { projectId: id, stage: 'checklist', steps: steps.map((x) => ({ ...x })) });
+    };
+    const failAt = (e: unknown) => {
+      const i = steps.findIndex((x) => x.status === 'running');
+      step(i < 0 ? 2 : i, 'failed', e instanceof Error ? e.message.slice(0, 160) : undefined);
+    };
+    step(0, 'running');
+    try {
+      // 1. The voice: the project's recording, or the script in the character's voice.
+      let audio: Buffer;
+      let audioType: 'audio/wav' | 'audio/mpeg';
+      if (asset) {
+        const ext = path.extname(asset.path).toLowerCase();
+        if ((ext === '.wav' || ext === '.mp3') && asset.kind === 'audio') {
+          audio = fs.readFileSync(asset.path);
+          audioType = ext === '.mp3' ? 'audio/mpeg' : 'audio/wav';
+        } else {
+          const sound = await this.studio.assetSound(id, asset.id);
+          if (!sound) throw new StudioError(`Keo could not read the sound of “${asset.name}”.`);
+          audio = wavOf(sound.samples, sound.rate);
+          audioType = 'audio/wav';
+        }
+      } else {
+        const narrator = this.studioNarrator(this.characterVoice(c));
+        if (!narrator) throw new StudioError(`${c.name}’s voice is not available: sign in to your Keo account (or choose another voice for them).`);
+        const said = await narrator.speak(text, signal);
+        audio = Buffer.from(said.audio);
+        // What the bytes are (WAV or MP3), whatever the voice service called them.
+        const isWav = audio.subarray(0, 4).toString('latin1') === 'RIFF';
+        if (!isWav && !said.mimeType.includes('mpeg') && !said.mimeType.includes('mp3') && audioSeconds(audio) === null) throw new StudioError('That voice came back in a format the lip-sync cannot take: choose another voice for the character.');
+        audioType = isWav ? 'audio/wav' : 'audio/mpeg';
+      }
+      const seconds = audioSeconds(audio) ?? plan.seconds;
+      if (seconds > TALK_MAX_SECONDS + 0.5) throw new StudioError(`The voice is ${Math.round(seconds)} s: a talking clip is up to ${TALK_MAX_SECONDS} s. Split it into parts.`);
+      step(0, 'done', `${seconds.toFixed(1)} s`);
+      // 2. The picture: framed for the video (or put in the scene) when needed.
+      let image = this.imageTools.jpeg?.(c.pictures[0], 1280) ?? null;
+      if (!image) throw new StudioError(`Keo could not read ${c.name}’s picture.`);
+      if (plan.picture) {
+        step(1, 'running', 'about half a minute');
+        const aspect = p.width > p.height * 1.15 ? ('16:9' as const) : p.height > p.width * 1.15 ? ('9:16' as const) : ('1:1' as const);
+        const where = o.scene?.trim() ? `in this place: ${o.scene.trim()}` : 'in the same place, with the same background and light, extended to fill the frame';
+        const framed = await this.aiVideo.frame(
+          {
+            references: [image],
+            prompt: `A photo of exactly this person (${c.name}): the same face, hair, skin and clothes. ${c.name} faces the camera, head and shoulders to waist up, mouth closed, ready to speak, ${where}. ${REAL_PHOTO}`,
+            aspect,
+            quality: 'real',
+          },
+          signal,
+        );
+        if (!framed.cached) this.audit.record({ kind: 'studio.character_picture', decision: 'sent', detail: { destination: this.aiVia(), costUsd: REAL_PICTURE_USD } });
+        image = this.imageTools.jpeg?.(framed.file, 1280) ?? null;
+        if (!image) throw new StudioError('Keo could not read the picture it made.');
+        step(1, 'done');
+      }
+      // 3. The lip-sync.
+      const request = { image, audio, audioType, seconds, quality: o.quality, ...(o.prompt?.trim() ? { prompt: o.prompt.trim() } : {}) };
+      const hash = this.aiVideo.talkHash(request);
+      const resumed = this.aiVideo.pending().some((j) => j.hash === hash);
+      const cost = Math.max(1, Math.ceil(seconds)) * TALK_PER_SECOND[o.quality];
+      if (!resumed && !fs.existsSync(this.aiVideo.cacheFileOf(hash))) this.falBudget(cost);
+      const at = Math.max(0, o.at ?? projectDuration(this.studio.get(id)));
+      const placement = { at, in: 0, duration: seconds, trackName: 'Talking', about: `Talking ${c.name} (${TALK_MODEL.label}): ${(text || asset?.name || '').slice(0, 160)}` };
+      const progress = (stage: 'queued' | 'making' | 'saving', queue?: number) =>
+        step(2, 'running', stage === 'queued' ? `waiting in line at the AI service${queue ? ` (${queue} ahead)` : ''}` : stage === 'saving' ? 'downloading the clip' : 'the AI is making it: usually 3 to 8 minutes');
+      step(2, 'running', 'sending it');
+      try {
+        const made = await this.aiVideo.talk(request, signal, { waitMs: 30_000, context: { projectId: id, ...placement }, progress });
+        step(2, 'done');
+        if (!made.cached && !resumed) this.audit.record({ kind: 'studio.talking_character', decision: 'sent', detail: { destination: this.aiVia(), seconds: Math.round(seconds), quality: o.quality, costUsd: cost } });
+        const r = await this.studio.addAiClip(id, made.file, { ...placement, seconds: made.seconds });
+        return { clip: r.clip, seconds, cached: made.cached, costUsd: made.cached || resumed ? 0 : plan.costUsd, pending: false };
+      } catch (e) {
+        if (e instanceof AiVideoPending) {
+          if (!resumed) this.audit.record({ kind: 'studio.talking_character', decision: 'sent', detail: { destination: this.aiVia(), seconds: Math.round(seconds), quality: o.quality, costUsd: cost } });
+          step(2, 'running', 'still being made: it lands on the timeline by itself when ready (usually 3 to 8 minutes)');
+          this.aiSettle.set(id, (failed) => {
+            step(2, failed ? 'failed' : 'done', failed?.slice(0, 160));
+            this.aiSettle.delete(id);
+          });
+          this.emit('studio:aiShot', { projectId: id, state: 'waiting', message: `${c.name} is being brought to life. The clip lands on the timeline by itself when it is ready: keep working.` });
+          return { clip: null, seconds, cached: false, costUsd: resumed ? 0 : plan.costUsd, pending: true };
+        }
+        throw e;
+      }
+    } catch (e) {
       failAt(e);
       throw e instanceof AiVideoError ? new StudioError(e.message) : e;
     }
@@ -2996,4 +3149,18 @@ function facelessPrompt(board: Storyboard, s: Storyboard['scenes'][number]): str
 /** A short stable name for what was made from these inputs (for reuse on the next try). */
 function facelessKey(...parts: string[]): string {
   return crypto.createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 24);
+}
+
+/** A JPEG's pixel size (from its frame header); null when it is not a JPEG. */
+function jpegSize(b: Buffer): { width: number; height: number } | null {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  for (let at = 2; at + 9 < b.length; ) {
+    if (b[at] !== 0xff) return null;
+    const marker = b[at + 1]!;
+    const len = b.readUInt16BE(at + 2);
+    // Start of frame (baseline, progressive…): height then width.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { height: b.readUInt16BE(at + 5), width: b.readUInt16BE(at + 7) };
+    at += 2 + len;
+  }
+  return null;
 }

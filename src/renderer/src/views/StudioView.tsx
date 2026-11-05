@@ -14,6 +14,7 @@ import { BrandKit } from '../studio/BrandKit';
 import { Versions } from '../studio/Versions';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { CloneVideo } from '../studio/CloneVideo';
+import { TalkingCharacter } from '../studio/TalkingCharacter';
 import { AiVideoCreator } from '../studio/AiVideoCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
@@ -92,6 +93,7 @@ export function StudioView() {
   const [captioning, setCaptioning] = useState(false);
   const [faceless, setFaceless] = useState<false | 'script' | 'characters'>(false);
   const [cloning, setCloning] = useState(false);
+  const [talking, setTalking] = useState(false);
   // Real AI video from a description (with the text the faceless page passed on, if any).
   const [aiVideo, setAiVideo] = useState<false | { text: string }>(false);
   const [exporting, setExporting] = useState(false);
@@ -534,6 +536,25 @@ export function StudioView() {
       </div>
     );
   }
+  if (talking) {
+    return (
+      <div className="view studio">
+        <TalkingCharacter
+          onCancel={() => setTalking(false)}
+          onCharacters={() => {
+            setTalking(false);
+            setFaceless('characters');
+          }}
+          onDone={(id) => {
+            setTalking(false);
+            setCreating(false);
+            refreshList();
+            void openProject(id);
+          }}
+        />
+      </div>
+    );
+  }
   if (cloning) {
     return (
       <div className="view studio">
@@ -577,7 +598,7 @@ export function StudioView() {
     return (
       <div className="view studio">
         <div className="studio-home">
-          <NewProject onCreate={create} onFaceless={() => setFaceless('script')} onClone={() => setCloning(true)} onAiVideo={() => setAiVideo({ text: '' })} onCancel={project ? () => setCreating(false) : undefined} />
+          <NewProject onCreate={create} onFaceless={() => setFaceless('script')} onClone={() => setCloning(true)} onTalk={() => setTalking(true)} onAiVideo={() => setAiVideo({ text: '' })} onCancel={project ? () => setCreating(false) : undefined} />
           <ProjectGrid
             projects={list}
             current={project?.id ?? null}
@@ -909,7 +930,7 @@ function listProjects() {
   return invoke('studio:list', {});
 }
 
-function NewProject({ onCreate, onFaceless, onClone, onAiVideo, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onClone: () => void; onAiVideo: () => void; onCancel?: () => void }) {
+function NewProject({ onCreate, onFaceless, onClone, onTalk, onAiVideo, onCancel }: { onCreate: (name: string, f: FormatId) => void; onFaceless: () => void; onClone: () => void; onTalk: () => void; onAiVideo: () => void; onCancel?: () => void }) {
   const [name, setName] = useState('My video');
   const [format, setFormat] = useState<FormatId>('vertical');
   return (
@@ -953,6 +974,9 @@ function NewProject({ onCreate, onFaceless, onClone, onAiVideo, onCancel }: { on
           </button>
           <button className="btn sm" onClick={onClone} title="Replace the person in a content video with your character">
             <Icon name="sparkle" size={13} /> Clone a video with your character
+          </button>
+          <button className="btn sm" onClick={onTalk} title="Your character says your script in their voice, with real lip-sync">
+            <Icon name="mic" size={13} /> Make your character talk
           </button>
         </div>
       </div>

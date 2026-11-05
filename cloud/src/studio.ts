@@ -7,6 +7,7 @@
  * it gets upload links and request addresses on this gateway.
  */
 
+import { audioSeconds } from './audioLength';
 import { fail, json, type Env, type Fetch, type Plan, type Supabase } from './gateway';
 
 /** 1 credit is 1 US cent to the user and covers half a cent of fal.ai's price. */
@@ -28,7 +29,21 @@ interface Priced {
   input: Record<string, unknown>;
   credits: number;
 }
-type Pricer = (input: Record<string, unknown>, o: { seconds?: number; fps?: number; videoSeconds?: number; videoFrames?: number }) => Priced | string;
+type Pricer = (input: Record<string, unknown>, o: { seconds?: number; fps?: number; videoSeconds?: number; videoFrames?: number; audioSeconds?: number | null }) => Priced | string;
+
+/**
+ * A talking character (Kling AI Avatar v2): priced by the uploaded voice's own length (read from
+ * the file, never less than the app says), up to a minute.
+ */
+function talking(perSecond: number): Pricer {
+  return (i, o) => {
+    if (!falFile(i.image_url) || !falFile(i.audio_url)) return 'Upload the picture and the voice first.';
+    if (o.audioSeconds === null || o.audioSeconds === undefined) return 'Keo could not read the voice file: send it as WAV or MP3.';
+    const seconds = Math.max(o.audioSeconds, Number(o.seconds) || 0);
+    if (seconds > 60.5) return 'A talking clip is up to 60 seconds: split the script.';
+    return { input: { image_url: i.image_url, audio_url: i.audio_url, prompt: String(i.prompt ?? '').slice(0, 1000) || '.' }, credits: credits(Math.max(1, Math.ceil(seconds)) * perSecond) };
+  };
+}
 
 const ENDPOINTS: Record<string, Pricer> = {
   // AI shots: a picture brought to life.
@@ -94,6 +109,9 @@ const ENDPOINTS: Record<string, Pricer> = {
     const aspect = ['1:1', '4:5', '3:4', '9:16', '16:9', '4:3', '5:4', '2:3', '3:2', '21:9'].includes(String(i.aspect_ratio)) ? String(i.aspect_ratio) : '9:16';
     return { input: { prompt, num_images: 1, output_format: 'png', aspect_ratio: aspect }, credits: credits(0.039) };
   },
+  // A talking character: their picture lip-synced to a voice.
+  'fal-ai/kling-video/ai-avatar/v2/pro': talking(0.115),
+  'fal-ai/kling-video/ai-avatar/v2/standard': talking(0.0562),
   // A line in a character's own voice (from their voice sample).
   'fal-ai/chatterbox/text-to-speech': (i) => {
     const text = String(i.text ?? '').trim().slice(0, 5000);
@@ -192,6 +210,19 @@ export function mp4Video(bytes: Uint8Array): { seconds: number; frames: number }
   return best;
 }
 
+/** The uploaded voice's length: its first bytes (headers) and its size (from the range answer). */
+async function audioOf(url: string, fetch: Fetch): Promise<number | null> {
+  try {
+    const r = await fetch(url, { headers: { range: 'bytes=0-131071' } });
+    if (!r.ok) return null;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const total = Number(/\/(\d+)$/.exec(r.headers.get('content-range') ?? '')?.[1]) || (r.status === 200 ? bytes.length : 0);
+    return total ? audioSeconds(bytes, total) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The uploaded video's length and frames: its start and end are read (the moov box is in one of them). */
 async function videoOf(url: string, fetch: Fetch): Promise<{ seconds: number; frames: number } | null> {
   for (const range of ['bytes=0-1048575', 'bytes=-2097152']) {
@@ -257,7 +288,8 @@ export async function handleStudio(
     if (!pricer) return fail(400, 'Keo Studio cannot run that.', 'unknown_endpoint', 'invalid_request_error');
     const input = body.input && typeof body.input === 'object' && !Array.isArray(body.input) ? (body.input as Record<string, unknown>) : {};
     const video = (endpoint.includes('/animate/') || endpoint.includes('/motion-control')) && falFile(input.video_url) ? await videoOf(input.video_url, deps.fetch) : null;
-    const priced = pricer(input, { seconds: Number(body.seconds) || 0, fps: Number(body.fps) || 0, ...(video ? { videoSeconds: video.seconds, videoFrames: video.frames } : {}) });
+    const audio = endpoint.includes('/ai-avatar/') && falFile(input.audio_url) ? await audioOf(input.audio_url, deps.fetch) : undefined;
+    const priced = pricer(input, { seconds: Number(body.seconds) || 0, fps: Number(body.fps) || 0, ...(video ? { videoSeconds: video.seconds, videoFrames: video.frames } : {}), ...(audio !== undefined ? { audioSeconds: audio } : {}) });
     if (typeof priced === 'string') return fail(400, priced, 'bad_request', 'invalid_request_error');
     let spent: { from_monthly: number; from_bought: number; left: number };
     try {
