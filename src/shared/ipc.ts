@@ -541,9 +541,9 @@ export interface InvokeOutputs {
   'studio:undo': StudioProject;
   'studio:redo': StudioProject;
   'studio:history': { undo: boolean; redo: boolean; undoLabels: string[]; redoLabels: string[] };
-  'studio:captions': { lines: number; words: number; exact: boolean };
+  'studio:captions': { lines: number; words: number; exact: boolean; skipped: number };
   'studio:captionSource': { destination: string | null; exact: boolean; reason: string | null };
-  'studio:transcribe': { words: number; exact: boolean };
+  'studio:transcribe': { words: number; exact: boolean; skipped: number };
   'studio:cleanup': { cuts: number; seconds: number; byReason: Record<string, number>; notes: string[] };
   'studio:punchIn': { points: number };
   'studio:soundEffect': { ok: true };

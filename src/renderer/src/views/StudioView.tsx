@@ -336,7 +336,12 @@ export function StudioView() {
       setPlaying(false);
       setCaptioning(true);
       const r = await invoke('studio:captions', { id: project.id, maxWords: 3 });
-      ui.toast(`Added ${r.lines} caption lines (${r.words} words).`, 'success');
+      ui.toast(
+        r.skipped
+          ? `Added ${r.lines} caption lines (${r.words} words). ${r.skipped} short part${r.skipped === 1 ? '' : 's'} of the speech could not be heard by the speech service and ${r.skipped === 1 ? 'has' : 'have'} no captions: add ${r.skipped === 1 ? 'it' : 'them'} by hand, or run Captions again.`
+          : `Added ${r.lines} caption lines (${r.words} words).`,
+        r.skipped ? 'info' : 'success',
+      );
     } catch (e) {
       ui.error(errText(e));
     } finally {

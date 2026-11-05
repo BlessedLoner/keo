@@ -2192,21 +2192,21 @@ export class Services {
   }
 
   /** The spoken words of a Studio project's media (their sound goes to studioTranscriber's service). */
-  async studioTranscribe(id: string, o: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ words: number; exact: boolean; destination: string }> {
+  async studioTranscribe(id: string, o: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ words: number; exact: boolean; destination: string; skipped: number }> {
     const t = this.studioTranscriber();
     if (!t) throw new StudioError('Transcripts need speech-to-text: sign in to your Keo account, or add an OpenAI API key in Settings → Providers.');
     const r = await this.studio.transcribe(id, t, { ...(o.force ? { force: true } : {}), signal: o.signal ?? new AbortController().signal });
     if (r.transcribed) this.audit.record({ kind: 'studio.transcribed', decision: 'sent', detail: { destination: t.destination, files: r.transcribed, words: r.words } });
-    return { words: r.words, exact: r.exact, destination: t.destination };
+    return { words: r.words, exact: r.exact, destination: t.destination, skipped: r.skipped };
   }
 
   /** Auto-captions for a Studio project (the timeline's sound goes to studioTranscriber's service). */
-  async studioCaptions(id: string, o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal?: AbortSignal } = {}): Promise<{ lines: CaptionLine[]; words: number; exact: boolean; destination: string }> {
+  async studioCaptions(id: string, o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal?: AbortSignal } = {}): Promise<{ lines: CaptionLine[]; words: number; exact: boolean; destination: string; skipped: number }> {
     const t = this.studioTranscriber();
     if (!t) throw new StudioError('Captions need speech-to-text: sign in to your Keo account, or add an OpenAI API key in Settings → Providers.');
     const r = await this.studio.captions(id, t, { ...o, signal: o.signal ?? new AbortController().signal });
     this.audit.record({ kind: 'studio.captions', decision: 'sent', detail: { destination: t.destination, words: r.words } });
-    return { lines: r.lines, words: r.words, exact: r.exact, destination: t.destination };
+    return { lines: r.lines, words: r.words, exact: r.exact, destination: t.destination, skipped: r.skipped };
   }
 
   /** The Studio project open in Keo (the user may be editing it by hand), so Keo can edit it by id. */

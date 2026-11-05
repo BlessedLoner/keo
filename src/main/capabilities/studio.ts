@@ -40,7 +40,7 @@ export interface StudioToolDeps {
   userTexts: (conversationId: string) => string[];
   /** Where captions' sound goes (null: no speech-to-text available). */
   captionSource: () => { destination: string; exact: boolean } | null;
-  transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean }>;
+  transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean; skipped?: number }>;
   /** Files Keo made itself (its own output folders): usable as media without the user naming them. */
   keoMade: (file: string) => boolean;
   /** Why a faceless video cannot be made now (null: it can). */
@@ -49,7 +49,7 @@ export interface StudioToolDeps {
   reframe: (projectId: string, clipId: string, o: { every?: number; signal: AbortSignal }) => Promise<{ points: number; axis: 'x' | 'y' }>;
   readAloud: (projectId: string, clipId: string, voice: string, signal: AbortSignal) => Promise<{ clip: string; seconds: number }>;
   faceless: (board: Storyboard, o: { projectId?: string; signal: AbortSignal }) => Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }>;
-  captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean }>;
+  captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean; skipped?: number }>;
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
@@ -418,7 +418,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         highlight: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional().describe('Colour of the word being spoken (null: none); default yellow'),
       })
       .strict(),
-    output: z.object({ lines: z.number(), words: z.number(), exactTiming: z.boolean(), firstLines: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })) }),
+    output: z.object({ lines: z.number(), words: z.number(), exactTiming: z.boolean(), firstLines: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })), note: z.string().optional() }),
     risk: 'low',
     // The video's sound leaves the PC (to the speech-to-text service): the user approves each time.
     approval: 'always',
@@ -441,7 +441,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const r = await d.captions(p.id, { maxWords: i.maxWords, ...(i.style ? { style: i.style } : {}), ...(i.highlight !== undefined ? { highlight: i.highlight } : {}), signal: ctx.signal }).catch((e: unknown) => {
         throw e instanceof StudioError ? fail('studio', e.message) : e;
       });
-      return { lines: r.lines.length, words: r.words, exactTiming: r.exact, firstLines: r.lines.slice(0, 8).map((l) => ({ text: l.text, start: l.start, end: l.end })) };
+      const note = r.skipped ? `${r.skipped} short part${r.skipped === 1 ? '' : 's'} of the speech got no captions (the speech service failed there); tell the user, and add those lines by hand or run captions again.` : undefined;
+      return { lines: r.lines.length, words: r.words, exactTiming: r.exact, firstLines: r.lines.slice(0, 8).map((l) => ({ text: l.text, start: l.start, end: l.end })), ...(note ? { note } : {}) };
     },
   });
 
@@ -469,7 +470,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     description:
       'Turn the speech in the Studio timeline into text with times (speech-to-text; transcripts are kept, so later calls send nothing unless force). Use it to find retakes and bad takes, to place B-roll, music and sound effects at the right words, and before cleaning up filler words. Returns the phrases with their timeline times.',
     input: z.object({ projectId: ProjectId.optional(), force: z.boolean().default(false) }).strict(),
-    output: z.object({ words: z.number(), exactTiming: z.boolean(), phrases: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })), truncated: z.boolean() }),
+    output: z.object({ words: z.number(), exactTiming: z.boolean(), phrases: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })), truncated: z.boolean(), note: z.string().optional() }),
     risk: 'low',
     // The video's sound leaves the PC (to the speech-to-text service): the user approves.
     approval: 'always',
@@ -493,7 +494,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const phrases = captionLines(words, { maxWords: 14, maxChars: 90 }).map((l) => ({ start: l.start, end: l.end, text: l.text }));
       let size = 0;
       const shown = phrases.filter((ph) => (size += ph.text.length + 24) < 14000);
-      return { words: words.length, exactTiming: r.exact, phrases: shown, truncated: shown.length < phrases.length };
+      const note = r.skipped ? `${r.skipped} short part${r.skipped === 1 ? '' : 's'} of the speech could not be turned into text (the speech service failed there); the rest is here. Running it again with force can fill the gap.` : undefined;
+      return { words: words.length, exactTiming: r.exact, phrases: shown, truncated: shown.length < phrases.length, ...(note ? { note } : {}) };
     },
   });
 

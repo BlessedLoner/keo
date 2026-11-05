@@ -493,12 +493,12 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       const r = await s.studioCaptions(id, { maxWords }).catch((e: unknown) => {
         throw e instanceof StudioError ? new KeoError('studio', e.message) : e;
       });
-      return { lines: r.lines.length, words: r.words, exact: r.exact };
+      return { lines: r.lines.length, words: r.words, exact: r.exact, skipped: r.skipped };
     },
     // The user's own click in Studio, after the page showed where the sound goes.
     'studio:transcribe': async ({ id }) => {
       const r = await s.studioTranscribe(id).catch(studioErr);
-      return { words: r.words, exact: r.exact };
+      return { words: r.words, exact: r.exact, skipped: r.skipped };
     },
     'studio:cleanup': async ({ id, dryRun, ...o }) => {
       const r = dryRun ? { plan: await s.studio.planCleanup(id, o).catch(studioErr) } : await s.studio.cleanup(id, o).catch(studioErr);

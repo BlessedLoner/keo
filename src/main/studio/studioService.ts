@@ -59,6 +59,8 @@ export interface StudioDeps {
   showProject?: (projectId: string) => void;
   /** Milliseconds before and after each shown step (tests use 0). */
   livePace?: { before: number; after: number };
+  /** Wait before trying a failed piece of speech again (tests use 0). */
+  retryDelayMs?: number;
   now?: () => Date;
 }
 
@@ -784,7 +786,7 @@ export class StudioService {
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
     o: { force?: boolean; signal: AbortSignal; progress?: (done: number, total: number) => void },
-  ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean }> {
+  ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean; skipped: number }> {
     let p = this.get(id);
     const exact = !!t.words;
     const used = p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id)));
@@ -792,7 +794,26 @@ export class StudioService {
     const looped = used.filter((a) => a.words?.length && dropLoops(a.words, (w) => w.text).length < a.words.length * 0.9);
     const todo = o.force ? used : [...new Set([...needsAnalysis(p, 'words'), ...looped])];
     let count = 0;
+    let skipped = 0;
     const failed: string[] = [];
+    /**
+     * One piece of speech, tried up to three times (speech services fail now and then on a single
+     * piece); a piece that still fails is skipped (a short gap in the words) instead of losing the file.
+     */
+    const piece = async <T>(f: () => Promise<T>, where: number): Promise<T | null> => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await f();
+        } catch (e) {
+          if (o.signal.aborted) throw new StudioError('Stopped.');
+          if (attempt >= 3) {
+            this.d.log.warn('studio.transcribe_piece_skipped', { at: Math.round(where), error: e instanceof Error ? e.message.slice(0, 160) : String(e) });
+            return null;
+          }
+          await new Promise((r) => setTimeout(r, this.d.retryDelayMs ?? 1000 * attempt * attempt));
+        }
+      }
+    };
     for (const a of todo) {
       try {
       const sound = await this.assetSound(id, a.id);
@@ -801,6 +822,7 @@ export class StudioService {
       // Word times: pieces of up to 10 minutes (the service's file limit). Text only: short pieces.
       const groups = sound ? pieces(spans, exact ? 600 : 14) : [];
       let done = 0;
+      let missed = 0;
       for (const g of groups) {
         if (o.signal.aborted) throw new StudioError('Stopped.');
         const from = g[0]!.start;
@@ -808,15 +830,22 @@ export class StudioService {
         const wav = wavOf(sound!.samples, sound!.rate, from, to);
         const voiced = g.reduce((n, s) => n + (s.end - s.start), 0);
         if (t.words) {
-          const said = (await t.words(wav, o.signal)).filter((w) => w.text.trim());
+          const got = await piece(() => t.words!(wav, o.signal), from);
+          if (!got) missed++;
+          const said = (got ?? []).filter((w) => w.text.trim());
           for (const w of dropLoops(said, (x) => x.text, voiced)) words.push({ text: w.text.trim().slice(0, 80), start: round3(from + w.start), end: round3(from + Math.max(w.start, w.end)) });
         } else if (t.text) {
+          const got = await piece(() => t.text!(wav, o.signal), from);
+          if (got === null) missed++;
           // Repeated loops of the speech service are dropped before the words are spread out.
-          const text = dropLoops((await t.text(wav, o.signal)).trim().split(/\s+/).filter(Boolean), (x) => x, voiced).join(' ');
+          const text = dropLoops((got ?? '').trim().split(/\s+/).filter(Boolean), (x) => x, voiced).join(' ');
           if (text) words.push(...spreadWords(text, g).map((w) => ({ ...w, text: w.text.slice(0, 80) })));
         }
         o.progress?.(++done, groups.length);
       }
+      // Not one piece came back: this file did not work.
+      if (groups.length && missed === groups.length) throw new StudioError('the speech service did not answer for any part of it. Try again in a minute.');
+      skipped += missed;
       count += words.length;
       p = this.learn(id, a.id, { speech: spans, words, wordsExact: exact });
       } catch (e) {
@@ -827,8 +856,8 @@ export class StudioService {
       }
     }
     if (failed.length === todo.length && todo.length) throw new StudioError(`Speech-to-text did not work: ${failed.slice(0, 2).join('; ')}`);
-    if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length - failed.length, words: count, exact, failed: failed.length });
-    return { project: p, transcribed: todo.length, words: count, exact };
+    if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length - failed.length, words: count, exact, failed: failed.length, skipped });
+    return { project: p, transcribed: todo.length, words: count, exact, skipped };
   }
 
   /**
@@ -839,15 +868,15 @@ export class StudioService {
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
     o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal; progress?: (done: number, total: number) => void },
-  ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean }> {
+  ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean; skipped: number }> {
     if (projectDuration(this.get(id)) === 0) throw new StudioError('The timeline is empty: add a video with speech first.');
-    await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
+    const heard = await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
     const words = this.spokenWords(this.get(id));
     if (!words.length) throw new StudioError('No spoken words were found in the timeline’s sound.');
     const lines = captionLines(words, { maxWords: o.maxWords ?? 3 });
     const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
     this.d.log.info('studio.captions', { lines: lines.length, words: words.length });
-    return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact) };
+    return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact), skipped: heard.skipped };
   }
 
   // ---------------------------------------------------------------- voice-over recordings
