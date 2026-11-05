@@ -48,6 +48,10 @@ const TRUSTED_ORIGIN = (DEV_URL ? originOf(DEV_URL) : null) ?? 'app://keo';
 const RENDERER_DIR = path.join(__dirname, '../renderer');
 const TEST_PROVIDER = process.env.KEO_ENABLE_TEST_PROVIDER === '1';
 const SMOKE = process.env.KEO_SMOKE === '1';
+/** Development only: Keo's product tour, captured and made in Studio (scripts/showcase.mjs). */
+const SHOWCASE = !app.isPackaged && !!process.env.KEO_SHOWCASE;
+/** Development only: lines read in the user's own voice through their own account (devtools/voiceover). */
+const VOICEOVER = !app.isPackaged && !!process.env.KEO_VOICEOVER;
 
 const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 
@@ -868,6 +872,24 @@ app.whenReady().then(() => {
       void import('./devtools/e2eDesktop').then(({ runDesktopE2E }) =>
         runDesktopE2E(services!, { electronPath: process.execPath, fixtureDir: path.join(__dirname, '../../tests/fixtures/fake-whatsapp'), outFile: out, workDir: profile.userData }).finally(() => app.quit()),
       );
+    } else if (VOICEOVER) {
+      const dir = process.env.KEO_VOICEOVER!;
+      void import('./devtools/voiceover')
+        .then(({ runVoiceover }) => runVoiceover(services!, dir))
+        .then((r) => fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 2)))
+        .catch((e: unknown) => fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ error: errorMessage(e) }, null, 2)))
+        .finally(() => app.quit());
+    } else if (SHOWCASE) {
+      const win = mainWindow;
+      win.webContents.once('did-finish-load', () => {
+        setTimeout(() => {
+          void import('./devtools/showcase')
+            .then(({ runShowcase }) => runShowcase(win, services!, buildHost, process.env.KEO_SHOWCASE!))
+            .then((r) => fs.writeFileSync(path.join(process.env.KEO_SHOWCASE!, 'result.json'), JSON.stringify(r, null, 2)))
+            .catch((e: unknown) => fs.writeFileSync(path.join(process.env.KEO_SHOWCASE!, 'result.json'), JSON.stringify({ error: errorMessage(e), stack: e instanceof Error ? e.stack : null }, null, 2)))
+            .finally(() => app.quit());
+        }, 2500);
+      });
     } else if (SMOKE) {
       runSmoke(mainWindow);
     } else {
@@ -1812,7 +1834,7 @@ async function buildSmoke(): Promise<Record<string, unknown>> {
       content: `<!doctype html><html><head><title>Smoke shop</title></head><body><h1 id="h">Shop</h1><p id="out">waiting</p>
 <script src="/lib/gsap/gsap.min.js"></script>
 <script type="module">
-import * as THREE from 'three';
+import * as THREE from '/lib/three/build/three.module.js';
 const r = { gsap: typeof gsap, three: typeof THREE.Scene };
 const post = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: 'coffee', total: 3.5 }) }).then((x) => x.json());
 r.created = post.id;
@@ -1841,7 +1863,7 @@ document.getElementById('out').textContent = 'done';
   ]);
   let first: Awaited<ReturnType<BuildHost['check']>>;
   let again: Awaited<ReturnType<BuildHost['check']>>;
-  let dbSaved = false;
+  let dbSaved: boolean;
   try {
     first = await buildHost.check(m.id, '', { waitMs: 4000 });
     again = await buildHost.check(m.id, '', { waitMs: 4000 });

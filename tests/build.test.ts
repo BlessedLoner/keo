@@ -152,3 +152,61 @@ describe('Keo builds a site in one turn, in small steps', () => {
     }
   }, 60_000);
 });
+
+describe('Keo’s builder: robust building', () => {
+  it('serves the usual npm paths of the libraries from Keo’s copies', async () => {
+    const { libraryAlias } = await import('../src/main/build/libraries');
+    expect(libraryAlias('lib/three/build/three.module.js')).toBe('lib/three/three.module.min.js');
+    expect(libraryAlias('lib/three/examples/jsm/controls/OrbitControls.js')).toBe('lib/three/addons/controls/OrbitControls.js');
+    expect(libraryAlias('lib/gsap/dist/ScrollTrigger.min.js')).toBe('lib/gsap/ScrollTrigger.min.js');
+    expect(libraryAlias('lib/phaser/dist/phaser.js')).toBe('lib/phaser/phaser.min.js');
+    expect(libraryAlias('css/site.css')).toBeNull();
+    expect(withImportMap('<html><head></head></html>', ['three'])).toContain('"/lib/three/build/three.module.js":"/lib/three/three.module.min.js"');
+  });
+
+  it('starting again in the same chat (Retry, continue) carries on with the same build', async () => {
+    const { p } = make();
+    const caps = buildCapabilities({ projects: p, host: null });
+    const start = caps.find((c) => c.id === 'build.start')!;
+    const ctx = { conversationId: 'conv1', signal: new AbortController().signal } as never;
+    const first = (await start.execute({ title: 'Driftline', kind: 'game', brief: '3D racer', libraries: ['three'] } as never, ctx)) as { id: string; continued: boolean };
+    p.write(first.id, [{ path: 'js/game.js', content: 'const x = 1;' }]);
+    const again = (await start.execute({ title: 'Neon Drift', kind: 'game', brief: '3D racer', libraries: ['three', 'rapier'] } as never, ctx)) as { id: string; continued: boolean; files: Array<{ path: string }>; libraries: string[] };
+    expect(again.id).toBe(first.id);
+    expect(again.continued).toBe(true);
+    expect(again.files.map((f) => f.path)).toContain('js/game.js');
+    expect(again.libraries).toEqual(['three', 'rapier']);
+    // Another chat starts its own.
+    const other = (await start.execute({ title: 'Other', kind: 'game', brief: 'x', libraries: [] } as never, { conversationId: 'conv2', signal: new AbortController().signal } as never)) as { id: string };
+    expect(other.id).not.toBe(first.id);
+  });
+
+  it('a model call that drops mid-turn is made again; the turn keeps its work', async () => {
+    const { makeHarness } = await import('./helpers');
+    const { ProviderError } = await import('../src/main/providers/types');
+    const reply = (text: string, extra: Partial<ChatResult> = {}): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage: { inputTokens: 10, outputTokens: 5 }, model: 'keo-test-1', native: undefined, ...extra });
+    let calls = 0;
+    let dropped = false;
+    const h = makeHarness({
+      script: (req) => {
+        calls++;
+        const done = req.messages.some((m) => m.content.some((b) => b.type === 'tool_result'));
+        if (!done) return reply('', { toolCalls: [{ id: 'c1', name: 'build__list', input: {} }], stopReason: 'tool_use' });
+        if (!dropped) {
+          dropped = true;
+          throw new ProviderError('network', 'The connection to Keo dropped in the middle of a reply (TypeError: terminated).', { retryable: true });
+        }
+        return reply('All good.');
+      },
+    });
+    try {
+      const c = h.services.conversations.create();
+      const msg = await h.services.agent.send(c.id, 'list my builds').done;
+      expect(msg.status).toBe('complete');
+      expect(msg.content).toContain('All good.');
+      expect(calls).toBe(3);
+    } finally {
+      await h.close();
+    }
+  }, 60_000);
+});

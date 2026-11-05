@@ -28,7 +28,15 @@ export const BUILD_LIBRARIES = {
       ...THREE_ADDONS.map((d): [string, string] => [`three/examples/jsm/${d}`, `three/addons/${d}`]),
       ...THREE_LIBS.map((f): [string, string] => [`three/examples/jsm/libs/${f}`, `three/addons/libs/${f}`]),
     ],
-    importMap: { three: '/lib/three/three.module.min.js', 'three/addons/': '/lib/three/addons/' },
+    // Also the paths people know from npm and three.js examples, so either way of writing it works.
+    importMap: {
+      three: '/lib/three/three.module.min.js',
+      'three/addons/': '/lib/three/addons/',
+      'three/examples/jsm/': '/lib/three/addons/',
+      '/lib/three/build/three.module.js': '/lib/three/three.module.min.js',
+      '/lib/three/build/three.module.min.js': '/lib/three/three.module.min.js',
+      '/lib/three/examples/jsm/': '/lib/three/addons/',
+    },
   },
   gsap: {
     label: 'GSAP (motion: timelines, scroll-driven animation, text and SVG motion, drag)',
@@ -49,6 +57,25 @@ export const BUILD_LIBRARIES = {
 } satisfies Record<string, BuildLibrary>;
 export type BuildLibraryId = keyof typeof BUILD_LIBRARIES;
 export const BUILD_LIBRARY_IDS = Object.keys(BUILD_LIBRARIES) as BuildLibraryId[];
+
+/**
+ * A library file asked for by its usual npm path (lib/three/build/three.module.js,
+ * lib/gsap/dist/gsap.min.js, lib/phaser/dist/phaser.min.js…): the path of Keo's copy, or null.
+ */
+export function libraryAlias(rel: string): string | null {
+  const r = rel.replace(/\\/g, '/');
+  const rules: Array<[RegExp, string]> = [
+    [/^lib\/three\/build\/three\.module(\.min)?\.js$/, 'lib/three/three.module.min.js'],
+    [/^lib\/three\/examples\/jsm\/(.+)$/, 'lib/three/addons/$1'],
+    [/^lib\/gsap\/dist\/([A-Za-z]+)(\.min)?\.js$/, 'lib/gsap/$1.min.js'],
+    [/^lib\/gsap\/([A-Za-z]+)\.js$/, 'lib/gsap/$1.min.js'],
+    [/^lib\/phaser\/dist\/phaser(\.min)?\.js$/, 'lib/phaser/phaser.min.js'],
+    [/^lib\/phaser\/phaser\.js$/, 'lib/phaser/phaser.min.js'],
+    [/^lib\/rapier\/rapier(\.es)?\.js$/, 'lib/rapier/rapier.es.js'],
+  ];
+  for (const [re, to] of rules) if (re.test(r)) return r.replace(re, to);
+  return null;
+}
 
 /** Copies a library's files into a project's lib/ folder (once; again when Keo's copy is newer). */
 export function copyLibrary(id: BuildLibraryId, modules: string, projectDir: string): void {

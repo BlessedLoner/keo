@@ -518,30 +518,45 @@ export class AgentService {
         }
         const sep = text && !text.endsWith('\n') ? '\n\n' : '';
         let first = true;
-        const result = await provider.stream(
-          {
-            model,
-            system: SYSTEM_PROMPT + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
-            messages,
-            tools,
-            maxOutputTokens: maxOut,
-            correlationId,
-          },
-          {
-            onText: (delta) => {
-              if (first && sep) {
-                text += sep;
-                this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: sep });
-              }
-              first = false;
-              text += delta;
-              this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta });
-              flush();
-            },
-            onPhase: (p) => phase(p),
-          },
-          signal,
-        );
+        // A model call that drops or comes back garbled (a connection cut mid-stream, a provider hiccup) is
+        // made again, up to twice, when nothing of it was shown yet: the turn keeps all its work so far.
+        let result!: Awaited<ReturnType<typeof provider.stream>>;
+        for (let attempt = 1; ; attempt++) {
+          let streamed = false;
+          try {
+            result = await provider.stream(
+              {
+                model,
+                system: SYSTEM_PROMPT + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
+                messages,
+                tools,
+                maxOutputTokens: maxOut,
+                correlationId,
+              },
+              {
+                onText: (delta) => {
+                  streamed = true;
+                  if (first && sep) {
+                    text += sep;
+                    this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: sep });
+                  }
+                  first = false;
+                  text += delta;
+                  this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta });
+                  flush();
+                },
+                onPhase: (p) => phase(p),
+              },
+              signal,
+            );
+            break;
+          } catch (e) {
+            const again = e instanceof ProviderError && !signal.aborted && !streamed && attempt < 3 && (e.kind === 'malformed' || e.kind === 'network' || e.kind === 'timeout' || e.kind === 'server');
+            if (!again) throw e;
+            this.log.warn('agent.model_retry', { attempt, kind: e.kind, error: e.message.slice(0, 240), round: iteration }, correlationId);
+            await new Promise((r) => setTimeout(r, 1500 * attempt));
+          }
+        }
         if (result.usage) {
           usageIn += result.usage.inputTokens;
           usageOut += result.usage.outputTokens;

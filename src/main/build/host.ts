@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BrowserWindow, session, type Session } from 'electron';
 import { BuildError, type BuildProjects } from './projects';
+import { libraryAlias } from './libraries';
 import { RUNNER_HTML } from './runner';
 
 /**
@@ -153,6 +154,8 @@ export class BuildHost {
     if (url.pathname.startsWith('/api/') || url.pathname === '/api') return this.apiRequest(id, req);
     let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
     if (!rel || rel.endsWith('/')) rel += 'index.html';
+    // A library asked for by its usual npm path is served from Keo's copy.
+    if (!fs.existsSync(path.resolve(dir, rel))) rel = libraryAlias(rel) ?? rel;
     let file = path.resolve(dir, rel);
     if (!file.startsWith(path.resolve(dir) + path.sep)) return new Response('Forbidden', { status: 403 });
     // Pretty addresses: /about → about.html or about/index.html.
@@ -363,7 +366,7 @@ export class BuildHost {
    * Loads a page in a hidden window like a visitor would, lets it run a few seconds, and reports
    * its errors, missing files, text and a screenshot: how Keo checks its own work.
    */
-  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number } = {}): Promise<BuildCheck> {
+  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number } = {}): Promise<BuildCheck> {
     this.d.projects().manifest(id);
     this.preview();
     this.logs.set(id, { errors: [], warnings: [], missing: new Set() });
@@ -379,7 +382,7 @@ export class BuildHost {
       await new Promise((r) => setTimeout(r, o.waitMs ?? 2500));
       const title = win.isDestroyed() ? '' : win.webContents.getTitle();
       const text = win.isDestroyed() ? '' : String(await win.webContents.executeJavaScript('(document.body && document.body.innerText || "").slice(0, 1500)').catch(() => ''));
-      const shot = win.isDestroyed() ? null : await win.webContents.capturePage().then((img) => img.resize({ width: 960 }).toPNG()).catch(() => null);
+      const shot = win.isDestroyed() ? null : await win.webContents.capturePage().then((img) => img.resize({ width: o.shotWidth ?? 960 }).toPNG()).catch(() => null);
       const l = this.logOf(id);
       return { page: page || 'index.html', title, errors: [...l.errors], warnings: [...l.warnings].slice(-12), missing: [...l.missing], text, screenshot: shot };
     } finally {

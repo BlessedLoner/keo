@@ -154,7 +154,7 @@ check('studio: a faceless video is made from a script (voice, pictures, captions
 check('studio: export choices (720p, 24 fps, a file name)', st.exportChoices?.width === 720 && st.exportChoices?.height === 720 && st.exportChoices?.named === 'Smoke faceless 720.mp4' && Math.abs(st.exportChoices.frames - st.exportChoices.seconds * 24) <= 1, st.error ?? JSON.stringify(st.exportChoices));
 check('studio: an export can be stopped', st.stopped?.asked === true && st.stopped?.result !== 'finished', st.error ?? JSON.stringify(st.stopped));
 const bd = a.build ?? {};
-check('builder: a page loads its libraries (GSAP, three.js) from its own folder', bd.first?.gsap === 'object' && bd.first?.three === 'function', bd.error ?? JSON.stringify(bd));
+check('builder: a page loads its libraries (GSAP, three.js by its npm path) from its own folder', bd.first?.gsap === 'object' && bd.first?.three === 'function', bd.error ?? JSON.stringify(bd));
 check('builder: the API runs in the sandbox and its database keeps the data', bd.first?.created === 1 && bd.first?.orders === 1 && bd.again?.orders === 2 && bd.dbSaved === true, bd.error ?? JSON.stringify(bd));
 check('builder: a built page cannot reach the internet', bd.first?.network === 'blocked', bd.error ?? JSON.stringify(bd.first));
 check('builder: Keo sees the page (screenshot; the blocked internet call said plainly, no other errors)', bd.screenshot === true && (bd.errors ?? []).length >= 1 && bd.errors.every((e) => e.startsWith('Blocked: the page tried to reach https://example.com')), bd.error ?? JSON.stringify(bd.errors));

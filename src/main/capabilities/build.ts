@@ -33,7 +33,7 @@ const LIB_HELP = BUILD_LIBRARY_IDS.map((id) => `${id}: ${BUILD_LIBRARIES[id].lab
 
 const HOW_TO_BUILD = [
   'How Keo builds (follow it):',
-  '0. One build per request: when the user continues ("continue", "are you done?", "fix it", "add…"), use build__list and keep working on that build; never start a second build for the same thing.',
+  '0. One build per request: when the user continues ("continue", "are you done?", "fix it", "add…"), keep working on that build (build__start in the same chat gives it back with its files; build__list finds others); never start a second build for the same thing.',
   '1. Plan first: the pages or screens, the features, the look (colours, fonts, motion), the data the backend keeps. Build the whole thing, not a demo: every page, every button working, real content (no lorem ipsum), mobile and desktop layouts.',
   '2. Files: index.html at the root (and other pages: about.html, shop.html…), css/, js/, assets/. Pages link files by root paths (/css/site.css, /js/app.js). Split the code into several focused files (css/base.css, css/sections.css, js/motion.js, js/form.js…), never one huge file.',
   '   SMALL CALLS (a reply has a length limit; a call that is too long is cut off and fails): one file per build__write call, under 8,000 characters. A longer file is written in parts: build__write its first part, then build__append the next parts, each under 8,000 characters, in order. Never put a whole site in one call.',
@@ -69,7 +69,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
         libraries: Libraries.default([]),
       })
       .strict(),
-    output: Manifest.extend({ next: z.string() }),
+    output: Manifest.extend({ next: z.string(), continued: z.boolean(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional() }),
     approval: 'never',
     consequential: false,
     idempotent: false,
@@ -78,9 +78,21 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     autonomy: () => ({ tier: 'routine' }),
     preview: (i) => ({ summary: `Start the ${i.kind} “${i.title}”`, target: null, consequences: ['A new folder in Documents\\Keo\\Builds.'], dataExport: null }),
     auditView: (i) => ({ kind: i.kind, libraries: i.libraries }),
-    async execute(i) {
-      const m = run(() => d.projects.create({ title: i.title, kind: i.kind, brief: i.brief, libraries: i.libraries }));
-      return { ...summary(d, m), next: 'Write the files with build__write (several at a time), then build__check each page and fix what it finds.' };
+    async execute(i, ctx) {
+      // Asked again in the same chat (Retry, continue, the request sent again): the same build carries on.
+      const existing = ctx.conversationId ? d.projects.forConversation(ctx.conversationId) : null;
+      if (existing) {
+        const libs = [...new Set([...existing.libraries, ...i.libraries])].slice(0, 4) as BuildLibraryId[];
+        const m = libs.length !== existing.libraries.length ? run(() => d.projects.update(existing.id, { libraries: libs })) : existing;
+        return {
+          ...summary(d, m),
+          continued: true,
+          files: run(() => d.projects.files(m.id)),
+          next: 'This chat already has this build: carry on with it (do not start another). Its files are listed: read what is there with build__read, write what is missing, fix what is broken, then build__check and build__open.',
+        };
+      }
+      const m = run(() => d.projects.create({ title: i.title, kind: i.kind, brief: i.brief, libraries: i.libraries, ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}) }));
+      return { ...summary(d, m), continued: false, next: 'Write the files with build__write (one file per call, under 8,000 characters; long files in parts with build__append), then build__check each page and fix what it finds.' };
     },
   });
 

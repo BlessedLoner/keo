@@ -47,6 +47,8 @@ export const BuildManifest = z
     /** Settings the backend reads (env.NAME), never secrets: those the user adds when going live. */
     vars: z.record(z.string().regex(/^[A-Z][A-Z0-9_]{1,40}$/), z.string().max(400)).default({}),
     todo: z.array(TodoItem).max(40).default([]),
+    /** The chat it was made in: asking again there (Retry, continue) carries on with it. */
+    conversationId: z.string().max(80).optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -142,7 +144,12 @@ export class BuildProjects {
   }
 
   /** A new project folder (a free name from the title). */
-  create(o: { title: string; kind: BuildKind; brief?: string; libraries?: BuildLibraryId[] }): BuildManifest {
+  /** The build a chat made most recently (within maxAgeMs), to carry on with instead of starting another. */
+  forConversation(conversationId: string, maxAgeMs = 24 * 3600_000): BuildManifest | null {
+    return this.list().find((m) => m.conversationId === conversationId && Date.now() - Date.parse(m.updatedAt) < maxAgeMs) ?? null;
+  }
+
+  create(o: { title: string; kind: BuildKind; brief?: string; libraries?: BuildLibraryId[]; conversationId?: string }): BuildManifest {
     const id = `bd_${crypto.randomBytes(5).toString('hex')}`;
     const base = o.title.normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'keo-build';
     let folder = base;
@@ -150,7 +157,7 @@ export class BuildProjects {
     fs.mkdirSync(path.join(this.d.root(), folder), { recursive: true });
     this.saveIndex({ ...this.index(), [id]: folder });
     const now = new Date().toISOString();
-    const m = BuildManifest.parse({ id, title: o.title, kind: o.kind, brief: o.brief ?? '', libraries: [], createdAt: now, updatedAt: now });
+    const m = BuildManifest.parse({ id, title: o.title, kind: o.kind, brief: o.brief ?? '', libraries: [], ...(o.conversationId ? { conversationId: o.conversationId } : {}), createdAt: now, updatedAt: now });
     this.saveManifest(m);
     this.d.log.info('build.created', { kind: o.kind });
     return o.libraries?.length ? this.update(id, { libraries: o.libraries }) : m;

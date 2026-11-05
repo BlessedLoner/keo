@@ -429,5 +429,8 @@ export function mapOpenAIError(err: unknown, signal: AbortSignal | undefined, la
   if (err instanceof OpenAI.APIConnectionTimeoutError) return new ProviderError('timeout', `The request to ${label} timed out.`, { retryable: true });
   if (err instanceof OpenAI.APIConnectionError) return new ProviderError('network', `Could not reach ${label}. Is the server running and reachable?`, { retryable: true });
   if (err instanceof OpenAI.APIError) return new ProviderError('unknown', `${label} API error ${err.status ?? ''}`.trim(), { status: err.status ?? null });
-  return new ProviderError('malformed', `${label} returned a response that could not be parsed.`);
+  // A connection cut in the middle of a reply (the stream ended early): a network hiccup, worth retrying.
+  const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  if (/terminated|ECONNRESET|socket|other side closed|premature|aborted|ETIMEDOUT|network/i.test(raw)) return new ProviderError('network', `The connection to ${label} dropped in the middle of a reply (${raw.slice(0, 120)}).`, { retryable: true });
+  return new ProviderError('malformed', `${label} returned a response that could not be parsed (${raw.slice(0, 160)}).`);
 }
