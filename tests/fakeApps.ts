@@ -17,6 +17,8 @@ export interface FakeUiaApp {
   pasted?(text: string): void;
   /** A file pasted from the clipboard (attachment). */
   pastedFile?(path: string): void;
+  /** Keys pressed while the window has the keyboard. */
+  keyed?(mods: number[], key: number): void;
   /** Names inside an element through the raw view (text hidden from the control view). */
   rawNames?(rid: string): string[];
 }
@@ -142,6 +144,21 @@ export class FakeWhatsApp implements FakeUiaApp {
   rowPerLine = false;
   /** Reports only the last paragraph of the message box (as on some PCs). */
   valueLastParagraph = false;
+  /**
+   * Like the WhatsApp app with a draft in the box: an accessibility value write does not empty it,
+   * and pasted text goes in after it. Ctrl+A then Delete in the box clears it (unless draftLocked).
+   */
+  draftSticks = false;
+  draftLocked = false;
+  private allSelected = false;
+  keyed(mods: number[], key: number): void {
+    if (this.focused !== 'compose') return;
+    if (mods.includes(0x11) && key === 0x41) this.allSelected = true;
+    else if (key === 0x2e && this.allSelected && !this.draftLocked) {
+      this.compose = '';
+      this.allSelected = false;
+    } else this.allSelected = false;
+  }
   focused: 'search' | 'compose' | null = null;
   /** A pasted file waiting in WhatsApp's attachment preview (caption box + Send). */
   attachment: { name: string; caption: string } | null = null;
@@ -283,7 +300,7 @@ export class FakeWhatsApp implements FakeUiaApp {
   pasted(text: string): void {
     if (this.focused === 'search') this.search = text;
     if (this.focused === 'compose') {
-      this.compose = text;
+      this.compose = this.draftSticks ? this.compose + text : text;
       if (this.switchChatAfterCompose) this.open = this.switchChatAfterCompose;
     }
   }
@@ -311,7 +328,7 @@ export class FakeWhatsApp implements FakeUiaApp {
       return action;
     }
     if (k === 'compose' && action === 'set_value') {
-      this.compose = text ?? '';
+      this.compose = this.draftSticks ? this.compose + (text ?? '') : text ?? '';
       if (this.switchChatAfterCompose) this.open = this.switchChatAfterCompose;
       return 'value';
     }

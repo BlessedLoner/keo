@@ -328,6 +328,29 @@ describe('WhatsApp workflows', () => {
     expect(wa.sent).toEqual([]);
   });
 
+  it('clears a draft already in the message box, so only the approved text is sent', async () => {
+    const { wa } = setup();
+    wa.open = 'Daniel Okafor';
+    wa.draftSticks = true;
+    wa.compose = 'Send "Keo test" to Daniel on WhatsApp';
+    const r = await runCap('whatsapp.send_message', { target: WA, contact: 'Daniel Okafor', text: 'Keo test' });
+    expect(r.task?.state).toBe('completed');
+    expect(wa.sent).toEqual([{ to: 'Daniel Okafor', text: 'Keo test' }]);
+  });
+
+  it('sends nothing when the message box holds other text it cannot clear', async () => {
+    const { wa } = setup();
+    wa.open = 'Daniel Okafor';
+    wa.draftSticks = true;
+    wa.draftLocked = true;
+    wa.compose = 'Send "Keo test" to Daniel on WhatsApp';
+    const r = await runCap('whatsapp.send_message', { target: WA, contact: 'Daniel Okafor', text: 'Keo test' });
+    expect(r.task?.state).toBe('failed');
+    expect(r.step?.errorCode).toBe('draft_present');
+    expect(wa.sent).toEqual([]);
+    expect(h.desktop.calls.filter((c) => c.op === 'uia_act' && c.args[1] === 'rid.send')).toHaveLength(0);
+  });
+
   it('marks an unconfirmed send as uncertain instead of success, and never retries it blindly', async () => {
     const { wa } = setup();
     wa.open = 'Daniel Okafor';

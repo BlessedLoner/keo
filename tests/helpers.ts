@@ -123,7 +123,9 @@ export class FakeDesktop implements DesktopBackend {
     return this.documentText;
   }
   keys(hwnd: string, mods: number[], key: number) {
-    return this.act('keys', [hwnd, mods, key], () => undefined);
+    return this.act('keys', [hwnd, mods, key], () => {
+      this.apps.get(hwnd)?.keyed?.(mods, key);
+    });
   }
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean) {
     return this.act('click', [hwnd, x, y, button, double], () => undefined);

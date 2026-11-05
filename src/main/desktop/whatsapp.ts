@@ -294,6 +294,18 @@ export function holdsText(box: string, text: string): boolean {
   return b.length >= 40 && k >= b.length * 0.95;
 }
 
+/**
+ * Whether a message box holds the approved text and nothing else (checked right before Send).
+ * Same letters and digits as holdsText; a long box some versions report only in part (its current
+ * paragraph) still counts when that part is a solid piece of the approved text.
+ */
+export function draftIs(box: string, text: string): boolean {
+  const sq = (s: string) => normName(s).replace(/\s+/g, '');
+  const a = sq(box);
+  const b = sq(text);
+  return b.length > 0 && (a === b || (a.length >= 20 && b.includes(a)));
+}
+
 export function textMatches(haystack: string, needle: string): boolean {
   const a = normName(haystack);
   const b = normName(needle);
