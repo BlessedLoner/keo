@@ -144,6 +144,28 @@ const NOT_DISPATCHED = new Set([
  * helper script (written fresh from the app bundle at start, so its content
  * is always Keo's own). Requests are serialized one at a time.
  */
+/** How long one call waits for the helper to start (it keeps starting after that). */
+const HELPER_START_WAIT_MS = 45_000;
+/** A helper that is still not ready after this is stopped. */
+const HELPER_START_LIMIT_MS = 5 * 60_000;
+
+/** Waits for the helper's start, but this call gives up after HELPER_START_WAIT_MS. */
+export function waitForStart(ready: Promise<void>, ms = HELPER_START_WAIT_MS): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const t = setTimeout(() => reject(new CapabilityError('helper_start_timeout', 'The desktop helper is still starting (Windows can be slow right after it starts). Try again in a minute.', { retryable: true, dispatched: 'no' })), ms);
+    ready.then(
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      (e: unknown) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 export class Win32Backend implements DesktopBackend {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private ready: Promise<void> | null = null;
@@ -176,6 +198,8 @@ export class Win32Backend implements DesktopBackend {
 
   private start(): Promise<void> {
     if (this.ready) return this.ready;
+    // A start that failed is not kept: the next call tries again.
+    const forget = (p: Promise<void>) => p.catch(() => { if (this.ready === p) this.ready = null; });
     this.ready = new Promise<void>((resolve, reject) => {
       const sup = this.support();
       if (!sup.supported) return reject(new CapabilityError('unsupported', sup.reason ?? 'Unsupported'));
@@ -185,12 +209,19 @@ export class Win32Backend implements DesktopBackend {
       const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
       const exe = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       // -ExecutionPolicy Bypass applies to this child process only; it does not change system policy.
+      const startedAt = Date.now();
       const proc = spawn(exe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
         windowsHide: true,
         stdio: 'pipe',
       });
       this.proc = proc;
-      const startTimer = setTimeout(() => reject(new CapabilityError('helper_start_timeout', 'Desktop helper did not start in time.', { retryable: true })), 45000);
+      // The first start after Windows boots can take minutes (it compiles its Win32 bindings while the
+      // PC is busy): a slow call gives up after 45 s (see call), but the helper keeps starting and later
+      // calls use it. Only a helper that never gets ready is stopped (and started again on the next call).
+      const startTimer = setTimeout(() => {
+        this.log.warn('desktop.helper_start_abandoned', { afterMs: HELPER_START_LIMIT_MS });
+        proc.kill();
+      }, HELPER_START_LIMIT_MS);
       const rl = readline.createInterface({ input: proc.stdout });
       rl.on('line', (line) => {
         let msg: { ready?: boolean; id?: number; ok?: boolean; result?: unknown; error?: { code: string; message: string } };
@@ -201,6 +232,7 @@ export class Win32Backend implements DesktopBackend {
         }
         if (msg.ready) {
           clearTimeout(startTimer);
+          this.log.info('desktop.helper_ready', { ms: Date.now() - startedAt });
           resolve();
           return;
         }
@@ -228,12 +260,13 @@ export class Win32Backend implements DesktopBackend {
         this.log.error('desktop.helper_error', { error: e.message });
       });
     });
+    void forget(this.ready);
     return this.ready;
   }
 
   private call<T>(cmd: string, args: Record<string, unknown> = {}, timeoutMs = 10000): Promise<T> {
     const run = async (): Promise<T> => {
-      await this.start();
+      await waitForStart(this.start());
       const proc = this.proc;
       if (!proc) throw new CapabilityError('helper_unavailable', 'Desktop helper is not running.', { retryable: true });
       const id = this.nextId++;
