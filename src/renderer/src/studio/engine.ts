@@ -1,9 +1,10 @@
-import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
+import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { chromaKey } from './chroma';
 import { cutout } from './cutout';
 import { drawEffects } from './effects';
+import { drawMotionClip, motionBox } from './motionPieces';
 import { drawDevice, drawNotch, drawShape } from './shapes';
 
 /**
@@ -53,13 +54,13 @@ export function fadeAt(c: { start: number; duration: number; fadeIn: number; fad
 }
 
 /** The visible clips at time t, bottom layer first. */
-export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip> {
-  return layersAt(p, t).filter((c): c is MediaClip | TextClip | ShapeClip => c.type !== 'adjust');
+export function visibleAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip | MotionClip> {
+  return layersAt(p, t).filter((c): c is MediaClip | TextClip | ShapeClip | MotionClip => c.type !== 'adjust');
 }
 
 /** Everything drawn at time t, bottom layer first: the visible clips and adjustment layers. */
-export function layersAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip | AdjustClip> {
-  const out: Array<MediaClip | TextClip | ShapeClip | AdjustClip> = [];
+export function layersAt(p: Project, t: number): Array<MediaClip | TextClip | ShapeClip | AdjustClip | MotionClip> {
+  const out: Array<MediaClip | TextClip | ShapeClip | AdjustClip | MotionClip> = [];
   for (const tr of p.tracks) {
     if (tr.hidden || tr.kind === 'audio') continue;
     // During a transition both clips show: the one going out under the one coming in.
@@ -106,6 +107,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, p: Project, t: number, 
       if (src) drawMedia(ctx, c, src, role ? 1 : fadeAt(c, t), t, W, H, role);
       if (role?.as === 'in' && (role.kind === 'flash' || role.kind === 'dip')) flash = role.kind === 'flash' ? 1 - Math.abs(role.p - 0.5) * 2 : -(1 - Math.abs(role.p - 0.5) * 2);
     } else if (c.type === 'shape') drawShape(ctx, c, motionAt(c, t, H), W, H);
+    else if (c.type === 'motion') drawMotionClip(ctx, c, motionAt(c, t, H), t, W, H);
     else drawText(ctx, c, t, W, H);
   }
   // Flash: white at the cut; dip: black at the cut.
@@ -404,6 +406,11 @@ export async function fontsReady(p: Project): Promise<void> {
   const want = new Set<string>();
   for (const t of p.tracks)
     for (const c of t.clips) {
+      if (c.type === 'motion') {
+        for (const wt of [600, 700, 800, 900]) want.add(`${wt} 64px "${c.font}"`);
+        want.add('600 64px "Inter"');
+        continue;
+      }
       if (c.type !== 'text') continue;
       want.add(`${FONT_WEIGHT[c.style.weight]} 64px "${c.style.font}"`);
       for (const m of c.marks ?? []) want.add(`${m.italic ? 'italic ' : ''}${FONT_WEIGHT[m.weight ?? c.style.weight]} 64px "${m.font ?? c.style.font}"`);
@@ -466,7 +473,7 @@ function phases(c: TextClip, t: number): { pin: number; pout: number } {
 /** Where a layer is on the canvas (pixels): its centre, size (with its scale) and rotation. */
 export interface LayerBox {
   id: string;
-  type: 'media' | 'text' | 'shape';
+  type: 'media' | 'text' | 'shape' | 'motion';
   cx: number;
   cy: number;
   w: number;
@@ -497,6 +504,8 @@ export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number,
     } else if (c.type === 'shape') {
       w = c.style.width * W;
       h = c.style.height * H;
+    } else if (c.type === 'motion') {
+      ({ w, h } = motionBox(c, W, H));
     } else {
       const st = c.style;
       const px = (st.sizePct / 100) * H;

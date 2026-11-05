@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
-import { keyValue, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { keyValue, MOTION_PIECE_INFO, MOTION_PIECES, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -13,7 +13,7 @@ import { Color, Num, Section } from './fields';
  */
 
 type SetPatch = Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>;
-type Visual = MediaClip | TextClip | ShapeClip;
+type Visual = MediaClip | TextClip | ShapeClip | MotionClip;
 
 const MOTION_LABEL: Record<(typeof MOTIONS)[number], string> = {
   fade: 'Fade',
@@ -472,6 +472,50 @@ export function ElementsPanel({ project, time, onEdit }: { project: Project; tim
           <Icon name="plus" size={13} /> Add at playhead
         </button>
       </div>
+      <MotionGraphics time={time} onEdit={onEdit} />
     </div>
+  );
+}
+
+/** Starting words for each motion piece (changed in the Motion tab after). */
+const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp, { op: 'add_motion' }>, 'op' | 'piece' | 'place'>> = {
+  headline: { text: 'Your big idea here', sub: 'Chapter one' },
+  word_pop: { text: 'Wow', icon: 'fire' },
+  icon_burst: { text: 'Grow faster', items: ['rocket', 'chart', 'users', 'heart'] },
+  chips: { text: 'Key points', items: ['First point', 'Second point', 'Third point'], icon: 'check' },
+  stat: { text: 'more views', value: 87, unit: '%' },
+  list: { text: '3 steps', items: ['Step one', 'Step two', 'Step three'] },
+  lower_third: { text: 'Your Name', sub: 'Your role' },
+  quote: { text: 'A line worth remembering.', sub: 'Someone' },
+  card3d: { text: 'Your product', sub: 'One line about it', icon: 'sparkle' },
+  highlight: { text: 'The part that matters most', items: ['matters', 'most'] },
+  callout: { text: 'Look here' },
+  light_sweep: { text: 'Next' },
+};
+
+/** Motion graphics: ready-made animated pieces added at the playhead (Keo can sync them to the speech). */
+function MotionGraphics({ time, onEdit }: { time: number; onEdit: (ops: EditOp[]) => Promise<void> }) {
+  const ui = useUi();
+  const add = async (piece: (typeof MOTION_PIECES)[number]) => {
+    try {
+      await onEdit([{ op: 'add_motion', piece, place: 'auto', start: time, duration: piece === 'light_sweep' ? 1.2 : 4, ...MOTION_SAMPLE[piece] }]);
+    } catch (e) {
+      ui.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <>
+      <div className="studio-pane-head">
+        <span>Motion graphics</span>
+      </div>
+      <div className="motion-pieces">
+        {MOTION_PIECES.map((p) => (
+          <button key={p} className="btn sm" title={`${MOTION_PIECE_INFO[p].label}: ${MOTION_PIECE_INFO[p].use}`} onClick={() => void add(p)}>
+            {MOTION_PIECE_INFO[p].label}
+          </button>
+        ))}
+      </div>
+      <p className="small muted">Added at the playhead; change the words in the Motion tab. Or ask Keo: “add motion graphics on what I say”.</p>
+    </>
   );
 }

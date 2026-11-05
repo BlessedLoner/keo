@@ -17,6 +17,7 @@ import { CloneVideo } from '../studio/CloneVideo';
 import { AiVideoCreator } from '../studio/AiVideoCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
+import { MotionClipFields } from '../studio/MotionClipFields';
 import '../styles/studio.css';
 
 /**
@@ -1025,7 +1026,7 @@ function Checklist({ steps, onClose }: { steps: Step[]; onClose: () => void }) {
 
 // ---------------------------------------------------------------- inspector
 
-type InspTab = 'video' | 'audio' | 'speed' | 'animation' | 'adjust' | 'text' | 'element';
+type InspTab = 'video' | 'audio' | 'speed' | 'animation' | 'adjust' | 'text' | 'element' | 'motion';
 let lastInspTab: InspTab = 'video';
 
 function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project; clip: Clip; time: number; onEdit: (ops: EditOp[]) => void; onFollow: () => void }) {
@@ -1041,7 +1042,9 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           ? [['text', 'Text'], ['animation', 'Animation']]
           : clip.type === 'shape'
             ? [['element', 'Element'], ['animation', 'Animation']]
-            : [['adjust', 'Adjust']];
+            : clip.type === 'motion'
+              ? [['motion', 'Motion'], ['animation', 'Animation']]
+              : [['adjust', 'Adjust']];
   const [tab, setTab] = useState<InspTab>(() => (tabs.some(([t]) => t === lastInspTab) ? lastInspTab : tabs[0]![0]));
   const at = (t: InspTab) => tab === t;
   const first = tab === tabs[0]![0];
@@ -1184,7 +1187,8 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           <ReadAloud projectId={project.id} clipId={clip.id} />
         </Section>
       )}
-      {(at('video') || at('text') || at('element')) && clip.type !== 'audio' && clip.type !== 'adjust' && (
+      {at('motion') && clip.type === 'motion' && <MotionClipFields clip={clip} set={set} />}
+      {(at('video') || at('text') || at('element') || at('motion')) && clip.type !== 'audio' && clip.type !== 'adjust' && (
         <Section title="Position">
           {clip.type === 'media' && (
             <div className="insp-seg" role="radiogroup" aria-label="Fit">

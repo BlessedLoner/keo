@@ -467,3 +467,7 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .video-brief { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent, #6b5a2f); background: var(--bg-elev); }
 .ai-jobs { display: flex; flex-direction: column; gap: 2px; }
 .clone-steps { text-align: left; align-self: center; min-width: 360px; }
+
+/* Motion graphics buttons (Elements panel). */
+.motion-pieces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 6px 0; }
+.motion-pieces .btn { justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

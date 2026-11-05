@@ -189,6 +189,7 @@ export function Timeline({
     if (c.type === 'text') return c.counter ? `${c.counter.prefix}${c.counter.to}${c.counter.suffix}` : c.text;
     if (c.type === 'shape') return c.shape[0]!.toUpperCase() + c.shape.slice(1);
     if (c.type === 'adjust') return 'Adjustment';
+    if (c.type === 'motion') return `✦ ${c.text}`;
     return project.assets.find((a) => a.id === c.assetId)?.name ?? 'Media';
   };
 

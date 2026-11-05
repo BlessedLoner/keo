@@ -1,4 +1,4 @@
-import { clipEnd, EASES, keyValue, type Counter, type Entrance, type MediaClip, type ShapeClip, type TextClip } from './studio';
+import { clipEnd, EASES, keyValue, type Counter, type Entrance, type MediaClip, type MotionClip, type ShapeClip, type TextClip } from './studio';
 
 /**
  * Where a layer is and how it looks at one moment: its position and size (with keyframes), its
@@ -95,7 +95,7 @@ function applyMotion(m: MotionState, e: Entrance, p: number, entering: boolean, 
 }
 
 /** The motion of a layer at timeline time t (W, H: the frame in pixels). */
-export function motionAt(c: MediaClip | TextClip | ShapeClip, t: number, H: number): MotionState {
+export function motionAt(c: MediaClip | TextClip | ShapeClip | MotionClip, t: number, H: number): MotionState {
   const rt = t - c.start;
   const tr = c.transform;
   const k = c.keys;

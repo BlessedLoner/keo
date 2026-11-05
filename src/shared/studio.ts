@@ -568,7 +568,180 @@ export const AdjustClip = z
 export type AdjustClip = z.infer<typeof AdjustClip>;
 export const ADJUST_TRACK = 'Adjustments';
 
-export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip, AdjustClip]);
+// ---------------------------------------------------------------- motion clips
+
+/**
+ * Motion clips: ready-made motion graphics (After Effects style) drawn frame by frame by Studio's
+ * engine, laid over the video on the Motion track: kinetic headlines, a word that pops, floating
+ * icon bursts, pills, counters, lists, lower thirds, quotes, 3D cards, highlights, callouts and light
+ * sweeps. Each piece animates in, lives (floats) and animates out on its own; `beats` (seconds into
+ * the clip) make its words or items appear on the spoken words.
+ */
+export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep'] as const;
+export const MotionPiece = z.enum(MOTION_PIECES);
+export type MotionPiece = z.infer<typeof MotionPiece>;
+/** What each piece is for (shown to Keo and in the Studio). */
+export const MOTION_PIECE_INFO: Record<MotionPiece, { label: string; use: string }> = {
+  headline: { label: 'Headline', use: 'a topic or key line: text = the headline (its last word glows), sub = a small kicker above; beats = when each word rises' },
+  word_pop: { label: 'Word pop', use: 'one strong word or short phrase slammed in with rings and sparkles (text); icon optional' },
+  icon_burst: { label: 'Icon burst', use: 'floating icons around a label: items = icon names (or emoji), text = the label; beats = when each icon pops' },
+  chips: { label: 'Pills', use: 'a few short points as floating pills: items = the points, text = a small heading, icon = the dot icon; beats = when each pill comes' },
+  stat: { label: 'Counter', use: 'a number that counts up: value, unit ("%", "$", "k", "x"…), text = what it is; sub = a kicker' },
+  list: { label: 'List', use: 'steps or tips ticked off one by one: text = the title, items = the rows; beats = when each row comes' },
+  lower_third: { label: 'Lower third', use: 'a name tag: text = the name, sub = their role or handle' },
+  quote: { label: 'Quote card', use: 'a quote typed word by word on a glass card: text = the quote, sub = who said it' },
+  card3d: { label: '3D card', use: 'a card that swings in in 3D and floats: icon, text = the title, sub = a line under it' },
+  highlight: { label: 'Highlight', use: 'a line with its key words marked by a sweeping marker: text = the line, items = the words to mark (default its last word)' },
+  callout: { label: 'Callout', use: 'a note with a hand-drawn arrow pointing at something: text = the note; rotate the layer to aim the arrow' },
+  light_sweep: { label: 'Light sweep', use: 'a full-frame flash of light between topics, with an optional word (text) — about 1 second' },
+};
+/** Icons motion clips draw (line icons); anything else in an icon field is drawn as an emoji. */
+export const MOTION_ICONS = ['chat', 'phone', 'memory', 'folder', 'film', 'rocket', 'sparkle', 'mic', 'check', 'clock', 'scissors', 'music', 'window', 'image', 'play', 'pin', 'speaker', 'captions', 'magic', 'send', 'search', 'heart', 'star', 'fire', 'bolt', 'money', 'chart', 'trend', 'users', 'user', 'mail', 'globe', 'camera', 'code', 'lock', 'bulb', 'target', 'gift', 'cart', 'calendar', 'book', 'home', 'like', 'eye', 'warning', 'cross', 'arrow', 'trophy', 'brain', 'coffee'] as const;
+
+const MotionFields = {
+  piece: MotionPiece,
+  /** The main words (headline, word, label, name, quote…). */
+  text: z.string().trim().min(1).max(200),
+  /** A second line (kicker, role, attribution…). */
+  sub: z.string().trim().min(1).max(160).optional(),
+  /** Icons, points, rows or words to mark (by piece). */
+  items: z.array(z.string().trim().min(1).max(60)).min(1).max(8).optional(),
+  /** An icon name (MOTION_ICONS) or an emoji. */
+  icon: z.string().trim().min(1).max(24).optional(),
+  /** Counters: the number reached, and its unit. */
+  value: z.number().min(-1e12).max(1e12).optional(),
+  unit: z.string().max(12).optional(),
+  /** Colours: two accents (glows, gradients) and the text colour. */
+  accent: Hex.default('#8B6BFF'),
+  accent2: Hex.default('#5FD4FF'),
+  color: Hex.default('#FFFFFF'),
+  font: z.string().trim().min(1).max(60).default('Poppins'),
+  /** Seconds into the clip when each word or item appears (on the spoken words); evenly spread when missing. */
+  beats: z.array(Sec).max(16).optional(),
+};
+
+export const MotionClip = z
+  .object({
+    id: Id,
+    type: z.literal('motion'),
+    /** Clips in one group move and are deleted together (gr_…). */
+    group: Id.optional(),
+    start: Sec,
+    duration: z.number().min(0.2).max(600),
+    ...MotionFields,
+    transform: Transform.prefault({}),
+    ...Motion,
+  })
+  .strict();
+export type MotionClip = z.infer<typeof MotionClip>;
+/** The track motion clips go on (made above the videos and graphics, under titles and captions). */
+export const MOTION_TRACK = 'Motion';
+/** Where Keo puts a motion clip when it does not say: away from the middle, where a speaker's face usually is. */
+export const MOTION_PLACES = ['auto', 'top', 'upper', 'center', 'lower', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+export function motionPlace(place: (typeof MOTION_PLACES)[number], piece: MotionPiece, frame: { width: number; height: number }): { x: number; y: number } {
+  const tall = frame.height > frame.width * 1.1;
+  const at: Record<Exclude<(typeof MOTION_PLACES)[number], 'auto'>, { x: number; y: number }> = {
+    top: { x: 0.5, y: tall ? 0.17 : 0.2 },
+    upper: { x: 0.5, y: tall ? 0.27 : 0.3 },
+    center: { x: 0.5, y: 0.5 },
+    lower: { x: 0.5, y: tall ? 0.66 : 0.7 },
+    bottom: { x: 0.5, y: tall ? 0.78 : 0.82 },
+    left: { x: tall ? 0.5 : 0.27, y: tall ? 0.62 : 0.5 },
+    right: { x: tall ? 0.5 : 0.73, y: tall ? 0.62 : 0.5 },
+    'top-left': { x: tall ? 0.34 : 0.24, y: tall ? 0.16 : 0.22 },
+    'top-right': { x: tall ? 0.66 : 0.76, y: tall ? 0.16 : 0.22 },
+    'bottom-left': { x: tall ? 0.36 : 0.25, y: tall ? 0.8 : 0.8 },
+    'bottom-right': { x: tall ? 0.64 : 0.75, y: tall ? 0.8 : 0.8 },
+  };
+  if (place !== 'auto') return at[place];
+  if (piece === 'light_sweep') return at.center;
+  if (piece === 'lower_third') return at['bottom-left'];
+  // A talking head fills the middle: tall videos get graphics above the head, wide ones beside it.
+  return tall ? at.top : at.right;
+}
+
+const spokenKey = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * Where a phrase is said: the timeline words that match it (in order, a word or two may be missed or
+ * misheard), nearest to `near` when it is said more than once. Null when it is not found.
+ */
+export function findSpoken(words: Array<{ text: string; start: number; end: number }>, phrase: string, near?: number, after = -1): Array<{ text: string; start: number; end: number }> | null {
+  const want = phrase.split(/\s+/).map(spokenKey).filter(Boolean);
+  if (!want.length) return null;
+  const keys = words.map((w) => spokenKey(w.text));
+  let best: { hits: Array<{ text: string; start: number; end: number }>; score: number; at: number } | null = null;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i]!.start < after) continue;
+    // A match starts on one of the first two words of the phrase.
+    const first = want.indexOf(keys[i]!);
+    if (first < 0 || first > 1) continue;
+    const hits = [words[i]!];
+    let j = i + 1;
+    for (let k = first + 1; k < want.length && j < words.length && j <= i + want.length + 3; k++) {
+      // The next word, or the one after it (one word misheard or added).
+      if (keys[j] === want[k]) hits.push(words[j++]!);
+      else if (keys[j + 1] === want[k]) {
+        hits.push(words[j + 1]!);
+        j += 2;
+      }
+    }
+    const score = hits.length / want.length;
+    if (score < (want.length <= 2 ? 1 : 0.6)) continue;
+    const dist = near === undefined ? 0 : Math.abs(words[i]!.start - near);
+    if (!best || score > best.score + 0.15 || (Math.abs(score - best.score) <= 0.15 && near !== undefined && dist < Math.abs(best.at - near))) best = { hits, score, at: words[i]!.start };
+  }
+  return best?.hits ?? null;
+}
+
+/** Start, length and beats of a motion clip synced to its spoken words (say, and sayItems for items). */
+function syncMotion(words: Array<{ text: string; start: number; end: number }>, op: { piece: MotionPiece; text: string; items?: string[] | undefined; say?: string | undefined; sayItems?: string[] | undefined; start?: number | undefined }): { start: number; duration: number; beats: number[] | undefined; heard: string } | null {
+  const hits = op.say ? findSpoken(words, op.say, op.start) : null;
+  if (!hits?.length) return null;
+  const lead = op.piece === 'light_sweep' ? 0.35 : 0.2;
+  const start = Math.max(0, hits[0]!.start - lead);
+  let lastEnd = hits.at(-1)!.end;
+  let beats: number[] | undefined;
+  const at = (t: number) => Math.max(0, t - start);
+  const n = op.items?.length ?? 0;
+  if (op.piece === 'headline' || op.piece === 'quote' || op.piece === 'word_pop') {
+    // Each word of the text comes in when its spoken word is said (or spread over the phrase).
+    const tw = op.text.split(/\s+/).filter(Boolean);
+    beats = tw.map((w, i) => {
+      const same = hits.find((h) => spokenKey(h.text) === spokenKey(w));
+      return at(same ? same.start : hits[Math.min(hits.length - 1, Math.floor((i * hits.length) / tw.length))]!.start);
+    });
+    for (let i = 1; i < beats.length; i++) beats[i] = Math.max(beats[i]!, beats[i - 1]!);
+    if (op.piece === 'word_pop') beats = [beats[0]!];
+  } else if (op.piece === 'highlight') {
+    const marks = op.items?.length ? op.items : [op.text.split(/\s+/).at(-1)!];
+    beats = marks.map((m, i) => at((hits.find((h) => spokenKey(h.text) === spokenKey(m)) ?? hits[Math.min(hits.length - 1, Math.floor(((i + 1) * hits.length) / (marks.length + 1)))]!).start));
+  } else if (n && (op.piece === 'chips' || op.piece === 'list' || op.piece === 'icon_burst')) {
+    if (op.sayItems?.length) {
+      let after = hits[0]!.start - 0.01;
+      beats = [];
+      for (let i = 0; i < n; i++) {
+        const said = op.sayItems[i] ? findSpoken(words, op.sayItems[i]!, undefined, after) : null;
+        const t = said?.[0]?.start ?? (beats.length ? start + beats.at(-1)! + 0.6 : hits[0]!.start);
+        beats.push(at(t));
+        if (said) {
+          after = said[0]!.start;
+          lastEnd = Math.max(lastEnd, said.at(-1)!.end);
+        }
+      }
+    } else {
+      const span = Math.max(0.6, lastEnd - hits[0]!.start);
+      beats = Array.from({ length: n }, (_, i) => at(hits[0]!.start + (i * span) / n));
+    }
+  } else if (op.piece === 'stat') {
+    const num = hits.find((h) => /\d/.test(h.text)) ?? hits[0]!;
+    beats = [at(num.start)];
+  }
+  const hold = op.piece === 'light_sweep' ? 0.7 : 1.6;
+  return { start: round(start), duration: round(Math.max(op.piece === 'light_sweep' ? 1 : 2.2, lastEnd - start + hold)), beats: beats?.map(round), heard: hits.map((h) => h.text).join(' ') };
+}
+
+export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip, AdjustClip, MotionClip]);
 export type Clip = z.infer<typeof Clip>;
 /** Clips with media behind them (video, picture or sound). */
 export const isAV = (c: Clip): c is MediaClip | AudioClip => c.type === 'media' || c.type === 'audio';
@@ -828,6 +1001,23 @@ export const EditOp = z.discriminatedUnion('op', [
       counter: Counter.nullable().optional(),
       shapeStyle: ShapeStyle.partial().optional(),
       shape: ShapeKind.optional(),
+      /** Motion clips: the piece and its words, items, icon, number, colours and beats (null removes a field that can be left out). */
+      motion: z
+        .object({
+          piece: MotionPiece.optional(),
+          sub: z.string().trim().min(1).max(160).nullable().optional(),
+          items: z.array(z.string().trim().min(1).max(60)).min(1).max(8).nullable().optional(),
+          icon: z.string().trim().min(1).max(24).nullable().optional(),
+          value: z.number().min(-1e12).max(1e12).nullable().optional(),
+          unit: z.string().max(12).nullable().optional(),
+          accent: Hex.optional(),
+          accent2: Hex.optional(),
+          color: Hex.optional(),
+          font: z.string().trim().min(1).max(60).optional(),
+          beats: z.array(Sec).max(16).nullable().optional(),
+        })
+        .strict()
+        .optional(),
       transition: Transition.nullable().optional(),
       crop: Crop.partial().nullable().optional(),
       backdrop: z.enum(['blur']).nullable().optional(),
@@ -876,6 +1066,31 @@ export const EditOp = z.discriminatedUnion('op', [
       keys: Keys.optional(),
       enter: Entrance.optional(),
       exit: Entrance.optional(),
+      loop: Loop.optional(),
+    })
+    .strict(),
+  /** A motion clip (motion graphics) on the Motion track (made above the videos and graphics when missing). */
+  z
+    .object({
+      op: z.literal('add_motion'),
+      ...MotionFields,
+      accent: Hex.optional(),
+      accent2: Hex.optional(),
+      color: Hex.optional(),
+      font: z.string().trim().min(1).max(60).optional(),
+      /** When it starts (timeline seconds); with `say`, the spoken words set it (start then only picks the nearest place they are said). */
+      start: Sec.optional(),
+      /** How long it stays; with `say`, until a moment after the words are said. */
+      duration: z.number().min(0.2).max(600).optional(),
+      /** Sync to the speech: the words as they are said in the video (found in the transcript); the clip starts on them and its words or items come in on them. */
+      say: z.string().trim().min(1).max(300).optional(),
+      /** Items pieces (pills, lists, icons): the words said for each item, so each comes in on its own words. */
+      sayItems: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
+      track: TrackRef.optional(),
+      trackName: z.string().trim().min(1).max(60).optional(),
+      /** Where on the frame (ignored when transform gives x and y). */
+      place: z.enum(MOTION_PLACES).default('auto'),
+      transform: TransformPatch.optional(),
       loop: Loop.optional(),
     })
     .strict(),
@@ -1585,9 +1800,24 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (!ok) throw new EditError(`${c.id} is ${c.type === 'media' ? 'a video or picture' : c.type}: it has no ${field}.`);
         };
         if (op.text !== undefined) {
-          only('text', c.type === 'text');
-          (c as TextClip).text = op.text;
-          delete (c as TextClip).words;
+          only('text', c.type === 'text' || c.type === 'motion');
+          if (c.type === 'motion') c.text = op.text;
+          else {
+            (c as TextClip).text = op.text;
+            delete (c as TextClip).words;
+          }
+        }
+        if (op.motion) {
+          only('motion settings (only motion clips)', c.type === 'motion');
+          const m = c as MotionClip;
+          const { sub, items, icon, value, unit, beats, ...rest } = op.motion;
+          const next: Record<string, unknown> = { ...m, ...rest };
+          for (const [k, v] of Object.entries({ sub, items, icon, value, unit, beats })) {
+            if (v === null) delete next[k];
+            else if (v !== undefined) next[k] = k === 'beats' ? [...(v as number[])].sort((a, b) => a - b).map(round) : v;
+          }
+          Object.assign(m, MotionClip.parse(next));
+          for (const k of ['sub', 'items', 'icon', 'value', 'unit', 'beats'] as const) if (!(k in next)) delete m[k];
         }
         if (op.style) {
           only('text style', c.type === 'text');
@@ -1758,8 +1988,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         }
         for (const k of ['enter', 'exit'] as const)
           if (op[k] !== undefined) {
-            only(k === 'enter' ? 'entrance (use animIn for text)' : 'exit (use animOut for text)', c.type === 'media' || c.type === 'shape');
-            const v = c as MediaClip | ShapeClip;
+            only(k === 'enter' ? 'entrance (use animIn for text)' : 'exit (use animOut for text)', c.type === 'media' || c.type === 'shape' || c.type === 'motion');
+            const v = c as MediaClip | ShapeClip | MotionClip;
             if (op[k] === null) delete v[k];
             else v[k] = op[k]!;
           }
@@ -1833,6 +2063,47 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         t.clips.push(c);
         sortClips(t);
         changes.push(`Added a ${op.shape} at ${c.start}s on ${t.name} (${c.id}).`);
+        break;
+      }
+      case 'add_motion': {
+        let t = op.trackName && !op.track ? p.tracks.find((x) => x.kind === 'text' && x.name === op.trackName) : op.track ? track(op.track, 'text') : p.tracks.find((x) => x.kind === 'text' && x.name === MOTION_TRACK);
+        if (!t) {
+          t = { id: rid('tr', rand), kind: 'text', name: op.trackName ?? MOTION_TRACK, hidden: false, muted: false, clips: [] };
+          // Above the videos, graphics and adjustments; under titles and captions (they stay on top).
+          const under = p.tracks.findIndex((x) => x.kind === 'text' && x.name !== GRAPHICS_TRACK && x.name !== ADJUST_TRACK);
+          p.tracks.splice(under < 0 ? p.tracks.length : under, 0, t);
+        }
+        if (t.locked) throw new EditError(`The track ${t.name} is locked: unlock it first (set_track locked false).`);
+        const spot = motionPlace(op.place, op.piece, p);
+        const synced = op.say ? syncMotion(timelineWords(p), op) : null;
+        if (op.say && !synced) throw new EditError(`Could not find “${op.say.slice(0, 60)}” in the transcript${timelineWords(p).length ? '' : ' (there is no transcript yet: run studio__transcript first)'}. Use the words exactly as they are said, or give start instead.`);
+        const start = synced?.start ?? op.start;
+        if (start === undefined) throw new EditError('A motion clip needs a start (seconds) or say (the spoken words it goes with).');
+        const duration = op.duration ?? synced?.duration ?? 3;
+        const beats = op.beats ?? synced?.beats;
+        const c = MotionClip.parse({
+          id: rid('cl', rand),
+          type: 'motion',
+          start: round(start),
+          duration: round(duration),
+          piece: op.piece,
+          text: op.text,
+          ...(op.sub ? { sub: op.sub } : {}),
+          ...(op.items ? { items: op.items } : {}),
+          ...(op.icon ? { icon: op.icon } : {}),
+          ...(op.value !== undefined ? { value: op.value } : {}),
+          ...(op.unit !== undefined ? { unit: op.unit } : {}),
+          ...(op.accent ? { accent: op.accent } : {}),
+          ...(op.accent2 ? { accent2: op.accent2 } : {}),
+          ...(op.color ? { color: op.color } : {}),
+          ...(op.font ? { font: op.font } : {}),
+          ...(beats?.length ? { beats: [...beats].filter((b) => b >= 0 && b < duration).sort((a, b) => a - b).map(round) } : {}),
+          transform: { ...spot, ...(op.transform ?? {}) },
+          ...(op.loop ? { loop: op.loop } : {}),
+        });
+        t.clips.push(c);
+        sortClips(t);
+        changes.push(`Added a ${MOTION_PIECE_INFO[op.piece].label.toLowerCase()} motion clip “${op.text.slice(0, 40)}” at ${c.start}–${round(c.start + c.duration)}s on ${t.name} (${c.id})${synced ? `, on the words “${synced.heard}”${c.beats ? ` (beats ${c.beats.join(', ')}s into it)` : ''}` : ''}.`);
         break;
       }
       case 'add_adjust': {
@@ -2023,7 +2294,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
 }
 
 /** Motion and look of a layer, briefly (for describeProject). */
-function motionNote(c: MediaClip | TextClip | ShapeClip): string {
+function motionNote(c: MediaClip | TextClip | ShapeClip | MotionClip): string {
   const parts: string[] = [];
   if (c.type !== 'text' && c.enter) parts.push(`in ${c.enter.kind}`);
   if (c.type !== 'text' && c.exit) parts.push(`out ${c.exit.kind}`);
@@ -2048,6 +2319,7 @@ export function describeProject(p: Project): string {
       const before = lines.length;
       const span = `${round(c.start)}–${round(clipEnd(c))}s`;
       if (c.type === 'text') lines.push(`  ${c.id} ${span} text “${c.text.slice(0, 60)}”${c.words ? ` (${c.words.length} timed words)` : ''}${c.counter ? ` counter ${c.counter.from}→${c.counter.to}` : ''}${motionNote(c)}`);
+      else if (c.type === 'motion') lines.push(`  ${c.id} ${span} motion ${c.piece} “${c.text.slice(0, 60)}”${c.sub ? ` / “${c.sub.slice(0, 40)}”` : ''}${c.items ? ` items ${c.items.map((x) => JSON.stringify(x)).join(', ')}` : ''}${c.icon ? ` icon ${c.icon}` : ''}${c.value !== undefined ? ` value ${c.value}${c.unit ?? ''}` : ''}${c.beats ? ` beats ${c.beats.join(',')}` : ''} at ${round(c.transform.x)},${round(c.transform.y)}${c.transform.scale !== 1 ? ` scale ${round(c.transform.scale)}` : ''}${motionNote(c)}`);
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
       else if (c.type === 'adjust') {
         const g = c.color ? Object.entries(c.color).filter(([, v]) => v).map(([k, v]) => `${k} ${round(v)}`) : [];
