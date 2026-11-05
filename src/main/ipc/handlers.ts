@@ -649,6 +649,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
         .filter((j) => j.context?.projectId === id)
         .map((j) => ({ about: j.context?.about ?? 'AI clip', submittedAt: j.submittedAt, kind: j.model === 'wan-animate-replace' ? ('swap' as const) : j.ext && j.ext !== 'mp4' ? ('other' as const) : ('shot' as const) })),
     // The user's own clicks (after the page showed the price and what is sent).
+    'studio:shotAgain': async ({ id, clip, mode, prompt, model, seconds }) =>
+      (mode === 'redo' ? s.studioRedoShot(id, { clip, ...(prompt ? { prompt } : {}), ...(model ? { model } : {}) }, new AbortController().signal) : s.studioExtendShot(id, { clip, seconds: seconds ?? 5, ...(prompt ? { prompt } : {}), ...(model ? { model } : {}) }, new AbortController().signal)).catch(studioErr),
     'studio:aiMusic': async ({ id, prompt, seconds, vocals, at, volume }) => s.studioAiMusic(id, { prompt, ...(seconds ? { seconds } : {}), ...(vocals ? { vocals } : {}), ...(at !== undefined ? { at } : {}), ...(volume !== undefined ? { volume } : {}) }, new AbortController().signal).catch(studioErr),
     'studio:aiSound': async ({ id, prompt, seconds, at, loop, volume }) => s.studioAiSound(id, { prompt, seconds, at, ...(loop ? { loop } : {}), ...(volume !== undefined ? { volume } : {}) }, new AbortController().signal).catch(studioErr),
     'studio:talk': async ({ id, character, text, audioAsset, scene, prompt, quality, at }) =>

@@ -753,7 +753,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about' | 'aiMade'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about' | 'aiMade' | 'aiRecipe'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -922,7 +922,7 @@ export class StudioService {
   addAiClip(
     id: string,
     file: string,
-    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null },
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: Asset['aiRecipe']; replace?: string },
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
     const next = this.aiClipQueue.then(() => this.addAiClipNow(id, file, o));
     this.aiClipQueue = next.catch(() => undefined);
@@ -931,14 +931,23 @@ export class StudioService {
   private async addAiClipNow(
     id: string,
     file: string,
-    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null },
+    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: Asset['aiRecipe']; replace?: string },
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
     // A clip used again (made before) is already media of the project.
     const imported = await this.importFiles(id, [file]);
     const asset = imported.added[0] ?? imported.project.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file).toLowerCase());
     if (!asset) throw new StudioError('Keo could not read the AI clip.');
-    this.learn(id, asset.id, { aiMade: true, about: o.about.slice(0, 300) });
+    this.learn(id, asset.id, { aiMade: true, about: o.about.slice(0, 300), ...(o.recipe ? { aiRecipe: o.recipe } : {}) });
     const from = Math.min(o.in ?? 0, Math.max(0, asset.duration - 0.1));
+    // A new take of a shot goes in the old one's place (its timing, effects and track kept).
+    if (o.replace && asset.kind === 'video') {
+      const old = findClip(this.get(id), o.replace)?.clip;
+      if (old && old.type === 'media') {
+        const r = this.edit(id, [{ op: 'replace_media', clip: old.id, assetId: asset.id, in: 0 }]);
+        const done = o.muted ? this.mergeLast(id, { op: 'set', clip: old.id, volume: 0 }) : r;
+        return { project: done.project, asset, clip: old.id };
+      }
+    }
     // AI music and sound effects go on an audio track (music under the speech).
     if (asset.kind === 'audio') {
       const r = this.edit(id, [{ op: 'add_audio', assetId: asset.id, trackName: o.trackName ?? 'Music', start: Math.max(0, o.at), in: from, duration: Math.min(o.duration ?? o.seconds, asset.duration - from), volume: o.volume ?? 1, ...(o.duck !== undefined ? { duck: o.duck } : {}) }]);

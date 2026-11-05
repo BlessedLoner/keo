@@ -15,6 +15,7 @@ import { Versions } from '../studio/Versions';
 import { FacelessCreator } from '../studio/FacelessCreator';
 import { CloneVideo } from '../studio/CloneVideo';
 import { TalkingCharacter } from '../studio/TalkingCharacter';
+import { ShotAgain } from '../studio/ShotAgain';
 import { AiVideoCreator } from '../studio/AiVideoCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
@@ -1273,6 +1274,7 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           </label>
         </Section>
       )}
+      {at('video') && clip.type === 'media' && asset?.kind === 'video' && <ShotAgain key={clip.id} projectId={project.id} clip={clip} asset={asset} />}
       {at('video') && clip.type === 'media' && <ChromaFields clip={clip} set={set} />}
       {at('adjust') && (clip.type === 'media' || clip.type === 'adjust') && <EffectsFields clip={clip} set={set} />}
       {at('text') && clip.type === 'text' && <CounterFields clip={clip} set={set} />}

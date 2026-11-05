@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Asset } from '../../shared/studio';
 import fs from 'node:fs';
 import path from 'node:path';
 import { MUSIC_SECONDS, SFX_MAX_SECONDS, TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
@@ -129,6 +130,9 @@ interface RunOptions {
 
 export class AiVideoError extends Error {}
 
+/** How an AI shot was made (kept with the clip's media). */
+export type AiRecipe = NonNullable<Asset['aiRecipe']>;
+
 export interface AiVideoRequest {
   model: AiVideoModelId;
   /** The picture, as JPEG bytes (Keo uploads it to fal.ai's storage and sends the model its link). */
@@ -137,6 +141,8 @@ export interface AiVideoRequest {
   seconds: number;
   audio: boolean;
   aspect: '9:16' | '16:9' | '1:1';
+  /** Another take of the same shot (1, 2…): a new clip instead of the one made before. */
+  take?: number;
 }
 
 type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> }>;
@@ -168,7 +174,8 @@ export class FalVideo {
   /** The same request (model, picture, words, length, sound, shape) gives the same id. */
   hashOf(r: AiVideoRequest): string {
     const picture = crypto.createHash('sha256').update(r.image).digest('hex');
-    return crypto.createHash('sha256').update(JSON.stringify([AI_VIDEO_MODELS[r.model].endpoint, r.prompt, picture, modelSeconds(r.model, r.seconds), r.audio, r.aspect])).digest('hex').slice(0, 24);
+    // The first take keeps the id it always had (clips made before are found again).
+    return crypto.createHash('sha256').update(JSON.stringify([AI_VIDEO_MODELS[r.model].endpoint, r.prompt, picture, modelSeconds(r.model, r.seconds), r.audio, r.aspect, ...(r.take ? [r.take] : [])])).digest('hex').slice(0, 24);
   }
 
   // ---------------------------------------------------------------- requests fal.ai is making
@@ -652,7 +659,7 @@ export interface PendingShot {
   cancelUrl: string | null;
   submittedAt: string;
   /** Where the clip goes when it is ready. */
-  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null };
+  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: AiRecipe; replace?: string };
 }
 
 /** fal.ai is still making the clip: it is remembered and arrives later. */

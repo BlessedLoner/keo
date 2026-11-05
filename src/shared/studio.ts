@@ -105,6 +105,21 @@ export const Asset = z
     about: z.string().trim().min(1).max(300).optional(),
     /** Made by an AI video model (Keo reminds the user to label the video as AI when they post it). */
     aiMade: z.boolean().optional(),
+    /** How an AI shot was made (its start picture, words, model and length), so it can be made again or made longer. */
+    aiRecipe: z
+      .object({
+        model: z.string().min(1).max(40),
+        prompt: z.string().max(4000),
+        /** The start picture (a file Keo keeps). */
+        frame: z.string().min(3).max(1000),
+        seconds: z.number().min(1).max(30),
+        audio: z.boolean(),
+        aspect: z.enum(['9:16', '16:9', '1:1']),
+        /** Which take this is (0: the first). */
+        take: z.number().int().min(0).max(999).default(0),
+      })
+      .strict()
+      .optional(),
     /** Degrees clockwise the video's frames are turned to stand upright (phone videos); width and height are upright. */
     rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
     /** A light copy (540p) the preview plays instead of a big video; the export always uses the original. */

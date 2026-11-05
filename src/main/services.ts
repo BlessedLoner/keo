@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { StudioError, StudioService, type ProbeResult, type RenderJob } from './studio/studioService';
 import type { CaptionLine, Word as CaptionWord } from './studio/captions';
-import { findClip as findStudioClip, projectDuration, type Asset as StudioAsset, type Project as StudioProject, type TextStyle } from '../shared/studio';
+import { clipEnd as studioClipEnd, findClip as findStudioClip, projectDuration, sourceSpan as studioSourceSpan, type Asset as StudioAsset, type Project as StudioProject, type TextStyle } from '../shared/studio';
 import { describeBrand } from '../shared/studioBrand';
 import { facelessOps, lookOps, pictureSize, type SceneMedia, type Storyboard } from '../shared/studioFaceless';
 import { KeoAccount } from './cloud/account';
@@ -94,7 +94,7 @@ import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/
 import { findQuote, nameMentioned } from './agent/quotes';
 import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
-import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
+import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 import { wavOf } from './studio/captions';
 import { audioSeconds, speakingSeconds } from '../shared/audioLength';
 import { CHARACTER_PICTURE_USD, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
@@ -740,6 +740,7 @@ export class Services {
         talkPlan: (projectId, o) => this.studioTalkPlan(projectId, o),
         talk: (projectId, o, signal) => this.studioTalkingCharacter(projectId, o, signal),
         aiMusic: (projectId, o, signal) => this.studioAiMusic(projectId, o, signal),
+        shotAgain: (projectId, o, signal) => (o.mode === 'redo' ? this.studioRedoShot(projectId, { clip: o.clip, ...(o.prompt ? { prompt: o.prompt } : {}), ...(o.model ? { model: o.model } : {}) }, signal) : this.studioExtendShot(projectId, { clip: o.clip, seconds: o.seconds ?? 5, ...(o.prompt ? { prompt: o.prompt } : {}), ...(o.model ? { model: o.model } : {}) }, signal)),
         aiSound: (projectId, o, signal) => this.studioAiSound(projectId, o, signal),
         aiVia: () => (this.secrets.has('fal') ? 'own' : this.account.signedIn() ? 'keo' : null),
         aiShotBlocked: () => (this.studioAiReady() ? null : 'Keo Studio’s AI needs the user’s Keo account: they sign in (Settings → Providers → Keo account) and it is paid with Studio credits. (Or their own fal.ai key under Settings → Advanced.)'),
@@ -1361,17 +1362,18 @@ export class Services {
     if (!a || a.kind !== 'image') throw new StudioError('Choose a picture of this project to bring to life.');
     const jpeg = this.imageTools.jpeg?.(a.path, 1280) ?? null;
     if (!jpeg) throw new StudioError('Keo could not read that picture.');
-    const aspect = p.width > p.height * 1.15 ? '16:9' : p.height > p.width * 1.15 ? '9:16' : '1:1';
+    const aspect: '16:9' | '9:16' | '1:1' = p.width > p.height * 1.15 ? '16:9' : p.height > p.width * 1.15 ? '9:16' : '1:1';
     const about = `AI clip (${AI_VIDEO_MODELS[o.model].label}) from ${a.name}: ${o.prompt}`;
     const request = { model: o.model, image: jpeg, prompt: o.prompt, seconds: o.seconds, audio: o.audio, aspect } as const;
+    const recipe = { model: o.model, prompt: o.prompt, frame: a.path, seconds: modelSeconds(o.model, o.seconds), audio: o.audio, aspect, take: 0 };
     // The same request fal.ai is still making from an earlier try: picked up, not paid again.
     const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.hashOf(request));
     if (!resumed && !fs.existsSync(this.aiVideo.cacheFile(request))) this.falBudget(estimateCost(o.model, o.seconds, o.audio));
     try {
-      const made = await this.aiVideo.generate(request, signal, { context: { projectId: id, at: o.at, about } });
+      const made = await this.aiVideo.generate(request, signal, { context: { projectId: id, at: o.at, about, recipe } });
       const costUsd = made.cached || resumed ? 0 : estimateCost(o.model, o.seconds, o.audio);
       if (!made.cached && !resumed) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: this.aiVia(), model: o.model, seconds: made.seconds, costUsd } });
-      const r = await this.studio.addAiClip(id, made.file, { at: o.at, seconds: made.seconds, about });
+      const r = await this.studio.addAiClip(id, made.file, { at: o.at, seconds: made.seconds, about, recipe });
       return { clip: r.clip, asset: r.asset.id, seconds: made.seconds, cached: made.cached, costUsd, pending: false };
     } catch (e) {
       // Still being made: remembered (paid once), checked in the background, added when ready.
@@ -1555,6 +1557,101 @@ export class Services {
       if (e instanceof AiVideoPending) {
         this.audit.record({ kind: 'studio.ai_sound', decision: 'sent', detail: { destination: this.aiVia(), seconds, costUsd: cost } });
         return { clip: null, seconds, cached: false, costUsd: cost, pending: true };
+      }
+      throw e instanceof AiVideoError ? new StudioError(e.message) : e;
+    }
+  }
+
+  /**
+   * One AI shot made again: a new take of the same shot (its start picture, words, model and
+   * length), with new words or another model when asked. The new take goes in the old clip's place
+   * (its timing and effects kept); the old take stays in the project's media.
+   */
+  async studioRedoShot(id: string, o: { clip: string; prompt?: string; model?: AiVideoModelId }, signal: AbortSignal): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    if (!this.studioAiReady()) throw new StudioError('AI shots need your Keo account: sign in (Settings → Providers → Keo account).');
+    const p = this.studio.get(id);
+    const found = findStudioClip(p, o.clip);
+    const c = found?.clip;
+    const a = c && c.type === 'media' ? p.assets.find((x) => x.id === c.assetId) : undefined;
+    const r = a?.aiRecipe;
+    if (!c || !a || !r) throw new StudioError('That clip was not made by Keo’s AI video (or was made before Keo kept how): use Extend, or make a new AI shot.');
+    if (!fs.existsSync(r.frame)) throw new StudioError('The start picture of that shot is gone: make a new AI shot instead.');
+    const jpeg = this.imageTools.jpeg?.(r.frame, 1280);
+    if (!jpeg) throw new StudioError('Keo could not read that shot’s start picture.');
+    const model = (o.model ?? (r.model in AI_VIDEO_MODELS ? r.model : 'kling-3-pro')) as AiVideoModelId;
+    const prompt = o.prompt?.trim() ? (r.prompt.includes(REAL_MOTION) ? `${o.prompt.trim()} ${REAL_MOTION}` : o.prompt.trim()).slice(0, 2400) : r.prompt;
+    const take = r.take + 1;
+    const request = { model, image: jpeg, prompt, seconds: r.seconds, audio: r.audio, aspect: r.aspect, take } as const;
+    const recipe = { ...r, model, prompt, seconds: modelSeconds(model, r.seconds), take };
+    const muted = c.type === 'media' && c.volume === 0;
+    const about = `AI shot, take ${take + 1} (${AI_VIDEO_MODELS[model].label}): ${(o.prompt?.trim() || r.prompt).slice(0, 200)}`;
+    return this.runShotAgain(id, request, { at: c.start, about, trackName: found.track.name, muted, recipe, replace: c.id }, signal);
+  }
+
+  /**
+   * A shot made longer: its last frame brought to life again (the same model and words unless
+   * new ones are given), placed right after it. What comes after it on the picture tracks moves
+   * along to make room. Works on any video clip (the words are then needed).
+   */
+  async studioExtendShot(id: string, o: { clip: string; seconds: number; prompt?: string; model?: AiVideoModelId }, signal: AbortSignal): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    if (!this.studioAiReady()) throw new StudioError('AI shots need your Keo account: sign in (Settings → Providers → Keo account).');
+    const p = this.studio.get(id);
+    const found = findStudioClip(p, o.clip);
+    const c = found?.clip;
+    const a = c && c.type === 'media' ? p.assets.find((x) => x.id === c.assetId) : undefined;
+    if (!c || c.type !== 'media' || !a || a.kind !== 'video') throw new StudioError('Choose a video clip on the timeline to extend.');
+    const r = a.aiRecipe;
+    if (!o.prompt?.trim() && !r) throw new StudioError('Say what happens next in the shot (it was not made by Keo’s AI, so Keo does not know its words).');
+    // The clip's own last frame (without the text and graphics on top), full size.
+    const last = Math.max(0, c.in + studioSourceSpan(c, c.duration) - 0.06);
+    const shot = (await this.studio.assetFrames(id, a.id, [Math.min(last, a.duration - 0.04)], Math.min(1280, p.width)))[0];
+    if (!shot) throw new StudioError('Keo could not read the last frame of that clip.');
+    const jpeg = await this.jpegOfPng(shot.png);
+    if (!jpeg) throw new StudioError('Keo could not read the last frame of that clip.');
+    // The frame is kept (it is this new shot's start picture, for a redo of it later).
+    const frame = this.aiVideo.cacheFileOf(crypto.createHash('sha256').update(shot.png).digest('hex').slice(0, 24), 'png');
+    fs.mkdirSync(path.dirname(frame), { recursive: true });
+    if (!fs.existsSync(frame)) fs.writeFileSync(frame, shot.png);
+    const model = (o.model ?? (r && r.model in AI_VIDEO_MODELS ? r.model : 'kling-3-pro')) as AiVideoModelId;
+    const seconds = modelSeconds(model, o.seconds);
+    const words = o.prompt?.trim() || `The same shot carries on smoothly from this moment: the same motion, camera and mood continue. ${r!.prompt}`;
+    const prompt = (r?.prompt.includes(REAL_MOTION) && !words.includes(REAL_MOTION) ? `${words} ${REAL_MOTION}` : words).slice(0, 2400);
+    const aspect = r?.aspect ?? (p.width > p.height * 1.15 ? '16:9' : p.height > p.width * 1.15 ? '9:16' : '1:1');
+    const audio = r?.audio ?? false;
+    const request = { model, image: jpeg, prompt, seconds, audio, aspect } as const;
+    // Room after the clip on the picture tracks (one undo), so the new part fits right after it.
+    const end = studioClipEnd(c);
+    const later = p.tracks
+      .filter((t) => t.kind !== 'audio')
+      .flatMap((t) => t.clips)
+      .filter((x) => x.id !== c.id && x.start >= end - 0.01)
+      .sort((x, y) => y.start - x.start);
+    if (later.length) this.studio.edit(id, later.map((x) => ({ op: 'move' as const, clip: x.id, start: Math.round((x.start + seconds) * 1000) / 1000 })));
+    const recipe = { model, prompt, frame, seconds, audio, aspect, take: 0 };
+    const about = `AI extension (${AI_VIDEO_MODELS[model].label}) of ${a.name}: ${words.slice(0, 200)}`;
+    return this.runShotAgain(id, request, { at: end, about, trackName: found.track.name, muted: c.volume === 0 || !audio, recipe }, signal);
+  }
+
+  /** Makes a redo or an extension, and places it (or tells that it arrives by itself). */
+  private async runShotAgain(
+    id: string,
+    request: { model: AiVideoModelId; image: Buffer; prompt: string; seconds: number; audio: boolean; aspect: '9:16' | '16:9' | '1:1'; take?: number },
+    place: { at: number; about: string; trackName: string; muted: boolean; recipe: NonNullable<StudioAsset['aiRecipe']>; replace?: string },
+    signal: AbortSignal,
+  ): Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }> {
+    const cost = estimateCost(request.model, request.seconds, request.audio);
+    const resumed = this.aiVideo.pending().some((j) => j.hash === this.aiVideo.hashOf(request));
+    if (!resumed && !fs.existsSync(this.aiVideo.cacheFile(request))) this.falBudget(cost);
+    try {
+      const made = await this.aiVideo.generate(request, signal, { context: { projectId: id, ...place } });
+      if (!made.cached && !resumed) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: this.aiVia(), model: request.model, seconds: made.seconds, costUsd: cost } });
+      const r = await this.studio.addAiClip(id, made.file, { ...place, seconds: made.seconds });
+      return { clip: r.clip, seconds: made.seconds, cached: made.cached, costUsd: made.cached || resumed ? 0 : cost, pending: false };
+    } catch (e) {
+      if (e instanceof AiVideoPending) {
+        if (!resumed) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: this.aiVia(), model: request.model, seconds: e.job.seconds, costUsd: cost } });
+        this.emit('studio:aiShot', { projectId: id, state: 'waiting', message: place.replace ? 'The new take is being filmed: it goes in the old one’s place by itself when ready.' : 'The extension is being filmed: it goes right after the shot by itself when ready.' });
+        return { clip: null, seconds: e.job.seconds, cached: false, costUsd: resumed ? 0 : cost, pending: true };
       }
       throw e instanceof AiVideoError ? new StudioError(e.message) : e;
     }
@@ -1827,11 +1924,12 @@ export class Services {
         const about = `AI shot ${i + 1} of ${n} (${model.label.split(':')[0]}): ${shot.motion}`.slice(0, 300);
         const request = { model: plan.model as AiVideoModelId, image: f.jpeg, prompt: `${shot.motion} ${REAL_MOTION}`.slice(0, 2400), seconds: f.seconds, audio: plan.audio, aspect } as const;
         const price = estimateCost(plan.model as AiVideoModelId, f.seconds, plan.audio);
-        const placement = { projectId: id, at: f.at, about, trackName: 'AI shots', muted: !plan.audio };
+        const recipe = { model: plan.model, prompt: request.prompt, frame: f.file, seconds: modelSeconds(plan.model as AiVideoModelId, f.seconds), audio: plan.audio, aspect, take: 0 };
+        const placement = { projectId: id, at: f.at, about, trackName: 'AI shots', muted: !plan.audio, recipe };
         try {
           const made = await this.aiVideo.generate(request, signal, { waitMs: 60_000, context: placement });
           if (!made.cached) this.audit.record({ kind: 'studio.ai_shot', decision: 'sent', detail: { destination: this.aiVia(), model: plan.model, seconds: made.seconds, costUsd: price } });
-          await this.studio.addAiClip(id, made.file, { at: f.at, seconds: made.seconds, about, trackName: 'AI shots', muted: !plan.audio });
+          await this.studio.addAiClip(id, made.file, { at: f.at, seconds: made.seconds, about, trackName: 'AI shots', muted: !plan.audio, recipe });
           ready++;
         } catch (e) {
           if (!(e instanceof AiVideoPending)) throw err(e);

@@ -54,6 +54,8 @@ export interface StudioToolDeps {
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  /** One shot made again (a new take) or made longer (from its last frame). */
+  shotAgain?: (projectId: string, o: { clip: string; mode: 'redo' | 'extend'; prompt?: string; model?: AiVideoModelId; seconds?: number }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution; smooth?: boolean; mode?: 'stable' | 'quick' }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** A talking character (lip-synced): its plan and price, and making it. */
   talkPlan?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality }) => { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
@@ -1363,6 +1365,70 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const shotAgain = defineCapability({
+    id: 'studio.shot_again',
+    version: '1.0.0',
+    title: 'Redo or extend one AI shot',
+    description:
+      'Fix one shot without making the whole video again. mode redo: a new take of an AI shot (same start picture and length; new words in prompt, or another model, when the last take was wrong); it goes in the old clip’s place (timing and effects kept; the old take stays in the media). mode extend: the shot made longer from its own last frame (seconds: how much longer; prompt: what happens next, needed for clips not made by Keo’s AI); it goes right after it and what follows on the picture tracks moves along. Paid like an AI shot (Keo Cloud’s Studio credits or the user’s fal.ai key; Kling about $0.11 a second). Say the price first. If it is still being made it arrives by itself: do not ask again.',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/),
+        mode: z.enum(['redo', 'extend']),
+        prompt: z.string().trim().min(3).max(2000).optional(),
+        model: z.enum(Object.keys(AI_VIDEO_MODELS) as [AiVideoModelId, ...AiVideoModelId[]]).optional(),
+        seconds: z.number().min(3).max(10).default(5).describe('extend: how many seconds longer'),
+      })
+      .strict(),
+    output: State.partial().extend({ clip: z.string().nullable(), seconds: z.number(), cached: z.boolean(), costUsd: z.number(), pending: z.boolean(), note: z.string().nullable() }),
+    risk: 'medium',
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 12 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The new take replaces the old clip, or the extension goes right after it (one undo each); one still being made arrives when ready.',
+    unavailableReason: () => (d.shotAgain ? d.aiShotBlocked() : 'Redoing AI shots is not available here.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a picture to fal.ai' }),
+    preview: (i) => {
+      const via = d.aiVia?.() ?? 'own';
+      let seconds = i.seconds;
+      let model: AiVideoModelId = i.model ?? 'kling-3-pro';
+      try {
+        const p = s.resolve(i.projectId);
+        const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === i.clip);
+        const a = c && c.type === 'media' ? p.assets.find((x) => x.id === c.assetId) : undefined;
+        if (a?.aiRecipe) {
+          if (!i.model && a.aiRecipe.model in AI_VIDEO_MODELS) model = a.aiRecipe.model as AiVideoModelId;
+          if (i.mode === 'redo') seconds = a.aiRecipe.seconds;
+        }
+      } catch {
+        /* the price from what was asked */
+      }
+      const cost = studioPrice(estimateCost(model, seconds, false), via);
+      return {
+        summary: i.mode === 'redo' ? `Make a new take of this shot (about ${cost})` : `Make this shot ${modelSeconds(model, seconds)} s longer (about ${cost})`,
+        target: null,
+        consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'}.`, i.mode === 'redo' ? 'The new take goes in the old clip’s place (can be undone).' : 'The extension goes right after the shot; what follows moves along (can be undone).'],
+        dataExport: 'The shot’s picture and its description are sent to fal.ai, which runs the AI video model.',
+      };
+    },
+    auditView: (i) => ({ mode: i.mode, model: i.model ?? null }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      if (!d.shotAgain) throw fail('studio', 'Redoing AI shots is not available here.');
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.shotAgain(p.id, { clip: i.clip, mode: i.mode, seconds: i.seconds, ...(i.prompt ? { prompt: i.prompt } : {}), ...(i.model ? { model: i.model } : {}) }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      return { ...state(s, s.get(p.id)), ...r, note: r.pending ? 'Still being filmed: it arrives on the timeline by itself. Tell the user, do not ask again.' : null };
+    },
+  });
+
   const characters = defineCapability({
     ...simple({
       id: 'studio.characters',
@@ -1704,7 +1770,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, swapCharacter, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, shotAgain, swapCharacter, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {
