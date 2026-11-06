@@ -690,6 +690,15 @@ export class StudioService {
     });
   }
 
+  /** Every job waiting on the renderer fails now (it stopped). */
+  failJobs(message: string): void {
+    for (const [jobId, j] of this.jobs) {
+      clearTimeout(j.timer);
+      this.jobs.delete(jobId);
+      j.reject(new StudioError(message));
+    }
+  }
+
   jobDone(jobId: string, result: unknown, error: string | null): void {
     const j = this.jobs.get(jobId);
     if (!j) return;

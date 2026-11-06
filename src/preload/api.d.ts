@@ -25,6 +25,7 @@ export interface PushPayloads {
   'presence:level': { level: number; source: 'mic' | 'playback' | null };
   'account:changed': import('../shared/cloud').AccountStatus;
   'app:switching': { mode: 'account' | 'local' | 'signed-out' };
+  'app:recovered': { message: string };
   'studio:job': { jobId: string; job: import('../shared/studio').RenderJob };
   'studio:changed': import('../shared/studio').Project;
   /** Watching Keo edit: the step Keo is about to make, or 'done' when its edit has been shown. */

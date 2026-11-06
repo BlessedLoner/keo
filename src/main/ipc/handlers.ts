@@ -1,4 +1,5 @@
 import { StudioError } from '../studio/studioService';
+import { buildReport } from '../../shared/problemReport';
 import { BuildError, type BuildManifest } from '../build/projects';
 import { CALENDAR_SCOPE, MAIL_SCOPE } from '../calendar/googleAuth';
 import type { AttachmentView } from '../../shared/ipc';
@@ -16,6 +17,7 @@ import { importBundle } from '../workflows/portability';
 import { locateFfmpeg } from '../video/ffmpeg';
 import type { Services } from '../services';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isCalendarLink } from '../briefing/briefing';
 import { plainToOpen } from '../capabilities/findFiles';
@@ -93,6 +95,11 @@ const view = (a: PreparedAttachment): AttachmentView => {
 export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const changed = (channel: string, payload: unknown) => s.emit(channel, payload);
   const abortAfter = (ms: number) => AbortSignal.timeout(ms);
+  /** A problem report's text: the user's words, Keo's version, and (if they agree) the recent log, personal details out. */
+  const problemReport = (message: string, includeLog: boolean) => {
+    const info = host.appInfo();
+    return buildReport({ message, env: { version: info.version, platform: info.platform, electron: info.electron, packaged: info.packaged, home: os.homedir() }, ...(includeLog ? { logs: s.log.recent(400) } : {}) });
+  };
   const wakeStatus = async () => ({
     ...s.wake.getState(),
     recognizers: await s.wake.recognizers(),
@@ -1179,6 +1186,26 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return task;
     },
     'diagnostics:logs': ({ limit }) => s.log.recent(limit),
+    // Report a problem: the user sees this exact text, then sends it to Keo Cloud or saves it.
+    'report:preview': ({ message, includeLog }) => ({ text: problemReport(message, includeLog), canSend: s.account.signedIn() }),
+    'report:send': async ({ message, includeLog, to }) => {
+      const text = problemReport(message, includeLog);
+      if (to === 'keo') {
+        if (!s.account.signedIn()) throw new KeoError('invalid_input', 'Sign in to your Keo account to send the report, or save it to a file.');
+        const reference = await s.account.report({ message: message.slice(0, 4000), report: text, version: host.appInfo().version }, abortAfter(60_000)).catch((e: unknown) => {
+          throw new KeoError('provider_unavailable', e instanceof Error ? e.message : 'The report could not be sent: save it to a file instead.');
+        });
+        s.log.info('report.sent', { log: includeLog });
+        return { sent: true, reference: reference || null, file: null };
+      }
+      const dir = s.reportsDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `Keo problem report ${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.txt`);
+      fs.writeFileSync(file, text, 'utf8');
+      await host.openPath(dir).catch(() => false);
+      s.log.info('report.saved', { log: includeLog });
+      return { sent: false, reference: null, file };
+    },
     'diagnostics:audit': ({ limit }) => s.audit.recent(limit),
 
     'data:backup': () => {

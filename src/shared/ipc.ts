@@ -452,6 +452,8 @@ export const invokeSchemas = {
   'briefing:morningDue': empty,
   'grants:approveAndGrant': z.object({ stepId: id, inputHash: z.string().regex(/^[a-f0-9]{64}$/), minutes: z.number().int().min(1).max(30).default(10) }).strict(),
   'diagnostics:logs': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
+  'report:preview': z.object({ message: z.string().max(4000), includeLog: z.boolean() }).strict(),
+  'report:send': z.object({ message: z.string().trim().min(3).max(4000), includeLog: z.boolean(), to: z.enum(['keo', 'file']) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
 
   'data:backup': empty,
@@ -722,6 +724,8 @@ export interface InvokeOutputs {
   'briefing:openFile': { opened: boolean; error: string | null };
   'briefing:morningDue': { due: boolean };
   'diagnostics:logs': LogEvent[];
+  'report:preview': { text: string; canSend: boolean };
+  'report:send': { sent: boolean; reference: string | null; file: string | null };
   'diagnostics:audit': AuditRecord[];
   'data:backup': { path: string };
   'data:deleteAll': { deleted: boolean };

@@ -5,6 +5,7 @@ import type { UpdateDownload, UpdateInfo } from '@shared/domain';
 import { Onboarding } from './components/Onboarding';
 import { invoke, subscribe } from './lib/api';
 import { Icon } from './components/Icon';
+import { useUi } from './components/ui';
 import { KeoEmblem, STATE_LABEL } from './components/KeoEmblem';
 import { useApp, type ViewId } from './state/AppState';
 import { CapabilitiesView } from './views/CapabilitiesView';
@@ -56,6 +57,9 @@ export function App() {
   // Opening another account's data (sign-in, sign-out): the window reloads on it in a moment.
   const [switching, setSwitching] = useState<null | 'account' | 'local' | 'signed-out'>(null);
   useEffect(() => subscribe('app:switching', (p) => setSwitching(p.mode)), []);
+  // The window's page stopped and was reopened: say so (nothing saved was lost).
+  const ui = useUi();
+  useEffect(() => subscribe('app:recovered', (p) => ui.toast(p.message, 'info')), [ui]);
   const settingsLoaded = !!app.settings.data;
   const showSignIn = settingsLoaded && !!account && !account.signedIn && !app.settings.data?.ui.ownKeys && app.settings.data?.activeProvider !== 'test';
   // First run: show the welcome until it is finished or skipped. An installation that already has a

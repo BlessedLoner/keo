@@ -376,6 +376,26 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     const studio = await handleStudio(req, route, env, { fetch: deps.fetch, now, db, waitUntil: deps.waitUntil, account: () => account(req, db, now) });
     if (studio) return studio;
 
+    // Report a problem: what the user wrote and saw (their recent log with personal details out).
+    if (req.method === 'POST' && route === '/v1/report') {
+      const a = await account(req, db, now);
+      if (a instanceof Response) return a;
+      const body = (await req.json().catch(() => ({}))) as { message?: unknown; report?: unknown; version?: unknown };
+      const message = String(body.message ?? '').trim().slice(0, 4000);
+      const report = String(body.report ?? '');
+      if (message.length < 1) return fail(400, 'Say what happened.', 'bad_request', 'invalid_request_error');
+      if (report.length > 200_000) return fail(413, 'The report is too long: leave out the activity log and try again.', 'too_large', 'invalid_request_error');
+      // At most 10 a day per account (a stuck loop cannot flood the reports).
+      const since = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+      const today = await db.rest<Array<{ id: string }>>(`problem_reports?user_id=eq.${encodeURIComponent(a.user.id)}&created_at=gte.${encodeURIComponent(since)}&select=id&limit=11`).catch(() => []);
+      if (today.length >= 10) return fail(429, 'You have sent 10 reports today: thank you! Try again tomorrow, or save the report to a file.', 'too_many_reports', 'rate_limit_error');
+      const saved = await db
+        .rest<Array<{ id: string }>>('problem_reports', { method: 'POST', headers: { prefer: 'return=representation' }, body: JSON.stringify({ user_id: a.user.id, message, report, version: String(body.version ?? '').slice(0, 40) }) })
+        .catch(() => null);
+      if (!saved?.[0]) return fail(502, 'The report could not be saved. Save it to a file instead.', 'report_failed', 'api_error');
+      return json(200, { id: saved[0].id.slice(0, 8) });
+    }
+
     if (req.method === 'GET' && route === '/v1/models') {
       const a = await account(req, db, now);
       if (a instanceof Response) return a;

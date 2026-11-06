@@ -318,6 +318,13 @@ export class KeoAccount {
     return `${this.cfg.upgradePageUrl}#t=${encodeURIComponent(j.ticket)}`;
   }
 
+  /** A problem report (the text the user saw and agreed to send). Returns its reference. */
+  async report(o: { message: string; report: string; version: string }, signal: AbortSignal): Promise<string> {
+    const r = await this.post('/report', o, signal);
+    const j = (await r.json().catch(() => ({}))) as { id?: string };
+    return typeof j.id === 'string' ? j.id : '';
+  }
+
   /** Web search through Keo Cloud (counts toward the plan's daily searches). */
   async search(query: string, count: number, signal: AbortSignal): Promise<CloudSearchResult[]> {
     const r = await this.post('/search', { query, count }, signal);

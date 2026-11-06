@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { Icon } from '../components/Icon';
 import { ErrorBanner, ViewHeader } from '../components/ui';
 import { useInvoke } from '../lib/hooks';
+import { ReportProblem } from '../components/ReportProblem';
 
 export function DiagnosticsView() {
   const [tab, setTab] = useState<'events' | 'audit'>('events');
+  const [reporting, setReporting] = useState(false);
   const info = useInvoke('app:info', {});
   const logs = useInvoke('diagnostics:logs', { limit: 300 }, { enabled: tab === 'events', pollMs: 4000 });
   const audit = useInvoke('diagnostics:audit', { limit: 300 }, { enabled: tab === 'audit', refreshOn: ['tasks:changed', 'settings:changed', 'memory:changed'] });
@@ -12,6 +14,9 @@ export function DiagnosticsView() {
   return (
     <div className="view">
       <ViewHeader title="Diagnostics" subtitle="Structured, privacy-filtered events. Conversation text, prompts, screenshots, audio and keys are never logged.">
+        <button className="btn sm" onClick={() => setReporting(true)} title="Tell the Keo team about a problem">
+          <Icon name="warn" size={13} /> Report a problem
+        </button>
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'events'} onClick={() => setTab('events')}>
             Events
@@ -22,6 +27,7 @@ export function DiagnosticsView() {
         </div>
       </ViewHeader>
       <div className="view-body">
+        {reporting && <ReportProblem onClose={() => setReporting(false)} />}
         {i && (
           <div className="card" style={{ marginBottom: 14 }}>
             <div className="row wrap small">

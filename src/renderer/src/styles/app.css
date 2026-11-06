@@ -583,3 +583,7 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 .build-files li { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
 .dialog.build-request { width: min(720px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
 .dialog.build-request textarea { resize: vertical; min-height: 160px; }
+
+/* Report a problem (Diagnostics). */
+.report-problem { display: flex; flex-direction: column; gap: 8px; }
+.report-preview { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg-2, rgba(255,255,255,0.03)); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 0; }

@@ -9,6 +9,7 @@ import type { RenderJob } from './studio/studioService';
 import { Readable } from 'node:stream';
 import { accountProfile, folderFor, openFolder, readState, sessionDir, setAsideLegacy, userIdOfToken, writeState, type AccountState } from './env/accounts';
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, globalShortcut, Notification, screen, ipcMain, nativeImage, nativeTheme, type OpenDialogOptions, protocol, safeStorage, session, shell } from 'electron';
+import { CrashGuard } from './crashGuard';
 import { UpdateService } from './updates/updateService';
 import { AutoUpdate } from './updates/autoUpdate';
 import { realPorcupine } from './voice/porcupineEngine';
@@ -73,6 +74,11 @@ if (!app.requestSingleInstanceLock()) {
 
 let mainWindow: BrowserWindow | null = null;
 let services: Services | null = null;
+/** Reloads a window whose page stopped, but not over and over. */
+const mainCrashes = new CrashGuard();
+const renderCrashes = new CrashGuard(5);
+/** The main window's page was reloaded after it stopped: say so once it is back. */
+let recoveredNotice = false;
 
 const cipher: SecretCipher = {
   isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -264,6 +270,27 @@ function createWindow(show = true): BrowserWindow {
   win.once('ready-to-show', () => {
     if (show && !SMOKE && !E2E_DESKTOP) win.show();
   });
+  // The page stopped (a crash, or Windows ended it): reload it, and say so when it is back.
+  win.webContents.on('render-process-gone', (_e, d) => {
+    log.error('app.window_gone', { reason: d.reason, exitCode: d.exitCode });
+    const what = mainCrashes.gone(d.reason);
+    if (what === 'ignore' || win.isDestroyed()) return;
+    if (what === 'give-up') {
+      void dialog.showMessageBox({ type: 'error', title: 'Keo', message: 'Keo’s window keeps stopping.', detail: 'Close Keo and open it again. If it happens again, open Diagnostics → Report a problem (you can send the report or save it to a file).' });
+      return;
+    }
+    recoveredNotice = true;
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.webContents.reload();
+    }, 400);
+  });
+  win.webContents.on('did-finish-load', () => {
+    if (!recoveredNotice) return;
+    recoveredNotice = false;
+    setTimeout(() => push('app:recovered', { message: 'Keo’s window stopped unexpectedly and was reopened. Your chats, tasks and projects are saved; a reply that was being written may need asking again.' }), 1500);
+  });
+  win.webContents.on('unresponsive', () => log.warn('app.window_unresponsive'));
+  win.webContents.on('responsive', () => log.info('app.window_responsive'));
   win.on('closed', () => {
     mainWindow = null;
     // The hidden render window must never keep Keo running on its own.
@@ -297,7 +324,19 @@ function sendRenderJob(jobId: string, job: RenderJob): void {
     });
     // Development builds: the render window's own messages (it has no visible console).
     if (!app.isPackaged) renderWindow.webContents.on('console-message', (e) => log.info('studio.render_console', { level: e.level, message: String(e.message).slice(0, 300) }));
-    renderWindow.webContents.on('render-process-gone', (_e, d) => log.warn('studio.render_gone', { reason: d.reason }));
+    // The renderer stopped: the jobs waiting on it fail at once (not after their long timeout),
+    // and the next job starts a fresh renderer.
+    const rw = renderWindow;
+    rw.webContents.on('render-process-gone', (_e, d) => {
+      log.warn('studio.render_gone', { reason: d.reason });
+      if (renderCrashes.gone(d.reason) === 'ignore') return;
+      services?.studio.failJobs('Keo’s video renderer stopped unexpectedly. It starts again by itself: try once more.');
+      if (renderWindow === rw) {
+        renderWindow = null;
+        renderReady = null;
+      }
+      if (!rw.isDestroyed()) rw.destroy();
+    });
     void renderWindow.loadURL(rendererUrl('#render'));
   }
   const win = renderWindow;

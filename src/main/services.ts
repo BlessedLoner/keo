@@ -1657,6 +1657,11 @@ export class Services {
     }
   }
 
+  /** Where problem reports are saved when they are not sent (Documents\\Keo\\Reports). */
+  reportsDir(): string {
+    return path.join(this.documentsDir ?? this.profile.userData, 'Keo', 'Reports');
+  }
+
   /** The voice a character speaks in (their own voice sample, or a Keo or OpenAI voice). */
   private characterVoice(c: { id: string; voice: string; voiceSample?: string | undefined }): string {
     return c.voice === 'own' && c.voiceSample ? `own:${c.id}:${path.basename(c.voiceSample)}` : c.voice === 'own' ? 'female' : c.voice;

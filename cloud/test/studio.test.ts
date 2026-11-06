@@ -302,3 +302,32 @@ describe('AI music and sound effects through Keo Cloud', () => {
     expect((await call('POST', '/v1/studio/run', { endpoint: 'elevenlabs/sound-effects/v3', input: { text: 'x', duration_seconds: 45 } })).status).toBe(400);
   });
 });
+
+describe('Problem reports through Keo Cloud', () => {
+  it('saves what the user sent, at most 10 a day, and only for a signed-in account', async () => {
+    const saved: Array<Record<string, unknown>> = [];
+    const plain = w.fetch;
+    w.fetch = async (input: string, init: RequestInit = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/rest/v1/problem_reports') {
+        if ((init.method ?? 'GET') === 'POST') {
+          const row = { id: `00000000-aaaa-bbbb-cccc-${String(saved.length).padStart(12, '0')}`, ...(JSON.parse(String(init.body)) as Record<string, unknown>) };
+          saved.push(row);
+          return new Response(JSON.stringify([row]), { status: 201, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify(saved.map((r) => ({ id: r.id }))), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return plain(input, init);
+    };
+    const r = await call('POST', '/v1/report', { message: 'Captions stopped half way.', report: 'Keo problem report\n…', version: '1.18.1' });
+    expect(r.status).toBe(200);
+    expect(r.body.id).toHaveLength(8);
+    expect(saved[0]).toMatchObject({ message: 'Captions stopped half way.', version: '1.18.1' });
+    expect(typeof saved[0]!.user_id).toBe('string');
+    expect((await call('POST', '/v1/report', { message: '', report: 'x' })).status).toBe(400);
+    expect((await call('POST', '/v1/report', { message: 'x', report: 'y'.repeat(200_001) })).status).toBe(413);
+    for (let i = 0; i < 9; i++) await call('POST', '/v1/report', { message: `again ${i}`, report: 'x' });
+    expect((await call('POST', '/v1/report', { message: 'one too many', report: 'x' })).status).toBe(429);
+    expect((await call('POST', '/v1/report', { message: 'x', report: 'x' }, 'bad-token')).status).toBe(401);
+  });
+});
