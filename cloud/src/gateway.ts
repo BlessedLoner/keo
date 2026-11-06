@@ -8,6 +8,7 @@
  */
 
 import { handleBilling, readTicket } from './billing';
+import { handleAdmin } from './admin';
 import { accountPage } from './pages';
 import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
@@ -26,6 +27,8 @@ export interface Env {
   PAYSTACK_URL?: string;
   /** Secret: Keo's fal.ai key (Keo Studio's AI video, pictures and voices, paid with Studio credits). Without it, Studio AI is off. */
   FAL_KEY?: string;
+  /** Secret: the emails allowed into the admin page (/admin), comma-separated. Without it there is no admin page. */
+  ADMIN_EMAILS?: string;
   /** Shown on the Terms, Privacy and Refund pages (optional until the address exists). */
   KEO_SUPPORT_EMAIL?: string;
   /** Which OpenRouter models do web search, pictures and voice (wrangler.toml [vars]; change any time). */
@@ -355,6 +358,9 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     // Keo's plans and payment page.
     if (req.method === 'GET' && route === '/upgrade') return upgradePage();
     if (req.method === 'GET' && (route === '/terms' || route === '/privacy' || route === '/refunds')) return legalPage(route.slice(1) as 'terms' | 'privacy' | 'refunds', env);
+    // The owner's admin page and its data (only the emails in ADMIN_EMAILS).
+    const adminAnswer = await handleAdmin(req, route, env, { fetch: deps.fetch, now, db });
+    if (adminAnswer) return adminAnswer;
 
     // Payments: prices, checkout, the Paystack webhook. Billing accepts the user's sign-in or an
     // Upgrade-page ticket.
