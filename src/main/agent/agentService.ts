@@ -17,6 +17,7 @@ import { unsupportedClaims } from './claims';
 import { GROUP_PROMPTS, SYSTEM_PROMPT } from './systemPrompt';
 import { chooseGroups, groupOf, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUPS, type ToolGroup } from './toolGroups';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
+import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
 import { compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
 
@@ -657,6 +658,9 @@ export class AgentService {
         };
         let blockedNow = 0;
         let failedNow = false;
+        // Several on-screen steps in one reply (open → type → save) run in order; once one does not
+        // work, the rest are not run — they would act on the wrong window or text.
+        let chainBroken = false;
         if (result.toolCalls.some((c) => c.name.startsWith('build__'))) building = true;
         for (const call of result.toolCalls) {
           if (call.name === LOAD_TOOLS) {
@@ -718,6 +722,14 @@ export class AgentService {
             if (looked === 'web.search') lookups.searches++;
             else lookups.pages++;
           }
+          const onScreen = this.onScreen(call.name);
+          if (chainBroken && onScreen) {
+            const activity: ToolActivity = { callId: call.id, capabilityId: this.registry.resolveToolName(call.name) ?? call.name, summary: 'Skipped: an earlier step did not work', outcome: 'rejected', detail: SKIPPED_NOTE };
+            upsert(activity);
+            this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity });
+            results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'skipped', note: SKIPPED_NOTE }), isError: true });
+            continue;
+          }
           turnGroups.add(groupOf(call.name));
           const r = await this.handleToolCall(call, {
             conversationId,
@@ -736,6 +748,7 @@ export class AgentService {
           this.notePending(conversationId, call, r);
           repeats.record(call, iteration, r.activity.outcome);
           failedNow ||= r.activity.outcome === 'failed' || r.activity.outcome === 'uncertain';
+          if (onScreen && breaksChain(r.activity.outcome)) chainBroken = true;
           trackProblems(problems, r.activity, r.verification);
           this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity: r.activity });
           results.push({ type: 'tool_result', callId: call.id, content: r.content, isError: r.isError });
@@ -816,6 +829,13 @@ export class AgentService {
     return final;
   }
 
+  /** A step that works the mouse, keyboard or apps on screen. */
+  private onScreen(toolName: string): boolean {
+    const id = this.registry.resolveToolName(toolName);
+    const cap = id ? this.registry.get(id) : undefined;
+    return !!cap && (cap.permissions.includes('desktop.control') || cap.permissions.includes('desktop.launch'));
+  }
+
   private async handleToolCall(
     call: ToolCall,
     ctx: {
@@ -874,15 +894,27 @@ export class AgentService {
     // Read-only / proposal-only capabilities run immediately (still validated + audited).
     if (!admission.requiresApproval && !cap.consequential) {
       try {
-        const out = await this.registry.runDirect(admission, {
-          signal: ctx.signal,
-          idempotencyKey: `direct_${call.id}`,
-          correlationId: ctx.correlationId,
-          conversationId: ctx.conversationId,
-          sourceMessageId: ctx.sourceMessageId,
-          taskId: null,
-          settings,
-        });
+        const run = (attempt: number) =>
+          this.registry.runDirect(admission, {
+            signal: ctx.signal,
+            idempotencyKey: `direct_${call.id}${attempt > 1 ? `_${attempt}` : ''}`,
+            correlationId: ctx.correlationId,
+            conversationId: ctx.conversationId,
+            sourceMessageId: ctx.sourceMessageId,
+            taskId: null,
+            settings,
+          });
+        let out: unknown;
+        try {
+          out = await run(1);
+        } catch (first) {
+          // A lookup that only reads (it changes nothing) is tried once more after a passing glitch.
+          if (ctx.signal.aborted || !isTransient(errorMessage(first))) throw first;
+          this.log.info('agent.tool_retry', { capabilityId: cap.id, error: errorMessage(first).slice(0, 200) }, ctx.correlationId);
+          await new Promise((r) => setTimeout(r, 700));
+          if (ctx.signal.aborted) throw first;
+          out = await run(2);
+        }
         this.dataChanged(cap.id);
         const savedMemory = cap.id === 'memory.propose' && (out as { status?: string }).status !== 'proposed';
         const outcome = savedMemory ? 'executed' : cap.id === 'task.propose_plan' || cap.id.endsWith('.propose') || cap.id.endsWith('.propose_item') ? 'proposed' : 'executed';
@@ -894,7 +926,7 @@ export class AgentService {
       } catch (err) {
         if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
         const msg = errorMessage(err);
-        return { activity: { ...base, summary, outcome: 'failed', detail: msg }, content: json({ status: 'failed', error: msg, next: RECOVER }), isError: true };
+        return { activity: { ...base, summary, outcome: 'failed', detail: msg }, content: json({ status: 'failed', error: msg, next: recoverHint(cap.id, msg) }), isError: true };
       }
     }
 
@@ -940,7 +972,7 @@ export class AgentService {
       case 'failed':
         return {
           activity: a('failed', step?.error ?? 'Failed.'),
-          content: json({ status: 'failed', error: step?.error, code: step?.errorCode, ...(step?.errorCode && NEEDS_CHOICE.has(step.errorCode) ? {} : { next: RECOVER }) }),
+          content: json({ status: 'failed', error: step?.error, code: step?.errorCode, ...(step?.errorCode && NEEDS_CHOICE.has(step.errorCode) ? {} : { next: recoverHint(capId, step?.error ?? '') }) }),
           isError: true,
         };
       case 'cancelled':
@@ -949,7 +981,7 @@ export class AgentService {
       case 'outcome_uncertain':
         return {
           activity: a('uncertain', step?.error ?? 'Outcome uncertain.'),
-          content: json({ status: 'outcome_uncertain', error: step?.error, note: 'It is unknown whether this took effect. Tell the user; do not repeat it automatically.' }),
+          content: json({ status: 'outcome_uncertain', error: step?.error, note: CHECK_FIRST }),
           isError: true,
         };
       default:
@@ -963,9 +995,6 @@ export class AgentService {
 }
 
 type ToolOutcome = { activity: ToolActivity; content: string; isError: boolean; verification?: Task['steps'][number]['verification'] };
-
-/** Told to the model with every failed step. */
-const RECOVER = 'Do not repeat this exact call. Try a different tool or different input, re-check the current state, or ask the user.';
 
 /**
  * Consequential actions (those that ran as authorized tasks) that have not been
