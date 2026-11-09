@@ -6,6 +6,7 @@ import { Markdown } from '../components/Markdown';
 import { ApprovalCard } from '../components/TaskWidgets';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
+import { explainReplyError } from '@shared/friendlyErrors';
 
 /**
  * Ask Keo, inside Studio: the user says what they want and Keo edits this project while they
@@ -174,7 +175,7 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
         )}
         {messages.map((m) => (
           <div key={m.id} className={`keo-msg ${m.role}`}>
-            {m.role === 'assistant' ? <Markdown text={m.content || (m.meta.error ?? '')} /> : <p>{m.content}</p>}
+            {m.role === 'assistant' ? <Markdown text={m.content || (m.status === 'error' ? (({ what, todo }) => `${what} ${todo}`)(explainReplyError(m.meta.errorKind, m.meta.error)) : '')} /> : <p>{m.content}</p>}
             {m.role === 'assistant' && !!m.meta.tools?.length && <ToolLines tools={m.meta.tools} />}
           </div>
         ))}

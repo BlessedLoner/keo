@@ -49,6 +49,9 @@ export class ContextBuilder {
     private readonly projects: ProjectRepo,
   ) {}
 
+  /** More per-turn context about what the latest message mentions (people Keo has messaged before). */
+  extraContext: ((latestUserText: string) => string | null) | null = null;
+
   build(opts: { conversationId: string; settings: Settings; unresolvedTasks: Task[]; now?: Date }): BuiltContext {
     const { settings } = opts;
     const conv = this.conversations.require(opts.conversationId);
@@ -117,6 +120,12 @@ export class ContextBuilder {
       );
     } else {
       ctx.push('Relevant user-confirmed memories: none found for this message.');
+    }
+    try {
+      const extra = query ? this.extraContext?.(query) : null;
+      if (extra) ctx.push(extra);
+    } catch {
+      /* extra context is a help, never a reason to fail */
     }
     if (conv.projectId) {
       const p = this.projects.get(conv.projectId);

@@ -10,7 +10,8 @@ import { errText, invoke, subscribe } from '../lib/api';
 import { clock, humanize, timeAgo } from '../lib/format';
 import { useInvoke } from '../lib/hooks';
 import { voice } from '../lib/voice';
-import { useApp } from '../state/AppState';
+import { useApp, type TurnInfo } from '../state/AppState';
+import { explainReplyError, explainStepError } from '@shared/friendlyErrors';
 
 /** What the briefing button sends (the same as saying it). */
 const BRIEFING_PROMPT = 'Good morning, Keo — what matters today?';
@@ -208,10 +209,10 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
   }, [messages, live, liveTools]);
 
   const send = useCallback(
-    async (text: string, attachments?: string[]) => {
+    async (text: string, attachments?: string[], spoken?: boolean) => {
       stick.current = true;
       try {
-        await invoke('chat:send', { conversationId: conversation.id, text, ...(attachments?.length ? { attachments } : {}) });
+        await invoke('chat:send', { conversationId: conversation.id, text, ...(attachments?.length ? { attachments } : {}), ...(spoken ? { spoken: true } : {}) });
         await load();
       } catch (e) {
         ui.error(errText(e));
@@ -247,7 +248,7 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="title">{conversation.title}</div>
           <div className="state" aria-live="polite">
-            {turn ? phaseLabel(turn.phase) : STATE_LABEL[app.emblem]}
+            {turn ? <TurnStatus turn={turn} /> : STATE_LABEL[app.emblem]}
           </div>
         </div>
         <select
@@ -287,7 +288,7 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
           {loadError && <div className="banner danger">{loadError}</div>}
           {messages.length === 0 && !loadError && <Welcome onPick={(t) => void send(t).catch(() => undefined)} />}
           {messages.map((m) => (
-            <MessageView key={m.id} m={m} liveText={live[m.id]} liveTools={liveTools[m.id]} livePlan={livePlans[m.id]} streaming={turn?.messageId === m.id} />
+            <MessageView key={m.id} m={m} liveText={live[m.id]} liveTools={liveTools[m.id]} livePlan={livePlans[m.id]} streaming={turn?.messageId === m.id} turn={turn?.messageId === m.id ? turn : undefined} />
           ))}
           {canRetry && (
             <div className="row">
@@ -303,19 +304,40 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
   );
 }
 
-function phaseLabel(p: string): string {
+function phaseLabel(p: string, detail?: string): string {
   switch (p) {
     case 'thinking':
       return 'Thinking…';
     case 'generating':
-      return 'Responding…';
+      return 'Writing the reply…';
+    case 'gathering_context':
+      return detail ? `${detail}…` : 'Looking things up…';
+    case 'planning':
+      return 'Planning the steps…';
     case 'tool':
-      return 'Running a capability…';
+      return detail ? `${detail}…` : 'Working…';
     case 'waiting_approval':
-      return 'Waiting for your approval';
+      return detail ? `Waiting for your OK: ${detail}` : 'Waiting for your approval';
     default:
       return humanize(p);
   }
+}
+
+/** What Keo is doing right now, and — once a step is slow — for how long, so it never looks frozen. */
+function TurnStatus({ turn }: { turn: TurnInfo }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = Math.max(0, Math.floor((now - turn.since) / 1000));
+  const waiting = turn.phase === 'waiting_approval';
+  return (
+    <span className="turn-status">
+      {phaseLabel(turn.phase, turn.detail)}
+      {!waiting && secs >= 5 && <span className="muted"> · {secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`}</span>}
+    </span>
+  );
 }
 
 function Welcome({ onPick }: { onPick: (t: string) => void }) {
@@ -348,7 +370,7 @@ function Welcome({ onPick }: { onPick: (t: string) => void }) {
   );
 }
 
-function MessageView({ m, liveText, liveTools, livePlan, streaming }: { m: Message; liveText?: string; liveTools?: ToolActivity[]; livePlan?: WorkPlan; streaming: boolean }) {
+function MessageView({ m, liveText, liveTools, livePlan, streaming, turn }: { m: Message; liveText?: string; liveTools?: ToolActivity[]; livePlan?: WorkPlan; streaming: boolean; turn?: TurnInfo }) {
   const ui = useUi();
   const app = useApp();
   const text = liveText !== undefined && (m.status === 'streaming' || streaming) ? liveText : m.content;
@@ -402,22 +424,14 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming }: { m: Messa
       {plan && plan.steps.length > 0 && <PlanChecklist plan={plan} />}
       {tools.length > 0 && <ToolList tools={tools} conversationId={m.conversationId} />}
       <div className="bubble">
-        {text ? <Markdown text={text} /> : isStreaming ? <span className="muted small">…</span> : null}
+        {text ? <Markdown text={text} /> : isStreaming ? <span className="muted small">{turn ? <TurnStatus turn={turn} /> : '…'}</span> : null}
         {isStreaming && <span className="caret" aria-hidden="true" />}
       </div>
       {m.status === 'error' && (
         <div className="banner danger small" role="alert">
           <Icon name="warn" size={15} />
           <div className="grow">
-            {m.meta.error ?? 'The request failed.'}
-            {m.meta.errorKind === 'unconfigured' && (
-              <>
-                {' '}
-                <button className="btn sm" onClick={() => app.setView('settings')}>
-                  Configure provider
-                </button>
-              </>
-            )}
+            <ReplyProblem m={m} onSettings={() => app.setView('settings')} />
           </div>
         </div>
       )}
@@ -546,10 +560,10 @@ function ToolList({ tools, conversationId }: { tools: ToolActivity[]; conversati
 const OUTCOME: Record<ToolActivity['outcome'], { label: string; cls: string }> = {
   executed: { label: 'Done', cls: 'ok' },
   proposed: { label: 'Proposed', cls: 'violet' },
-  rejected: { label: 'Rejected by Keo', cls: 'danger' },
+  rejected: { label: 'Stopped by Keo', cls: 'danger' },
   failed: { label: 'Failed', cls: 'danger' },
   denied: { label: 'Denied by you', cls: 'danger' },
-  uncertain: { label: 'Outcome uncertain', cls: 'warn' },
+  uncertain: { label: 'Not sure it worked', cls: 'warn' },
   awaiting_authorization: { label: 'Needs approval', cls: 'warn' },
 };
 
@@ -573,6 +587,9 @@ function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: stri
     } else if (task.state === 'cancelled') o = step?.state === 'denied' ? OUTCOME.denied : { label: 'Cancelled', cls: 'danger' };
   }
   if (t.cards) return <ProductCards data={t.cards} />;
+  // A step that did not work says why in normal words; the technical text stays under Details.
+  const bad = o.cls === 'danger' && t.outcome !== 'denied' && task?.state !== 'cancelled';
+  const said = bad ? explainStepError(detail) : { text: detail, technical: null };
   if (t.briefing) return <BriefingCard data={t.briefing} conversationId={conversationId} />;
   // A picture or animation Keo made: shown right here, like a reply.
   const made = t.capabilityId.startsWith('picture.') && task?.state === 'completed' ? (step?.result as { path?: string } | undefined)?.path : undefined;
@@ -581,9 +598,14 @@ function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: stri
     <div className={`tool-card ${t.outcome}`}>
       <Icon name={task?.state === 'running' ? 'pulse' : 'shield'} size={15} />
       <div className="grow">
-        <div>{t.summary}</div>
-        <div className="cap">{t.capabilityId}</div>
-        {detail && <div className="muted small">{detail}</div>}
+        <div title={t.capabilityId}>{t.summary}</div>
+        {said.text && <div className="muted small">{said.text}</div>}
+        {said.technical && (
+          <details className="tech small">
+            <summary>Details</summary>
+            <code>{said.technical}</code>
+          </details>
+        )}
         {t.choices && t.choices.length > 0 && (
           <div className="choices" role="group" aria-label="Choose one">
             {t.choices.map((c) => (
@@ -846,7 +868,9 @@ async function toBase64(f: File): Promise<string> {
 /** Things to ask about attachments when nothing is typed yet. */
 const QUICK = ['Summarize this', 'Explain this', 'Pull out the key points', 'Translate it to English', 'What do you see?'];
 
-function Composer({ conversationId, busy, onSend }: { conversationId: string; busy: boolean; onSend: (t: string, attachments?: string[]) => Promise<void> }) {
+function Composer({ conversationId, busy, onSend }: { conversationId: string; busy: boolean; onSend: (t: string, attachments?: string[], spoken?: boolean) => Promise<void> }) {
+  /** What the microphone put in the box: sent unchanged, the message counts as spoken. */
+  const dictated = useRef('');
   const app = useApp();
   const ui = useUi();
   const [text, setText] = useState('');
@@ -959,7 +983,8 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
     if ((!t && !atts.length) || busy || sending || adding > 0) return;
     setSending(true);
     try {
-      await onSend(t, atts.map((a) => a.id));
+      await onSend(t, atts.map((a) => a.id), !!dictated.current && t === dictated.current.trim());
+      dictated.current = '';
       setText('');
       setAtts([]);
     } catch {
@@ -977,7 +1002,11 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
     pressStart.current = Date.now();
     const transcript = await voice.start();
     if (transcript) {
-      setText((cur) => (cur ? `${cur} ${transcript}` : transcript));
+      setText((cur) => {
+        const next = cur ? `${cur} ${transcript}` : transcript;
+        dictated.current = cur ? '' : next;
+        return next;
+      });
       ref.current?.focus();
     }
   };
@@ -1102,7 +1131,7 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
       <div className="composer-foot">
         {v.recording ? (
           <span className="rec-indicator" role="status">
-            <span className="dot" /> Recording from your microphone — audio goes to OpenAI for transcription when you stop.
+            <span className="dot" /> Listening — when you stop, {s?.voice.sttProvider === 'keo' ? 'Keo Cloud' : 'OpenAI'} turns it into text (the recording is not kept).
             <button className="btn ghost sm" onClick={() => voice.abort()}>
               Discard
             </button>
@@ -1157,4 +1186,28 @@ export async function turnOnListening(ui: { confirm(o: { title: string; body: Re
   if (!ok) return false;
   await invoke('settings:update', { patch: { voice: { sttProvider: signedIn ? 'keo' : 'openai', audioExportConsent: true } } });
   return true;
+}
+
+/** A reply that failed: what happened and what to do, in normal words; the technical message under Details. */
+function ReplyProblem({ m, onSettings }: { m: Message; onSettings: () => void }) {
+  const e = explainReplyError(m.meta.errorKind, m.meta.error);
+  return (
+    <>
+      <strong>{e.what}</strong> {e.todo}
+      {e.action === 'settings' && (
+        <>
+          {' '}
+          <button className="btn sm" onClick={onSettings}>
+            Open Settings
+          </button>
+        </>
+      )}
+      {m.meta.error && m.meta.error !== e.what && (
+        <details className="tech small">
+          <summary>Details</summary>
+          <code>{m.meta.error}</code>
+        </details>
+      )}
+    </>
+  );
 }

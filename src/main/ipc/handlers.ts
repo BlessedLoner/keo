@@ -279,6 +279,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { id: wf.id, name: wf.name };
     },
     'workflows:delete': ({ id }) => ({ deleted: s.workflows.delete(id) }),
+    'people:list': () => s.people.list(),
+    'people:forget': ({ name }) => ({ forgotten: s.people.forget(name) }),
     // Projects (with their items) and workflows; never settings, keys or conversations.
     'data:export': async () => {
       const file = await host.pickSaveFile?.(`keo-export-${new Date().toISOString().slice(0, 10)}.json`);
@@ -415,11 +417,13 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return s.conversations.messages(id);
     },
 
-    'chat:send': ({ conversationId, text, attachments }) => {
+    'chat:send': ({ conversationId, text, attachments, spoken }) => {
       s.control.userSpoke();
       const attached = attachments?.length ? s.attachments.take(attachments) : [];
       if (attachments?.length && !attached.length && !text) throw new KeoError('attachments_expired', 'The attachments are no longer ready. Attach them again.');
-      const r = s.agent.send(conversationId, text, attached.length ? { attachments: attached } : {});
+      // Said aloud and answered aloud: the reply is made to be heard (short, natural).
+      const voice = !!spoken && s.settings.get().voice.speakResponses && s.settings.get().voice.ttsEngine !== 'none';
+      const r = s.agent.send(conversationId, text, { ...(attached.length ? { attachments: attached } : {}), ...(voice ? { voice: true } : {}) });
       r.done.catch((e) => s.log.error('agent.unhandled', { error: String(e) }));
       changed('conversations:changed', { conversationId });
       return { accepted: true as const, userMessageId: r.userMessageId };

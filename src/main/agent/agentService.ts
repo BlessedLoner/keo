@@ -79,6 +79,8 @@ interface ActiveTurn {
 export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
   systemExtra: (conversationId: string) => string = () => '';
+  /** A consequential action the user approved worked: Keo may learn from it (who a name means). */
+  learned: ((capabilityId: string, input: unknown, result: unknown) => void) | null = null;
   /** Tool groups a conversation always gets (e.g. Studio's tools for Keo Studio's own conversations). */
   extraGroups: ((conversationId: string) => ToolGroup[]) | null = null;
   /** Tool groups a conversation never gets (Studio's conversations do not need the older video pipeline). */
@@ -415,6 +417,8 @@ export class AgentService {
       const pencil = this.pictures.get(sourceMessageId) ?? [];
       this.pictures.delete(sourceMessageId);
       const pics = [...pencil, ...this.recentPictures(conversationId)];
+      // Said aloud (wake word, a call, the mic with replies read aloud): the reply is made to be heard.
+      const spokenTurn = this.spoken.has(sourceMessageId);
       const picked = this.pickModel(settings, sourceMessageId, !!pics?.length, !!open, correlationId);
       let { provider, model } = picked;
       const { route } = picked;
@@ -536,7 +540,7 @@ export class AgentService {
             result = await provider.stream(
               {
                 model,
-                system: SYSTEM_PROMPT + (settings.voice.voiceFirst ? VOICE_FIRST : '') + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
+                system: SYSTEM_PROMPT + (settings.voice.voiceFirst || spokenTurn ? VOICE_FIRST : '') + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
                 messages,
                 tools,
                 maxOutputTokens: maxOut,
@@ -890,6 +894,8 @@ export class AgentService {
   ): Promise<ToolOutcome> {
     const settings = this.getSettings();
     const cap = admission.capability;
+    // The user sees what Keo is doing right now, in words.
+    this.emit({ type: 'phase', conversationId: ctx.conversationId, messageId: ctx.messageId, phase: CONTEXT_CAPS.has(cap.id) ? 'gathering_context' : 'tool', detail: summary });
 
     // Read-only / proposal-only capabilities run immediately (still validated + audited).
     if (!admission.requiresApproval && !cap.consequential) {
@@ -944,11 +950,18 @@ export class AgentService {
     const pending: ToolActivity = { ...base, summary, outcome: 'awaiting_authorization', detail: 'Waiting for your approval.', taskId: task.id };
     ctx.onPending(pending);
     this.emit({ type: 'tool_activity', conversationId: ctx.conversationId, messageId: ctx.messageId, activity: pending });
-    this.emit({ type: 'phase', conversationId: ctx.conversationId, messageId: ctx.messageId, phase: 'waiting_approval' });
+    this.emit({ type: 'phase', conversationId: ctx.conversationId, messageId: ctx.messageId, phase: 'waiting_approval', detail: summary });
     this.tasks.pump();
     const settled = await this.tasks.waitForSettle(task.id, settings.agent.approvalWaitSeconds * 1000, ctx.signal);
     if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
     ctx.turn.taskIds = ctx.turn.taskIds.filter((id) => id !== task.id);
+    if (settled.state === 'completed') {
+      try {
+        this.learned?.(cap.id, admission.input, settled.steps[0]?.result);
+      } catch {
+        /* learning is a help, never a reason to fail */
+      }
+    }
     return this.taskOutcome(settled, base, summary, cap.id);
   }
 

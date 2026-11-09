@@ -65,6 +65,7 @@ import { reminderCapabilities } from './capabilities/reminders';
 import { Scheduler, whenText } from './schedule/scheduler';
 import { fileCapabilities } from './capabilities/files';
 import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
+import { KnownPeople } from './memory/knownPeople';
 import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
 import { installedBrowsers, openInProfile, type InstalledBrowser } from './desktop/browserProfiles';
 import { LiveChatService } from './livechat/liveChatService';
@@ -274,6 +275,8 @@ export class Services {
   readonly capDeps: CapabilityDeps;
   readonly apps: AppDiscovery;
   readonly workflows: WorkflowStore;
+  /** People the user has messaged through Keo (learned from approved, verified sends). */
+  readonly people: KnownPeople;
   readonly results = new ResearchResults();
   readonly video: VideoStudio;
   /** The user's own email account (IMAP/SMTP with an app password). */
@@ -430,6 +433,7 @@ export class Services {
     this.registry.inputLock = (owner, fn, signal) => this.desktop.exclusive(owner, fn, signal);
     this.apps = new AppDiscovery(d.startApps);
     this.workflows = new WorkflowStore(path.join(d.profile.userData, 'workflows.json'));
+    this.people = new KnownPeople(path.join(d.profile.userData, 'known-people.json'));
     this.documentsDir = d.documentsDir ?? null;
     this.windowsSpeak = d.windowsSpeak ?? null;
     this.captureScreen = d.captureScreen ?? null;
@@ -894,6 +898,7 @@ export class Services {
     };
 
     const context = new ContextBuilder(this.conversations, this.memory, this.projects);
+    context.extraContext = (text) => this.people.context(text);
     this.agent = new AgentService(
       this.conversations,
       context,
@@ -936,6 +941,13 @@ export class Services {
     this.agent.excludeGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['video', 'desktop', 'screen'] : []);
     // A whole edit (transcribe, look at the clips, plan, style, moments, review) takes many steps.
     // Full control works in small look → act steps: a whole task takes many of them.
+    // A WhatsApp message the user approved reached the chat Keo verified: remember who that name means.
+    this.agent.learned = (capabilityId, input, result) => {
+      if (capabilityId !== 'whatsapp.send_message') return;
+      const i = input as { contact?: string };
+      const r = result as { sent?: boolean; recipient?: string } | undefined;
+      if (r?.sent && i.contact && r.recipient) this.people.learnWhatsApp(i.contact, r.recipient);
+    };
     this.agent.minToolRounds = (conversationId) => Math.max(this.studioConversations.has(conversationId) ? 24 : 0, getSettings().permissions.fullControl ? 60 : 0);
     this.agent.systemExtra = (conversationId) =>
       this.jobs.isJobConversation(conversationId) ? this.live.agentContext() + this.researchContext() + this.videoContext() + this.studioContext(conversationId) + this.jobs.jobContext(conversationId) : this.agentExtra(conversationId);

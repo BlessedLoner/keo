@@ -64,6 +64,7 @@ export function MemoryView() {
         {(list.data ?? []).map((m) => (
           <MemoryCard key={m.id} m={m} all={list.data ?? []} onError={ui.error} />
         ))}
+        {tab === 'confirmed' && !query && <KnownPeopleList onError={ui.error} />}
       </div>
     </div>
   );
@@ -226,5 +227,37 @@ function MemoryCard({ m, all, onError }: { m: MemoryItem; all: MemoryItem[]; onE
         </button>
       </div>
     </article>
+  );
+}
+
+/** People Keo has messaged for the user: who each name means, so Keo opens the right chat straight away. */
+function KnownPeopleList({ onError }: { onError: (s: string) => void }) {
+  const people = useInvoke('people:list', {});
+  if (!people.data?.length) return null;
+  return (
+    <section className="card" style={{ marginTop: 16 }} aria-label="People Keo knows">
+      <h3 style={{ marginTop: 0 }}>People Keo knows</h3>
+      <p className="muted small">Learned from WhatsApp messages you approved. When you say a name, Keo opens this chat straight away. Forget one if it is wrong.</p>
+      {people.data.map((p) => (
+        <div key={p.name} className="row" style={{ gap: 10, alignItems: 'center', padding: '6px 0' }}>
+          <div className="grow">
+            <strong>{p.name}</strong> <span className="muted">→ WhatsApp “{p.whatsapp}”</span>
+            <div className="muted small">
+              {p.sends} message{p.sends === 1 ? '' : 's'} · last {timeAgo(p.lastAt)}
+            </div>
+          </div>
+          <button
+            className="btn ghost sm"
+            onClick={() =>
+              void invoke('people:forget', { name: p.name })
+                .then(() => people.refresh())
+                .catch((e) => onError(errText(e)))
+            }
+          >
+            Forget
+          </button>
+        </div>
+      ))}
+    </section>
   );
 }

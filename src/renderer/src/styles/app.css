@@ -604,3 +604,9 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 .connected-row p { margin: 4px 0 0; }
 .connected-setup { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 .connected-setup ol { margin: 0 0 8px; padding-left: 18px; }
+
+/* Technical details under a plain-language problem: folded away, readable when opened. */
+details.tech { margin-top: 4px; }
+details.tech summary { cursor: pointer; color: var(--muted, #8a8f98); }
+details.tech code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 4px; opacity: 0.85; }
+.turn-status { overflow: hidden; text-overflow: ellipsis; }

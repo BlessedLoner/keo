@@ -673,7 +673,8 @@ export type AgentEvent =
   | { type: 'turn_started'; conversationId: string; messageId: string; correlationId: string }
   | { type: 'text_delta'; conversationId: string; messageId: string; delta: string }
   | { type: 'tool_activity'; conversationId: string; messageId: string; activity: ToolActivity }
-  | { type: 'phase'; conversationId: string; messageId: string; phase: AgentPhase }
+  /** detail: what Keo is doing right now, in words ("Type text into Notepad"), while it acts or waits. */
+  | { type: 'phase'; conversationId: string; messageId: string; phase: AgentPhase; detail?: string }
   | { type: 'plan'; conversationId: string; messageId: string; plan: WorkPlan }
   | { type: 'turn_finished'; conversationId: string; message: Message };
 

@@ -167,6 +167,8 @@ export const INVOKE_CHANNELS = [
   'apps:installed',
   'workflows:saveFromTask',
   'workflows:delete',
+  'people:list',
+  'people:forget',
   'data:export',
   'data:import',
   'projects:clearWorkspace',

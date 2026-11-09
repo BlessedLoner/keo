@@ -7,6 +7,7 @@ import { ApprovalCard } from '../components/TaskWidgets';
 import { errText, invoke, subscribe } from '../lib/api';
 import { emblemFor, usePresence, useVoiceReporting } from '../lib/presence';
 import { voice } from '../lib/voice';
+import { explainReplyError } from '@shared/friendlyErrors';
 
 /**
  * Mini-chat (Ctrl+Shift+K) / wake-word command bar. Commands go to the "Quick commands"
@@ -181,7 +182,7 @@ export function CommandBarApp() {
           ) : m.role === 'assistant' ? (
             <div key={m.id} className="cmd-assistant">
               <Markdown text={live[m.id] ?? m.content ?? ''} />
-              {m.status === 'error' && <div className="small" style={{ color: 'var(--danger)' }}>{m.meta.error}</div>}
+              {m.status === 'error' && <div className="small" style={{ color: 'var(--danger)' }}>{(() => { const e = explainReplyError(m.meta.errorKind, m.meta.error); return `${e.what} ${e.todo}`; })()}</div>}
             </div>
           ) : (
             <div key={m.id} className="cmd-note small muted">

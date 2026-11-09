@@ -123,6 +123,8 @@ export const invokeSchemas = {
   'apps:installed': z.object({ refresh: z.boolean().default(false) }).strict(),
   'workflows:saveFromTask': z.object({ taskId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) }).strict(),
   'workflows:delete': z.object({ id: z.string().regex(/^wf_[a-z0-9]{6,20}$/) }).strict(),
+  'people:list': empty,
+  'people:forget': z.object({ name: z.string().trim().min(1).max(120) }).strict(),
   'data:export': empty,
   'data:import': empty,
   'projects:clearWorkspace': z.object({ projectId: z.string().min(1).max(80) }).strict(),
@@ -145,7 +147,13 @@ export const invokeSchemas = {
   'conversations:messages': z.object({ id }).strict(),
 
   'chat:send': z
-    .object({ conversationId: id, text: z.string().trim().max(32000), attachments: z.array(z.string().regex(/^att_[A-Za-z0-9]{8,40}$/)).max(8).optional() })
+    .object({
+      conversationId: id,
+      text: z.string().trim().max(32000),
+      attachments: z.array(z.string().regex(/^att_[A-Za-z0-9]{8,40}$/)).max(8).optional(),
+      /** The user said it with the microphone and sent it as heard. */
+      spoken: z.boolean().optional(),
+    })
     .strict()
     .refine((x) => x.text.length > 0 || (x.attachments?.length ?? 0) > 0, 'Write a message or attach something.'),
   'chat:pickAttachments': empty,
@@ -546,6 +554,8 @@ export interface InvokeOutputs {
   'workflows:list': Array<{ id: string; name: string; description: string; steps: number; imported: boolean; createdAt: string }>;
   'workflows:saveFromTask': { id: string; name: string };
   'workflows:delete': { deleted: boolean };
+  'people:list': Array<{ name: string; whatsapp: string; sends: number; lastAt: string }>;
+  'people:forget': { forgotten: boolean };
   'data:export': { path: string | null; projects: number; workflows: number };
   'data:import': { projects: number; workflows: number; skipped: number } | null;
   'projects:clearWorkspace': { cleared: boolean };

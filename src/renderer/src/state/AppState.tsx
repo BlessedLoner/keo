@@ -12,6 +12,10 @@ export type ViewId = 'chat' | 'call' | 'tasks' | 'memory' | 'projects' | 'builds
 export interface TurnInfo {
   messageId: string;
   phase: AgentPhase;
+  /** What Keo is doing right now, in words. */
+  detail?: string;
+  /** When this phase began (ms), to show how long a slow step has taken. */
+  since: number;
 }
 
 interface AppStateValue {
@@ -106,9 +110,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setTurns((cur) => {
           switch (e.type) {
             case 'turn_started':
-              return { ...cur, [e.conversationId]: { messageId: e.messageId, phase: 'thinking' } };
-            case 'phase':
-              return cur[e.conversationId] ? { ...cur, [e.conversationId]: { messageId: e.messageId, phase: e.phase } } : cur;
+              return { ...cur, [e.conversationId]: { messageId: e.messageId, phase: 'thinking', since: Date.now() } };
+            case 'phase': {
+              const was = cur[e.conversationId];
+              if (!was) return cur;
+              const same = was.phase === e.phase && was.detail === e.detail;
+              return { ...cur, [e.conversationId]: { messageId: e.messageId, phase: e.phase, ...(e.detail ? { detail: e.detail } : {}), since: same ? was.since : Date.now() } };
+            }
             case 'turn_finished': {
               const next = { ...cur };
               delete next[e.conversationId];

@@ -4,6 +4,7 @@ import { errText, invoke } from '../lib/api';
 import { exact, humanize, timeAgo } from '../lib/format';
 import { Icon } from './Icon';
 import { useUi } from './ui';
+import { explainStepError } from '@shared/friendlyErrors';
 
 export const TASK_TONE: Record<TaskState, string> = {
   proposed: 'violet',
@@ -250,7 +251,7 @@ function StepRow({ task, step }: { task: Task; step: TaskStep }) {
           {step.dependsOn.length > 0 && ` · after step ${step.dependsOn.map((d) => (task.steps.find((x) => x.id === d)?.index ?? 0) + 1).join(', ')}`}
         </div>
         {step.preview.dataExport && <div className="small" style={{ color: '#ffd38a' }}>{step.preview.dataExport}</div>}
-        {step.error && <div className="err">{step.error}</div>}
+        {step.error && <div className="err" title={step.error}>{explainStepError(step.error).text}</div>}
         {step.state === 'succeeded' && (
           <div className="small" style={{ color: step.verification === 'verified' ? 'var(--ok)' : 'var(--text-2)' }}>
             {step.verification === 'verified' ? '✓ Verified' : step.verification === 'unverified' ? 'Completed — not independently verified' : 'Completed'}
