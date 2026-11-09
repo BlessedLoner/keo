@@ -25,6 +25,8 @@ export function CapabilitiesView() {
       <div className="view-body narrow">
         {s && (
           <>
+            <FullControl s={s} patch={patch} />
+
             <div className="section-title">Permissions</div>
             <div className="card stack">
               <Toggle checked={s.permissions.observationEnabled} onChange={(v) => void enableWithConfirm('observationEnabled', v, 'window observation')} label={<PermLabel title="Window observation" text="List windows of allow-listed apps and capture one window at a time (each capture by Keo needs approval)." />} />
@@ -74,6 +76,55 @@ const PERMISSION_TEXT = {
   webSearchEnabled: 'Keo will be able to send search queries to its search engine (Keo Search with your Keo account, your own Brave key, or DuckDuckGo — Settings → Web) whenever it decides a search helps, without asking each time. Results are treated as untrusted.',
   webFetchEnabled: 'Keo will be able to download public web pages to read them. Websites see requests from your computer. Local and private-network addresses are always refused.',
 } as const;
+
+/**
+ * Full control: Keo uses any app like a person (see, click, type, keys, scroll, drag). Off by
+ * default; turning it on asks first and also lets the active AI see the screen (it must, to work).
+ */
+function FullControl({ s, patch }: { s: Settings; patch: (p: Record<string, unknown>) => Promise<unknown> }) {
+  const ui = useUi();
+  const provider = (s.activeProvider ?? '') as keyof Settings['permissions']['visionExport'];
+  const toggle = async (on: boolean) => {
+    if (!on) {
+      await patch({ permissions: { fullControl: false } });
+      return;
+    }
+    const ok = await ui.confirm({
+      title: 'Turn on Full control?',
+      body: (
+        <div className="stack" style={{ gap: 8 }}>
+          <span>Keo will be able to use any app on this computer the way you do: look at the screen, click, type, press keys, scroll and drag — without asking for each ordinary step.</span>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <li>Sending, posting, paying, deleting, submitting and installing still ask you every time.</li>
+            <li>Keo never types passwords or card numbers, and never touches password managers or Windows security prompts.</li>
+            <li>While Keo works, a banner shows at the top of the screen. Press Stop or Esc, or just move the mouse, and Keo stops at once.</li>
+            <li>Pictures of your screen go to your AI model so Keo can see what it is doing.</li>
+          </ul>
+        </div>
+      ),
+      confirmLabel: 'Turn on Full control',
+    });
+    if (!ok) return;
+    await patch({ permissions: { fullControl: true, ...(provider in s.permissions.visionExport ? { visionExport: { [provider]: true } } : {}) } });
+  };
+  return (
+    <>
+      <div className="section-title">Full control</div>
+      <div className="card stack">
+        <Toggle
+          checked={s.permissions.fullControl}
+          onChange={(v) => void toggle(v)}
+          label={
+            <PermLabel
+              title="Let Keo use my computer like a person"
+              text="Any app: Keo looks at the screen, clicks, types and presses keys until the job is done. Sending, paying, deleting and posting still ask. Stop, Esc or moving the mouse stops it."
+            />
+          }
+        />
+      </div>
+    </>
+  );
+}
 
 function PermLabel({ title, text }: { title: string; text: string }) {
   return (

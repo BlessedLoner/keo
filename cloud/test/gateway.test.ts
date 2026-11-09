@@ -271,4 +271,14 @@ describe('Keo Cloud gateway', () => {
     await w.settle();
     expect(w.usage.get(`u-ana|${DAY}`)).toMatchObject({ voice_seconds: 2 });
   });
+
+  it('listens for the meaning across accents, with the app’s context words', async () => {
+    const { wav } = await import('../src/gateway');
+    const b64 = btoa(String.fromCharCode(...wav(new Uint8Array(16000 * 2), 16000)));
+    await w.call('/v1/transcribe', { token: 'tok-ana', body: { audio: b64, format: 'wav', language: 'en', hint: 'Recent conversation: send it to Tunde <script>' } });
+    const text = (w.upstream.at(-1)!.body.messages as Array<{ content: Array<{ text?: string }> }>)[0]!.content[0]!.text!;
+    expect(text).toMatch(/Nigerian/);
+    expect(text).toMatch(/Tunde/);
+    expect(text).not.toMatch(/<script>/);
+  });
 });

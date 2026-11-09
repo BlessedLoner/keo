@@ -6,6 +6,10 @@ import type { Logger } from '../logging/logger';
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 /** Gmail over IMAP/SMTP with the Google sign-in instead of an app password (read and send). */
 export const MAIL_SCOPE = 'https://mail.google.com/';
+/** Upload videos to the user's YouTube channel (only when they connect YouTube). */
+export const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
+/** Files Keo itself creates or the user opens with Keo in Google Drive (never the whole Drive). */
+export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 export const GOOGLE_ENDPOINTS = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -114,7 +118,7 @@ export class GoogleAuth {
    * "Sign in with Google": Calendar, and with `mail` also Gmail (one consent page for both).
    * Returns what the user allowed.
    */
-  async signIn(opts: { mail?: boolean } = {}): Promise<{ calendar: boolean; mail: boolean; email: string | null }> {
+  async signIn(opts: { mail?: boolean; extra?: string[] } = {}): Promise<{ calendar: boolean; mail: boolean; email: string | null; granted: string[] }> {
     const clientId = this.d.clientId();
     if (!clientId) throw new Error('Add your Google OAuth client ID first (see the setup steps).');
     this.pending?.abort();
@@ -130,7 +134,7 @@ export class GoogleAuth {
         client_id: clientId,
         redirect_uri: listener.redirectUri,
         response_type: 'code',
-        scope: [CALENDAR_SCOPE, ...(opts.mail ? [MAIL_SCOPE, 'openid', 'email'] : [])].join(' '),
+        scope: [CALENDAR_SCOPE, ...(opts.mail ? [MAIL_SCOPE, 'openid', 'email'] : []), ...(opts.extra ?? [])].join(' '),
         include_granted_scopes: 'true',
         code_challenge: challenge,
         code_challenge_method: 'S256',
@@ -151,11 +155,13 @@ export class GoogleAuth {
       const granted = t.scope.split(' ');
       const calendar = granted.includes(CALENDAR_SCOPE);
       const mail = granted.includes(MAIL_SCOPE);
-      if (!calendar && !mail)
+      const extraGranted = (opts.extra ?? []).filter((x) => granted.includes(x));
+      if (opts.extra?.length && !extraGranted.length) throw new Error('Keo was not given the permission it asked for (the box on Google’s consent page was not ticked). Try again and allow it.');
+      if (!calendar && !mail && !extraGranted.length)
         throw new Error(opts.mail ? 'Keo was not given access to Gmail or your calendar (the boxes on Google’s consent page were not ticked). Sign in again and allow access.' : 'Keo was not given access to your calendar events (the box on Google’s consent page was not ticked). Sign in again and allow calendar access.');
       this.d.save(t);
       this.d.log.info('calendar.signed_in', { calendar, mail });
-      return { calendar, mail, email: t.email ?? null };
+      return { calendar, mail, email: t.email ?? null, granted };
     } catch (e) {
       if (ac.signal.aborted) throw new Error('Sign-in was cancelled or took too long.', { cause: e });
       throw e;

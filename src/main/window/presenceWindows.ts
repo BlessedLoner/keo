@@ -316,7 +316,8 @@ export class PresenceWindows {
     return { ...this.shortcut };
   }
 
-  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | 'marks' | 'video' | null {
+  roleOf(id: number): 'companion' | 'command' | 'results' | 'pencil' | 'keomode' | 'marks' | 'video' | 'control' | null {
+    if (this.controlWin && !this.controlWin.isDestroyed() && this.controlWin.webContents.id === id) return 'control';
     if (this.video && !this.video.isDestroyed() && this.video.webContents.id === id) return 'video';
     if (this.marksWin && !this.marksWin.isDestroyed() && this.marksWin.webContents.id === id) return 'marks';
     if (this.keoMode && !this.keoMode.isDestroyed() && this.keoMode.webContents.id === id) return 'keomode';
@@ -325,6 +326,88 @@ export class PresenceWindows {
     if (this.command && !this.command.isDestroyed() && this.command.webContents.id === id) return 'command';
     if (this.results && !this.results.isDestroyed() && this.results.webContents.id === id) return 'results';
     return null;
+  }
+
+  // ---------------------------------------------------------------- Full control banner
+  controlWin: BrowserWindow | null = null;
+  private stopKeyOn = false;
+
+  /**
+   * “Keo is using your computer — Stop”: a small pill at the top of the main display, always on
+   * top, never focused, and left out of screen pictures (content protection) so Keo never sees
+   * or clicks it by accident.
+   */
+  showControlBanner(): void {
+    const cur = this.controlWin;
+    if (cur && !cur.isDestroyed()) {
+      if (!cur.isVisible()) cur.showInactive();
+      return;
+    }
+    const d = screen.getPrimaryDisplay().workArea;
+    const width = 440;
+    const height = 48;
+    const win = new BrowserWindow({
+      x: Math.round(d.x + (d.width - width) / 2),
+      y: d.y + 6,
+      width,
+      height,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      show: false,
+      alwaysOnTop: true,
+      backgroundColor: '#00000000',
+      webPreferences: webPreferences(this.preload),
+    });
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setContentProtection(true);
+    win.on('closed', () => {
+      if (this.controlWin === win) this.controlWin = null;
+    });
+    void win.loadURL(this.url('#control'));
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed() && this.controlWin === win) win.showInactive();
+    });
+    this.controlWin = win;
+  }
+
+  hideControlBanner(): void {
+    const w = this.controlWin;
+    this.controlWin = null;
+    if (w && !w.isDestroyed()) w.destroy();
+  }
+
+  /** The banner in physical screen pixels (what Keo's clicks use). */
+  controlBannerBounds(): { x: number; y: number; width: number; height: number } | null {
+    const w = this.controlWin;
+    if (!w || w.isDestroyed() || !w.isVisible()) return null;
+    return screen.dipToScreenRect(null, w.getBounds());
+  }
+
+  controlBannerAside(aside: boolean): void {
+    const w = this.controlWin;
+    if (!w || w.isDestroyed()) return;
+    if (aside) w.hide();
+    else w.showInactive();
+  }
+
+  /** Esc stops Keo while it is in control (released while Keo presses Esc itself). */
+  controlStopKey(on: boolean): void {
+    if (on === this.stopKeyOn) return;
+    this.stopKeyOn = on;
+    try {
+      if (on) {
+        if (!globalShortcut.register('Escape', () => void this.services.stopAll())) this.log.warn('fullcontrol.esc_unavailable');
+      } else if (globalShortcut.isRegistered('Escape')) globalShortcut.unregister('Escape');
+    } catch (e) {
+      this.log.warn('fullcontrol.esc_error', { error: String(e) });
+    }
   }
 
   // ---------------------------------------------------------------- Keo's marks on the screen

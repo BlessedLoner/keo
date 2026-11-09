@@ -25,7 +25,11 @@ export type SecretName =
   /** Google OAuth client secret of the user's own "Desktop app" client, if it has one. */
   | 'google_client_secret'
   /** Google Calendar tokens (JSON: refresh and access token, expiry). */
-  | 'google_tokens';
+  | 'google_tokens'
+  /** Connected apps: the user's Telegram bot token, Notion integration token, Slack bot token. */
+  | 'telegram_bot'
+  | 'notion'
+  | 'slack';
 
 /**
  * Stores provider credentials as OS-encrypted blobs in Keo's own profile.

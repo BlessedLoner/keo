@@ -6,7 +6,8 @@ import { PreviewSources } from './media';
 /**
  * The Studio's live preview: the project drawn by Keo's picture engine at the playhead, with the
  * clips' media playing in step while it plays. When paused, layers can be picked, moved, resized
- * and rotated right on the picture (with guides that snap to the middle).
+ * and rotated right on the picture (with guides that snap to the middle, the thirds, a safe margin
+ * and the other layers' edges and centres).
  */
 
 /** Drag a box on the preview (for choosing what to follow). */
@@ -132,7 +133,10 @@ export function Preview({
   quality = 1,
   guides = 'none',
   pickBox,
+  flagged = [],
 }: {
+  /** Clips Keo's edit check flagged: outlined in red while they are on screen. */
+  flagged?: string[];
   /** While set, dragging on the preview draws a box (fractions of the frame), handed over when let go (null: cancelled). */
   pickBox?: (box: { x: number; y: number; w: number; h: number } | null) => void;
   /** Fewer pixels for smooth playback on slower PCs (1 = full). */
@@ -160,7 +164,8 @@ export function Preview({
   const [size, setSize] = useState({ w: 0, h: 0, scale: 1 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [patch, setPatch] = useState<Patch | null>(null);
-  const [snap, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false });
+  /** Guide lines shown while dragging (canvas pixels), where the layer snapped. */
+  const [snap, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null });
   const guideMode = guides;
 
   // While a layer is being moved, the preview draws it where the mouse is.
@@ -299,7 +304,7 @@ export function Preview({
   // Where the layers are on screen (canvas pixels), for picking and handles.
   const boxes = (() => {
     const c = canvas.current;
-    if (!c || playing || !onSelect) return [];
+    if (!c || playing || (!onSelect && !flagged.length)) return [];
     const ctx = c.getContext('2d');
     return ctx ? layerBoxes(ctx, shown, time, c.width, c.height) : [];
   })();
@@ -321,14 +326,26 @@ export function Preview({
       const p = toCanvas(e);
       const g = gesture;
       if (g.kind === 'move') {
-        let x = g.box.cx + (p.x - g.startX);
-        let y = g.box.cy + (p.y - g.startY);
-        const v = Math.abs(x - W / 2) < snapPx;
-        const hz = Math.abs(y - H / 2) < snapPx;
-        if (v) x = W / 2;
-        if (hz) y = H / 2;
-        setGuides({ v, h: hz });
-        setPatch({ id: g.id, x: x / W, y: y / H });
+        const raw = { x: g.box.cx + (p.x - g.startX), y: g.box.cy + (p.y - g.startY) };
+        // Alt: no snapping. Else the nearest line within reach: the middle, thirds, a safe margin, other layers.
+        const others = boxes.filter((b) => b.id !== g.id);
+        const lines = (size: number, pick: (b: LayerBox) => number[]) => [size / 2, size / 3, (size * 2) / 3, size * 0.06, size * 0.94, ...others.flatMap(pick)];
+        const snapAxis = (c: number, half: number, ls: number[]) => {
+          let best: { d: number; line: number; c: number } | null = null;
+          if (!e.altKey)
+            for (const line of ls)
+              for (const off of [-half, 0, half]) {
+                const d = Math.abs(c + off - line);
+                if (d < snapPx && (!best || d < best.d)) best = { d, line, c: line - off };
+              }
+          return best;
+        };
+        const hw = g.box.w / 2;
+        const hh = g.box.h / 2;
+        const sx = snapAxis(raw.x, hw, lines(W, (b) => [b.cx - b.w / 2, b.cx, b.cx + b.w / 2]));
+        const sy = snapAxis(raw.y, hh, lines(H, (b) => [b.cy - b.h / 2, b.cy, b.cy + b.h / 2]));
+        setGuides({ v: sx ? sx.line : null, h: sy ? sy.line : null });
+        setPatch({ id: g.id, x: (sx ? sx.c : raw.x) / W, y: (sy ? sy.c : raw.y) / H });
       } else if (g.kind === 'scale') {
         const d0 = Math.hypot(g.startX - g.box.cx, g.startY - g.box.cy);
         const d1 = Math.hypot(p.x - g.box.cx, p.y - g.box.cy);
@@ -345,7 +362,7 @@ export function Preview({
       }
     };
     const up = () => {
-      setGuides({ v: false, h: false });
+      setGuides({ v: null, h: null });
       setGesture(null);
       setPatch((pt) => {
         if (pt && onEdit) {
@@ -385,6 +402,10 @@ export function Preview({
         <canvas ref={canvas} aria-label="Video preview" />
         {guideMode !== 'none' && <SafeZones kind={guideMode} vertical={project.height > project.width} />}
         {pickBox && <BoxPicker onDone={pickBox} />}
+        {!playing &&
+          boxes
+            .filter((b) => flagged.includes(b.id) && b.id !== selected)
+            .map((b) => <div key={`flag-${b.id}`} className="flag-box" aria-hidden style={{ left: b.cx / k, top: b.cy / k, width: b.w / k, height: b.h / k, transform: `translate(-50%, -50%) rotate(${b.rotation}deg)` }} />)}
         {onSelect && !playing && (
           <div
             className="preview-overlay"
@@ -395,8 +416,8 @@ export function Preview({
               if (hit) start('move', hit, e);
             }}
           >
-            {snap.v && <div className="guide v" />}
-            {snap.h && <div className="guide h" />}
+            {snap.v !== null && <div className="guide v" style={{ left: snap.v / k }} />}
+            {snap.h !== null && <div className="guide h" style={{ top: snap.h / k }} />}
             {sel && (
               <div className="sel-box" style={{ left: sel.cx / k, top: sel.cy / k, width: sel.w / k, height: sel.h / k, transform: `translate(-50%, -50%) rotate(${sel.rotation}deg)` }}>
                 <span className="handle rotate" title="Drag to rotate (Shift: 15° steps)" onPointerDown={(e) => start('rotate', sel, e)} />

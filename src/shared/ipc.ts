@@ -1,4 +1,5 @@
 import type { Sound } from './studioSounds';
+import { Series, SeriesId } from './studioSeries';
 import type { Recipe } from './studioRecipe';
 import { Storyboard } from './studioFaceless';
 import { Brand, BrandPatch } from './studioBrand';
@@ -229,9 +230,36 @@ export const invokeSchemas = {
   'builds:delete': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
   // Real AI video from a description: the shot plan (Keo's model, nothing paid yet), then the video.
   'studio:aiVideoPlan': z.object({ description: z.string().trim().min(10).max(8000), seconds: z.number().int().min(5).max(60), model: z.enum(['kling-3-pro', 'veo-3.1-fast']), cast: z.array(CharacterId).max(3) }).strict(),
-  'studio:aiVideoMake': z.object({ plan: AiVideoPlan }).strict(),
+  'studio:aiVideoMake': z.object({ plan: AiVideoPlan, stage: z.enum(['frames', 'all']).default('frames') }).strict(),
+  'studio:aiFilm': z.object({ id: studioProjectId, assets: z.array(z.string().max(40)).max(12).optional(), test: z.boolean() }).strict(),
+  'studio:aiRedoFrame': z.object({ id: studioProjectId, asset: z.string().max(40) }).strict(),
   /** AI requests still being made for a project (they survive closing Keo). */
   'studio:aiJobs': z.object({ id: studioProjectId }).strict(),
+  'studio:review': z.object({ id: studioProjectId }).strict(),
+  'studio:lastExport': z.object({ id: studioProjectId }).strict(),
+  'studio:learnStyle': z.object({ id: studioProjectId }).strict(),
+  'connected:status': z.object({}).strict().optional().default({}),
+  'connected:set': z.object({ app: z.enum(['telegram', 'notion', 'slack']), token: z.string().trim().min(10).max(300) }).strict(),
+  'connected:clear': z.object({ app: z.enum(['telegram', 'notion', 'slack']) }).strict(),
+  'connected:connectDrive': z.object({}).strict().optional().default({}),
+  'account:studioHistory': z.object({}).strict().optional().default({}),
+  'account:referral': z.object({}).strict().optional().default({}),
+  'account:redeemReferral': z.object({ code: z.string().trim().min(6).max(12) }).strict(),
+  'studio:seriesList': z.object({}).strict().optional().default({}),
+  'studio:seriesCreate': z.object({ name: z.string().trim().min(1).max(80), projects: z.array(studioProjectId).max(200).optional() }).strict(),
+  'studio:seriesAdd': z.object({ seriesId: SeriesId, projectId: studioProjectId }).strict(),
+  'studio:seriesRemove': z.object({ projectId: studioProjectId }).strict(),
+  'studio:newEpisode': z.object({ seriesId: SeriesId, title: z.string().trim().max(80).optional() }).strict(),
+  'studio:viral': z.object({ id: studioProjectId, template: z.enum(['hook-payoff', 'listicle', 'myth-fact', 'story-time']), hook: z.string().trim().min(1).max(120).optional() }).strict(),
+  'social:write': z.object({ projectId: studioProjectId, platform: z.enum(['youtube', 'tiktok', 'instagram']) }).strict(),
+  'social:youtubeStatus': z.object({}).strict().optional().default({}),
+  'social:connectYouTube': z.object({}).strict().optional().default({}),
+  'social:postYouTube': z.object({ projectId: studioProjectId.optional(), file: z.string().min(3).max(1000), title: z.string().trim().min(1).max(100), description: z.string().max(5000), tags: z.array(z.string().max(60)).max(30), privacy: z.enum(['private', 'unlisted', 'public']), forKids: z.boolean() }).strict(),
+  'social:handoff': z.object({ platform: z.enum(['tiktok', 'instagram']), file: z.string().min(3).max(1000), text: z.string().max(2400) }).strict(),
+  'studio:wordCheck': z.object({ id: studioProjectId }).strict(),
+  'studio:proofread': z.object({ id: studioProjectId, fixes: z.array(z.object({ heard: z.string().trim().min(1).max(60), meant: z.string().trim().min(1).max(60) }).strict()).min(1).max(25) }).strict(),
+  'studio:fixReview': z.object({ id: studioProjectId, keys: z.array(z.string().max(200)).max(60).optional() }).strict(),
+  'studio:motionEdit': z.object({ id: studioProjectId, look: z.enum(['mix', 'light', 'dark']).default('mix'), energy: z.enum(['calm', 'normal', 'high']).default('normal') }).strict(),
   'studio:shotAgain': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), mode: z.enum(['redo', 'extend']), prompt: z.string().trim().min(3).max(2000).optional(), model: z.enum(['kling-3-pro', 'veo-3.1-fast']).optional(), seconds: z.number().min(3).max(10).optional() }).strict(),
   'studio:aiMusic': z.object({ id: studioProjectId, prompt: z.string().trim().min(3).max(2000), seconds: z.number().min(5).max(300).optional(), vocals: z.boolean().optional(), at: z.number().min(0).optional(), volume: z.number().min(0).max(1).optional() }).strict(),
   'studio:aiSound': z.object({ id: studioProjectId, prompt: z.string().trim().min(3).max(450), seconds: z.number().min(0.5).max(30), at: z.number().min(0), loop: z.boolean().optional(), volume: z.number().min(0).max(2).optional() }).strict(),
@@ -444,6 +472,19 @@ export const invokeSchemas = {
   'schedule:list': empty,
   'schedule:pause': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/), paused: z.boolean() }).strict(),
   'schedule:delete': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/) }).strict(),
+  'schedule:create': z
+    .object({
+      kind: z.enum(['routine', 'reminder']),
+      title: z.string().trim().min(1).max(80),
+      text: z.string().trim().min(3).max(4000),
+      /** The first time, as the user's local date and time ("2026-11-08T09:00"). */
+      at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),
+      every: z.enum(['once', 'day', 'week', 'hours']),
+      days: z.array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])).max(7).optional(),
+      hours: z.number().int().min(1).max(168).optional(),
+    })
+    .strict(),
+  'schedule:runNow': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/) }).strict(),
 
   /** The morning briefing card: open an event's Google Calendar page, or a file it listed. */
   'briefing:openEvent': z.object({ url: z.string().min(8).max(2000) }).strict(),
@@ -589,8 +630,35 @@ export interface InvokeOutputs {
   'builds:delete': { deleted: boolean };
   'studio:aiVideoPlan': { title: string; style: string; shots: AiShot[] };
   'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
+  'studio:aiFilm': { shots: number; costUsd: number };
+  'studio:aiRedoFrame': { asset: string };
   'studio:aiJobs': Array<{ about: string; submittedAt: string; kind: 'shot' | 'swap' | 'other' }>;
   'studio:swap': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
+  'studio:review': { issues: StudioIssue[]; updatedAt: string };
+  'studio:lastExport': { file: string | null };
+  'studio:learnStyle': { patch: Record<string, string>; found: string[] };
+  'connected:status': { telegram: { connected: boolean }; notion: { connected: boolean }; slack: { connected: boolean }; drive: { connected: boolean }; googleReady: boolean };
+  'connected:set': { name: string };
+  'connected:clear': { ok: true };
+  'connected:connectDrive': { connected: boolean };
+  'account:studioHistory': { items: Array<{ what: string; credits: number; refunded: boolean; at: string }> };
+  'account:referral': { code: string | null; credits: number; joined: number; earned: number; referred: boolean };
+  'account:redeemReferral': { credits: number };
+  'studio:seriesList': Series[];
+  'studio:seriesCreate': Series;
+  'studio:seriesAdd': Series;
+  'studio:seriesRemove': { ok: true };
+  'studio:newEpisode': { project: StudioProject; episode: number; filled: number; slots: number } | null;
+  'studio:viral': { placed: number; note: string | null; endCard: boolean };
+  'social:write': { title: string; caption: string; hashtags: string[] };
+  'social:youtubeStatus': { connected: boolean; email: string | null; canConnect: boolean };
+  'social:connectYouTube': { connected: boolean };
+  'social:postYouTube': { url: string; privacy: string };
+  'social:handoff': { opened: boolean; copied: boolean };
+  'studio:wordCheck': { words: Array<{ heard: string; meant: string; at: number; where: 'captions' | 'transcript' }> };
+  'studio:proofread': { fixed: number; inText: number };
+  'studio:fixReview': { fixed: number; issues: StudioIssue[]; updatedAt: string };
+  'studio:motionEdit': { placed: Array<{ kind: string; at: number; text: string }>; missed: number; planner: 'model' | 'keo' };
   'studio:shotAgain': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:aiMusic': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
   'studio:aiSound': { clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean };
@@ -719,6 +787,8 @@ export interface InvokeOutputs {
   'schedule:list': ScheduledItem[];
   'schedule:pause': ScheduledItem | null;
   'schedule:delete': { deleted: boolean };
+  'schedule:create': ScheduledItem;
+  'schedule:runNow': { started: boolean };
 
   'briefing:openEvent': { opened: boolean };
   'briefing:openFile': { opened: boolean; error: string | null };
@@ -806,3 +876,14 @@ export interface IpcErrorShape {
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: IpcErrorShape };
 
+
+/** One thing the edit check found (Studio's Check panel). */
+export interface StudioIssue {
+  key: string;
+  kind: string;
+  clip: string;
+  at: number;
+  detail: string;
+  fix: string;
+  canFix: boolean;
+}

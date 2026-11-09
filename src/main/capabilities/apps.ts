@@ -69,7 +69,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Open an app',
     description:
-      'Open (or switch to) an installed Windows app, including Microsoft Store apps, by name or by an app id from apps__find. If several apps match the name, this fails with the candidates: ask the user which one (they may say "the one already open"), then call again with its appId. Typing or clicking inside the app needs it in the allowed apps.',
+      'Open (or switch to) an installed Windows app, including Microsoft Store apps, by name or by an app id from apps__find. If several apps match the name, this fails with the candidates: ask the user which one (they may say "the one already open"), then call again with its appId. Typing or clicking inside the app needs it in the allowed apps (with Full control on, every app is allowed).',
     input: z
       .object({
         query: z.string().trim().min(1).max(80).optional(),

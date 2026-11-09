@@ -218,6 +218,15 @@ function TitleControls() {
           <Icon name="shield" size={12} /> {p.autonomy === 'hands_free' ? 'Hands-free' : 'Asks for important only'}
         </button>
       )}
+      {s?.permissions.fullControl && (
+        <button
+          className="chip warn level"
+          onClick={() => void invoke('settings:update', { patch: { permissions: { fullControl: false } } })}
+          title="Keo may use any app on this computer (sending, paying, deleting and posting still ask). Click to turn Full control off."
+        >
+          <Icon name="shield" size={12} /> Full control
+        </button>
+      )}
       <UpdateChip />
       <button className="chip" onClick={() => void invoke('commandBar:show')} title="Open the command bar">
         <Icon name="chat" size={12} /> {s?.shortcuts.commandBarEnabled ? s.shortcuts.commandBar.replace('Control', 'Ctrl') : 'Command bar'}

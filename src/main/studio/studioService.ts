@@ -3,19 +3,23 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, replaceWords, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
 import { Brand, patchBrand, respell, type BrandPatch } from '../../shared/studioBrand';
 import { Character, type CharacterPatch } from '../../shared/studioCharacters';
-import { reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
+import { fixIssues, issueKey, reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
 import { MomentNeeds, momentOps, placeMoments, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
+import { viralPlan, type ViralId } from '../../shared/studioViral';
+import { episodeName, Series } from '../../shared/studioSeries';
+import { lookTimes, MotionEditError, motionEditOps, planBeats, type BeatKind, type MotionEditOptions } from '../../shared/studioMotionEdit';
 import { guessShotKind, lookOf, recipeOps, shotsFrom, type Recipe, type ShotKind } from '../../shared/studioRecipe';
 
 export type { ProjectSummary, RenderJob };
+import { namesFor, type WordFix } from '../../shared/studioProofread';
 import { captionLines, dropLoops, pieces, readWav, spreadWords, voicedSpans, wavOf, type CaptionLine, type Word } from './captions';
 import { planCleanup, punchIns, type CleanupPlan } from './cleanup';
 import { SFX, sfxWav, type SfxKind } from './sfx';
@@ -59,6 +63,11 @@ export interface StudioDeps {
   showProject?: (projectId: string) => void;
   /** Milliseconds before and after each shown step (tests use 0). */
   livePace?: { before: number; after: number };
+  /**
+   * Proofreads a fresh transcript (the user's AI model): words the speech service misheard, such
+   * as names. Optional: without it the words stay as heard.
+   */
+  proofread?: (transcript: string, names: string[], signal: AbortSignal) => Promise<WordFix[]>;
   /** Wait before trying a failed piece of speech again (tests use 0). */
   retryDelayMs?: number;
   now?: () => Date;
@@ -78,6 +87,43 @@ export function kindOfFile(file: string): AssetKind | null {
 }
 
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
+
+/** A screen showcase's recipe: its scenes (assets of the showcase project itself) and choices. */
+export interface ShowcaseRecord {
+  title: string;
+  scenes: Array<{ screen: string; headline: string; kicker?: string; narration: string; clip?: string }>;
+  voice: 'female' | 'male' | 'none';
+  look: 'dark' | 'light';
+  captions: boolean;
+}
+
+/**
+ * A showcase made before Keo kept its recipe, read back from its own tracks: the screens in order,
+ * the headline over each, the clip floating beside it, and what the voice says (its captions).
+ */
+export function showcaseFromTimeline(p: Project): ShowcaseRecord | null {
+  const track = (name: string) => p.tracks.find((t) => t.name === name);
+  const screens = (track('Screens')?.clips ?? []).filter((c): c is MediaClip => c.type === 'media').sort((a, b) => a.start - b.start);
+  if (!screens.length || !track('Showcase titles')) return null;
+  const titles = track('Showcase titles')!.clips.filter((c) => c.type === 'motion');
+  const floating = (track('Floating clips')?.clips ?? []).filter((c): c is MediaClip => c.type === 'media');
+  const captions = (track('Captions')?.clips ?? []).filter((c) => c.type === 'text').sort((a, b) => a.start - b.start);
+  const inside = (c: Clip, s: MediaClip) => c.start >= s.start - 0.05 && c.start < clipEnd(s) - 0.05;
+  const scenes = screens.map((s) => {
+    const title = titles.find((t) => inside(t, s));
+    const clip = floating.find((f) => inside(f, s));
+    const narration = captions
+      .filter((c) => inside(c, s))
+      .map((c) => (c.type === 'text' ? c.text : ''))
+      .join(' ')
+      .trim();
+    return { screen: s.assetId, headline: title?.type === 'motion' ? title.text : 'Feature', ...(title?.type === 'motion' && title.sub ? { kicker: title.sub } : {}), narration, ...(clip ? { clip: clip.assetId } : {}) };
+  });
+  const backdrop = track('Showcase backdrop')?.clips[0];
+  const light = backdrop?.type === 'motion' && !!backdrop.background && /^#[EF]/i.test(backdrop.background);
+  const voiced = (track('Voice')?.clips.length ?? 0) > 0;
+  return { title: p.name, scenes, voice: voiced ? 'female' : 'none', look: light ? 'light' : 'dark', captions: captions.length > 0 };
+}
 
 export class StudioService {
   private readonly undo = new Map<string, Project[]>();
@@ -118,13 +164,16 @@ export class StudioService {
 
   list(): ProjectSummary[] {
     const out: ProjectSummary[] = [];
+    const seriesOf = new Map<string, { id: string; name: string; episode: number }>();
+    for (const se of this.seriesList()) se.projects.forEach((pid, i) => seriesOf.set(pid, { id: se.id, name: se.name, episode: i + 1 }));
     for (const f of fs.readdirSync(this.d.dir)) {
       if (!/^pr_[A-Za-z0-9]+\.json$/.test(f)) continue;
       try {
         const p = Project.parse(JSON.parse(fs.readFileSync(path.join(this.d.dir, f), 'utf8')));
         const first = p.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media').sort((x, y) => x.start - y.start)[0];
         const cover = (first?.type === 'media' ? p.assets.find((a) => a.id === first.assetId) : undefined) ?? p.assets.find((a) => a.kind !== 'audio') ?? null;
-        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined, scenes: undefined } : null });
+        const se = seriesOf.get(p.id);
+        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined, scenes: undefined } : null, ...(se ? { series: se } : {}) });
       } catch {
         /* a damaged file is left alone */
       }
@@ -321,6 +370,73 @@ export class StudioService {
         }
       });
     this.shows.set(id, run);
+  }
+
+  // ---------------------------------------------------------------- series
+
+  private get seriesFile(): string {
+    return path.join(this.d.dir, 'library', 'series.json');
+  }
+  /** The user's series (episodes whose projects were deleted are left out). */
+  seriesList(): Series[] {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.seriesFile, 'utf8')) as unknown[];
+      return raw.flatMap((x) => {
+        const r = Series.safeParse(x);
+        return r.success ? [{ ...r.data, projects: r.data.projects.filter((pid) => fs.existsSync(path.join(this.d.dir, `${pid}.json`))) }] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
+  private saveSeries(list: Series[]): void {
+    fs.mkdirSync(path.dirname(this.seriesFile), { recursive: true });
+    fs.writeFileSync(this.seriesFile, JSON.stringify(list, null, 2));
+  }
+  /** A new series, optionally starting from projects the user already made (in that order). */
+  createSeries(name: string, o: { format?: FormatId; projects?: string[] } = {}): Series {
+    const list = this.seriesList();
+    if (list.some((x) => x.name.toLowerCase() === name.trim().toLowerCase())) throw new StudioError(`There is already a series called “${name.trim()}”.`);
+    const projects = (o.projects ?? []).filter((pid) => { this.get(pid); return true; });
+    const first = projects[0] ? this.get(projects[0]) : null;
+    const format: FormatId = o.format ?? (first ? (first.width > first.height ? 'landscape' : first.width === first.height ? 'square' : 'vertical') : 'vertical');
+    const se: Series = { id: `se_${crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, 'x').slice(0, 10)}`, name: name.trim().slice(0, 80), projects, format: format === 'landscape' || format === 'square' ? format : 'vertical', createdAt: (this.d.now?.() ?? new Date()).toISOString() };
+    // A project is an episode of one series at a time.
+    this.saveSeries([...list.map((x) => ({ ...x, projects: x.projects.filter((pid) => !projects.includes(pid)) })), se]);
+    return se;
+  }
+  /** Adds a project as the next episode (taking it out of any other series). */
+  addToSeries(seriesId: string, projectId: string): Series {
+    this.get(projectId);
+    const list = this.seriesList().map((x) => ({ ...x, projects: x.projects.filter((pid) => pid !== projectId) }));
+    const se = list.find((x) => x.id === seriesId);
+    if (!se) throw new StudioError('There is no such series.');
+    se.projects.push(projectId);
+    this.saveSeries(list);
+    return se;
+  }
+  removeFromSeries(projectId: string): void {
+    this.saveSeries(this.seriesList().map((x) => ({ ...x, projects: x.projects.filter((pid) => pid !== projectId) })));
+  }
+  /**
+   * The next episode: the last episode's edit made again with the new clips (same look, captions,
+   * cards and timing), named and numbered for the series. The first episode starts empty.
+   */
+  async newEpisode(seriesId: string, files: string[], title?: string): Promise<{ project: Project; episode: number; filled: number; slots: number }> {
+    const se = this.seriesList().find((x) => x.id === seriesId);
+    if (!se) throw new StudioError('There is no such series.');
+    const n = se.projects.length + 1;
+    const name = episodeName(se.name, n, title);
+    const last = se.projects.at(-1);
+    let made: { project: Project; filled: number; slots: number };
+    if (last && files.length && this.templateSlots(this.get(last)).length) made = await this.fromTemplate(last, files, name);
+    else {
+      const p = this.create(name, se.format);
+      if (files.length) await this.importFiles(p.id, files);
+      made = { project: this.get(p.id), filled: 0, slots: 0 };
+    }
+    this.addToSeries(se.id, made.project.id);
+    return { ...made, episode: n };
   }
 
   create(name: string, format: FormatId = 'vertical'): Project {
@@ -638,7 +754,11 @@ export class StudioService {
   describe(id?: string): string {
     const p = this.resolve(id);
     const waiting = this.aiPending?.(p.id) ?? [];
-    return describeProject(p) + (waiting.length ? `\nStill being made by AI (not on the timeline yet; each is added by itself when ready, do not ask for it again): ${waiting.join('; ')}.` : '');
+    const show = this.showcaseOf(p.id);
+    const scenes = show
+      ? `\nThis is a screen showcase (${show.voice} voice, ${show.look} look, captions ${show.captions ? 'on' : 'off'}). Its scenes: ${show.scenes.map((sc, i) => `${i + 1}. screen ${sc.screen}${sc.clip ? ` + clip ${sc.clip}` : ''}, headline ${JSON.stringify(sc.headline)}${sc.kicker ? `, kicker ${JSON.stringify(sc.kicker)}` : ''}, says ${JSON.stringify(sc.narration)}`).join(' ')}. To change what is said, the voice, the look, the order or the scenes, remake it in place with studio__showcase {projectId: "${p.id}", remake: true, …only what changes}; small looks (caption style, a headline's words or colour) are studio__edit.`
+      : '';
+    return describeProject(p) + scenes + (waiting.length ? `\nStill being made by AI (not on the timeline yet; each is added by itself when ready, do not ask for it again): ${waiting.join('; ')}.` : '');
   }
 
   // ---------------------------------------------------------------- compressed frames for the render window
@@ -762,7 +882,7 @@ export class StudioService {
    * Saves what Keo learned about media (speech, words). It is not an edit: undo and redo keep it,
    * so the versions in their stacks get it too.
    */
-  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about' | 'aiMade' | 'aiRecipe'>>): Project {
+  private learn(id: string, assetId: string, patch: Partial<Pick<Asset, 'speech' | 'words' | 'wordsExact' | 'beats' | 'bpm' | 'scenes' | 'reverseOf' | 'cleanOf' | 'proxy' | 'name' | 'about' | 'aiMade' | 'aiRecipe' | 'aiPlan'>>): Project {
     const fix = (p: Project): Project => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)) });
     for (const stack of [this.undo.get(id), this.redo.get(id)]) if (stack) for (let i = 0; i < stack.length; i++) stack[i] = fix(stack[i]!);
     const next = Project.parse(fix(this.get(id)));
@@ -795,8 +915,9 @@ export class StudioService {
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
     o: { force?: boolean; signal: AbortSignal; progress?: (done: number, total: number) => void },
-  ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean; skipped: number }> {
+  ): Promise<{ project: Project; transcribed: number; words: number; exact: boolean; skipped: number; fixed: WordFix[] }> {
     let p = this.get(id);
+    const fixed: WordFix[] = [];
     const exact = !!t.words;
     const used = p.assets.filter((a) => a.hasAudio && a.kind !== 'image' && p.tracks.some((tr) => tr.clips.some((c) => isAV(c) && c.assetId === a.id)));
     // A transcript saved before loops were caught ("the um, the um…"): done again.
@@ -857,6 +978,18 @@ export class StudioService {
       skipped += missed;
       count += words.length;
       p = this.learn(id, a.id, { speech: spans, words, wordsExact: exact });
+      // Misheard names and words put right before anything uses them (captions, cuts, titles).
+      if (this.d.proofread && words.length) {
+        const fixes = await this.d.proofread(words.map((w) => w.text).join(' '), this.names(p), o.signal).catch((e: unknown) => {
+          if (o.signal.aborted) throw e;
+          this.d.log.warn('studio.proofread_failed', { reason: e instanceof Error ? e.message.slice(0, 160) : String(e) });
+          return [] as WordFix[];
+        });
+        if (fixes.length) {
+          p = this.learn(id, a.id, { words: respell(words, fixes.map((f) => ({ heard: f.heard, say: f.meant }))) });
+          fixed.push(...fixes.filter((f) => !fixed.some((x) => x.heard === f.heard)));
+        }
+      }
       } catch (e) {
         // One file the speech service could not do: the others still get their words.
         if (o.signal.aborted) throw new StudioError('Stopped.');
@@ -866,7 +999,33 @@ export class StudioService {
     }
     if (failed.length === todo.length && todo.length) throw new StudioError(`Speech-to-text did not work: ${failed.slice(0, 2).join('; ')}`);
     if (todo.length) this.d.log.info('studio.transcribed', { files: todo.length - failed.length, words: count, exact, failed: failed.length, skipped });
-    return { project: p, transcribed: todo.length, words: count, exact, skipped };
+    return { project: p, transcribed: todo.length, words: count, exact, skipped, fixed };
+  }
+
+  /** A planned AI shot's frame: what it shows and how it will be filmed (kept with the picture). */
+  setAiPlan(id: string, assetId: string, plan: NonNullable<Asset['aiPlan']>): Project {
+    return this.learn(id, assetId, { aiPlan: plan });
+  }
+
+  /** Names the user's videos say (for proofreading): brand kit, handle, spellings, project name. */
+  names(p: Project, extra: string[] = []): string[] {
+    const b = this.brand();
+    return namesFor({ ...(b.name ? { brandName: b.name } : {}), ...(b.handle ? { handle: b.handle } : {}), ...(b.spellings ? { spellings: b.spellings } : {}), project: p.name, extra });
+  }
+
+  /**
+   * Misheard words put right everywhere at once: the saved transcripts (so later captions and
+   * cuts are right) and every text, caption and graphic on the timeline that shows them (one edit).
+   */
+  fixWords(id: string, fixes: WordFix[]): { project: Project; fixed: WordFix[]; inText: number } {
+    let p = this.get(id);
+    const spellings = fixes.map((f) => ({ heard: f.heard, say: f.meant }));
+    for (const a of p.assets) if (a.words?.length) p = this.learn(id, a.id, { words: respell(a.words, spellings) });
+    const shows = (f: WordFix) =>
+      p.tracks.some((t) => t.clips.some((c) => (c.type === 'text' && replaceWords(c.text, f.heard, f.meant)) || (c.type === 'motion' && [c.text ?? '', ...(c.items ?? [])].some((x) => replaceWords(x, f.heard, f.meant)))));
+    const ops = fixes.filter(shows).map((f) => ({ op: 'replace_words' as const, find: f.heard, replace: f.meant }));
+    if (ops.length) p = this.edit(id, ops).project;
+    return { project: p, fixed: fixes, inText: ops.length };
   }
 
   /**
@@ -877,7 +1036,7 @@ export class StudioService {
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
     o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal; progress?: (done: number, total: number) => void },
-  ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean; skipped: number }> {
+  ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean; skipped: number; fixed: WordFix[] }> {
     if (projectDuration(this.get(id)) === 0) throw new StudioError('The timeline is empty: add a video with speech first.');
     const heard = await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
     const words = this.spokenWords(this.get(id));
@@ -885,7 +1044,7 @@ export class StudioService {
     const lines = captionLines(words, { maxWords: o.maxWords ?? 3 });
     const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
     this.d.log.info('studio.captions', { lines: lines.length, words: words.length });
-    return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact), skipped: heard.skipped };
+    return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact), skipped: heard.skipped, fixed: heard.fixed };
   }
 
   // ---------------------------------------------------------------- voice-over recordings
@@ -931,11 +1090,26 @@ export class StudioService {
   addAiClip(
     id: string,
     file: string,
-    o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: Asset['aiRecipe']; replace?: string },
+    o: AiClipPlace,
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
-    const next = this.aiClipQueue.then(() => this.addAiClipNow(id, file, o));
+    const next = this.aiClipQueue.then(() => this.addAiClipFull(id, file, o));
     this.aiClipQueue = next.catch(() => undefined);
     return next;
+  }
+  private async addAiClipFull(id: string, file: string, o: AiClipPlace): Promise<{ project: Project; asset: Asset; clip: string }> {
+    if (o.removeFirst && findClip(this.get(id), o.removeFirst)) this.edit(id, [{ op: 'delete', clip: o.removeFirst }]);
+    const r = await this.addAiClipNow(id, file, o);
+    // A planned shot: its frame remembers how far it got (a test, or the full shot).
+    if (o.frameAsset && o.filmed) {
+      const frame = this.get(id).assets.find((a) => a.id === o.frameAsset);
+      if (frame?.aiPlan) this.learn(id, frame.id, { aiPlan: { ...frame.aiPlan, filmed: frame.aiPlan.filmed === 'final' ? 'final' : o.filmed } });
+    }
+    // Filmed like a real camera: a hint of handheld movement and a slow push (free, on this PC).
+    if (o.finish && r.asset.kind === 'video') {
+      const c = findClip(this.get(id), r.clip)?.clip;
+      if (c?.type === 'media') return { ...r, project: this.mergeLast(id, realCameraOps(c.id, c.duration)[0]!).project };
+    }
+    return r;
   }
   private async addAiClipNow(
     id: string,
@@ -979,12 +1153,36 @@ export class StudioService {
   /** Keo's self-review: what is wrong with the edit (text over a face, cut off, overlapping, too fast). */
   async review(id: string): Promise<ReviewIssue[]> {
     const p = this.get(id);
+    // The same edit checked a moment ago: the same answer, at once.
+    const last = this.reviews.get(id);
+    if (last && last.updatedAt === p.updatedAt) return last.issues;
     const times = reviewTimes(p);
     if (!times.length) return [];
     const samples = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times }, 5 * 60_000);
     const issues = reviewEdit(p, samples);
+    this.reviews.set(id, { updatedAt: p.updatedAt, issues });
     this.d.log.info('studio.review', { samples: samples.length, issues: issues.length });
     return issues;
+  }
+  private reviews = new Map<string, { updatedAt: string; issues: ReviewIssue[] }>();
+
+  /**
+   * Fixes what the check found (all it can be sure of, or only the issues named by key) in ONE
+   * edit (one undo, played live), then checks again. Issues without a sure fix stay listed.
+   */
+  async fixReview(id: string, keys?: string[]): Promise<{ fixed: number; issues: ReviewIssue[] }> {
+    const issues = await this.review(id);
+    const chosen = keys?.length ? issues.filter((i) => keys.includes(issueKey(i))) : issues;
+    const r = fixIssues(this.get(id), chosen);
+    const ops = r.fixed.flatMap((i) => i.ops ?? []);
+    if (ops.length) this.edit(id, ops);
+    this.d.log.info('studio.review_fixed', { fixed: r.fixed.length, left: r.skipped.length });
+    return { fixed: r.fixed.length, issues: await this.review(id) };
+  }
+
+  /** A project's spoken words on its timeline (spelled the user's way). */
+  wordsOf(id: string): ReturnType<typeof timelineWords> {
+    return this.spokenWords(this.get(id));
   }
 
   /** The timeline's spoken words, spelled the way the user writes them (their brand kit's spellings). */
@@ -1226,6 +1424,40 @@ export class StudioService {
     return { project: r.project, stressed, captions: style === 'podcast-frame' ? 0 : lines.length, needsWords: !words.length };
   }
 
+  /**
+   * The motion edit on the whole talking video, in one edit (one undo): camera moves on the
+   * footage, full-screen keyword scenes, the speaker framed beside graphics, graphics off the face,
+   * whooshes and pops. Keo's beats when given, else its own plan from the speech. Making it again
+   * replaces it. Needs the transcript (the edit lands on the words).
+   */
+  async motionEdit(id: string, given: Omit<MotionEditOptions, 'words' | 'people' | 'sfx'> & { sounds?: boolean } = {}): Promise<{ project: Project; placed: Array<{ kind: BeatKind; at: number; text: string }>; missed: string[] }> {
+    const p = this.get(id);
+    const words = this.spokenWords(p);
+    if (!words.length) throw new StudioError('The speech is not transcribed yet: transcribe it first (studio__transcript), then make the motion edit.');
+    const b = this.brand();
+    const { sounds, ...o } = given;
+    const beats = o.beats?.length ? o.beats : planBeats(words, o.energy ?? 'normal');
+    // Where the speaker is (found on this PC), so graphics keep off the face and punch-ins aim at it.
+    let people: MotionEditOptions['people'] = [];
+    try {
+      const samples = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times: lookTimes(words, beats) }, 3 * 60_000);
+      people = samples.map((x) => ({ t: x.t, box: x.person }));
+    } catch (e) {
+      this.d.log.warn('studio.motion_edit_people', { error: e instanceof Error ? e.message : String(e) });
+    }
+    const opts: MotionEditOptions = { ...(b.accent ? { accent: b.accent } : {}), ...o, beats, words, people };
+    try {
+      motionEditOps(p, opts);
+    } catch (e) {
+      throw e instanceof MotionEditError ? new StudioError(e.message) : e;
+    }
+    const sfx = sounds === false ? {} : { whoosh: this.soundEffect(id, 'whoosh').asset.id, pop: this.soundEffect(id, 'pop').asset.id };
+    const built = motionEditOps(this.get(id), { ...opts, sfx });
+    const r = this.edit(id, built.ops);
+    this.d.log.info('studio.motion_edit', { beats: beats.length, placed: built.placed.length, missed: built.missed.length, people: people.filter((x) => x.box).length });
+    return { project: r.project, placed: built.placed, missed: built.missed };
+  }
+
   /** Where the speaker is in the talking video at time t (null: no one found, or it could not be measured). */
   private async personAt(id: string, t: number): Promise<ReviewSample['person']> {
     try {
@@ -1237,6 +1469,28 @@ export class StudioService {
   }
 
   /** A moment (text behind the speaker, a word card, a split, a picture popping in), in one edit. */
+  /**
+   * A viral template on the user's talking video: its motion edit (from their own words), its hook,
+   * and the brand end card when the video has none. Making it again replaces the last one.
+   */
+  async viral(id: string, template: ViralId, o: { hook?: string } = {}): Promise<{ project: Project; placed: Array<{ kind: BeatKind; at: number; text: string }>; missed: string[]; note: string | null; endCard: boolean }> {
+    const words = this.spokenWords(this.get(id));
+    if (!words.length) throw new StudioError('The speech is not transcribed yet: transcribe it first, then use a template.');
+    const plan = viralPlan(template, words, o);
+    const r = await this.motionEdit(id, { beats: plan.beats, look: plan.look, energy: plan.energy, ...(plan.hook ? { hook: plan.hook } : {}) });
+    // The end card: the brand's @handle, right where the video ends (not twice).
+    const b = this.brand();
+    const p = this.get(id);
+    const hasEnd = p.tracks.some((t) => t.name === 'Card words' && t.clips.length > 0);
+    let endCard = false;
+    if (!hasEnd && (b.handle || b.name)) {
+      const end = projectDuration(p);
+      await this.moment(id, 'follow-card', { at: end, duration: 2.5 }).then(() => (endCard = true)).catch(() => undefined);
+    }
+    this.d.log.info('studio.viral', { template, beats: plan.beats.length, placed: r.placed.length, endCard });
+    return { project: this.get(id), placed: r.placed, missed: r.missed, note: plan.note ?? null, endCard };
+  }
+
   async moment(id: string, moment: MomentId, given: MomentOptions): Promise<{ project: Project; changes: string[] }> {
     // The end card's name and colour come from the brand kit when not given.
     const b = this.brand();
@@ -1860,7 +2114,64 @@ export class StudioService {
       if (this.running.get(id) === exportId) this.running.delete(id);
     });
     this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames });
+    this.rememberExport(id, r.file);
     return r;
+  }
+
+  private get showcasesFile(): string {
+    return path.join(this.d.dir, 'library', 'showcases.json');
+  }
+  /** What a screen showcase was made from (so it can be remade in place: new words, voice or order). */
+  rememberShowcase(id: string, rec: ShowcaseRecord): void {
+    let all: Record<string, ShowcaseRecord>;
+    try {
+      all = JSON.parse(fs.readFileSync(this.showcasesFile, 'utf8')) as Record<string, ShowcaseRecord>;
+    } catch {
+      all = {};
+    }
+    all[id] = rec;
+    fs.mkdirSync(path.dirname(this.showcasesFile), { recursive: true });
+    fs.writeFileSync(this.showcasesFile, JSON.stringify(all));
+  }
+  /** The showcase this project is, or null (its screens and clips still in the project). */
+  showcaseOf(id: string): ShowcaseRecord | null {
+    try {
+      const r = (JSON.parse(fs.readFileSync(this.showcasesFile, 'utf8')) as Record<string, ShowcaseRecord>)[id];
+      const p = this.get(id);
+      if (r && Array.isArray(r.scenes) && r.scenes.every((sc) => p.assets.some((a) => a.id === sc.screen))) return r;
+    } catch {
+      /* no record: read it from the timeline */
+    }
+    try {
+      return showcaseFromTimeline(this.get(id));
+    } catch {
+      return null;
+    }
+  }
+
+  private get exportsFile(): string {
+    return path.join(this.d.dir, 'library', 'exports.json');
+  }
+  /** The last video exported from each project (to post it later). */
+  private rememberExport(id: string, file: string): void {
+    let all: Record<string, string>;
+    try {
+      all = JSON.parse(fs.readFileSync(this.exportsFile, 'utf8')) as Record<string, string>;
+    } catch {
+      all = {};
+    }
+    all[id] = file;
+    fs.mkdirSync(path.dirname(this.exportsFile), { recursive: true });
+    fs.writeFileSync(this.exportsFile, JSON.stringify(all));
+  }
+  /** The project's latest exported video still on disk, or null. */
+  lastExport(id: string): string | null {
+    try {
+      const f = (JSON.parse(fs.readFileSync(this.exportsFile, 'utf8')) as Record<string, string>)[id];
+      return f && fs.existsSync(f) ? f : null;
+    } catch {
+      return null;
+    }
   }
 
   /** A GIF or the sound alone (WAV), made in the render window and saved next to the videos (a new file). */
@@ -1936,4 +2247,36 @@ function describeChanges(changes: string[]): string {
   if (!changes.length) return 'A change';
   const first = changes[0]!.replace(/\s*\((cl|tr|as)_[A-Za-z0-9]+\)/g, '').replace(/\.$/, '');
   return changes.length > 1 ? `${first.slice(0, 50)} (+${changes.length - 1} more)` : first.slice(0, 70);
+}
+
+export { issueKey } from '../../shared/studioReview';
+
+/**
+ * Real-camera movement for an AI shot (AI footage is too steady): a little bigger so the edges
+ * never show, a faint handheld drift, and a slow push in over the shot.
+ */
+/** Where an AI clip goes, and what follows once it is placed. */
+export interface AiClipPlace {
+  at: number;
+  seconds: number;
+  about: string;
+  in?: number;
+  duration?: number;
+  trackName?: string;
+  muted?: boolean;
+  volume?: number;
+  duck?: number | null;
+  recipe?: Asset['aiRecipe'];
+  replace?: string;
+  /** The real-camera finish (handheld drift, slow push). */
+  finish?: boolean;
+  /** The planned shot's frame (its plan notes the test or full shot). */
+  frameAsset?: string;
+  filmed?: 'test' | 'final';
+  /** A clip that goes first (the motion test the full shot takes over from). */
+  removeFirst?: string;
+}
+
+export function realCameraOps(clip: string, duration: number): EditOp[] {
+  return [{ op: 'set', clip, transform: { scale: 1.035 }, loop: { kind: 'shake', amount: 0.18, period: 2 }, zooms: [{ at: 0, scale: 1, x: 0.5, y: 0.5, ease: 'cut' }, { at: Math.max(0.5, Math.round(duration * 100) / 100), scale: 1.04, x: 0.5, y: 0.48, ease: 'ramp' }] }];
 }

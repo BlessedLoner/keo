@@ -47,12 +47,13 @@ const PERMISSION_LABEL: Record<PermissionKey, string> = {
 
 export function permissionEnabled(p: PermissionKey, s: Settings): boolean {
   switch (p) {
+    // Full control includes seeing, controlling and opening apps.
     case 'desktop.observe':
-      return s.permissions.observationEnabled;
+      return s.permissions.observationEnabled || s.permissions.fullControl;
     case 'desktop.control':
-      return s.permissions.desktopControlEnabled;
+      return s.permissions.desktopControlEnabled || s.permissions.fullControl;
     case 'desktop.launch':
-      return s.permissions.launchEnabled;
+      return s.permissions.launchEnabled || s.permissions.fullControl;
     case 'web.search':
       return s.permissions.webSearchEnabled;
     case 'web.fetch':

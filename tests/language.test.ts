@@ -133,4 +133,15 @@ describe('English voice', () => {
     expect(opts?.language).toBe('en');
     expect(opts?.prompt).toMatch(/Keo/);
   });
+
+  it('gives the speech model the context: names and words the user is likely to say', async () => {
+    let opts: { prompt?: string } | undefined;
+    const fake = { transcribe: async (_a: Uint8Array, _m: string, _model: string, _s: AbortSignal, o?: { prompt?: string }) => ((opts = o), 'Send it to Tunde') } as unknown as OpenAICompatProvider;
+    const settings = SettingsSchema.parse({ voice: { sttProvider: 'openai', audioExportConsent: true } });
+    const v = new VoiceService(fake, () => settings, () => true, new Logger(tempDir(), false), null, () => 'Recent conversation: Should I send the photos to Tunde Adebayo?');
+    await v.transcribe(new Uint8Array([1, 2, 3]), 'audio/webm', new AbortController().signal);
+    expect(opts?.prompt).toMatch(/any accent/);
+    expect(opts?.prompt).toMatch(/Tunde Adebayo/);
+    expect(SettingsSchema.parse({}).voice.sttModel).toBe('gpt-4o-transcribe');
+  });
 });

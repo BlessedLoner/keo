@@ -184,10 +184,18 @@ export function spreadWords(text: string, spans: Span[]): Word[] {
   let pos = 0;
   for (const w of words) {
     const len = (weight(w) / sum) * total;
-    out.push({ text: w, start: round(at(pos + 0.001)), end: round(at(pos + len)) });
+    const start = round(at(pos + 0.001));
+    // Speech the service did not hear (mumbles) leaves few words for a long time: a word is never
+    // longer than it takes to say, so its caption does not hang on screen through the rest.
+    out.push({ text: w, start, end: round(Math.min(at(pos + len), start + naturalLength(w))) });
     pos += len;
   }
   return out;
+}
+
+/** About how long a word takes to say (a little more, for slow speech). */
+export function naturalLength(w: string): number {
+  return Math.min(1.1, 0.3 + 0.085 * w.replace(/[^\p{L}\p{N}]/gu, '').length);
 }
 
 /**
@@ -204,6 +212,8 @@ export function captionLines(words: Word[], o: { maxWords?: number; maxChars?: n
     lines.push({ text: cur.map((w) => w.text).join(' '), start: cur[0]!.start, end: cur.at(-1)!.end, words: cur });
     cur = [];
   };
+  // Old transcripts (made before word lengths were capped): the same cap here.
+  words = words.map((w) => (w.end - w.start > naturalLength(w.text) + 0.35 ? { ...w, end: round(w.start + naturalLength(w.text)) } : w));
   for (const w of words) {
     const prev = cur.at(-1);
     const chars = cur.reduce((t, x) => t + x.text.length + 1, 0) + w.text.length;

@@ -1,4 +1,6 @@
-import { StudioError } from '../studio/studioService';
+import { issueKey, StudioError } from '../studio/studioService';
+import type { ReviewIssue } from '../../shared/studioReview';
+import { learnStyle } from '../../shared/studioStyleLearn';
 import { buildReport } from '../../shared/problemReport';
 import { BuildError, type BuildManifest } from '../build/projects';
 import { CALENDAR_SCOPE, MAIL_SCOPE } from '../calendar/googleAuth';
@@ -145,6 +147,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     const credits = keo ? await s.account.studioCredits().catch(() => null) : null;
     return { hasKey: own, secretStorage: s.secrets.available(), ...s.falSpending(), via: own ? ('own' as const) : keo ? ('keo' as const) : null, credits };
   };
+  const shownIssue = ({ ops, ...i }: ReviewIssue) => ({ ...i, key: issueKey(i), canFix: !!ops?.length });
   const studioErr = (e: unknown): never => {
     if (e instanceof StudioError) throw new KeoError('studio', e.message);
     throw e;
@@ -353,6 +356,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       p('observationEnabled', before.permissions.observationEnabled, next.permissions.observationEnabled);
       p('desktopControlEnabled', before.permissions.desktopControlEnabled, next.permissions.desktopControlEnabled);
       p('launchEnabled', before.permissions.launchEnabled, next.permissions.launchEnabled);
+      p('fullControl', before.permissions.fullControl, next.permissions.fullControl);
+      if (before.permissions.fullControl && !next.permissions.fullControl) s.endFullControl?.();
       p('webSearchEnabled', before.permissions.webSearchEnabled, next.permissions.webSearchEnabled);
       p('webFetchEnabled', before.permissions.webFetchEnabled, next.permissions.webFetchEnabled);
       p('memoryLearning', before.memory.learning, next.memory.learning);
@@ -411,6 +416,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
 
     'chat:send': ({ conversationId, text, attachments }) => {
+      s.control.userSpoke();
       const attached = attachments?.length ? s.attachments.take(attachments) : [];
       if (attachments?.length && !attached.length && !text) throw new KeoError('attachments_expired', 'The attachments are no longer ready. Attach them again.');
       const r = s.agent.send(conversationId, text, attached.length ? { attachments: attached } : {});
@@ -649,13 +655,92 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     'studio:aiVideoPlan': async (o) => s.aiVideoPlanShots(o, new AbortController().signal).catch(studioErr),
     // The user's click after seeing the shots and the price.
-    'studio:aiVideoMake': async ({ plan }) => s.aiVideoCreate(plan, new AbortController().signal, { background: true }).catch(studioErr),
+    'studio:aiVideoMake': async ({ plan, stage }) => s.aiVideoCreate(plan, new AbortController().signal, { background: true, stage }).catch(studioErr),
+    // The user's clicks, on buttons that showed the price.
+    'studio:aiFilm': async ({ id, assets, test }) => s.aiVideoFilm(id, { test, ...(assets ? { assets } : {}) }, new AbortController().signal).catch(studioErr),
+    'studio:aiRedoFrame': async ({ id, asset }) => s.aiVideoRedoFrame(id, asset, new AbortController().signal).catch(studioErr),
     'studio:aiJobs': ({ id }) =>
       s.aiVideo
         .pending()
         .filter((j) => j.context?.projectId === id)
         .map((j) => ({ about: j.context?.about ?? 'AI clip', submittedAt: j.submittedAt, kind: j.model === 'wan-animate-replace' ? ('swap' as const) : j.ext && j.ext !== 'mp4' ? ('other' as const) : ('shot' as const) })),
     // The user's own clicks (after the page showed the price and what is sent).
+    // The user's own click (Keo's model plans the beats from the transcript, after the page said so).
+    // Posting: every one is the user's own click after reading the post.
+    'social:write': async ({ projectId, platform }) => s.socialWrite(projectId, platform, new AbortController().signal).catch(studioErr),
+    'social:youtubeStatus': () => s.youTubeReady(),
+    'social:connectYouTube': async () => s.connectYouTube().catch((e: unknown) => {
+      throw new KeoError('studio', e instanceof Error ? e.message : String(e));
+    }),
+    'social:postYouTube': async (o) => s.postToYouTube(o, new AbortController().signal).catch(studioErr),
+    'social:handoff': async ({ platform, file, text }) => {
+      const h = (() => {
+        try {
+          return s.socialHandoff(platform, file);
+        } catch (e) {
+          return studioErr(e);
+        }
+      })();
+      const copied = !!host.copyText && !!text.trim();
+      if (copied) await host.copyText!(text);
+      host.showInFolder?.(h.file);
+      if (host.openExternal) await host.openExternal(h.page);
+      return { opened: !!host.openExternal, copied };
+    },
+    'studio:viral': async ({ id, template, hook }) => {
+      const r = await s.studio.viral(id, template, hook ? { hook } : {}).catch(studioErr);
+      return { placed: r.placed.length, note: r.note, endCard: r.endCard };
+    },
+    'studio:seriesList': () => s.studio.seriesList(),
+    'studio:seriesCreate': ({ name, projects }) => studioCall(() => s.studio.createSeries(name, projects ? { projects } : {})),
+    'studio:seriesAdd': ({ seriesId, projectId }) => studioCall(() => s.studio.addToSeries(seriesId, projectId)),
+    'studio:seriesRemove': ({ projectId }) => {
+      s.studio.removeFromSeries(projectId);
+      return { ok: true as const };
+    },
+    'studio:newEpisode': async ({ seriesId, title }) => {
+      const files = host.pickMedia ? await host.pickMedia() : [];
+      if (!files.length) return null;
+      return s.studio.newEpisode(seriesId, files, title).catch(studioErr);
+    },
+    'account:studioHistory': async () => s.account.studioHistory().catch((e: unknown) => {
+      throw new KeoError('account', e instanceof Error ? e.message : String(e));
+    }),
+    'account:referral': async () => s.account.referral().catch((e: unknown) => {
+      throw new KeoError('account', e instanceof Error ? e.message : String(e));
+    }),
+    'account:redeemReferral': async ({ code }) => s.account.redeemReferral(code).catch((e: unknown) => {
+      throw new KeoError('account', e instanceof Error ? e.message : String(e));
+    }),
+    // Connected apps: a token is checked with the app, then kept encrypted (never shown again).
+    'connected:status': () => s.connectedStatus(),
+    'connected:set': async ({ app, token }) => s.connectApp(app, token).catch((e: unknown) => {
+      throw new KeoError('connected', e instanceof Error ? e.message : String(e));
+    }),
+    'connected:clear': ({ app }) => {
+      s.disconnectApp(app);
+      return { ok: true as const };
+    },
+    'connected:connectDrive': async () => s.connectDrive().catch((e: unknown) => {
+      throw new KeoError('connected', e instanceof Error ? e.message : String(e));
+    }),
+    // Only proposes (the user saves it to the brand kit with studio:brand).
+    'studio:learnStyle': ({ id }) => studioCall(() => learnStyle(s.studio.get(id), s.studio.brand()) as { patch: Record<string, string>; found: string[] }),
+    'studio:lastExport': ({ id }) => ({ file: s.studio.lastExport(id) }),
+    'studio:review': async ({ id }) => ({ issues: (await s.studio.review(id).catch(studioErr)).map(shownIssue), updatedAt: s.studio.get(id).updatedAt }),
+    // The user's click (the page says the words go to their AI model).
+    'studio:wordCheck': async ({ id }) => ({ words: await s.studioWordCheck(id, new AbortController().signal).catch(studioErr) }),
+    'studio:proofread': async ({ id, fixes }) => {
+      const r = await s.studioProofread(id, { fixes }, new AbortController().signal).catch(studioErr);
+      return { fixed: r.fixed.length, inText: r.inText };
+    },
+    'studio:fixReview': async ({ id, keys }) => {
+      const r = await s.studio.fixReview(id, keys).catch(studioErr);
+      return { fixed: r.fixed, issues: r.issues.map(shownIssue), updatedAt: s.studio.get(id).updatedAt };
+    },
+    'studio:motionEdit': async ({ id, look, energy }) => {
+      return s.studioMotionEdit(id, { look, energy }, new AbortController().signal).catch(studioErr);
+    },
     'studio:shotAgain': async ({ id, clip, mode, prompt, model, seconds }) =>
       (mode === 'redo' ? s.studioRedoShot(id, { clip, ...(prompt ? { prompt } : {}), ...(model ? { model } : {}) }, new AbortController().signal) : s.studioExtendShot(id, { clip, seconds: seconds ?? 5, ...(prompt ? { prompt } : {}), ...(model ? { model } : {}) }, new AbortController().signal)).catch(studioErr),
     'studio:aiMusic': async ({ id, prompt, seconds, vocals, at, volume }) => s.studioAiMusic(id, { prompt, ...(seconds ? { seconds } : {}), ...(vocals ? { vocals } : {}), ...(at !== undefined ? { at } : {}), ...(volume !== undefined ? { volume } : {}) }, new AbortController().signal).catch(studioErr),
@@ -1160,6 +1245,20 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'schedule:list': () => s.schedule.list(),
     'schedule:pause': ({ id, paused }) => s.schedule.setPaused(id, paused),
     'schedule:delete': ({ id }) => ({ deleted: s.schedule.delete(id) }),
+    // Made by the user in Tasks (a routine is an instruction Keo runs as a background job; its actions still ask as usual).
+    'schedule:create': ({ kind, title, text, at, every, days, hours }) => {
+      const [d, t] = at.split('T') as [string, string];
+      const [y, mo, da] = d.split('-').map(Number) as [number, number, number];
+      const [h, mi] = t.split(':').map(Number) as [number, number];
+      const when = new Date(y, mo - 1, da, h, mi, 0, 0);
+      const recurrence = every === 'week' ? { every, days: days?.length ? days : (['mon'] as const).slice() } : every === 'hours' ? { every, hours: hours ?? 3 } : { every };
+      try {
+        return s.schedule.create({ kind, title, text, conversationId: null, at: when, recurrence: recurrence as never });
+      } catch (e) {
+        throw new KeoError('schedule', e instanceof Error ? e.message : String(e));
+      }
+    },
+    'schedule:runNow': ({ id }) => ({ started: s.runRoutineNow(id) }),
 
     'briefing:openEvent': async ({ url }) => {
       if (!isCalendarLink(url) || !host.openExternal) return { opened: false };

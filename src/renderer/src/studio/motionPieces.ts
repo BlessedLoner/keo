@@ -275,7 +275,7 @@ function kicker(k: Ctx, text: string, x: number, y: number, p: number, align: Ca
 
 /** Headline: a kicker, words rising out of masks one by one (the last glows), an underline that grows. */
 function headline(k: Ctx): void {
-  const { ctx, c, U, W } = k;
+  const { ctx, c, U } = k;
   const words = c.text.split(/\s+/);
   const max = Math.min(k.room, 90 * U);
   const px = fitSize(ctx, c.text, 800, c.font, 9.5 * U, max, 3);
@@ -332,7 +332,7 @@ function headline(k: Ctx): void {
 
 /** Word pop: a big word slammed in (overshoot and settle), rings that burst out, sparkles that fly. */
 function wordPop(k: Ctx): void {
-  const { ctx, c, U, W } = k;
+  const { ctx, c, U } = k;
   const t0 = c.beats?.[0] ?? 0.05;
   const lt = k.t - t0;
   if (lt < 0) return;
@@ -662,7 +662,7 @@ function lowerThird(k: Ctx): void {
 
 /** Quote card: a glass card with a big glowing quote mark; the quote is typed in word by word. */
 function quote(k: Ctx): void {
-  const { ctx, c, U, W } = k;
+  const { ctx, c, U } = k;
   const words = c.text.split(/\s+/);
   const max = Math.min(k.room, 72 * U);
   const px = fitSize(ctx, c.text, 700, c.font, 5.4 * U, max - 10 * U, 5);
@@ -794,7 +794,7 @@ function card3d(k: Ctx): void {
 
 /** Highlight: a line of text whose key words get a marker swept behind them, one after another. */
 function highlight(k: Ctx): void {
-  const { ctx, c, U, W } = k;
+  const { ctx, c, U } = k;
   const words = c.text.split(/\s+/);
   const max = Math.min(k.room, 88 * U);
   const px = fitSize(ctx, c.text, 800, c.font, 7.5 * U, max, 3);
@@ -945,6 +945,311 @@ function lightSweep(k: Ctx, frame: { W: number; H: number }): void {
   }
 }
 
+// ---------------------------------------------------------------- full-screen pieces
+
+/** How light a colour is (0 black … 1 white). */
+function lightness(hex: string): number {
+  const n = parseInt(hex.replace('#', '').slice(0, 6), 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
+const plainWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/** A living background: the colour, two soft glows of the accents drifting, a moving dot grid. */
+function sceneBackground(k: Ctx, bg: string, ink: string, strength = 1): void {
+  const { ctx, U, W, H, t } = k;
+  const dark = lightness(bg) < 0.45;
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = (hex: string, x: number, y: number, r: number, a: number) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, rgba(hex, a));
+    g.addColorStop(1, rgba(hex, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  };
+  const a = (dark ? 0.38 : 0.2) * strength;
+  glow(k.c.accent, W * (0.22 + 0.06 * Math.sin(t * 0.7)), H * (0.28 + 0.05 * Math.cos(t * 0.5)), Math.max(W, H) * 0.55, a);
+  // On a dark background the second glow stays faint (two strong hues mixed turn muddy).
+  glow(k.c.accent2, W * (0.8 + 0.05 * Math.cos(t * 0.6)), H * (0.76 + 0.04 * Math.sin(t * 0.8)), Math.max(W, H) * 0.5, a * (dark ? 0.3 : 0.8));
+  // The dot grid drifts slowly up and to the left.
+  const gap = 4.2 * U;
+  const ox = (t * 1.2 * U) % gap;
+  const oy = (t * 2 * U) % gap;
+  ctx.fillStyle = rgba(ink, dark ? 0.11 : 0.09);
+  for (let y = -oy; y < H + gap; y += gap)
+    for (let x = -ox; x < W + gap; x += gap) {
+      ctx.beginPath();
+      ctx.arc(x, y, 0.17 * U, 0, Math.PI * 2);
+      ctx.fill();
+    }
+}
+
+/** A few small shapes (rings, plus signs, dots) floating around the edges. */
+function floaters(k: Ctx, ink: string, alpha: number): void {
+  const { ctx, U, W, H, t } = k;
+  const r = rng(`${k.c.id}:f`);
+  ctx.save();
+  ctx.lineWidth = 0.35 * U;
+  for (let i = 0; i < 7; i++) {
+    const side = i % 2 ? r() * 0.2 : 0.8 + r() * 0.2;
+    const x = W * (i < 4 ? side : 0.15 + r() * 0.7);
+    const y = H * (i < 4 ? 0.1 + r() * 0.8 : r() < 0.5 ? 0.05 + r() * 0.1 : 0.85 + r() * 0.1);
+    const s = (1 + r() * 1.6) * U;
+    const p = clamp((t - 0.15 - i * 0.05) / 0.5);
+    if (p <= 0) continue;
+    const dx = Math.sin(t * 0.9 + i) * 1.2 * U;
+    const dy = Math.cos(t * 0.7 + i * 2) * 1.2 * U - (1 - cubicOut(p)) * 4 * U;
+    const color = i % 3 === 0 ? k.c.accent : i % 3 === 1 ? k.c.accent2 : ink;
+    ctx.globalAlpha = alpha * cubicOut(p) * 0.75;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    if (i % 3 === 0) ctx.arc(x + dx, y + dy, s, 0, Math.PI * 2);
+    else if (i % 3 === 1) {
+      ctx.moveTo(x + dx - s, y + dy);
+      ctx.lineTo(x + dx + s, y + dy);
+      ctx.moveTo(x + dx, y + dy - s);
+      ctx.lineTo(x + dx, y + dy + s);
+    } else ctx.arc(x + dx, y + dy, s * 0.35, 0, Math.PI * 2);
+    if (i % 3 === 2) ctx.fill();
+    else ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** The scene's small line above the words: spaced capitals, a little lighter than the words. */
+function sceneKicker(k: Ctx, text: string, y: number, ink: string, p: number): void {
+  const { ctx, U } = k;
+  if (p <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= clamp(p * 1.4) * 0.75;
+  ctx.font = font(700, 2.8 * U, BODY);
+  setLetterSpacing(ctx, 0.8 * U);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = ink;
+  ctx.fillText(text.toUpperCase(), 0, y + (1 - cubicOut(p)) * 2 * U);
+  ctx.restore();
+}
+
+/** A big counter for a scene: the number counts up, the unit in the accent italic, the words under it. */
+function sceneCounter(k: Ctx, ink: string, maxW: number): void {
+  const { ctx, c, U } = k;
+  const fam = c.font;
+  const b = beat(k, 0, 1, 0.15);
+  const p = expoOut((k.t - b) / 1.1);
+  const value = c.value ?? 0;
+  const v = value * p;
+  const num = Number.isInteger(value) ? Math.round(v).toLocaleString('en-US') : v.toFixed(1);
+  const unit = c.unit ?? '';
+  const unitBefore = ['$', '£', '€', '₦'].includes(unit);
+  const big = fitSize(ctx, `${unit}${num}`, 900, fam, 26 * U, maxW, 1);
+  const s = lerp(1.25, 1, backOut((k.t - b) / 0.45));
+  ctx.save();
+  ctx.globalAlpha *= clamp((k.t - b) / 0.15);
+  ctx.scale(s, s);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.font = font(900, big, fam);
+  const nW = ctx.measureText(num).width;
+  const unitFont = `italic ${font(400, big * 0.9, 'Instrument Serif')}`;
+  ctx.font = unitFont;
+  const uW = unit ? ctx.measureText(unit).width : 0;
+  let x = -(nW + uW) / 2;
+  const y = big * 0.32;
+  if (unit && unitBefore) {
+    ctx.fillStyle = c.accent;
+    ctx.fillText(unit, x, y);
+    x += uW;
+  }
+  ctx.font = font(900, big, fam);
+  ctx.fillStyle = ink;
+  ctx.fillText(num, x, y);
+  x += nW;
+  if (unit && !unitBefore) {
+    ctx.font = unitFont;
+    ctx.fillStyle = c.accent;
+    ctx.fillText(unit, x, y);
+  }
+  ctx.restore();
+  const lp = cubicOut((k.t - b - 0.35) / 0.5);
+  if (lp > 0) {
+    ctx.save();
+    ctx.globalAlpha *= lp;
+    ctx.font = font(700, fitSize(ctx, c.text, 700, fam, 5.2 * U, maxW, 2), fam);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = ink;
+    ctx.fillText(c.text, 0, big * 0.32 + 8 * U + (1 - lp) * 3 * U);
+    ctx.restore();
+  }
+  if (c.sub) sceneKicker(k, c.sub, -big * 0.75, ink, (k.t - 0.1) / 0.5);
+}
+
+/** A scene's words: they slam in as they are said, the key word in the accent serif italic with a hand-drawn underline. */
+function sceneWords(k: Ctx, ink: string, dark: boolean, maxW: number): void {
+  const { ctx, c, U, W } = k;
+  const fam = c.font;
+  const words = c.text.split(/\s+/).filter(Boolean);
+  const keys = new Set((c.items?.length ? c.items.flatMap((x) => x.split(/\s+/)) : [words.at(-1) ?? '']).map(plainWord));
+  const isKey = words.map((w) => keys.has(plainWord(w)));
+  const shown = (i: number) => (isKey[i] ? words[i]! : words[i]!.toUpperCase());
+  const fontOf = (i: number, size: number) => (isKey[i] ? `italic ${font(400, size * 1.18, 'Instrument Serif')}` : font(900, size, fam));
+  const measure = (i: number, size: number) => {
+    ctx.font = fontOf(i, size);
+    return ctx.measureText(shown(i)).width;
+  };
+  // One size for the whole phrase: as big as fits on at most three lines.
+  // Short phrases go big: one or two words fill the frame.
+  const cap = words.length <= 2 ? 26 * U : words.length === 3 ? 20 * U : 15 * U;
+  let px = Math.min(cap, (W * 0.9) / Math.max(3, Math.max(...words.map((w) => w.length)) * 0.6));
+  let lines: number[][] = [];
+  for (let tries = 0; tries < 14; tries++) {
+    lines = [];
+    let line: number[] = [];
+    let lw = 0;
+    const space = px * 0.28;
+    words.forEach((_, i) => {
+      const w = measure(i, px);
+      if (line.length && lw + space + w > maxW) {
+        lines.push(line);
+        line = [i];
+        lw = w;
+      } else {
+        lw += (line.length ? space : 0) + w;
+        line.push(i);
+      }
+    });
+    if (line.length) lines.push(line);
+    if (lines.length <= 3 && words.every((_, i) => measure(i, px) <= maxW)) break;
+    px *= 0.9;
+  }
+  const lh = px * 1.08;
+  const top = -(lines.length * lh) / 2;
+  if (c.icon) {
+    const ip = backOut((k.t - beat(k, 0, words.length, 0.12) + 0.05) / 0.45);
+    if (ip > 0) chip(k, c.icon, 0, top - 9 * U, 12 * U * clamp(ip, 0, 1.2), clamp(ip));
+  }
+  if (c.sub) sceneKicker(k, c.sub, top - (c.icon ? 18 * U : 3.5 * U), ink, (k.t - 0.08) / 0.5);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  lines.forEach((line, li) => {
+    const space = px * 0.28;
+    const widths = line.map((i) => measure(i, px));
+    const total = widths.reduce((a, b) => a + b, 0) + space * (line.length - 1);
+    let x = -total / 2;
+    const base = top + (li + 1) * lh - px * 0.18;
+    line.forEach((i, j) => {
+      const w = widths[j]!;
+      const b = beat(k, i, words.length, 0.12);
+      const p = (k.t - b) / 0.32;
+      if (p > 0) {
+        const s = lerp(1.7, 1, backOut(p, 1.4));
+        ctx.save();
+        ctx.globalAlpha *= clamp(p * 3);
+        ctx.translate(x + w / 2, base - px * 0.35);
+        ctx.rotate((1 - clamp(p)) * (i % 2 ? 0.08 : -0.08));
+        ctx.scale(s, s);
+        ctx.font = fontOf(i, px);
+        ctx.fillStyle = isKey[i] ? c.accent : ink;
+        if (dark) {
+          ctx.shadowColor = isKey[i] ? rgba(c.accent, 0.8) : 'rgba(0,0,0,0.4)';
+          ctx.shadowBlur = 2.5 * U;
+        }
+        ctx.fillText(shown(i), -w / 2, px * 0.35);
+        ctx.restore();
+        // The key word gets a hand-drawn underline once it has landed.
+        const up = cubicInOut((k.t - b - 0.2) / 0.45);
+        if (isKey[i] && up > 0) {
+          ctx.save();
+          ctx.strokeStyle = c.accent2;
+          ctx.lineWidth = 0.9 * U;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          const y = base + px * 0.14;
+          const x1 = x + w * up;
+          ctx.moveTo(x, y);
+          ctx.quadraticCurveTo((x + x1) / 2, y + px * 0.12, x1, y - px * 0.04);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      x += w + space;
+    });
+  });
+}
+
+/**
+ * Keyword scene: the video cuts away to a clean, living background (it comes in with an iris, a
+ * panel rising or a diagonal wipe) and the words slam in as they are said; a counter when it has a
+ * value. It leaves by sliding up, uncovering the video.
+ */
+function scene(k: Ctx): void {
+  const { ctx, c, W, H } = k;
+  const bg = c.background ?? '#F4F1EA';
+  const dark = lightness(bg) < 0.45;
+  // Words that would vanish on the background get a colour that reads.
+  const ink = Math.abs(lightness(c.color) - lightness(bg)) < 0.35 ? (dark ? '#FFFFFF' : '#121212') : c.color;
+  const inS = Math.min(0.32, k.d * 0.25);
+  const outS = Math.min(0.3, k.d * 0.2);
+  const pin = cubicOut(k.t / inS);
+  const pout = cubicIn((k.t - (k.d - outS)) / outS);
+  const variant = rng(`${c.id}:v`)() * 3;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Leaving: everything slides up and off.
+  if (pout > 0) ctx.translate(0, -H * pout);
+  ctx.beginPath();
+  if (variant < 1) ctx.arc(W / 2, H / 2, Math.hypot(W, H) * 0.52 * pin, 0, Math.PI * 2);
+  else if (variant < 2) ctx.rect(0, H * (1 - pin), W, H * pin);
+  else {
+    const x = lerp(-W * 0.6, W * 1.05, pin);
+    ctx.moveTo(-W, 0);
+    ctx.lineTo(x + W * 0.5, 0);
+    ctx.lineTo(x, H);
+    ctx.lineTo(-W, H);
+    ctx.closePath();
+  }
+  ctx.clip();
+  sceneBackground(k, bg, ink);
+  floaters(k, ink, 1);
+  // A slow push on the words while they are on.
+  const push = 1 + 0.04 * clamp(k.t / Math.max(0.5, k.d));
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(push, push);
+  const maxW = W * 0.84;
+  if (c.value !== undefined) sceneCounter(k, ink, maxW);
+  else sceneWords(k, ink, dark, maxW);
+  ctx.restore();
+}
+
+/** Backdrop: a full-screen living background (under a framed video or a graphic), with the words as a giant faint drift behind. */
+function backdrop(k: Ctx): void {
+  const { ctx, c, U, W, H } = k;
+  const bg = c.background ?? '#0D0C12';
+  const dark = lightness(bg) < 0.45;
+  const ink = dark ? '#FFFFFF' : '#121212';
+  const a = clamp(k.t / 0.3) * (1 - clamp((k.t - (k.d - 0.3)) / 0.3));
+  if (a <= 0) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha *= a;
+  sceneBackground(k, bg, ink, 1.2);
+  const word = c.text.trim().toUpperCase();
+  if (word && word !== '-') {
+    ctx.font = font(900, 30 * U, c.font);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const w = ctx.measureText(word).width + 20 * U;
+    const x = -((k.t * 6 * U) % w);
+    ctx.lineWidth = 0.3 * U;
+    ctx.strokeStyle = rgba(ink, 0.13);
+    for (let dx = x; dx < W; dx += w) ctx.strokeText(word, dx, H * 0.88);
+  }
+  floaters(k, ink, 0.8);
+  ctx.restore();
+}
+
 const PIECES: Record<MotionClip['piece'], (k: Ctx, frame: { W: number; H: number }) => void> = {
   headline,
   word_pop: wordPop,
@@ -958,6 +1263,8 @@ const PIECES: Record<MotionClip['piece'], (k: Ctx, frame: { W: number; H: number
   highlight,
   callout,
   light_sweep: lightSweep,
+  scene,
+  backdrop,
 };
 
 /** Draws a motion clip at timeline time t (m: its place and motion from motionAt). */
@@ -970,7 +1277,7 @@ export function drawMotionClip(ctx: CanvasRenderingContext2D, c: MotionClip, m: 
   const room = (Math.max(0.3, 2 * half) * W * 0.92) / scale;
   const k: Ctx = { ctx, c, t: lt, d: c.duration, U: Math.min(W, H) / 100, W, H, room: Math.min(room, (W * 0.9) / scale), rand: rng(c.id) };
   // Every piece goes out the same way: up and away, fading (light sweeps end on their own).
-  const out = c.piece === 'light_sweep' ? 0 : exitP(k);
+  const out = c.piece === 'light_sweep' || c.piece === 'scene' || c.piece === 'backdrop' ? 0 : exitP(k);
   const alpha = m.opacity * (1 - out);
   if (alpha <= 0.002) return;
   ctx.save();
@@ -992,6 +1299,8 @@ export function motionBox(c: MotionClip, W: number, H: number): { w: number; h: 
   const len = c.text.length;
   switch (c.piece) {
     case 'light_sweep':
+    case 'scene':
+    case 'backdrop':
       return { w: W / Math.max(0.01, c.transform.scale), h: H / Math.max(0.01, c.transform.scale) };
     case 'word_pop':
       return { w: Math.min(W * 0.9, len * 9 * U + 10 * U), h: 26 * U };

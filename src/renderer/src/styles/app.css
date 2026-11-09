@@ -587,3 +587,20 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 /* Report a problem (Diagnostics). */
 .report-problem { display: flex; flex-direction: column; gap: 8px; }
 .report-preview { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg-2, rgba(255,255,255,0.03)); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 0; }
+
+/* Chat: long runs of web lookups fold into one line; failed lookups are one quiet line. */
+.tool-fold { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12px; color: var(--text-2, inherit); cursor: pointer; }
+.tool-fold:hover { background: var(--bg-elev); }
+.tool-fold.quiet { border-color: transparent; padding: 2px 4px; color: var(--text-3); }
+
+/* New routine */
+.routine-dialog { width: min(520px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+.routine-ideas { display: flex; flex-wrap: wrap; gap: 6px; }
+.routine-dialog .chip-btn { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--bg-elev); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.routine-dialog .chip-btn.on { border-color: var(--accent); background: rgba(124, 92, 255, 0.12); }
+
+/* Connected apps */
+.connected-row { padding: 10px 0; border-top: 1px solid var(--line); }
+.connected-row p { margin: 4px 0 0; }
+.connected-setup { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.connected-setup ol { margin: 0 0 8px; padding-left: 18px; }

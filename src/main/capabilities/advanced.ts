@@ -67,7 +67,7 @@ function hiddenShare(nodes: UiaNodeRaw[]): number {
 }
 
 /** A fresh observation; waits briefly while the window still reports itself as not painted. */
-async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
+export async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
   let raw = await d.desktop.backend.uiaSnapshot(target.hwnd, SNAP_OPTS);
   // Repainting after a restore (everything off-screen), or web content whose accessibility
   // tree is still being built (Chromium/WebView2 build it on first request): wait a little.
@@ -241,7 +241,7 @@ async function emptyField(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw):
  * accept an accessibility value without noticing, or a browser hands focus elsewhere right after
  * activation), clicks the field and pastes it for real. Returns whether the read-back matched.
  */
-async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string, clearFirst = false): Promise<boolean> {
+export async function enterTextChecked(d: CapabilityDeps, target: TargetT, node: UiaNodeRaw, text: string, clearFirst = false): Promise<boolean> {
   await enterText(d, target, node, text, clearFirst);
   await sleep(d.focusSettleMs === 0 ? 0 : 250);
   // WhatsApp steps (clearFirst) need the exact text: anything else in the box would be sent with it.

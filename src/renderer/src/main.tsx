@@ -8,6 +8,7 @@ import { VideoApp } from './presence/VideoApp';
 import { PencilApp } from './presence/PencilApp';
 import { KeoModeApp } from './presence/KeoModeApp';
 import { MarksApp } from './presence/MarksApp';
+import { ControlBannerApp } from './presence/ControlBannerApp';
 import { RenderApp } from './studio/RenderApp';
 import { UiProvider } from './components/ui';
 import { invoke, subscribe } from './lib/api';
@@ -49,6 +50,8 @@ createRoot(document.getElementById('root') as HTMLElement).render(
         <KeoModeApp />
       ) : route === '#marks' ? (
         <MarksApp />
+      ) : route === '#control' ? (
+        <ControlBannerApp />
       ) : (
         <AppStateProvider>
           <App />

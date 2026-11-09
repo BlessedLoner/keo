@@ -10,9 +10,10 @@ import { Toggle, ViewHeader, useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 import { EmailCalendarSettings } from './EmailCalendarSettings';
+import { ConnectedApps } from './ConnectedApps';
 import { StudioCredits, useStudioAi } from '../studio/StudioCredits';
 
-type Section = 'providers' | 'web' | 'email' | 'files' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
+type Section = 'providers' | 'web' | 'email' | 'apps' | 'files' | 'voice' | 'autonomy' | 'agent' | 'video' | 'appearance' | 'data' | 'help';
 
 export function SettingsView() {
   const app = useApp();
@@ -35,6 +36,7 @@ export function SettingsView() {
               ['providers', 'Providers'],
               ['web', 'Web'],
               ['email', 'Email & calendar'],
+              ['apps', 'Connected apps'],
               ['files', 'Files'],
               ['voice', 'Voice & shortcuts'],
               ['autonomy', 'Approvals & live chat'],
@@ -65,6 +67,8 @@ export function SettingsView() {
           </>
         ) : section === 'email' ? (
           <EmailCalendarSettings s={s} patch={patch} />
+        ) : section === 'apps' ? (
+          <ConnectedApps />
         ) : section === 'files' ? (
           <Files s={s} patch={patch} />
         ) : section === 'voice' ? (
@@ -1157,14 +1161,9 @@ function WakeAndShortcuts({ s, patch }: { s: Settings; patch: Patch }) {
             <span className="hint">Only languages with an installed Windows speech recognizer are listed{status ? ` (${status.recognizers.length} installed)` : ''}.</span>
           </div>
         </div>
-        <div className="field">
-          <label htmlFor="wake-cmd">After the wake phrase, understand the command with</label>
-          <select id="wake-cmd" className="select" style={{ maxWidth: 420 }} value={w.commandRecognizer} onChange={(e) => void patch({ wake: { commandRecognizer: e.target.value } })}>
-            <option value="local">Windows speech (offline, on this computer)</option>
-            <option value="openai">OpenAI transcription (more accurate; sends that recording to OpenAI)</option>
-          </select>
-          {w.commandRecognizer === 'openai' && !(s.voice.sttProvider === 'openai' && s.voice.audioExportConsent) && <span className="hint" style={{ color: 'var(--warn)' }}>OpenAI transcription isn’t set up (Voice section below), so Keo will use Windows speech.</span>}
-        </div>
+        <p className="small muted" style={{ margin: 0 }}>
+          After the wake phrase, Keo understands your command with its accurate listening when it is on (Speech input below) — any accent. Windows’ built-in speech is used only when it is off.
+        </p>
       </section>
 
       {status && <TrainedWakeWord s={s} patch={patch} hasKey={status.picovoiceKey} />}
@@ -1251,6 +1250,20 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
       <section className="card">
         <h2>Speech input</h2>
         <p className="muted small">Push-to-talk only: recording starts when you press the microphone button and stops when you release or click it again. Audio stays in memory and is never saved.</p>
+        {!(v.sttProvider !== 'none' && v.audioExportConsent) && (
+          <div className="row" style={{ gap: 10, alignItems: 'center', margin: '4px 0 10px' }}>
+            <span className="small" style={{ flex: 1 }}>
+              <strong>Recommended:</strong> Keo’s accurate listening understands every accent far better than Windows’ built-in speech.
+            </span>
+            <button
+              className="btn primary sm"
+              disabled={!keo?.signedIn && !openai?.hasApiKey}
+              onClick={() => void patch({ voice: { sttProvider: keo?.signedIn ? 'keo' : 'openai', audioExportConsent: true } })}
+            >
+              Turn on accurate listening
+            </button>
+          </div>
+        )}
         <div className="grid-2">
           <div className="field">
             <label htmlFor="stt">Speech-to-text provider</label>
@@ -1333,6 +1346,12 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
           )}
         </div>
         <Toggle checked={v.speakResponses} onChange={(c) => void patch({ voice: { speakResponses: c } })} label="Read replies aloud automatically" />
+        <Toggle
+          checked={v.voiceFirst}
+          onChange={(c) => void patch(c ? { voice: { voiceFirst: true, speakResponses: true }, ui: { keoModeOnWake: true } } : { voice: { voiceFirst: false } })}
+          label="Voice-first mode: short spoken answers, read aloud, and Keo mode opens when you say the wake word"
+        />
+        {v.voiceFirst && v.sttProvider === 'none' && <span className="hint warn-text">Choose how Keo hears you (Speech input above) so you can talk instead of typing.</span>}
       </section>
     </>
   );

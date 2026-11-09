@@ -651,6 +651,43 @@ public static class KeoWin {
     }
     Send(inputs);
   }
+
+  // ---- Full control: the top-level window under a screen point, and a click anywhere on it.
+  public static Dictionary<string, object> At(int sx, int sy) {
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    var hit = WindowFromPoint(p);
+    if (hit == IntPtr.Zero) return null;
+    var top = GetAncestor(hit, 2);
+    return Describe(top == IntPtr.Zero ? hit : top);
+  }
+
+  // Like a person's click: whatever window is visible at the point gets it (the click itself brings
+  // it forward) — the taskbar, the Start menu and other shell surfaces cannot be "focused" first.
+  public static void WheelAt(IntPtr h, int sx, int sy, int notches) {
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    if (!PartOfTarget(WindowFromPoint(p), h)) throw new Exception("target_obscured");
+    PointerTo(sx, sy);
+    var inputs = new List<INPUT>();
+    for (int i = 0; i < Math.Abs(notches); i++) {
+      var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = 0x0800; a.U.mi.mouseData = (uint)(notches < 0 ? -120 : 120); inputs.Add(a);
+    }
+    Send(inputs);
+  }
+
+  public static void ClickAt(IntPtr h, int sx, int sy, string button, bool dbl) {
+    var p = new POINT(); p.X = sx; p.Y = sy;
+    if (!PartOfTarget(WindowFromPoint(p), h)) throw new Exception("target_obscured");
+    PointerTo(sx, sy);
+    uint down = button == "right" ? 0x0008u : button == "middle" ? 0x0020u : 0x0002u;
+    uint up = button == "right" ? 0x0010u : button == "middle" ? 0x0040u : 0x0004u;
+    var inputs = new List<INPUT>();
+    int n = dbl ? 2 : 1;
+    for (int i = 0; i < n; i++) {
+      var a = new INPUT(); a.type = 0; a.U.mi.dwFlags = down; inputs.Add(a);
+      var b = new INPUT(); b.type = 0; b.U.mi.dwFlags = up; inputs.Add(b);
+    }
+    Send(inputs);
+  }
 }
 '@
 
@@ -740,6 +777,31 @@ public static class KeoUia {
       if (sb.Length > 400000) break;
     }
     return sb.ToString();
+  }
+
+  // Full control: what lies under a screen point, or has the keyboard focus (name, type, password).
+  static string Brief(AutomationElement e) {
+    var res = new Dictionary<string, object>();
+    if (e != null) {
+      try {
+        var c = e.Current;
+        res["name"] = Clip(c.Name ?? "", 200);
+        res["aid"] = Clip(c.AutomationId ?? "", 120);
+        res["type"] = c.ControlType != null ? c.ControlType.ProgrammaticName.Replace("ControlType.", "") : "";
+        res["password"] = c.IsPassword;
+      } catch (Exception) { }
+    }
+    return Json.Serialize(res);
+  }
+  public static string AtPoint(int sx, int sy) {
+    AutomationElement e = null;
+    try { e = AutomationElement.FromPoint(new Point(sx, sy)); } catch (Exception) { }
+    return Brief(e);
+  }
+  public static string Focused() {
+    AutomationElement e = null;
+    try { e = AutomationElement.FocusedElement; } catch (Exception) { }
+    return Brief(e);
   }
 
   static string Rid(AutomationElement e) {
@@ -1158,6 +1220,23 @@ while ($true) {
           Reply $req.id $true @{ set = $true }
         }
       }
+      'screenshot' {
+        Add-Type -AssemblyName System.Drawing
+        $w = [Math]::Max(1, [Math]::Min(10000, [int]$req.args.width)); $hh = [Math]::Max(1, [Math]::Min(10000, [int]$req.args.height))
+        $bmp = New-Object System.Drawing.Bitmap $w, $hh
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        try {
+          $g.CopyFromScreen([int]$req.args.x, [int]$req.args.y, 0, 0, $bmp.Size)
+          $ms = New-Object System.IO.MemoryStream
+          $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+          ReplyRaw $req.id ('{"png":"' + [Convert]::ToBase64String($ms.ToArray()) + '"}')
+        } finally { $g.Dispose(); $bmp.Dispose() }
+      }
+      'window_at' { Reply $req.id $true ([KeoWin]::At([int]$req.args.x, [int]$req.args.y)) }
+      'wheel_at' { [KeoWin]::WheelAt($h, [int]$req.args.x, [int]$req.args.y, [int]$req.args.notches); Reply $req.id $true @{ scrolled = $true } }
+      'click_at' { [KeoWin]::ClickAt($h, [int]$req.args.x, [int]$req.args.y, [string]$req.args.button, [bool]$req.args.double); Reply $req.id $true @{ clicked = $true } }
+      'element_at' { if ($script:uiaReady) { ReplyRaw $req.id ([KeoUia]::AtPoint([int]$req.args.x, [int]$req.args.y)) } else { ReplyRaw $req.id '{}' } }
+      'focused_element' { if ($script:uiaReady) { ReplyRaw $req.id ([KeoUia]::Focused()) } else { ReplyRaw $req.id '{}' } }
       'ping'  { Reply $req.id $true @{ pong = $true; dpi = $script:dpiMode } }
       'idle'  { Reply $req.id $true @{ idleMs = [KeoWin]::IdleMs(); foreground = [KeoWin]::ForegroundHwnd() } }
       'covered' { Reply $req.id $true @{ share = [KeoWin]::CoveredShare($h) } }

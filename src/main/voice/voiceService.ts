@@ -17,6 +17,8 @@ export class VoiceService {
     private readonly hasOpenAIKey: () => boolean,
     private readonly log: Logger,
     private readonly account: Pick<KeoAccount, 'signedIn' | 'speak' | 'transcribe'> | null = null,
+    /** Words the user is likely to say now (app names, names in the conversation, what Keo just asked). */
+    private readonly hints: () => string = () => '',
   ) {}
 
   sttStatus(s: Settings = this.getSettings()): { available: boolean; reason: string | null } {
@@ -39,13 +41,20 @@ export class VoiceService {
     // Transcribe in the user's language (the wake-word language) instead of letting
     // the model guess: short or quiet clips were otherwise "heard" as Spanish etc.
     const language = s.wake.culture.split('-')[0]!.toLowerCase();
+    // Context makes the biggest difference for names, app words and accents the model has heard less.
+    let hint = '';
+    try {
+      hint = this.hints().replace(/\s+/g, ' ').slice(0, 900);
+    } catch {
+      hint = '';
+    }
     if (s.voice.sttProvider === 'keo') {
       if (mimeType !== 'audio/wav') throw new KeoError('voice_unavailable', 'Keo’s listening needs the recording as WAV.');
-      return dropHallucination((await this.cloud(() => this.account!.transcribe(audio, language, signal))).trim());
+      return dropHallucination((await this.cloud(() => this.account!.transcribe(audio, language, signal, hint))).trim());
     }
     const text = await this.openai.transcribe(audio, mimeType, s.voice.sttModel, signal, {
       language,
-      prompt: 'A person talking to Keo, their computer assistant (apps such as WhatsApp, Chrome, Notepad).',
+      prompt: `A person talking to Keo, their computer assistant. They may have any accent. ${hint}`.trim().slice(0, 1000),
     });
     return dropHallucination(text.trim());
   }

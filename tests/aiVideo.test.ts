@@ -285,6 +285,34 @@ describe('Through Keo Cloud (signed in, no own key: Studio credits)', () => {
     expect(calls.find((c) => c.url === `${base}/studio/run`)?.body).toMatchObject({ endpoint: 'fal-ai/kling-video/v3/pro/image-to-video', input: { start_image_url: 'https://v3.fal.media/files/pic.jpg', duration: '5' } });
   });
 
+  it('when the storage will not take an upload, a picture goes inside the request instead; if that is refused too, the upload’s reason is said', async () => {
+    const base = 'https://cloud.test/v1';
+    const runs: unknown[] = [];
+    let cloudTakesInline = true;
+    const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) });
+    const fetch = async (url: string, init?: { body?: string | Uint8Array }) => {
+      if (url === `${base}/studio/upload`) return json(502, { error: { message: 'The AI service’s storage did not take the upload (403: User is locked).' } });
+      if (url === `${base}/studio/run`) {
+        const body = JSON.parse(String(init?.body)) as { input: { start_image_url: string } };
+        runs.push(body);
+        if (!cloudTakesInline) return json(400, { error: { message: 'Upload the picture first.' } });
+        return json(200, { request_id: 'q1', status_url: `${base}/studio/requests/q1/status`, response_url: `${base}/studio/requests/q1`, cancel_url: `${base}/studio/requests/q1/cancel` });
+      }
+      if (url === `${base}/studio/requests/q1/status`) return json(200, { status: 'COMPLETED' });
+      if (url === `${base}/studio/requests/q1`) return json(200, { video: { url: 'https://v3.fal.media/files/clip.mp4' } });
+      if (url === 'https://v3.fal.media/files/clip.mp4') return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new Uint8Array(5000).buffer };
+      return json(404, {});
+    };
+    const fal = new FalVideo({ key: () => null, cloud: { base, token: async () => 't' }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });
+    const r = await fal.generate(req, new AbortController().signal);
+    expect(fs.existsSync(r.file)).toBe(true);
+    expect((runs[0] as { input: { start_image_url: string } }).input.start_image_url).toMatch(/^data:image\/jpeg;base64,/);
+    // An older Keo Cloud that takes uploaded pictures only: the real reason (the refused upload) is shown.
+    cloudTakesInline = false;
+    const again = new FalVideo({ key: () => null, cloud: { base, token: async () => 't' }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });
+    await expect(again.generate(req, new AbortController().signal)).rejects.toThrow(/did not take the upload \(403: User is locked\)/);
+  });
+
   it('out of credits: Keo Cloud’s own words are shown; signed out: says to sign in', async () => {
     const fetch = async (url: string) => ({ ok: url.endsWith('/upload') || url.startsWith('https://upload'), status: url.endsWith('/run') ? 402 : 200, json: async () => (url.endsWith('/run') ? { error: { message: 'This needs 112 Studio credits and you have 40. Buy more credits.' } } : { upload_url: 'https://upload.fal.media/x', file_url: 'https://v3.fal.media/files/a.jpg' }), arrayBuffer: async () => new ArrayBuffer(0) });
     const fal = new FalVideo({ key: () => null, cloud: { base: 'https://cloud.test/v1', token: async () => 't' }, dir: tempDir('keo-cloud-'), fetch, log, sleep: async () => undefined });

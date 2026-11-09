@@ -120,6 +120,27 @@ export const Asset = z
       })
       .strict()
       .optional(),
+    /**
+     * A first frame of a planned AI shot, waiting to be checked and filmed: what it shows, what moves,
+     * how it is filmed, and how far it got (no film yet, a short motion test, or the full shot).
+     */
+    aiPlan: z
+      .object({
+        frame: z.string().max(3800),
+        motion: z.string().max(2400),
+        model: z.enum(['kling-3-pro', 'veo-3.1-fast']),
+        seconds: z.number().int().min(3).max(10),
+        audio: z.boolean(),
+        aspect: z.enum(['9:16', '16:9', '1:1']),
+        cast: z.array(z.string().max(40)).max(3).default([]),
+        realism: z.enum(['real', 'draft']).default('real'),
+        /** The shot's place in the video (0: the first). */
+        index: z.number().int().min(0).max(99),
+        take: z.number().int().min(0).max(999).default(0),
+        filmed: z.enum(['no', 'test', 'final']).default('no'),
+      })
+      .strict()
+      .optional(),
     /** Degrees clockwise the video's frames are turned to stand upright (phone videos); width and height are upright. */
     rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
     /** A light copy (540p) the preview plays instead of a big video; the export always uses the original. */
@@ -159,7 +180,8 @@ export type Key = z.infer<typeof Key>;
  * scaleX, scaleY (1 = normal), rotation (degrees), opacity (0..1), blur (percent of the frame
  * height). A keyframed property replaces the clip's own value.
  */
-export const KEY_PROPS = ['x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'opacity', 'blur'] as const;
+/** tiltX, tiltY: a turn in 3D, in degrees (videos and pictures: the top or the right side going away). */
+export const KEY_PROPS = ['x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'opacity', 'blur', 'tiltX', 'tiltY'] as const;
 export type KeyProp = (typeof KEY_PROPS)[number];
 export const Keys = z.object(Object.fromEntries(KEY_PROPS.map((k) => [k, z.array(Key).max(300).optional()])) as Record<KeyProp, z.ZodOptional<z.ZodArray<typeof Key>>>).strict();
 export type Keys = z.infer<typeof Keys>;
@@ -456,6 +478,8 @@ export const MediaClip = z
     frame: DeviceFrame.optional(),
     /** A drop shadow under the layer (0: none). */
     shadow: z.number().min(0).max(60).default(0),
+    /** A glass finish: a sheen across it, a bright edge and a reflection below (a screen floating in space). */
+    glass: z.boolean().optional(),
     ...Motion,
   })
   .strict();
@@ -592,7 +616,7 @@ export const ADJUST_TRACK = 'Adjustments';
  * sweeps. Each piece animates in, lives (floats) and animates out on its own; `beats` (seconds into
  * the clip) make its words or items appear on the spoken words.
  */
-export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep'] as const;
+export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop'] as const;
 export const MotionPiece = z.enum(MOTION_PIECES);
 export type MotionPiece = z.infer<typeof MotionPiece>;
 /** What each piece is for (shown to Keo and in the Studio). */
@@ -609,6 +633,8 @@ export const MOTION_PIECE_INFO: Record<MotionPiece, { label: string; use: string
   highlight: { label: 'Highlight', use: 'a line with its key words marked by a sweeping marker: text = the line, items = the words to mark (default its last word)' },
   callout: { label: 'Callout', use: 'a note with a hand-drawn arrow pointing at something: text = the note; rotate the layer to aim the arrow' },
   light_sweep: { label: 'Light sweep', use: 'a full-frame flash of light between topics, with an optional word (text) — about 1 second' },
+  scene: { label: 'Keyword scene', use: 'FULL SCREEN: the video cuts away to a clean animated background and the key words slam in as they are said (text = 1–5 words, items = the word(s) in the accent serif italic, default the last; sub = a small kicker; icon optional; value + unit make it a big counter). background = its colour (light #F4F1EA, dark #0D0C12 or a brand colour), color = the words. The voice keeps playing; 1.2–3 s' },
+  backdrop: { label: 'Backdrop', use: 'FULL SCREEN animated background (soft glows, a moving dot grid, text as a giant faint word drifting behind) to put under a framed video or a graphic; background = its colour' },
 };
 /** Icons motion clips draw (line icons); anything else in an icon field is drawn as an emoji. */
 export const MOTION_ICONS = ['chat', 'phone', 'memory', 'folder', 'film', 'rocket', 'sparkle', 'mic', 'check', 'clock', 'scissors', 'music', 'window', 'image', 'play', 'pin', 'speaker', 'captions', 'magic', 'send', 'search', 'heart', 'star', 'fire', 'bolt', 'money', 'chart', 'trend', 'users', 'user', 'mail', 'globe', 'camera', 'code', 'lock', 'bulb', 'target', 'gift', 'cart', 'calendar', 'book', 'home', 'like', 'eye', 'warning', 'cross', 'arrow', 'trophy', 'brain', 'coffee'] as const;
@@ -631,6 +657,8 @@ const MotionFields = {
   accent2: Hex.default('#5FD4FF'),
   color: Hex.default('#FFFFFF'),
   font: z.string().trim().min(1).max(60).default('Poppins'),
+  /** Full-screen pieces (scene, backdrop): the background colour. */
+  background: Hex.optional(),
   /** Seconds into the clip when each word or item appears (on the spoken words); evenly spread when missing. */
   beats: z.array(Sec).max(16).optional(),
 };
@@ -669,7 +697,7 @@ export function motionPlace(place: (typeof MOTION_PLACES)[number], piece: Motion
     'bottom-right': { x: tall ? 0.64 : 0.75, y: tall ? 0.8 : 0.8 },
   };
   if (place !== 'auto') return at[place];
-  if (piece === 'light_sweep') return at.center;
+  if (piece === 'light_sweep' || piece === 'scene' || piece === 'backdrop') return at.center;
   if (piece === 'lower_third') return at['bottom-left'];
   // A talking head fills the middle: tall videos get graphics above the head, wide ones beside it.
   return tall ? at.top : at.right;
@@ -719,7 +747,7 @@ function syncMotion(words: Array<{ text: string; start: number; end: number }>, 
   let beats: number[] | undefined;
   const at = (t: number) => Math.max(0, t - start);
   const n = op.items?.length ?? 0;
-  if (op.piece === 'headline' || op.piece === 'quote' || op.piece === 'word_pop') {
+  if (op.piece === 'headline' || op.piece === 'quote' || op.piece === 'word_pop' || op.piece === 'scene') {
     // Each word of the text comes in when its spoken word is said (or spread over the phrase).
     const tw = op.text.split(/\s+/).filter(Boolean);
     beats = tw.map((w, i) => {
@@ -752,8 +780,8 @@ function syncMotion(words: Array<{ text: string; start: number; end: number }>, 
     const num = hits.find((h) => /\d/.test(h.text)) ?? hits[0]!;
     beats = [at(num.start)];
   }
-  const hold = op.piece === 'light_sweep' ? 0.7 : 1.6;
-  return { start: round(start), duration: round(Math.max(op.piece === 'light_sweep' ? 1 : 2.2, lastEnd - start + hold)), beats: beats?.map(round), heard: hits.map((h) => h.text).join(' ') };
+  const hold = op.piece === 'light_sweep' ? 0.7 : op.piece === 'scene' ? 0.6 : 1.6;
+  return { start: round(start), duration: round(Math.max(op.piece === 'light_sweep' ? 1 : op.piece === 'scene' ? 1.3 : 2.2, lastEnd - start + hold)), beats: beats?.map(round), heard: hits.map((h) => h.text).join(' ') };
 }
 
 export const Clip = z.discriminatedUnion('type', [MediaClip, TextClip, AudioClip, ShapeClip, AdjustClip, MotionClip]);
@@ -810,6 +838,8 @@ export interface ProjectSummary {
   clips: number;
   /** The first video or picture (for a thumbnail), null when there is none. */
   cover: Asset | null;
+  /** The series it is an episode of (its number counts from 1). */
+  series?: { id: string; name: string; episode: number };
 }
 
 /** A job for Keo's render window: an export, frames for Keo to look at, or measuring a file. */
@@ -893,6 +923,95 @@ const At = z.union([Sec, z.literal('end')]);
 const StylePatch = TextStyle.partial();
 const TransformPatch = Transform.partial();
 
+const SetOp = z
+  .object({
+    op: z.literal('set'),
+    clip: ClipRef,
+    text: z.string().min(1).max(2000).optional(),
+    style: StylePatch.optional(),
+    transform: TransformPatch.optional(),
+    volume: z.number().min(0).max(4).optional(),
+    /** Volume keyframes (values 0..4); null or [] removes them. */
+    volumeKeys: z.array(Key).max(300).nullable().optional(),
+    speed: z.number().min(0.1).max(8).optional(),
+    fadeIn: z.number().min(0).max(30).optional(),
+    fadeOut: z.number().min(0).max(30).optional(),
+    fit: z.enum(['cover', 'contain']).optional(),
+    animIn: TextAnimIn.optional(),
+    animOut: TextAnimOut.optional(),
+    animSeconds: z.number().min(0).max(5).optional(),
+    highlight: Hex.nullable().optional(),
+    /** A caption's word timings (seconds from the clip's start), for the word-by-word highlight. */
+    words: z.array(z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict()).max(400).optional(),
+    color: ColorGrade.partial().nullable().optional(),
+    zooms: z.array(Zoom).max(400).nullable().optional(),
+    voice: z.boolean().optional(),
+    gate: z.number().min(-40).max(0).nullable().optional(),
+    duck: z.number().min(-40).max(0).nullable().optional(),
+    /** Keyframes per property (each list replaces that property's keyframes; null or [] removes them). */
+    keys: z.partialRecord(z.enum(KEY_PROPS), z.array(Key).max(300).nullable()).optional(),
+    enter: Entrance.nullable().optional(),
+    exit: Entrance.nullable().optional(),
+    loop: Loop.nullable().optional(),
+    mask: Mask.nullable().optional(),
+    frame: DeviceFrame.nullable().optional(),
+    shadow: z.number().min(0).max(60).optional(),
+    glass: z.boolean().optional(),
+    counter: Counter.nullable().optional(),
+    shapeStyle: ShapeStyle.partial().optional(),
+    shape: ShapeKind.optional(),
+    /** Motion clips: the piece and its words, items, icon, number, colours and beats (null removes a field that can be left out). */
+    motion: z
+      .object({
+        piece: MotionPiece.optional(),
+        sub: z.string().trim().min(1).max(160).nullable().optional(),
+        items: z.array(z.string().trim().min(1).max(60)).min(1).max(8).nullable().optional(),
+        icon: z.string().trim().min(1).max(24).nullable().optional(),
+        value: z.number().min(-1e12).max(1e12).nullable().optional(),
+        unit: z.string().max(12).nullable().optional(),
+        accent: Hex.optional(),
+        accent2: Hex.optional(),
+        color: Hex.optional(),
+        font: z.string().trim().min(1).max(60).optional(),
+        background: Hex.nullable().optional(),
+        beats: z.array(Sec).max(16).nullable().optional(),
+      })
+      .strict()
+      .optional(),
+    transition: Transition.nullable().optional(),
+    crop: Crop.partial().nullable().optional(),
+    backdrop: z.enum(['blur']).nullable().optional(),
+    cutout: z.boolean().optional(),
+    flipX: z.boolean().optional(),
+    flipY: z.boolean().optional(),
+    blend: Blend.optional(),
+    voiceFx: VoiceFx.nullable().optional(),
+    /** Rich text marks (replace the text's marks; null or [] removes them). */
+    marks: z.array(TextMarkInput).max(100).nullable().optional(),
+    /** Equalizer bands to change (dB), or a preset's name; null: flat again. */
+    eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
+    chroma: Chroma.partial().nullable().optional(),
+    /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
+    effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
+    /** Adjustment layers: blur of everything under it, and how much of it shows. */
+    blur: z.number().min(0).max(20).optional(),
+    strength: z.number().min(0).max(1).optional(),
+    /** A speed curve: points, a preset's name, or null for steady speed again. */
+    speedCurve: z.union([z.array(SpeedPoint).min(2).max(16), z.enum(['montage', 'hero', 'bullet', 'flash-in', 'flash-out', 'jump-cut'])]).nullable().optional(),
+  })
+  .strict();
+/** The same change to every clip on a track (or several tracks): all captions bigger, every headline another colour, every screen without glass. */
+const SetAllOp = SetOp.omit({ op: true, clip: true, text: true, words: true, zooms: true, volumeKeys: true, speedCurve: true })
+  .extend({
+    op: z.literal('set_all'),
+    track: TrackRef.optional(),
+    /** Tracks by name, e.g. "Captions" (several: one name each). */
+    trackName: z.union([z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).min(1).max(12)]).optional(),
+    /** Only the clips of this kind on those tracks. */
+    only: z.enum(['text', 'motion', 'media', 'audio', 'shape']).optional(),
+  })
+  .strict();
+
 export const EditOp = z.discriminatedUnion('op', [
   z
     .object({
@@ -905,11 +1024,14 @@ export const EditOp = z.discriminatedUnion('op', [
       in: Sec.optional(),
       duration: z.number().min(0.04).optional(),
       fit: z.enum(['cover', 'contain']).optional(),
+      /** Its sound (0: silent, e.g. a copy of a video already playing below). */
+      volume: z.number().min(0).max(4).optional(),
       transform: TransformPatch.optional(),
       zooms: z.array(Zoom).max(400).optional(),
       mask: Mask.optional(),
       frame: DeviceFrame.optional(),
       shadow: z.number().min(0).max(60).optional(),
+      glass: z.boolean().optional(),
       keys: Keys.optional(),
       enter: Entrance.optional(),
       exit: Entrance.optional(),
@@ -982,79 +1104,8 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('cut_range'), from: Sec, to: Sec }).strict(),
   /** Cut several time ranges out of the whole timeline at once (times as they are before any of them is cut). */
   z.object({ op: z.literal('cut_ranges'), ranges: z.array(z.object({ from: Sec, to: Sec }).strict()).min(1).max(5000) }).strict(),
-  z
-    .object({
-      op: z.literal('set'),
-      clip: ClipRef,
-      text: z.string().min(1).max(2000).optional(),
-      style: StylePatch.optional(),
-      transform: TransformPatch.optional(),
-      volume: z.number().min(0).max(4).optional(),
-      /** Volume keyframes (values 0..4); null or [] removes them. */
-      volumeKeys: z.array(Key).max(300).nullable().optional(),
-      speed: z.number().min(0.1).max(8).optional(),
-      fadeIn: z.number().min(0).max(30).optional(),
-      fadeOut: z.number().min(0).max(30).optional(),
-      fit: z.enum(['cover', 'contain']).optional(),
-      animIn: TextAnimIn.optional(),
-      animOut: TextAnimOut.optional(),
-      animSeconds: z.number().min(0).max(5).optional(),
-      highlight: Hex.nullable().optional(),
-      color: ColorGrade.partial().nullable().optional(),
-      zooms: z.array(Zoom).max(400).nullable().optional(),
-      voice: z.boolean().optional(),
-      gate: z.number().min(-40).max(0).nullable().optional(),
-      duck: z.number().min(-40).max(0).nullable().optional(),
-      /** Keyframes per property (each list replaces that property's keyframes; null or [] removes them). */
-      keys: z.partialRecord(z.enum(KEY_PROPS), z.array(Key).max(300).nullable()).optional(),
-      enter: Entrance.nullable().optional(),
-      exit: Entrance.nullable().optional(),
-      loop: Loop.nullable().optional(),
-      mask: Mask.nullable().optional(),
-      frame: DeviceFrame.nullable().optional(),
-      shadow: z.number().min(0).max(60).optional(),
-      counter: Counter.nullable().optional(),
-      shapeStyle: ShapeStyle.partial().optional(),
-      shape: ShapeKind.optional(),
-      /** Motion clips: the piece and its words, items, icon, number, colours and beats (null removes a field that can be left out). */
-      motion: z
-        .object({
-          piece: MotionPiece.optional(),
-          sub: z.string().trim().min(1).max(160).nullable().optional(),
-          items: z.array(z.string().trim().min(1).max(60)).min(1).max(8).nullable().optional(),
-          icon: z.string().trim().min(1).max(24).nullable().optional(),
-          value: z.number().min(-1e12).max(1e12).nullable().optional(),
-          unit: z.string().max(12).nullable().optional(),
-          accent: Hex.optional(),
-          accent2: Hex.optional(),
-          color: Hex.optional(),
-          font: z.string().trim().min(1).max(60).optional(),
-          beats: z.array(Sec).max(16).nullable().optional(),
-        })
-        .strict()
-        .optional(),
-      transition: Transition.nullable().optional(),
-      crop: Crop.partial().nullable().optional(),
-      backdrop: z.enum(['blur']).nullable().optional(),
-      cutout: z.boolean().optional(),
-      flipX: z.boolean().optional(),
-      flipY: z.boolean().optional(),
-      blend: Blend.optional(),
-      voiceFx: VoiceFx.nullable().optional(),
-      /** Rich text marks (replace the text's marks; null or [] removes them). */
-      marks: z.array(TextMarkInput).max(100).nullable().optional(),
-      /** Equalizer bands to change (dB), or a preset's name; null: flat again. */
-      eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
-      chroma: Chroma.partial().nullable().optional(),
-      /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
-      effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
-      /** Adjustment layers: blur of everything under it, and how much of it shows. */
-      blur: z.number().min(0).max(20).optional(),
-      strength: z.number().min(0).max(1).optional(),
-      /** A speed curve: points, a preset's name, or null for steady speed again. */
-      speedCurve: z.union([z.array(SpeedPoint).min(2).max(16), z.enum(['montage', 'hero', 'bullet', 'flash-in', 'flash-out', 'jump-cut'])]).nullable().optional(),
-    })
-    .strict(),
+  SetOp,
+  SetAllOp,
   /** An adjustment layer (colour, effects, blur over everything under it) on the Adjustments track (made above the videos and graphics, under text). */
   z
     .object({
@@ -1125,7 +1176,8 @@ export const EditOp = z.discriminatedUnion('op', [
     })
     .strict(),
   z.object({ op: z.literal('add_track'), kind: TrackKind, name: z.string().trim().min(1).max(60).optional() }).strict(),
-  z.object({ op: z.literal('set_track'), track: TrackRef, hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional() }).strict(),
+  /** position: the track drawn under all others (bottom) or over them (top). trackName: the track by its name instead of track. */
+  z.object({ op: z.literal('set_track'), track: TrackRef.optional(), trackName: z.string().trim().min(1).max(60).optional(), hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional(), position: z.enum(['bottom', 'top']).optional() }).strict(),
   z.object({ op: z.literal('delete_track'), track: TrackRef }).strict(),
   /** Every whole-word match of a word or phrase, in all text and captions, replaced (e.g. a name speech-to-text misheard). */
   z.object({ op: z.literal('replace_words'), find: z.string().trim().min(1).max(80), replace: z.string().trim().min(1).max(80) }).strict(),
@@ -1514,8 +1566,29 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
     return (a.duration - c.in) / (c.type === 'media' ? c.speed : 1);
   };
 
-  for (const op of ops) {
+  // set_all becomes one set per clip, run in its place (quietly: one line says what changed).
+  const queue: EditOp[] = [...ops];
+  const quiet = new WeakSet<EditOp>();
+  while (queue.length) {
+    const op = queue.shift()!;
     switch (op.op) {
+      case 'set_all': {
+        const { op: _o, track, trackName, only, ...fields } = op;
+        const names = trackName === undefined ? [] : Array.isArray(trackName) ? trackName : [trackName];
+        const lower = (x: string) => x.trim().toLowerCase();
+        const tracks = p.tracks.filter((t) => (track ? t.id === track : names.some((n) => lower(n) === lower(t.name))));
+        if (!tracks.length) throw new EditError(track || names.length ? `There is no track ${track ?? names.join(', ')}. Tracks: ${p.tracks.map((t) => `${t.name} (${t.id})`).join(', ')}.` : 'set_all needs a track or trackName (e.g. "Captions").');
+        const clips = tracks.flatMap((t) => t.clips).filter((c) => !only || c.type === only);
+        if (!clips.length) throw new EditError(`There are no ${only ? `${only} ` : ''}clips on ${tracks.map((t) => t.name).join(', ')}.`);
+        const sets = clips.map((c) => {
+          const s: EditOp = { op: 'set', clip: c.id, ...fields } as EditOp;
+          quiet.add(s);
+          return s;
+        });
+        queue.unshift(...sets);
+        changes.push(`Changed all ${clips.length} clip${clips.length === 1 ? '' : 's'} on ${tracks.map((t) => t.name).join(', ')}.`);
+        break;
+      }
       case 'add_media': {
         const a = asset(op.assetId);
         if (a.kind === 'audio') throw new EditError(`${a.name} is audio: use add_audio.`);
@@ -1536,6 +1609,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.mask ? { mask: op.mask } : {}),
           ...(op.frame ? { frame: op.frame } : {}),
           ...(op.shadow !== undefined ? { shadow: op.shadow } : {}),
+          ...(op.glass ? { glass: true } : {}),
           ...(op.keys ? { keys: sortKeys(op.keys) } : {}),
           ...(op.enter ? { enter: op.enter } : {}),
           ...(op.exit ? { exit: op.exit } : {}),
@@ -1544,6 +1618,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.crop ? { crop: op.crop } : {}),
           ...(op.flipX ? { flipX: true } : {}),
           ...(op.color ? { color: op.color } : {}),
+          ...(op.volume !== undefined ? { volume: op.volume } : {}),
         });
         t.clips.push(c);
         sortClips(t);
@@ -1818,21 +1893,38 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           only('text', c.type === 'text' || c.type === 'motion');
           if (c.type === 'motion') c.text = op.text;
           else {
-            (c as TextClip).text = op.text;
-            delete (c as TextClip).words;
+            const tc = c as TextClip;
+            tc.text = op.text;
+            // A caption keeps its word-by-word highlight: the same words keep their times, new words share the line's time.
+            if (tc.words?.length && !op.words) {
+              const next = op.text.split(/\s+/).filter(Boolean);
+              if (next.length === tc.words.length) tc.words = tc.words.map((w, i) => ({ ...w, text: next[i]! }));
+              else if (next.length && next.length <= 400) {
+                const from = tc.words[0]!.start;
+                const to = Math.max(from + 0.1, tc.words.at(-1)!.end);
+                const total = next.reduce((n, w) => n + w.length + 1, 0);
+                let at = from;
+                tc.words = next.map((w) => {
+                  const len = ((to - from) * (w.length + 1)) / total;
+                  const word = { text: w, start: round(at), end: round(at + len) };
+                  at += len;
+                  return word;
+                });
+              } else delete tc.words;
+            }
           }
         }
         if (op.motion) {
           only('motion settings (only motion clips)', c.type === 'motion');
           const m = c as MotionClip;
-          const { sub, items, icon, value, unit, beats, ...rest } = op.motion;
+          const { sub, items, icon, value, unit, beats, background, ...rest } = op.motion;
           const next: Record<string, unknown> = { ...m, ...rest };
-          for (const [k, v] of Object.entries({ sub, items, icon, value, unit, beats })) {
+          for (const [k, v] of Object.entries({ sub, items, icon, value, unit, beats, background })) {
             if (v === null) delete next[k];
             else if (v !== undefined) next[k] = k === 'beats' ? [...(v as number[])].sort((a, b) => a - b).map(round) : v;
           }
           Object.assign(m, MotionClip.parse(next));
-          for (const k of ['sub', 'items', 'icon', 'value', 'unit', 'beats'] as const) if (!(k in next)) delete m[k];
+          for (const k of ['sub', 'items', 'icon', 'value', 'unit', 'beats', 'background'] as const) if (!(k in next)) delete m[k];
         }
         if (op.style) {
           only('text style', c.type === 'text');
@@ -1959,6 +2051,10 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           only('fit', c.type === 'media');
           (c as MediaClip).fit = op.fit;
         }
+        if (op.words) {
+          only('words', c.type === 'text');
+          (c as TextClip).words = op.words.map((w) => ({ text: w.text, start: round(w.start), end: round(Math.max(w.start, w.end)) }));
+        }
         for (const k of ['animIn', 'animOut', 'animSeconds', 'highlight'] as const)
           if (op[k] !== undefined) {
             only('animation', c.type === 'text');
@@ -2025,6 +2121,11 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           only('shadow (for shapes use shapeStyle.shadow, for text style.shadow)', c.type === 'media');
           (c as MediaClip).shadow = op.shadow;
         }
+        if (op.glass !== undefined) {
+          only('glass', c.type === 'media');
+          if (op.glass) (c as MediaClip).glass = true;
+          else delete (c as MediaClip).glass;
+        }
         if (op.counter !== undefined) {
           only('counter', c.type === 'text');
           const tc = c as TextClip;
@@ -2051,7 +2152,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (op.shapeStyle) sc.style = ShapeStyle.parse({ ...sc.style, ...op.shapeStyle });
         }
         sortClips(f.track);
-        changes.push(`Changed ${c.id}.`);
+        if (!quiet.has(op)) changes.push(`Changed ${c.id}.`);
         break;
       }
       case 'add_shape': {
@@ -2112,6 +2213,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.accent2 ? { accent2: op.accent2 } : {}),
           ...(op.color ? { color: op.color } : {}),
           ...(op.font ? { font: op.font } : {}),
+          ...(op.background ? { background: op.background } : {}),
           ...(beats?.length ? { beats: [...beats].filter((b) => b >= 0 && b < duration).sort((a, b) => a - b).map(round) } : {}),
           transform: { ...spot, ...(op.transform ?? {}) },
           ...(op.loop ? { loop: op.loop } : {}),
@@ -2187,8 +2289,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         break;
       }
       case 'set_track': {
-        const t = p.tracks.find((x) => x.id === op.track);
-        if (!t) throw new EditError(`There is no track ${op.track}.`);
+        const t = p.tracks.find((x) => (op.track ? x.id === op.track : x.name === op.trackName));
+        if (!t) throw new EditError(`There is no track ${op.track ?? op.trackName ?? '(none named)'}.`);
+        if (op.position) {
+          p.tracks.splice(p.tracks.indexOf(t), 1);
+          if (op.position === 'bottom') p.tracks.unshift(t);
+          else p.tracks.push(t);
+        }
         if (op.hidden !== undefined) t.hidden = op.hidden;
         if (op.muted !== undefined) t.muted = op.muted;
         if (op.locked !== undefined) {
@@ -2210,6 +2317,22 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         let count = 0;
         for (const t of p.tracks)
           for (const c of t.clips) {
+            if (c.type === 'motion') {
+              // Motion graphics show the same words: their text and list items too.
+              const r = c.text ? replaceWords(c.text, op.find, op.replace) : null;
+              if (r) {
+                c.text = r.text;
+                count += r.at.length;
+              }
+              if (c.items?.length)
+                c.items = c.items.map((it) => {
+                  const ri = replaceWords(it, op.find, op.replace);
+                  if (!ri) return it;
+                  count += ri.at.length;
+                  return ri.text;
+                });
+              continue;
+            }
             if (c.type !== 'text') continue;
             const r = replaceWords(c.text, op.find, op.replace);
             if (!r) continue;
@@ -2254,6 +2377,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       }
     }
   }
+  followTalking(p);
   p.updatedAt = (o.now ?? new Date()).toISOString();
   // Whatever happened, the result must still be a valid project.
   const checked = Project.safeParse(p);
@@ -2304,6 +2428,35 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       }
       t.clips = out;
       sortClips(t);
+    }
+  }
+}
+
+/**
+ * A cut-out of the speaker (text behind them, sweeps) is a copy of the talking video laid on top.
+ * It must sit exactly on it, so whenever the talking clip under it is flipped, zoomed, moved,
+ * masked or coloured later, the copy takes the same look (else the speaker shows twice).
+ */
+export function followTalking(p: Project): void {
+  const talking = p.tracks.filter((t) => t.kind === 'video').flatMap((t) => t.clips).filter((c): c is MediaClip => c.type === 'media' && !c.cutout && c.volume > 0);
+  for (const t of p.tracks) {
+    if (t.kind !== 'video') continue;
+    for (const c of t.clips) {
+      if (c.type !== 'media' || !c.cutout) continue;
+      const mid = c.start + Math.min(0.05, c.duration / 2);
+      const base = talking.find((x) => x.assetId === c.assetId && mid >= x.start && mid < x.start + x.duration && Math.abs(x.in + (c.start - x.start) * x.speed - c.in) < 0.08);
+      if (!base) continue;
+      const look = structuredClone(base) as Clip;
+      shiftInto(look, Math.max(0, c.start - base.start), c.duration);
+      const m = look as MediaClip;
+      c.transform = { ...m.transform };
+      c.fit = m.fit;
+      for (const k of ['flipX', 'flipY', 'mask', 'color', 'zooms', 'keys'] as const) {
+        const v = m[k];
+        const empty = v === undefined || v === false || (Array.isArray(v) && !v.length) || (k === 'keys' && !Object.keys(v as object).length);
+        if (empty) delete c[k];
+        else (c as Record<string, unknown>)[k] = structuredClone(v);
+      }
     }
   }
 }

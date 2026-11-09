@@ -5,7 +5,7 @@ import { Color, Num, Section } from './fields';
 type SetPatch = Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>;
 
 /** Which fields each piece uses (the others are hidden). */
-const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: boolean; value?: boolean }> = {
+const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: boolean; value?: boolean; background?: boolean }> = {
   headline: { sub: 'Kicker (small line above)' },
   word_pop: { icon: true },
   icon_burst: { items: 'Icons (one per line: an icon name or an emoji)' },
@@ -18,6 +18,8 @@ const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: b
   highlight: { items: 'Words to mark (one per line; default the last word)' },
   callout: {},
   light_sweep: {},
+  scene: { sub: 'Kicker (small line above)', items: 'Words in the accent italic (one per line; default the last word)', icon: true, value: true, background: true },
+  backdrop: { background: true },
 };
 
 /** The Motion tab: a motion clip's piece, words, items, icon, number and colours. */
@@ -92,6 +94,7 @@ export function MotionClipFields({ clip, set }: { clip: MotionClip; set: (p: Set
           <Color label="Accent" value={clip.accent} onCommit={(v) => set({ motion: { accent: v } })} />
           <Color label="Second accent" value={clip.accent2} onCommit={(v) => set({ motion: { accent2: v } })} />
           <Color label="Text" value={clip.color} onCommit={(v) => set({ motion: { color: v } })} />
+          {uses.background && <Color label="Background" value={clip.background ?? '#F4F1EA'} onCommit={(v) => set({ motion: { background: v } })} />}
         </div>
       </Section>
     </>

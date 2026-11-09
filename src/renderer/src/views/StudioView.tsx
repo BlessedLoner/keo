@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx, KEO_FONTS, SYSTEM_FONTS } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -20,6 +20,11 @@ import { AiVideoCreator } from '../studio/AiVideoCreator';
 import { Color, Num, Section } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import { MotionClipFields } from '../studio/MotionClipFields';
+import { PlannedShots } from '../studio/PlannedShots';
+import { PostDialog } from '../studio/PostDialog';
+import { CheckPanel, fmtAt, kindLabel, type CheckRow, type Stage } from '../studio/CheckPanel';
+import { fixIssues, issueKey, reviewTimes, timelineIssues, TIMELINE_KINDS } from '@shared/studioReview';
+import type { StudioIssue } from '@shared/ipc';
 import '../styles/studio.css';
 
 /**
@@ -61,6 +66,92 @@ export function StudioView() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [full, setFull] = useState(false);
   const [reversing, setReversing] = useState(false);
+  // The export being posted (its file), while the Post dialog is open.
+  const [posting, setPosting] = useState<string | null>(null);
+  // Keo's edit check. The timeline's own problems are worked out here on every change (instant,
+  // nothing sent); faces and edges (frames) and misheard words (the AI model) come from Keo when asked.
+  const blankCheck = { open: false, frames: 'idle' as Stage, words: 'idle' as Stage, deep: [] as StudioIssue[], misheard: [] as Array<{ heard: string; meant: string; at: number; where: 'captions' | 'transcript' }>, fixing: false, fixed: null as { labels: string[]; edits: number } | null };
+  const [check, setCheck] = useState(blankCheck);
+  const checkProject = project?.id;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setCheck(blankCheck), [checkProject]);
+  const live = useMemo(() => (project ? timelineIssues(project) : []), [project]);
+  const checkRows: CheckRow[] = (() => {
+    if (!project) return [];
+    const exists = (clip: string) => !clip || !!findClip(project, clip);
+    const rows: CheckRow[] = [
+      ...live.map((i) => ({ key: issueKey(i), kind: i.kind, clip: i.clip, at: i.at, detail: i.detail, fix: i.fix, canFix: !!i.ops?.length, source: 'live' as const })),
+      // From the last look at the frames: the timeline kinds are already live above, and gone clips are gone.
+      ...check.deep.filter((i) => !(TIMELINE_KINDS as readonly string[]).includes(i.kind) && exists(i.clip)).map((i) => ({ key: i.key, kind: i.kind, clip: i.clip, at: i.at, detail: i.detail, fix: i.fix, canFix: i.canFix, source: 'frames' as const })),
+      ...check.misheard.map((w) => ({ key: `words/${w.heard}`, kind: 'words', clip: '', at: w.at, detail: `“${w.heard}” should be “${w.meant}”${w.where === 'transcript' ? ' (in the transcript: captions made from it would show it)' : ''}`, fix: `put “${w.meant}” everywhere it shows`, canFix: true, source: 'words' as const })),
+    ];
+    return rows.sort((a, b) => a.at - b.at);
+  })();
+  const runCheck = () => {
+    if (!project) return;
+    const id = project.id;
+    setCheck((c) => ({ ...c, open: true, frames: 'running', words: 'running', fixed: null }));
+    // Both at once; each shows as soon as it is back.
+    void invoke('studio:review', { id })
+      .then((r) => setCheck((c) => ({ ...c, frames: 'done', deep: r.issues })))
+      .catch((e) => {
+        setCheck((c) => ({ ...c, frames: 'failed' }));
+        ui.error(errText(e));
+      });
+    void invoke('studio:wordCheck', { id })
+      .then((r) => setCheck((c) => ({ ...c, words: 'done', misheard: r.words })))
+      .catch(() => setCheck((c) => ({ ...c, words: 'failed' })));
+  };
+  /** Fixes one row, or every one Keo can: frames first (by place), then words, then the timeline (cuts last). */
+  const fixRows = async (only?: CheckRow) => {
+    if (!project) return;
+    const todo = (only ? [only] : checkRows).filter((r) => r.canFix);
+    if (!todo.length) return;
+    setCheck((c) => ({ ...c, fixing: true }));
+    const labels: string[] = [];
+    let edits = 0;
+    try {
+      const frameRows = todo.filter((r) => r.source === 'frames');
+      if (frameRows.length) {
+        const r = await invoke('studio:fixReview', { id: project.id, keys: frameRows.map((x) => x.key) });
+        if (r.fixed) edits++;
+        const left = new Set(r.issues.map((i) => i.key));
+        for (const x of frameRows) if (!left.has(x.key)) labels.push(`${kindLabel(x.kind)} at ${fmtAt(x.at)}`);
+        setCheck((c) => ({ ...c, deep: r.issues }));
+      }
+      const wordRows = todo.filter((r) => r.source === 'words');
+      if (wordRows.length) {
+        const fixes = check.misheard.filter((w) => wordRows.some((x) => x.key === `words/${w.heard}`)).map(({ heard, meant }) => ({ heard, meant }));
+        const r = await invoke('studio:proofread', { id: project.id, fixes });
+        if (r.inText) edits++;
+        for (const f of fixes) labels.push(`“${f.heard}” → “${f.meant}”`);
+        setCheck((c) => ({ ...c, misheard: c.misheard.filter((w) => !fixes.some((f) => f.heard === w.heard)) }));
+      }
+      const liveRows = todo.filter((r) => r.source === 'live');
+      if (liveRows.length) {
+        // The latest edit (the fixes above may have changed it): worked out again here, at once.
+        const now = await invoke('studio:get', { id: project.id });
+        const issues = timelineIssues(now).filter((i) => liveRows.some((x) => x.kind === i.kind && x.clip === i.clip));
+        const r = fixIssues(now, issues);
+        const ops = r.fixed.flatMap((i) => i.ops ?? []);
+        if (ops.length) {
+          await edit(ops);
+          edits++;
+          for (const i of r.fixed) labels.push(`${kindLabel(i.kind)} at ${fmtAt(i.at)}`);
+        }
+      }
+      setCheck((c) => ({ ...c, fixing: false, fixed: { labels, edits } }));
+      if (!labels.length) ui.toast('That one could not be fixed automatically: fix it by hand.', 'info');
+    } catch (e) {
+      setCheck((c) => ({ ...c, fixing: false, fixed: labels.length ? { labels, edits } : c.fixed }));
+      ui.error(errText(e));
+    }
+  };
+  const undoFixes = async () => {
+    const n = check.fixed?.edits ?? 0;
+    for (let i = 0; i < n; i++) await undo();
+    setCheck((c) => ({ ...c, fixed: null }));
+  };
   // Motion tracking: the clip that will follow what the user boxes on the preview.
   const [follow, setFollow] = useState<string | null>(null);
   const onPickBox = async (box: { x: number; y: number; w: number; h: number } | null) => {
@@ -703,6 +794,26 @@ export function StudioView() {
         <button className="btn icon sm ghost" onClick={() => void removeProject()} title="Delete this project">
           <Icon name="trash" size={15} />
         </button>
+        <button className={`btn sm ${checkRows.length ? 'check-has' : ''}`} disabled={projectDuration(project) === 0} onClick={() => (check.open ? setCheck((c) => ({ ...c, open: false })) : check.frames === 'idle' ? runCheck() : setCheck((c) => ({ ...c, open: true })))} title="Keo checks the edit like an editor: text on the face, stuck captions, misheard words, empty frames… and fixes what it can. The number updates live while you edit.">
+          <Icon name="shield" size={14} /> {check.frames === 'running' || check.words === 'running' ? 'Checking…' : 'Check'}
+          {checkRows.length > 0 && <span className="check-count">{checkRows.length}</span>}
+        </button>
+        <button
+          className="btn sm"
+          disabled={projectDuration(project) === 0}
+          title="YouTube, TikTok or Instagram: Keo writes the post for your latest export"
+          onClick={() =>
+            void invoke('studio:lastExport', { id: project.id }).then((r) => {
+              if (r.file) setPosting(r.file);
+              else {
+                ui.toast('Export the video first: then Post sends it to YouTube or opens TikTok and Instagram with your caption.', 'info');
+                setExporting(true);
+              }
+            }, (e) => ui.error(errText(e)))
+          }
+        >
+          <Icon name="send" size={14} /> Post
+        </button>
         <button className="btn primary sm" disabled={progress?.stage === 'sound' || progress?.stage === 'video' || progress?.stage === 'saving'} onClick={() => (projectDuration(project) === 0 ? ui.error('Add something to the timeline first.') : setExporting(true))}>
           <Icon name="download" size={14} /> Export
         </button>
@@ -724,7 +835,27 @@ export function StudioView() {
           }}
         />
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
-          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
+          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} flagged={check.open ? checkRows.map((r) => r.clip).filter(Boolean) : []} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
+          {check.open && (
+            <CheckPanel
+              rows={checkRows}
+              frames={check.frames}
+              frameCount={reviewTimes(project).length}
+              words={check.words}
+              fixing={check.fixing}
+              fixed={check.fixed}
+              onCheck={runCheck}
+              onFix={(r) => void fixRows(r)}
+              onUndo={() => void undoFixes()}
+              onGo={(i) => {
+                setPlaying(false);
+                // A moment into it, so the problem is on screen.
+                setTime(Math.min(Math.max(0, duration - 0.02), i.at + (i.kind === 'blank' ? 0.05 : 0.15)));
+                if (i.clip && findClip(project, i.clip)) setSelected(i.clip);
+              }}
+              onClose={() => setCheck((c) => ({ ...c, open: false }))}
+            />
+          )}
           <div className="studio-transport">
             <span className="studio-time tp-left">
               {fmtTime(time, project.fps)} <span className="muted">/ {fmtTime(duration, project.fps)}</span>
@@ -783,7 +914,8 @@ export function StudioView() {
             ))}
           </div>
           {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
-          {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} />}
+          {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} onPost={() => progress.file && setPosting(progress.file)} />}
+          {posting && <PostDialog projectId={project.id} file={posting} aiMade={project.assets.some((a) => a.aiMade)} onClose={() => setPosting(null)} />}
           {sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} />}
           {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
                 setPlaying(false);
@@ -904,6 +1036,13 @@ export function StudioView() {
           </button>
         </div>
       )}
+      <PlannedShots
+        project={project}
+        onGo={(t) => {
+          setPlaying(false);
+          setTime(t + 0.05);
+        }}
+      />
       <Timeline
         project={project}
         time={time}
@@ -912,6 +1051,7 @@ export function StudioView() {
         onSelect={pick}
         onSelectMany={setSelection}
         keo={keoStep}
+        issues={checkRows}
         onTime={(t) => {
           setPlaying(false);
           setTime(t);
@@ -985,7 +1125,7 @@ function NewProject({ onCreate, onFaceless, onClone, onTalk, onAiVideo, onCancel
   );
 }
 
-function ExportCard({ progress, onClose, onStop }: { progress: Progress; onClose: () => void; onStop: () => void }) {
+function ExportCard({ progress, onClose, onStop, onPost }: { progress: Progress; onClose: () => void; onStop: () => void; onPost: () => void }) {
   const running = progress.stage === 'sound' || progress.stage === 'video' || progress.stage === 'saving';
   const pct = progress.total ? Math.round(((progress.done ?? 0) / progress.total) * 100) : 0;
   return (
@@ -1015,6 +1155,11 @@ function ExportCard({ progress, onClose, onStop }: { progress: Progress; onClose
           <button className="btn sm" onClick={() => void invoke('video:openFolder', {})}>
             <Icon name="folder" size={13} /> Open the folder
           </button>
+          {progress.file && (
+            <button className="btn sm primary" onClick={onPost} title="YouTube, TikTok or Instagram: Keo writes the post">
+              <Icon name="send" size={13} /> Post
+            </button>
+          )}
         </>
       )}
       {progress.stage === 'failed' && <p className="small">{progress.error ?? 'The export failed.'}</p>}
@@ -1563,7 +1708,7 @@ function ShortcutsSheet({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </dl>
-        <p className="small muted">On the picture: click a layer to pick it, drag to move, drag the corner to resize, drag the round handle to rotate (Shift: 15° steps).</p>
+        <p className="small muted">On the picture: click a layer to pick it, drag to move, drag the corner to resize, drag the round handle to rotate (Shift: 15° steps). Moving snaps to the middle, the thirds, a safe margin and other layers; hold Alt to place freely. Check (top bar) finds text on the face, stuck captions and empty frames, and fixes them.</p>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button className="btn" onClick={onClose}>
             Close
@@ -1625,7 +1770,7 @@ function ProjectSettings({ project, onEdit }: { project: Project; onEdit: (ops: 
           <Color label="Background" value={project.background} onCommit={(v) => onEdit([{ op: 'set_project', background: v }])} />
         </div>
       </Section>
-      <BrandKit />
+      <BrandKit projectId={project.id} />
       <p className="small muted insp-tip">Click a clip on the timeline to change it. Space plays, S splits at the playhead, Delete removes the selected clip, Ctrl+Z undoes.</p>
       <p className="small muted insp-tip">Or ask Keo in the chat, for example: “Cut the silences, add captions and soft background music.”</p>
     </div>

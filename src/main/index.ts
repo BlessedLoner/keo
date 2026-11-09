@@ -73,6 +73,8 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+/** Full control minimised Keo's window (so it is restored when Keo hands the computer back). */
+let keoSteppedAside = false;
 let services: Services | null = null;
 /** Reloads a window whose page stopped, but not over and over. */
 const mainCrashes = new CrashGuard();
@@ -479,12 +481,39 @@ function windowsSpeak(text: string): Promise<void> {
 async function captureScreen(): Promise<{ png: Buffer; width: number; height: number; bounds: { x: number; y: number; width: number; height: number }; toScreen(x: number, y: number): { x: number; y: number } }> {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const size = { width: Math.round(display.size.width * display.scaleFactor), height: Math.round(display.size.height * display.scaleFactor) };
-  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size, fetchWindowIcons: false });
-  const src = sources.find((x) => x.display_id === String(display.id)) ?? (sources.length === 1 ? sources[0] : undefined);
-  if (!src || src.thumbnail.isEmpty()) throw new Error('the screen could not be captured');
-  const img = src.thumbnail;
-  const { width, height } = img.getSize();
-  return { png: img.toPNG(), width, height, bounds: display.bounds, toScreen: (x, y) => screen.dipToScreenPoint({ x, y }) };
+  const toScreen = (x: number, y: number) => screen.dipToScreenPoint({ x, y });
+  const index = screen.getAllDisplays().findIndex((d) => d.id === display.id);
+  let why = 'the screen could not be captured';
+  // Chromium's capturer first; a frame taken while a window animates can come back empty, so try again.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size, fetchWindowIcons: false });
+      const src = sources.find((x) => x.display_id === String(display.id)) ?? (sources.length === 1 ? sources[0] : index >= 0 ? sources.find((x) => x.id.startsWith(`screen:${index}:`)) : undefined);
+      if (src && !src.thumbnail.isEmpty()) {
+        const img = src.thumbnail;
+        const { width, height } = img.getSize();
+        return { png: img.toPNG(), width, height, bounds: display.bounds, toScreen };
+      }
+      why = src ? 'the screen picture came back empty' : `no picture for this display among ${sources.length}`;
+    } catch (e) {
+      why = String(e).slice(0, 160);
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  // Then Windows itself, through Keo's desktop helper (a plain copy of the screen's pixels).
+  const backend = services?.desktop.backend;
+  if (backend?.screenshot) {
+    const tl = screen.dipToScreenPoint({ x: display.bounds.x, y: display.bounds.y });
+    try {
+      const png = await backend.screenshot({ x: tl.x, y: tl.y, width: size.width, height: size.height });
+      log.warn('screen.capture_fallback', { why });
+      return { png, width: size.width, height: size.height, bounds: display.bounds, toScreen };
+    } catch (e) {
+      why = `${why}; Windows copy failed: ${String(e).slice(0, 120)}`;
+    }
+  }
+  log.warn('screen.capture_failed', { why });
+  throw new Error(`the screen could not be captured (${why})`);
 }
 
 /**
@@ -560,7 +589,7 @@ function openAccountFolder(): { profile: ProfileInfo; sessionSecrets: SecretStor
   const sessionSecrets = new SecretStore(sessionDir(root), cipher);
   if (setAsideLegacy(root)) log.info('app.data_set_aside', {});
   // The stored sign-in decides; the saved mode only matters without one.
-  let signedInAs: string | null = null;
+  let signedInAs: string | null;
   try {
     const raw = sessionSecrets.get('keo_account');
     const s = raw ? (JSON.parse(raw) as { access?: string; userId?: string }) : null;
@@ -693,6 +722,7 @@ app.whenReady().then(() => {
         documentsDir: app.getPath('documents'),
         // Smoke checks save their test videos inside the disposable profile, never in the user's Videos folder.
         videosDir: SMOKE ? path.join(profile.userData, 'smoke-videos') : app.getPath('videos'),
+        picturesDir: SMOKE ? path.join(profile.userData, 'smoke-pictures') : app.getPath('pictures'),
         homeDir: app.getPath('home'),
         openPath: async (p) => (await shell.openPath(p)) === '',
         showInFolder: (p) => shell.showItemInFolder(p),
@@ -860,6 +890,26 @@ app.whenReady().then(() => {
         hideKeoMode: () => presenceWindows?.hideKeoMode(),
         keoModeOpen: () => !!presenceWindows?.keoMode,
         mainFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+        control: {
+          showBanner: () => presenceWindows?.showControlBanner(),
+          hideBanner: () => presenceWindows?.hideControlBanner(),
+          bannerBounds: () => presenceWindows?.controlBannerBounds() ?? null,
+          bannerAside: (aside) => presenceWindows?.controlBannerAside(aside),
+          stopKey: (on) => presenceWindows?.controlStopKey(on),
+          // Keo's window gets out of the way while Keo uses the computer, and comes back after.
+          stepKeoAside: () => {
+            const w = mainWindow;
+            if (!w || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return;
+            keoSteppedAside = true;
+            w.minimize();
+          },
+          restoreKeo: () => {
+            const w = mainWindow;
+            if (!keoSteppedAside) return;
+            keoSteppedAside = false;
+            if (w && !w.isDestroyed() && w.isMinimized()) w.showInactive();
+          },
+        },
         notify: (title, body, view = 'tasks') => {
           if (!Notification.isSupported()) return;
           const n = new Notification({ title, body: body.slice(0, 240), silent: false });

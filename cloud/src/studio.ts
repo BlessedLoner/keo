@@ -19,8 +19,14 @@ const FAL_UPLOAD = 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal
 /** What may be uploaded for a request (pictures, videos, voice samples). */
 const UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'audio/wav', 'audio/mpeg'];
 
-/** A file fal.ai keeps (what an upload gives back): the only links a request may use. */
-const falFile = (v: unknown): v is string => typeof v === 'string' && /^https:\/\/([a-z0-9-]+\.)*fal\.media\/[^\s]{1,1500}$/i.test(v);
+/** A file fal.ai keeps (what an upload gives back). */
+const falStored = (v: unknown): v is string => typeof v === 'string' && /^https:\/\/([a-z0-9-]+\.)*fal\.media\/[^\s]{1,1500}$/i.test(v);
+
+/** A picture sent inside the request (when fal.ai's storage cannot take an upload): JPEG, PNG or WebP, up to about 6 MB. */
+const inlinePicture = (v: unknown): v is string => typeof v === 'string' && v.length <= 8_000_000 && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(v);
+
+/** The only files a request may use: fal.ai's own, or a picture sent inline. */
+const falFile = (v: unknown): v is string => falStored(v) || inlinePicture(v);
 
 const credits = (usd: number) => Math.max(1, Math.ceil(usd * CREDITS_PER_USD - 1e-6));
 
@@ -37,7 +43,7 @@ type Pricer = (input: Record<string, unknown>, o: { seconds?: number; fps?: numb
  */
 function talking(perSecond: number): Pricer {
   return (i, o) => {
-    if (!falFile(i.image_url) || !falFile(i.audio_url)) return 'Upload the picture and the voice first.';
+    if (!falFile(i.image_url) || !falStored(i.audio_url)) return 'Upload the picture and the voice first.';
     if (o.audioSeconds === null || o.audioSeconds === undefined) return 'Keo could not read the voice file: send it as WAV or MP3.';
     const seconds = Math.max(o.audioSeconds, Number(o.seconds) || 0);
     if (seconds > 60.5) return 'A talking clip is up to 60 seconds: split the script.';
@@ -67,7 +73,7 @@ const ENDPOINTS: Record<string, Pricer> = {
   'fal-ai/wan/v2.2-14b/animate/replace': (i, o) => {
     const rate = { '480p': 0.04, '580p': 0.06, '720p': 0.08 }[String(i.resolution)];
     if (!rate) return 'Choose 480p, 580p or 720p.';
-    if (!falFile(i.video_url) || !falFile(i.image_url)) return 'Upload the video and the picture first.';
+    if (!falStored(i.video_url) || !falFile(i.image_url)) return 'Upload the video and the picture first.';
     const seconds = Math.max(0, Number(o.seconds) || 0, o.videoSeconds ?? 0);
     const frames = Math.max(seconds * Math.max(16, Number(o.fps) || 30), o.videoFrames ?? 0);
     if (frames <= 0) return 'Say how long the video is.';
@@ -96,7 +102,7 @@ const ENDPOINTS: Record<string, Pricer> = {
   },
   // A stable clone: the character performs the video's moves; priced per second of the video.
   'fal-ai/kling-video/v2.6/pro/motion-control': (i, o) => {
-    if (!falFile(i.video_url) || !falFile(i.image_url)) return 'Upload the video and the picture first.';
+    if (!falStored(i.video_url) || !falFile(i.image_url)) return 'Upload the video and the picture first.';
     const seconds = Math.max(0, Number(o.seconds) || 0, o.videoSeconds ?? 0);
     if (seconds <= 0) return 'Say how long the video is.';
     if (seconds > 30.5) return 'A stable clone takes up to 30 seconds of video at a time.';
@@ -133,7 +139,7 @@ const ENDPOINTS: Record<string, Pricer> = {
   'fal-ai/chatterbox/text-to-speech': (i) => {
     const text = String(i.text ?? '').trim().slice(0, 5000);
     if (!text) return 'There is nothing to say.';
-    if (!falFile(i.audio_url)) return 'Upload the voice sample first.';
+    if (!falStored(i.audio_url)) return 'Upload the voice sample first.';
     const clamp = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
     return {
       input: { text, audio_url: i.audio_url, exaggeration: clamp(i.exaggeration, 0, 1, 0.35), temperature: clamp(i.temperature, 0.05, 2, 0.7), cfg: clamp(i.cfg, 0, 1, 0.5) },
@@ -276,9 +282,43 @@ export async function handleStudio(
   const fal = (url: string, init: RequestInit = {}) => deps.fetch(url, { ...init, headers: { authorization: `Key ${env.FAL_KEY}`, 'content-type': 'application/json', ...(init.headers ?? {}) } });
 
   if (req.method === 'GET' && route === '/v1/studio/credits') {
+    // The one-time trial: given the first time the account looks at its credits.
+    const trial = await giveTrial(db, a.user.id, env);
     const b = await balance(db, a.user.id, a.plan, now);
     const packs = await db.rest<Array<{ id: string; credits: number; currency: string; amount: number }>>('credit_packs?select=id,credits,currency,amount&order=credits').catch(() => []);
-    return json(200, { ...b, ready: !!env.FAL_KEY, plan: a.plan.id, packs, creditsPerUsd: CREDITS_PER_USD });
+    return json(200, { ...b, ready: !!env.FAL_KEY, plan: a.plan.id, packs, creditsPerUsd: CREDITS_PER_USD, ...(trial ? { trialGiven: trial } : {}) });
+  }
+
+  // What the credits went on: the last 100 AI requests, newest first.
+  if (req.method === 'GET' && route === '/v1/studio/history') {
+    const rows = await db.rest<Array<{ endpoint: string; credits: number; status: string; created_at: string }>>(`studio_jobs?user_id=eq.${encodeURIComponent(a.user.id)}&select=endpoint,credits,status,created_at&order=created_at.desc&limit=100`).catch(() => []);
+    return json(200, { items: rows.map((r) => ({ what: jobLabel(r.endpoint), credits: Number(r.credits) || 0, refunded: r.status === 'refunded', at: r.created_at })) });
+  }
+
+  // The user's invite code and what it earned; redeeming a friend's code (new accounts).
+  if (req.method === 'GET' && route === '/v1/studio/referral') {
+    const code = await referralCode(db, a.user.id);
+    const mine = await db.rest<Array<{ credits: number; rewarded: boolean }>>(`referrals?referrer_id=eq.${encodeURIComponent(a.user.id)}&select=credits,rewarded`).catch(() => []);
+    const referred = await db.rest<Array<{ user_id: string }>>(`referrals?user_id=eq.${encodeURIComponent(a.user.id)}&select=user_id`).catch(() => []);
+    return json(200, { code, credits: referralCredits(env), joined: mine.length, earned: mine.filter((r) => r.rewarded).reduce((t, r) => t + (Number(r.credits) || 0), 0), referred: referred.length > 0 });
+  }
+  if (req.method === 'POST' && route === '/v1/studio/referral/redeem') {
+    const body = (await req.json().catch(() => ({}))) as { code?: unknown };
+    const code = String(body.code ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{6,12}$/.test(code)) return fail(400, 'That is not an invite code: it is 8 letters and numbers.', 'bad_code', 'invalid_request_error');
+    const amount = referralCredits(env);
+    if (!amount) return fail(403, 'Invites are switched off right now.', 'referrals_off');
+    try {
+      const r = await db.rest<{ credits: number; referrer_rewarded: boolean }>('rpc/redeem_referral', { method: 'POST', body: JSON.stringify({ p_user: a.user.id, p_code: code, p_amount: amount, p_max_age_days: 14, p_monthly_limit: 20 }) });
+      return json(200, { credits: r.credits });
+    } catch (e) {
+      const why = e instanceof Error ? e.message : '';
+      if (why.includes('no_such_code')) return fail(404, 'There is no such invite code: check it with your friend.', 'no_such_code', 'invalid_request_error');
+      if (why.includes('own_code')) return fail(400, 'That is your own invite code: share it with friends instead.', 'own_code', 'invalid_request_error');
+      if (why.includes('already_referred')) return fail(409, 'This account has already used an invite code.', 'already_referred', 'invalid_request_error');
+      if (why.includes('too_old')) return fail(403, 'Invite codes are for new accounts (in their first 14 days).', 'too_old', 'invalid_request_error');
+      return fail(502, 'The invite could not be used right now. Try again in a minute.', 'referral_failed', 'api_error');
+    }
   }
 
   if (!env.FAL_KEY) return fail(503, 'Keo Studio’s AI is not switched on yet. Try again later.', 'studio_off');
@@ -292,8 +332,13 @@ export async function handleStudio(
     if (!UPLOAD_TYPES.includes(type)) return fail(400, 'Keo can upload pictures, MP4 videos and voice recordings only.', 'bad_type', 'invalid_request_error');
     const name = String(body.file_name ?? 'keo-file').replace(/[^\w.-]/g, '').slice(0, 80) || 'keo-file';
     const r = await fal(FAL_UPLOAD, { method: 'POST', body: JSON.stringify({ content_type: type, file_name: name }) });
-    const out = (await r.json().catch(() => ({}))) as { upload_url?: unknown; file_url?: unknown };
-    if (!r.ok || typeof out.upload_url !== 'string' || !falFile(out.file_url)) return fail(502, 'The upload could not be started. Try again in a minute.', 'upload_failed', 'api_error');
+    const out = (await r.json().catch(() => ({}))) as { upload_url?: unknown; file_url?: unknown; detail?: unknown };
+    if (!r.ok || typeof out.upload_url !== 'string' || !falStored(out.file_url)) {
+      // Why fal.ai said no (an empty balance, a locked account, an outage), so it can be put right.
+      const why = typeof out.detail === 'string' ? out.detail.slice(0, 200) : '';
+      console.error('studio upload refused', r.status, why);
+      return fail(502, `The AI service's storage did not take the upload (${r.status}${why ? `: ${why}` : ''}). Nothing was charged.`, 'upload_failed', 'api_error');
+    }
     return json(200, { upload_url: out.upload_url, file_url: out.file_url });
   }
 
@@ -304,8 +349,8 @@ export async function handleStudio(
     const pricer = ENDPOINTS[endpoint];
     if (!pricer) return fail(400, 'Keo Studio cannot run that.', 'unknown_endpoint', 'invalid_request_error');
     const input = body.input && typeof body.input === 'object' && !Array.isArray(body.input) ? (body.input as Record<string, unknown>) : {};
-    const video = (endpoint.includes('/animate/') || endpoint.includes('/motion-control')) && falFile(input.video_url) ? await videoOf(input.video_url, deps.fetch) : null;
-    const audio = endpoint.includes('/ai-avatar/') && falFile(input.audio_url) ? await audioOf(input.audio_url, deps.fetch) : undefined;
+    const video = (endpoint.includes('/animate/') || endpoint.includes('/motion-control')) && falStored(input.video_url) ? await videoOf(input.video_url, deps.fetch) : null;
+    const audio = endpoint.includes('/ai-avatar/') && falStored(input.audio_url) ? await audioOf(input.audio_url, deps.fetch) : undefined;
     const priced = pricer(input, { seconds: Number(body.seconds) || 0, fps: Number(body.fps) || 0, ...(video ? { videoSeconds: video.seconds, videoFrames: video.frames } : {}), ...(audio !== undefined ? { audioSeconds: audio } : {}) });
     if (typeof priced === 'string') return fail(400, priced, 'bad_request', 'invalid_request_error');
     let spent: { from_monthly: number; from_bought: number; left: number };
@@ -386,4 +431,49 @@ export async function handleStudio(
 function noCredits(plan: Plan, needed?: number, have?: number): Response {
   const what = needed ? `This needs ${needed} Studio credits${have !== undefined ? ` and you have ${have}` : ''}.` : 'You have no Studio credits left.';
   return fail(402, `${what} Buy more credits${plan.id === 'creator' ? '' : ' or move to the Creator plan'} in Settings → Keo account.`, 'not_enough_credits', 'plan_limit');
+}
+
+// ---------------------------------------------------------------- trial and referrals
+
+const trialCredits = (env: Env) => Math.max(0, Math.floor(Number(env.TRIAL_CREDITS ?? 150) || 0));
+const referralCredits = (env: Env) => Math.max(0, Math.floor(Number(env.REFERRAL_CREDITS ?? 200) || 0));
+
+/** Gives the one-time trial (the credits given now, or 0). A database without update 8: nothing. */
+async function giveTrial(db: Supabase, userId: string, env: Env): Promise<number> {
+  const amount = trialCredits(env);
+  if (!amount) return 0;
+  const rows = await db.rest<Array<{ trial_given?: boolean }>>(`studio_credits?user_id=eq.${encodeURIComponent(userId)}&select=*`).catch(() => null);
+  if (!rows) return 0;
+  const row = rows[0];
+  // A row without the column: the database has not had update 8 yet.
+  if (row && row.trial_given !== false) return 0;
+  const given = await db.rest<boolean>('rpc/give_trial', { method: 'POST', body: JSON.stringify({ p_user: userId, p_amount: amount }) }).catch(() => false);
+  return given ? amount : 0;
+}
+
+const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/** The user's invite code, made the first time (8 letters and numbers, no look-alikes). */
+async function referralCode(db: Supabase, userId: string): Promise<string | null> {
+  const have = (await db.rest<Array<{ code: string }>>(`referral_codes?user_id=eq.${encodeURIComponent(userId)}&select=code`).catch(() => null))?.[0];
+  if (have) return have.code;
+  for (let tries = 0; tries < 4; tries++) {
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    const code = Array.from(bytes, (b) => CODE_LETTERS[b % CODE_LETTERS.length]).join('');
+    const made = await db.rest('referral_codes', { method: 'POST', headers: { prefer: 'return=minimal' }, body: JSON.stringify({ user_id: userId, code }) }).then(() => true, () => false);
+    if (made) return code;
+  }
+  return null;
+}
+
+/** What an AI request was, in words (for the user's history). */
+export function jobLabel(endpoint: string): string {
+  if (endpoint.includes('image-to-video')) return endpoint.includes('veo') ? 'AI shot (Veo)' : 'AI shot (Kling)';
+  if (endpoint.includes('/animate/')) return 'Character swap';
+  if (endpoint.includes('motion-control')) return 'Clone a video';
+  if (endpoint.includes('ai-avatar')) return 'Talking character';
+  if (endpoint.includes('nano-banana')) return 'Picture / first frame';
+  if (endpoint.includes('music')) return 'AI music';
+  if (endpoint.includes('sound-effects')) return 'Sound effect';
+  if (endpoint.includes('chatterbox') || endpoint.includes('voice')) return 'Character voice';
+  return 'AI request';
 }

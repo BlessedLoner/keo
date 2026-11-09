@@ -62,7 +62,7 @@ class VoiceController {
     return this.ctx;
   }
 
-  private vad: { speechAt: number; quietSince: number; startedAt: number } | null = null;
+  private vad: { speechAt: number; quietSince: number; startedAt: number; floor?: number } | null = null;
 
   private meter(analyser: AnalyserNode, from: 'mic' | 'playback'): void {
     const buf = new Uint8Array(analyser.fftSize);
@@ -79,11 +79,16 @@ class VoiceController {
       // silence following speech, or give up after 7 s without speech.
       if (from === 'mic' && this.vad) {
         const now = performance.now();
-        if (level > 0.12) {
+        // The room's own noise (first moments, and whenever it is quieter): speech is clearly above it.
+        // A soft voice in a quiet room still counts; a fan or street noise does not.
+        this.vad.floor = this.vad.floor === undefined ? level : Math.min(level, this.vad.floor * 0.995 + level * 0.005);
+        const threshold = Math.min(0.2, Math.max(0.06, this.vad.floor * 2.5 + 0.03));
+        if (level > threshold) {
           this.vad.speechAt = now;
           this.vad.quietSince = 0;
         } else if (this.vad.speechAt && !this.vad.quietSince) this.vad.quietSince = now;
-        if (this.vad.speechAt && this.vad.quietSince && now - this.vad.quietSince > 1300) {
+        // A natural pause to think is not the end: 1.6 s of quiet is.
+        if (this.vad.speechAt && this.vad.quietSince && now - this.vad.quietSince > 1600) {
           this.vad = null;
           this.stop();
           return;
@@ -126,7 +131,7 @@ class VoiceController {
     if (this.state.recording || this.state.transcribing) return null;
     this.set({ error: null });
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }, video: false });
       this.set({ micPermission: 'granted' });
     } catch (e) {
       const denied = e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError');

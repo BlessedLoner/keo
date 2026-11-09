@@ -24,9 +24,21 @@ const appKey = (name: string) => {
   return SAME_APP[n] ?? n;
 };
 
+/**
+ * Apps Keo never operates, even in Full control: password managers (they hold every secret the
+ * user has) and Windows' own security and sign-in prompts (UAC, credentials, the lock screen).
+ */
+const PROTECTED_APPS = /^(1password|keepass(xc)?|bitwarden|lastpass|dashlane|nordpass|roboform|enpass|keeper(passwordmanager)?|protonpass|consent|credentialuihost|credentialuibroker|logonui|lockapp|securityhealthhost|securityhealthsystray|secHealthui|useraccountcontrolsettings)$/i;
+
+export function isProtectedProcess(processName: string): boolean {
+  return PROTECTED_APPS.test(normalizeProcess(processName));
+}
+
 export function isAllowedProcess(processName: string, s: Settings): boolean {
   const n = appKey(processName);
-  return s.permissions.allowedApps.some((a) => appKey(a.processName) === n);
+  if (s.permissions.allowedApps.some((a) => appKey(a.processName) === n)) return true;
+  // Full control: every app, like a person at the computer — except the protected ones.
+  return s.permissions.fullControl && n.length > 0 && !isProtectedProcess(n);
 }
 
 export function toTarget(w: RawWindow, s: Settings): WindowTarget {

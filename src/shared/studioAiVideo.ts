@@ -93,7 +93,8 @@ export function shotPlanPrompt(o: { description: string; seconds: number; model:
     '- "frame": the first frame as a photo description, complete on its own: who is in it, where, what they wear, pose, expression, light, lens and framing. Repeat the place, clothes and light in every frame, so all shots match. No text or logos in the picture.',
     '  Write it the way a cinematographer describes a real, candid photo: ordinary real-world details (people passing, a slightly messy table, real weather), natural poses mid-action, real light with its flaws. Never use words like beautiful, stunning, perfect, flawless, luxurious or glamorous: they make pictures look fake.',
     '- "motion": what moves during the shot (the people, animals and the camera), in one or two plain sentences. Real, natural, unhurried movement at normal speed (no slow motion), a handheld or gently moving camera; no cuts inside a shot.',
-    '- "seconds": the length.',
+    '- "seconds": the length. Prefer the shortest length (short shots look most real and cost least); use a longer one only when one continuous action truly needs it.',
+    'Keep each shot simple, the way real footage looks real: one or two people, slow natural movement, hands small in the frame or out of it, no readable text or logos, no fast action. Describe the camera like a cinematographer: lens (35mm, 50mm, 85mm), height, distance, and one simple move (slow push-in, gentle pan, handheld) or none.',
     '- "cast": the ids of the characters visible in the frame (from the list), [] for none.',
     'Also write "title" (short) and "style" (the look every frame shares, under 40 words).',
     o.cast.length ? `Characters (their faces come from their own pictures, so describe clothes, place and action, not their face): ${o.cast.map((c) => `${c.id} = ${c.name}${c.look ? ` (${c.look})` : ''}`).join('; ')}.` : 'There are no saved characters in this video.',
@@ -129,4 +130,30 @@ export function parseShotPlan(text: string, o: { model: ShotModelId; known: stri
   }
   if (!shots.length) return null;
   return { title: String(raw.title ?? 'AI video').trim().slice(0, 120) || 'AI video', style: String(raw.style ?? '').trim().slice(0, 600), shots };
+}
+
+/**
+ * A motion test: the same model, the shortest clip it makes, silent. It shows whether the movement
+ * works before the full shot is paid for (and it is real footage: usable if it is good).
+ */
+export const TEST_SECONDS: Record<ShotModelId, number> = { 'kling-3-pro': 3, 'veo-3.1-fast': 4 };
+
+/** What filming one shot costs (US dollars): a test, or the full shot. */
+export function filmCost(model: ShotModelId, seconds: number, audio: boolean, test = false): number {
+  const m = SHOT_MODELS[model];
+  const len = test ? TEST_SECONDS[model] : seconds;
+  const usd = len * (test ? m.perSecond.silent : audio ? m.perSecond.audio : m.perSecond.silent);
+  return Math.round(usd * 1000) / 1000;
+}
+
+/** What makes AI shots fail or look fake, said before anything is paid for. */
+export function shotRisks(s: { frame: string; motion: string; seconds: number; cast?: string[] }): string[] {
+  const t = `${s.frame} ${s.motion}`.toLowerCase();
+  const out: string[] = [];
+  if (/\b(hands?|fingers?|holding|grabs?|typing|writes|writing|playing (the )?(piano|guitar))\b/.test(t)) out.push('Hands up close often come out wrong: keep them small in the frame or out of it.');
+  if ((s.cast?.length ?? 0) > 2 || /\b(crowd|group of|many people|audience|team of)\b/.test(t)) out.push('Many faces drift and change: one or two people per shot look most real.');
+  if (/\b(sign|logo|text|written|letters|caption|title|label|screen showing)\b/.test(t)) out.push('Words in the picture come out garbled: add text in Studio instead.');
+  if (/\b(runs?|running|dances?|dancing|fights?|fighting|jumps?|jumping|spins?|flips?|chase|sprint)\b/.test(t)) out.push('Fast action warps bodies: slow, simple movement looks real.');
+  if (s.seconds > 6) out.push('Long shots drift more: two 5-second shots look more real and cost the same.');
+  return out;
 }

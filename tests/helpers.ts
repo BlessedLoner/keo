@@ -159,6 +159,24 @@ export class FakeDesktop implements DesktopBackend {
     if (this.hang) return new Promise(() => undefined);
     return { method: this.app(hwnd).act(rid, action, text) };
   }
+  /** Full control: the element under any point, and the focused element (tests set them). */
+  pointElement: { name?: string; aid?: string; type?: string; password?: boolean } = {};
+  focused: { name?: string; aid?: string; type?: string; password?: boolean } = { type: 'Edit', name: 'Text editor' };
+  async windowAt(x: number, y: number) {
+    this.calls.push({ op: 'window_at', args: [x, y] });
+    const w = this.windows.find((v) => !v.minimized && x >= v.x && y >= v.y && x < v.x + v.width && y < v.y + v.height);
+    return w ? { ...w } : null;
+  }
+  async elementAt(x: number, y: number) {
+    this.calls.push({ op: 'element_at', args: [x, y] });
+    return { ...this.pointElement };
+  }
+  async focusedElement() {
+    return { ...this.focused };
+  }
+  clickAt(hwnd: string, x: number, y: number, button: 'left' | 'right' | 'middle', double: boolean) {
+    return this.act('click_at', [hwnd, x, y, button, double], () => undefined);
+  }
   /** Simulated user activity: ms since last input, and the foreground window. */
   idleMs = 60_000;
   foreground: string | null = null;

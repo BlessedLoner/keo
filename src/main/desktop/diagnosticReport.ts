@@ -32,7 +32,7 @@ export function diagnosticReport(d: DiagnosticInput): string {
     `Windows ${os.release()} ${os.arch()} · ${os.cpus().length} CPUs · ${Math.round(os.totalmem() / 2 ** 30)} GB RAM · locale ${Intl.DateTimeFormat().resolvedOptions().locale}`,
     `Displays: ${d.displays.map((x) => `${x.width}×${x.height} @${Math.round(x.scale * 100)}%${x.primary ? ' (main)' : ''}`).join(', ') || 'unknown'}`,
     `Provider: ${s.activeProvider ?? 'none'} · keys stored for: ${d.providersWithKeys.join(', ') || 'none'}`,
-    `Access: observation ${on(p.observationEnabled)}, control ${on(p.desktopControlEnabled)}, launch ${on(p.launchEnabled)}, ${p.allowedApps.length} allowed apps, screenshots to ${(Object.keys(p.visionExport) as Array<keyof typeof p.visionExport>).filter((k) => p.visionExport[k]).join('/') || 'nobody'}`,
+    `Access: observation ${on(p.observationEnabled)}, control ${on(p.desktopControlEnabled)}, launch ${on(p.launchEnabled)}, full control ${on(p.fullControl)}, ${p.allowedApps.length} allowed apps, screenshots to ${(Object.keys(p.visionExport) as Array<keyof typeof p.visionExport>).filter((k) => p.visionExport[k]).join('/') || 'nobody'}`,
     `Approvals: ${s.autonomy.level}`,
     `Voice: wake ${on(s.wake.enabled)} (${d.speech.wakeStatus}), engine ${s.wake.engine} → ${d.speech.kind ?? 'not started'}${d.speech.fallbackReason ? ` (fallback: ${d.speech.fallbackReason})` : ''}, commands via ${s.wake.commandRecognizer}`,
   ];

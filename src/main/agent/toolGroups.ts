@@ -8,7 +8,7 @@ import type { ToolSpec } from '../providers/types';
  * few turns, and on request: the model can load any group with tools__load in the same turn.
  * Any registered tool still runs if the model calls it by name.
  */
-export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects'] as const;
+export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number] | 'core';
 
 /** Which group a tool belongs to (by its name: "desktop__click" → desktop). */
@@ -16,6 +16,7 @@ export function groupOf(toolName: string): ToolGroup {
   const [ns, op] = toolName.split('__');
   switch (ns) {
     case 'desktop':
+    case 'computer':
     case 'apps':
     case 'vision':
     case 'access':
@@ -51,6 +52,11 @@ export function groupOf(toolName: string): ToolGroup {
     case 'project':
     case 'workflows':
       return 'projects';
+    case 'telegram':
+    case 'notion':
+    case 'slack':
+    case 'drive':
+      return 'connected';
     default:
       // memory, jobs, reminders, briefing, system, task, plan and anything new: always there.
       return 'core';
@@ -59,7 +65,7 @@ export function groupOf(toolName: string): ToolGroup {
 
 /** What each group is for (shown to the model so it can load one it needs). */
 export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
-  desktop: 'open apps, work in windows, click, type, draw, allowed apps',
+  desktop: 'open apps, work in windows, click, type, draw, allowed apps; Full control (any app, like a person)',
   screen: 'look at the whole screen, point things out on it',
   whatsapp: 'WhatsApp chats, messages, files, live chats',
   email: 'read, search, draft, send and reply to email',
@@ -72,6 +78,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
+  connected: 'connected apps: Telegram (the user’s bot), Notion pages, Slack channels, Google Drive (files Keo saves there)',
 };
 
 /** Words that bring a group in (the newest user messages, lower-cased). */
@@ -90,6 +97,7 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   video: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?)\b/,
   studio: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?|voice-?over|green ?screen|transition|thumbnail)\b/,
   projects: /\b(projects?|workflows?|workspace|milestone|backlog)\b/,
+  connected: /\b(telegram|notion|slack|google drive|my drive|to drive|in drive)\b/,
 };
 
 export interface GroupHints {
@@ -119,6 +127,8 @@ export function chooseGroups(h: GroupHints): Set<ToolGroup> {
   }
   for (const g of h.recent) out.add(g);
   if (h.pendingTool) out.add(groupOf(h.pendingTool));
+  // Working on the computer means looking at the screen too (Full control works from screen pictures).
+  if (out.has('desktop')) out.add('screen');
   // Making a file usually means looking at one too; pictures are often files.
   if (out.has('create') || out.has('pictures') || out.has('video')) out.add('files');
   return out;

@@ -65,6 +65,14 @@ export interface BrowserContextRaw {
   method: string;
 }
 
+/** What lies under a point (or has focus): enough to tell a Send button or a password box. */
+export interface PointElement {
+  name?: string;
+  aid?: string;
+  type?: string;
+  password?: boolean;
+}
+
 /** Native desktop operations. Every method acts on exactly one explicit hwnd. */
 export interface DesktopBackend {
   support(): { supported: boolean; reason: string | null };
@@ -110,6 +118,17 @@ export interface DesktopBackend {
   wheel(hwnd: string, x: number, y: number, notches: number): Promise<void>;
   keys(hwnd: string, mods: number[], key: number): Promise<void>;
   click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void>;
+  /** Full control: the top-level window under a point in physical screen pixels (null over the bare desktop). */
+  windowAt?(x: number, y: number): Promise<RawWindow | null>;
+  /** Full control: a click at a physical screen point on that window (which must be in front and under the point). */
+  clickAt?(hwnd: string, x: number, y: number, button: 'left' | 'right' | 'middle', double: boolean): Promise<void>;
+  /** Full control: mouse wheel at a point on that window (positive = up), without bringing it to the front. */
+  wheelAt?(hwnd: string, x: number, y: number, notches: number): Promise<void>;
+  /** Full control: the accessibility element under a point, or with the keyboard focus (best effort; empty when unknown). */
+  elementAt?(x: number, y: number): Promise<PointElement>;
+  focusedElement?(): Promise<PointElement>;
+  /** A PNG of a screen area in physical pixels (Windows' own copy; the fallback when Chromium's capturer fails). */
+  screenshot?(r: { x: number; y: number; width: number; height: number }): Promise<Buffer>;
   /** Class names of the window's child windows with counts (diagnostics; no titles or content). */
   childClasses?(hwnd: string): Promise<Record<string, number>>;
   /** Which accessibility reader a window uses (diagnostics). */
@@ -487,6 +506,50 @@ export class Win32Backend implements DesktopBackend {
 
   async click(hwnd: string, x: number, y: number, button: 'left' | 'right', double: boolean): Promise<void> {
     await this.call('click', { hwnd, x, y, button, double });
+  }
+
+  async windowAt(x: number, y: number): Promise<RawWindow | null> {
+    const r = await this.call<RawWindow | null>('window_at', { x: Math.round(x), y: Math.round(y) });
+    return r ? normalize(r) : null;
+  }
+
+  async clickAt(hwnd: string, x: number, y: number, button: 'left' | 'right' | 'middle', double: boolean): Promise<void> {
+    const args = { hwnd, x: Math.round(x), y: Math.round(y) };
+    if (button !== 'left' || double) {
+      await this.call('click_at', { ...args, button, double });
+      return;
+    }
+    await this.orDirect(
+      () => this.call('click_at', { ...args, button, double }),
+      () => this.call('post_click_screen', args),
+    );
+  }
+
+  async wheelAt(hwnd: string, x: number, y: number, notches: number): Promise<void> {
+    await this.call('wheel_at', { hwnd, x: Math.round(x), y: Math.round(y), notches });
+  }
+
+  async elementAt(x: number, y: number): Promise<PointElement> {
+    try {
+      return (await this.call<PointElement>('element_at', { x: Math.round(x), y: Math.round(y) }, 8000)) ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  async screenshot(r: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
+    const out = await this.call<{ png: string }>('screenshot', { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }, 20000);
+    const png = Buffer.from(String(out?.png ?? ''), 'base64');
+    if (png.length < 100) throw new Error('empty picture');
+    return png;
+  }
+
+  async focusedElement(): Promise<PointElement> {
+    try {
+      return (await this.call<PointElement>('focused_element', {}, 8000)) ?? {};
+    } catch {
+      return {};
+    }
   }
 
   dispose(): void {

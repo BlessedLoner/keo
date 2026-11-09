@@ -18,6 +18,7 @@ class World {
   fal: Array<{ url: string; auth: string | null; body?: unknown }> = [];
   falResult = 200;
   falStatus = 'COMPLETED';
+  uploadRefused = false;
 
   fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(input);
@@ -85,6 +86,7 @@ class World {
     }
     if (url.host === 'rest.fal.ai' || url.host === 'queue.fal.run') {
       this.fal.push({ url: input, auth: headers.get('authorization'), ...(init.body ? { body } : {}) });
+      if (url.host === 'rest.fal.ai' && this.uploadRefused) return j(403, { detail: 'User is locked. Reason: Exhausted balance.' });
       if (url.host === 'rest.fal.ai') return j(200, { upload_url: 'https://upload.fal.media/x', file_url: 'https://v3.fal.media/files/a.jpg' });
       if (url.pathname.endsWith('/status')) return j(200, { status: this.falStatus });
       if (url.pathname.endsWith('/cancel')) return j(202, { status: 'CANCELLATION_REQUESTED' });
@@ -185,6 +187,21 @@ describe('Studio credits (Keo’s fal.ai key, a fake fal.ai: nothing is paid)', 
     expect(r.body.file_url).toBe('https://v3.fal.media/files/a.jpg');
     expect(w.fal[0]!.auth).toBe('Key fal-secret');
     expect((await call('POST', '/v1/studio/upload', { content_type: 'application/x-msdownload', file_name: 'a.exe' })).status).toBe(400);
+  });
+
+  it('a refused upload says why; a picture may then go inside the request, a video or voice may not', async () => {
+    w.uploadRefused = true;
+    const r = await call('POST', '/v1/studio/upload', { content_type: 'image/jpeg', file_name: 'a.jpg' });
+    expect(r.status).toBe(502);
+    expect(r.body.error.message).toContain('403: User is locked. Reason: Exhausted balance.');
+    w.uploadRefused = false;
+    const inline = 'data:image/jpeg;base64,' + btoa('a picture');
+    const ok = await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/nano-banana-pro/edit', input: { prompt: 'p', image_urls: [inline, 'https://v3.fal.media/files/a.jpg'] } });
+    expect(ok.status).toBe(200);
+    expect((w.fal.at(-1)!.body as { image_urls: string[] }).image_urls[0]).toBe(inline);
+    // Not a picture, or not inline-able: refused before anything is paid.
+    expect((await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/nano-banana-pro/edit', input: { prompt: 'p', image_urls: ['data:text/html;base64,PGI+'] } })).status).toBe(400);
+    expect((await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/wan/v2.2-14b/animate/replace', input: { video_url: 'data:image/jpeg;base64,AAAA', image_url: inline } })).status).toBe(400);
   });
 
   it('without Keo’s fal.ai key, Studio AI says it is off', async () => {
@@ -329,5 +346,84 @@ describe('Problem reports through Keo Cloud', () => {
     for (let i = 0; i < 9; i++) await call('POST', '/v1/report', { message: `again ${i}`, report: 'x' });
     expect((await call('POST', '/v1/report', { message: 'one too many', report: 'x' })).status).toBe(429);
     expect((await call('POST', '/v1/report', { message: 'x', report: 'x' }, 'bad-token')).status).toBe(401);
+  });
+});
+
+describe('Trial credits, history and referrals', () => {
+  /** The database functions of update 8, in memory, over the World above. */
+  const withUpdate8 = () => {
+    const trial = new Set<string>();
+    const codes = new Map<string, string>([['u-bob', 'BOBCODE2']]);
+    const refs: Array<{ user_id: string; referrer_id: string; credits: number; rewarded: boolean }> = [];
+    const base = w.fetch;
+    w.fetch = async (input: string, init: RequestInit = {}) => {
+      const url = new URL(input);
+      const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      const j = (s: number, b: unknown) => new Response(JSON.stringify(b), { status: s });
+      const eq = (k: string) => (url.searchParams.get(k) ?? '').replace('eq.', '');
+      if (url.host === 'db.test' && url.pathname === '/rest/v1/studio_credits') {
+        const r = w.credits.get(eq('user_id'));
+        return j(200, r ? [{ ...r, trial_given: trial.has(eq('user_id')) }] : []);
+      }
+      if (url.host === 'db.test' && url.pathname === '/rest/v1/rpc/give_trial') {
+        const u = String(body.p_user);
+        if (trial.has(u)) return j(200, false);
+        trial.add(u);
+        const r = w.credits.get(u) ?? { month: '', monthly_used: 0, bought: 0 };
+        r.bought += Number(body.p_amount);
+        w.credits.set(u, r);
+        return j(200, true);
+      }
+      if (url.host === 'db.test' && url.pathname === '/rest/v1/referral_codes') {
+        if (init.method === 'POST') {
+          codes.set(String(body.user_id), String(body.code));
+          return new Response(null, { status: 201 });
+        }
+        const c = codes.get(eq('user_id'));
+        return j(200, c ? [{ code: c }] : []);
+      }
+      if (url.host === 'db.test' && url.pathname === '/rest/v1/referrals') return j(200, refs.filter((r) => (url.searchParams.has('referrer_id') ? r.referrer_id === eq('referrer_id') : r.user_id === eq('user_id'))));
+      if (url.host === 'db.test' && url.pathname === '/rest/v1/rpc/redeem_referral') {
+        const ref = [...codes.entries()].find(([, c]) => c === body.p_code)?.[0];
+        if (!ref) return j(400, { message: 'no_such_code' });
+        if (ref === body.p_user) return j(400, { message: 'own_code' });
+        if (refs.some((r) => r.user_id === body.p_user)) return j(400, { message: 'already_referred' });
+        refs.push({ user_id: String(body.p_user), referrer_id: ref, credits: Number(body.p_amount), rewarded: true });
+        return j(200, { credits: body.p_amount, referrer_rewarded: true });
+      }
+      return base(input, init);
+    };
+    return { codes, refs };
+  };
+
+  it('a new account gets its trial credits once', async () => {
+    withUpdate8();
+    const first = await call('GET', '/v1/studio/credits');
+    expect(first.body).toMatchObject({ trialGiven: 150, bought: 150, total: 1650 });
+    const again = await call('GET', '/v1/studio/credits');
+    expect(again.body.trialGiven).toBeUndefined();
+    expect(again.body.bought).toBe(150);
+  });
+
+  it('shows what the credits went on, in words', async () => {
+    await call('POST', '/v1/studio/run', kling);
+    // The fake lists jobs by request: the history reads the user's own.
+    const base = w.fetch;
+    w.fetch = async (input: string, init: RequestInit = {}) => (new URL(input).pathname === '/rest/v1/studio_jobs' && !init.method ? new Response(JSON.stringify([...w.jobs.values()].map((x) => ({ ...x, created_at: '2026-11-03T12:00:00Z' })))) : base(input, init));
+    const r = await call('GET', '/v1/studio/history');
+    expect(r.body.items[0]).toMatchObject({ what: 'AI shot (Kling)', credits: 112, refunded: false });
+  });
+
+  it('gives an invite code, and a friend’s code gives credits once (not your own)', async () => {
+    const { refs } = withUpdate8();
+    const mine = await call('GET', '/v1/studio/referral');
+    expect(mine.body.code).toMatch(/^[A-Z2-9]{8}$/);
+    expect(mine.body).toMatchObject({ credits: 200, joined: 0, earned: 0, referred: false });
+    expect((await call('POST', '/v1/studio/referral/redeem', { code: mine.body.code })).body.error.code).toBe('own_code');
+    expect((await call('POST', '/v1/studio/referral/redeem', { code: 'NOPE1234' })).status).toBe(404);
+    const ok = await call('POST', '/v1/studio/referral/redeem', { code: 'bobcode2' });
+    expect(ok.body).toEqual({ credits: 200 });
+    expect(refs).toHaveLength(1);
+    expect((await call('POST', '/v1/studio/referral/redeem', { code: 'BOBCODE2' })).status).toBe(409);
   });
 });

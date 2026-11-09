@@ -29,7 +29,8 @@ describe('Windows app discovery', () => {
   it('lists Start-menu and Microsoft Store apps, skipping uninstallers, links and unsafe ids', async () => {
     const d = new AppDiscovery(async () => START_APPS);
     const apps = await d.list();
-    expect(apps.map((a) => a.name)).toEqual(['Calculator', 'Google Chrome', 'Notepad', 'Visual Studio Code', 'WhatsApp', 'WhatsApp Web']);
+    // Windows' built-in apps (System32 / File Explorer) are always added; the rest come from the Start list.
+    expect(apps.filter((a) => !a.appId.startsWith('{1AC14E77') && a.appId !== 'Microsoft.Windows.Explorer').map((a) => a.name)).toEqual(['Calculator', 'Google Chrome', 'Notepad', 'Visual Studio Code', 'WhatsApp', 'WhatsApp Web']);
     expect(apps.find((a) => a.name === 'Calculator')?.kind).toBe('store');
     expect(apps.find((a) => a.name === 'Google Chrome')?.kind).toBe('desktop');
     expect(validAppId('x" & calc.exe & "')).toBe(false);

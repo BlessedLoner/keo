@@ -125,8 +125,23 @@ export class KeoAccount {
   }
 
   /** The Studio credits left (Keo Studio's AI is paid with them), and the credit packs. */
-  async studioCredits(): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number; ready: boolean; plan: string }> {
+  async studioCredits(): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number; ready: boolean; plan: string; trialGiven?: number }> {
     return this.gateway('/studio/credits');
+  }
+
+  /** What the Studio credits went on (the last 100 AI requests). */
+  async studioHistory(): Promise<{ items: Array<{ what: string; credits: number; refunded: boolean; at: string }> }> {
+    return this.gateway('/studio/history');
+  }
+
+  /** The user's invite code and what it earned. */
+  async referral(): Promise<{ code: string | null; credits: number; joined: number; earned: number; referred: boolean }> {
+    return this.gateway('/studio/referral');
+  }
+
+  /** A friend's invite code (new accounts): both get Studio credits. */
+  async redeemReferral(code: string): Promise<{ credits: number }> {
+    return this.gateway('/studio/referral/redeem', { code });
   }
 
   signedIn(): boolean {
@@ -272,13 +287,13 @@ export class KeoAccount {
     await this.refreshing;
   }
 
-  private async gateway<T>(path: string): Promise<T> {
+  private async gateway<T>(path: string, body?: unknown): Promise<T> {
     await this.fresh();
     const t = this.token();
     if (!t) throw new AccountError('Sign in to your Keo account.');
     let r: Response;
     try {
-      r = await this.f(`${this.cfg.gatewayUrl}${path}`, { headers: { authorization: `Bearer ${t}` } });
+      r = await this.f(`${this.cfg.gatewayUrl}${path}`, body === undefined ? { headers: { authorization: `Bearer ${t}` } } : { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     } catch {
       throw new AccountError('Keo could not reach Keo Cloud. Check your internet connection.');
     }
@@ -348,8 +363,8 @@ export class KeoAccount {
   }
 
   /** A WAV recording turned into text. */
-  async transcribe(wav: Uint8Array, language: string, signal: AbortSignal): Promise<string> {
-    const r = await this.post('/transcribe', { audio: Buffer.from(wav).toString('base64'), format: 'wav', language }, signal);
+  async transcribe(wav: Uint8Array, language: string, signal: AbortSignal, hint = ''): Promise<string> {
+    const r = await this.post('/transcribe', { audio: Buffer.from(wav).toString('base64'), format: 'wav', language, ...(hint ? { hint } : {}) }, signal);
     const j = (await r.json().catch(() => ({}))) as { text?: string };
     return j.text ?? '';
   }

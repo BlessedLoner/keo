@@ -53,6 +53,12 @@ const NEEDS_CHOICE = new Set(['ambiguous_app', 'ambiguous_profile', 'profile_not
 
 const CONTEXT_CAPS = new Set(['web.search', 'web.fetch_page', 'browser.read_page', 'desktop.inspect_window', 'desktop.list_windows', 'whatsapp.read_chat', 'memory.search', 'project.list', 'project.get', 'vision.get_observation', 'system.datetime']);
 const MAX_TOOL_RESULT_CHARS = 20000;
+
+/** Voice-first mode: the user mostly listens, so replies are made to be heard. */
+const VOICE_FIRST = `
+
+# Voice-first mode
+The user talks to Keo and listens to the replies. Answer in one to three short, natural spoken sentences, the way a person would say it: no lists, tables, headings, links, emoji or code unless the user asks to see them. Lead with the answer. For anything long (a plan, a list of results, a draft), say the gist in a sentence and offer to show the details on screen. Numbers, times and names in words that read well aloud. Still use tools exactly as usual, and still ask before anything that sends, posts, buys or deletes.`;
 /** Rounds that only update the checklist do not use up the tool-round limit, up to this many. */
 const FREE_PLAN_ROUNDS = 3;
 /** Studio's step list on screen is progress only, like the checklist: its rounds are free too, up to this many. */
@@ -490,6 +496,8 @@ export class AgentService {
       let usageOut = 0;
       // Long multi-step work: repeated calls, actions not shown to work, and where this turn's own messages begin.
       const repeats = new RepeatGuard();
+      // Web lookups this turn: a quick question gets a few good sources, deep research (when asked) more.
+      const lookups = { budget: lookupBudget(latest?.content ?? ''), searches: 0, pages: 0 };
       const problems = new Map<string, Problem>();
       const turnStart = messages.length;
       let freeRounds = 0;
@@ -527,7 +535,7 @@ export class AgentService {
             result = await provider.stream(
               {
                 model,
-                system: SYSTEM_PROMPT + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
+                system: SYSTEM_PROMPT + (settings.voice.voiceFirst ? VOICE_FIRST : '') + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
                 messages,
                 tools,
                 maxOutputTokens: maxOut,
@@ -697,6 +705,18 @@ export class AgentService {
             this.emit({ type: 'tool_activity', conversationId, messageId: assistant.id, activity });
             results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'blocked_repeat', error: repeated }), isError: true });
             continue;
+          }
+          // Enough looking: answer with the sources already read (nothing runs, nothing is shown).
+          const looked = this.registry.resolveToolName(call.name);
+          if (looked === 'web.search' || looked === 'web.fetch_page') {
+            const over = looked === 'web.search' ? lookups.searches >= lookups.budget.searches : lookups.pages >= lookups.budget.pages;
+            if (over) {
+              this.log.info('agent.lookup_budget', { tool: looked, searches: lookups.searches, pages: lookups.pages }, correlationId);
+              results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'enough', note: `You have looked at enough for this request (${lookups.searches} searches, ${lookups.pages} pages). Answer now from what you already found and cite those sources; say plainly if something stayed unclear. For more, the user can ask for deep research.` }), isError: false });
+              continue;
+            }
+            if (looked === 'web.search') lookups.searches++;
+            else lookups.pages++;
           }
           turnGroups.add(groupOf(call.name));
           const r = await this.handleToolCall(call, {
@@ -1019,3 +1039,12 @@ export function deriveTitle(text: string): string {
 }
 
 export { CapabilityError };
+
+/**
+ * How much web looking one reply may do. A normal question: a few focused searches and the best
+ * pages (answers stay quick and cheap). When the user asks for deep or thorough research, a lot more.
+ */
+export function lookupBudget(text: string): { searches: number; pages: number } {
+  const deep = /\b(deep|thorough(ly)?|in[- ]depth|detailed|comprehensive|exhaustive|full)\s+(research|dive|search|report|look|analysis|comparison)\b|\bresearch (everything|thoroughly|in depth|deeply)\b|\bdig deep\b/i.test(text);
+  return deep ? { searches: 12, pages: 20 } : { searches: 4, pages: 6 };
+}

@@ -50,7 +50,16 @@ export class AppDiscovery {
 
   async list(force = false): Promise<DiscoveredApp[]> {
     if (!force && this.cache && this.now() - this.cache.at < 10 * 60_000) return this.cache.apps;
-    const raw = await this.source();
+    // One read at a time (a second request waits for the first instead of starting another).
+    this.loading ??= this.read().finally(() => (this.loading = null));
+    return this.loading;
+  }
+
+  private loading: Promise<DiscoveredApp[]> | null = null;
+
+  private async read(): Promise<DiscoveredApp[]> {
+    // When Windows does not answer, the built-in apps still open (and the next request asks again).
+    const raw = await this.source().catch(() => [] as StartApp[]);
     const seen = new Set<string>();
     const apps: DiscoveredApp[] = [];
     for (const a of raw) {
@@ -63,8 +72,12 @@ export class AppDiscovery {
       const publisher = typeof a.publisher === 'string' && a.publisher.trim() && !/^ms-resource:/i.test(a.publisher) ? a.publisher.trim().slice(0, 80) : null;
       apps.push({ name, appId, kind: appId.includes('!') ? 'store' : 'desktop', publisher });
     }
+    // Windows' own built-in apps are always there, even when the Start list leaves them out.
+    const names = new Set(apps.map((a) => normApp(a.name)));
+    for (const b of BUILT_IN_APPS) if (!names.has(normApp(b.name))) apps.push({ ...b, publisher: 'Microsoft' });
     apps.sort((x, y) => x.name.localeCompare(y.name));
-    this.cache = { at: this.now(), apps };
+    // An empty or tiny list means Windows did not answer properly: not remembered, so the next request asks again.
+    if (raw.length >= 5) this.cache = { at: this.now(), apps };
     return apps;
   }
 
@@ -116,8 +129,34 @@ export class AppDiscovery {
   }
 }
 
-/** Windows' list of startable apps, read with the built-in Get-StartApps cmdlet (names and app ids only). */
-export function listStartApps(): Promise<StartApp[]> {
+/** Windows' built-in programs (System32), by the app ids the Start menu itself uses. */
+const SYSTEM32 = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}';
+const BUILT_IN_APPS: Array<Omit<DiscoveredApp, 'publisher'>> = [
+  { name: 'Notepad', appId: `${SYSTEM32}\\notepad.exe`, kind: 'desktop' },
+  { name: 'Calculator', appId: `${SYSTEM32}\\calc.exe`, kind: 'desktop' },
+  { name: 'Paint', appId: `${SYSTEM32}\\mspaint.exe`, kind: 'desktop' },
+  { name: 'Command Prompt', appId: `${SYSTEM32}\\cmd.exe`, kind: 'desktop' },
+  { name: 'Control Panel', appId: `${SYSTEM32}\\control.exe`, kind: 'desktop' },
+  { name: 'Snipping Tool', appId: `${SYSTEM32}\\SnippingTool.exe`, kind: 'desktop' },
+  { name: 'Task Manager', appId: `${SYSTEM32}\\Taskmgr.exe`, kind: 'desktop' },
+  { name: 'File Explorer', appId: 'Microsoft.Windows.Explorer', kind: 'desktop' },
+];
+
+/**
+ * Windows' list of startable apps (Get-StartApps), with Store publishers. Reading the publishers
+ * can be slow; when that read fails or runs long, the plain list (a second or two) is used.
+ */
+export async function listStartApps(): Promise<StartApp[]> {
+  try {
+    const full = await readStartApps(true, 30_000);
+    if (full.length >= 5) return full;
+  } catch {
+    /* fall back to the plain list */
+  }
+  return readStartApps(false, 30_000);
+}
+
+function readStartApps(withPublishers: boolean, timeoutMs: number): Promise<StartApp[]> {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') return resolve([]);
     const exe = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -125,12 +164,18 @@ export function listStartApps(): Promise<StartApp[]> {
     const script = [
       '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
       '$pub = @{}',
-      "Get-AppxPackage | ForEach-Object { $d = $null; try { $m = [xml](Get-Content -LiteralPath (Join-Path $_.InstallLocation 'AppxManifest.xml') -ErrorAction Stop); $d = [string]$m.Package.Properties.PublisherDisplayName } catch {}; if ((-not $d -or $d -like 'ms-resource:*') -and $_.Publisher -match 'O=([^,]+)') { $d = $Matches[1] }; $pub[$_.PackageFamilyName] = $d }",
+      withPublishers ? "Get-AppxPackage | ForEach-Object { $d = $null; try { $m = [xml](Get-Content -LiteralPath (Join-Path $_.InstallLocation 'AppxManifest.xml') -ErrorAction Stop); $d = [string]$m.Package.Properties.PublisherDisplayName } catch {}; if ((-not $d -or $d -like 'ms-resource:*') -and $_.Publisher -match 'O=([^,]+)') { $d = $Matches[1] }; $pub[$_.PackageFamilyName] = $d }" : '',
       "Get-StartApps | ForEach-Object { $pfn = ($_.AppID -split '!')[0]; [pscustomobject]@{ Name = $_.Name; AppID = $_.AppID; Publisher = $pub[$pfn] } } | ConvertTo-Json -Compress",
-    ].join('; ');
+    ]
+      .filter(Boolean)
+      .join('; ');
     const p = spawn(exe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
-    const timer = setTimeout(() => p.kill(), 45_000);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      p.kill();
+    }, timeoutMs);
     p.stdout.setEncoding('utf8');
     p.stdout.on('data', (d: string) => {
       if (out.length < 4_000_000) out += d;
@@ -141,6 +186,11 @@ export function listStartApps(): Promise<StartApp[]> {
     });
     p.on('close', () => {
       clearTimeout(timer);
+      // Cut off, or nothing at all: that is not “no apps installed”.
+      if (timedOut || !out.trim()) {
+        reject(new Error(timedOut ? 'Windows took too long to list the apps.' : 'Windows did not return the list of apps.'));
+        return;
+      }
       try {
         type Row = { Name?: string; AppID?: string; Publisher?: string | null };
         const j = JSON.parse(out.replace(/^\ufeff/, '') || '[]') as Row[] | Row;

@@ -9,7 +9,7 @@ import { Color, Section } from './fields';
  * The user's brand kit: what Keo uses on every video (end card name and line, colour, fonts,
  * favourite style). Keo can fill it in too when the user tells it; here they see and change it.
  */
-export function BrandKit() {
+export function BrandKit({ projectId }: { projectId?: string } = {}) {
   const ui = useUi();
   const [brand, setBrand] = useState<Brand>({});
   const [draft, setDraft] = useState<Brand>({});
@@ -51,6 +51,26 @@ export function BrandKit() {
   return (
     <Section title="Brand kit">
       <p className="small muted">Keo uses these on every video (end cards, colours, fonts), so it does not have to ask. Kept on this PC.</p>
+      {projectId && (
+        <button
+          className="btn sm"
+          title="Keo looks at this video's titles, captions and end card and offers to keep that style"
+          onClick={() =>
+            void (async () => {
+              try {
+                const r = await invoke('studio:learnStyle', { id: projectId });
+                if (!r.found.length) return ui.toast('Nothing new to learn: your brand kit already matches this video.', 'info');
+                const ok = await ui.confirm({ title: 'Keep this style for every video?', body: `Keo noticed: ${r.found.join(' · ')}. Saved to your brand kit, it is used by end cards, templates and edits from now on.`, confirmLabel: 'Save my style' });
+                if (ok) await save(r.patch as BrandPatch);
+              } catch (e) {
+                ui.error(errText(e));
+              }
+            })()
+          }
+        >
+          Learn my style from this video
+        </button>
+      )}
       {text('name', 'Name', 'Your name or brand', 60)}
       {text('handle', 'Handle', '@yourname', 60)}
       {text('endText', 'End card line', 'Follow for more', 120)}

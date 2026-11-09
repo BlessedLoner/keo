@@ -5,6 +5,9 @@ import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { Autopilot } from './Autopilot';
+import { MotionEdit } from './MotionEdit';
+import { ViralTemplates } from './ViralTemplates';
+import { CharacterPictures } from './CharacterPictures';
 import { Templates } from './Templates';
 import { Looks } from './Looks';
 import { EMOJI, TEXT_STYLES, Tile } from './Bin';
@@ -62,6 +65,7 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
   ],
   filters: [['looks', 'Looks']],
   smart: [
+    ['viral', 'Viral templates'],
     ['looks', 'Keo looks'],
     ['templates', 'Templates'],
     ['tools', 'One-click tools'],
@@ -118,7 +122,7 @@ export function Library({
 }) {
   const ui = useUi();
   const [tab, setTab] = useState<Tab>('media');
-  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'looks' });
+  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'viral' });
   const sel = selected ? (findClip(project, selected)?.clip ?? null) : null;
   const now = cat[tab];
   const run = (ops: EditOp[]) => void onEdit(ops).catch((e: unknown) => ui.error(errText(e)));
@@ -266,8 +270,30 @@ export function Library({
               </div>
             </>
           )}
+          {tab === 'smart' && now === 'viral' && <ViralTemplates project={project} />}
+          {tab === 'smart' && now === 'viral' && (
+            <div className="studio-card">
+              <div className="studio-pane-head">
+                <span>Screen showcase</span>
+              </div>
+              <p className="small muted">Got screenshots of your app? Keo turns them into a launch-style promo: each screen flies in as a 3D glass panel, a headline names the feature, your clips float beside their screens, and Keo’s voice explains it.</p>
+              <button className="btn primary sm" disabled={!project.assets.some((a) => a.kind === 'image')} title={project.assets.some((a) => a.kind === 'image') ? 'Keo looks at your screenshots, writes the script and builds it in a new project' : 'Import your screenshots first'} onClick={() => onAskKeo('Make a screen showcase from the screenshots in this project: look at each one, write a short punchy headline and one or two spoken sentences for it, float my AI video and clone clips beside their matching screens, and use your voice.')}>
+                <Icon name="sparkle" size={13} /> Make a screen showcase
+              </button>
+            </div>
+          )}
+          {tab === 'smart' && now === 'viral' && (
+            <div className="studio-card">
+              <div className="studio-pane-head">
+                <span>My character in my pictures</span>
+              </div>
+              <p className="small muted">Swap the person in your saved pictures for your character: same pose, background and light, as real photos. Keep the clothes or give a new outfit per picture.</p>
+              <CharacterPictures project={project} onAskKeo={onAskKeo} />
+            </div>
+          )}
           {tab === 'smart' && now === 'looks' && <Looks onAskKeo={onAskKeo} />}
           {tab === 'smart' && now === 'templates' && <Templates project={project} onAskKeo={onAskKeo} />}
+          {tab === 'smart' && now === 'tools' && <MotionEdit project={project} />}
           {tab === 'smart' && now === 'tools' && <Autopilot project={project} time={time} onEdit={onEdit} onBusy={() => undefined} />}
         </div>
       </div>

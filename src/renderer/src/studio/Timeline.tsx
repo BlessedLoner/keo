@@ -39,6 +39,7 @@ export function Timeline({
   onSelect,
   onSelectMany,
   keo,
+  issues = [],
   onTime,
   onEdit,
   zoom,
@@ -55,6 +56,8 @@ export function Timeline({
   onSelectMany?: (ids: string[]) => void;
   /** Keo's step being shown: its place (and range) on the timeline and what it does. */
   keo?: { at: number; end?: number | undefined; label: string; kind: string } | null;
+  /** What Keo's edit check found: a red tick on the ruler at each (click to go there). */
+  issues?: Array<{ key: string; at: number; detail: string }>;
   onTime: (t: number) => void;
   onEdit: (ops: EditOp[]) => void;
   zoom: number;
@@ -254,6 +257,18 @@ export function Timeline({
           }}
         >
           <div className="tl-label-gap" />
+          {issues.map((x) => (
+            <span
+              key={x.key}
+              className="tl-issue"
+              style={{ left: LABEL_W + x.at * pps }}
+              title={`${x.detail} (${x.at.toFixed(1)} s) — click to go there`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                onTime(x.at + 0.15);
+              }}
+            />
+          ))}
           {project.markers.map((m, i) => (
             <span
               key={`m${i}-${m.t}`}

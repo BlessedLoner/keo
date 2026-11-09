@@ -1,4 +1,5 @@
 import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
+import { drawTilted, glassSheen } from './perspective';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
 import { chromaKey } from './chroma';
@@ -176,6 +177,9 @@ function croppedBox(c: MediaClip, fw: number, fh: number, W: number, H: number):
   return { dw, dh, vw: dw, vh: dh, inDevice: false, ox: ((cr.left - cr.right) / 2) * b.dw, oy: ((cr.top - cr.bottom) / 2) * b.dh };
 }
 
+/** A flat card drawn before it is turned in 3D (reused between frames). */
+let cardCanvas: OffscreenCanvas | null = null;
+
 /** A copy of what is drawn so far (an adjustment layer changes it). */
 let under: OffscreenCanvas | null = null;
 
@@ -306,72 +310,114 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
   if (ox || oy) ctx.translate(ox, oy);
   clipReveal(ctx, m, vw * 1.2, vh * 1.2);
   ctx.imageSmoothingQuality = 'high';
-  let radius = 0;
-  if (c.frame) radius = drawDevice(ctx, c.frame, vw, vh, H);
-  if (c.mask && !inDevice) radius = c.mask.shape === 'circle' ? vw / 2 : Math.min(vw, vh) * c.mask.radius;
-  const shaped = inDevice || !!c.mask;
-  if (c.shadow > 0 && !inDevice) {
-    // A drop shadow of the layer's shape.
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = (c.shadow / 40) * H * 0.05;
-    ctx.shadowOffsetY = (c.shadow / 160) * H * 0.05;
-    ctx.fillStyle = '#000000';
-    ctx.beginPath();
-    ctx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
-    ctx.fill();
-    ctx.restore();
-  }
-  if (shaped) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
-    ctx.clip();
-  }
-  const g = c.color;
-  const filters: string[] = [];
-  if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
-  if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
-  if (filters.length) ctx.filter = filters.join(' ');
-  const paint = (cx: CanvasRenderingContext2D) => {
-    // Mirrored: only the picture flips (its frame, mask and shadow stay put).
-    if (c.flipX || c.flipY) {
+  // A turn in 3D or a glass finish: the card is drawn flat first, then turned in perspective.
+  const tilted = !inDevice && (Math.abs(m.tiltX) > 0.05 || Math.abs(m.tiltY) > 0.05 || !!c.glass);
+  const drawCard = (cx: CanvasRenderingContext2D, withShadow: boolean) => {
+    let radius = 0;
+    if (c.frame) radius = drawDevice(cx, c.frame, vw, vh, H);
+    if (c.mask && !inDevice) radius = c.mask.shape === 'circle' ? vw / 2 : Math.min(vw, vh) * c.mask.radius;
+    const shaped = inDevice || !!c.mask;
+    if (withShadow && c.shadow > 0 && !inDevice) {
+      // A drop shadow of the layer's shape.
       cx.save();
-      cx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
+      cx.shadowColor = 'rgba(0,0,0,0.55)';
+      cx.shadowBlur = (c.shadow / 40) * H * 0.05;
+      cx.shadowOffsetY = (c.shadow / 160) * H * 0.05;
+      cx.fillStyle = '#000000';
+      cx.beginPath();
+      cx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
+      cx.fill();
+      cx.restore();
     }
-    if (c.crop) cx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, -dw / 2, -dh / 2, dw, dh);
-    else cx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
-    if (c.flipX || c.flipY) cx.restore();
+    if (shaped) {
+      cx.save();
+      cx.beginPath();
+      cx.roundRect(-vw / 2, -vh / 2, vw, vh, radius);
+      cx.clip();
+    }
+    const g = c.color;
+    const filters: string[] = [];
+    if (g && (g.exposure || g.contrast || g.saturation)) filters.push(`brightness(${(1 + g.exposure * 0.6).toFixed(3)}) contrast(${(1 + g.contrast * 0.5).toFixed(3)}) saturate(${(1 + g.saturation).toFixed(3)})`);
+    if (m.blur > 0.3) filters.push(`blur(${m.blur.toFixed(1)}px)`);
+    if (filters.length) cx.filter = filters.join(' ');
+    const paint = (cx: CanvasRenderingContext2D) => {
+      // Mirrored: only the picture flips (its frame, mask and shadow stay put).
+      if (c.flipX || c.flipY) {
+        cx.save();
+        cx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
+      }
+      if (c.crop) cx.drawImage(src, sx * kx, sy * kx, w * kx, h * kx, -dw / 2, -dh / 2, dw, dh);
+      else cx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+      if (c.flipX || c.flipY) cx.restore();
+    };
+    paint(cx);
+    cx.filter = 'none';
+    if (c.effects) drawEffects(cx, c.effects, src, paint, -(shaped ? vw : dw) / 2, -(shaped ? vh : dh) / 2, shaped ? vw : dw, shaped ? vh : dh, t, H);
+    if (m.flash > 0) {
+      cx.save();
+      cx.globalAlpha = clamp(m.flash) * m.opacity;
+      cx.fillStyle = '#FFFFFF';
+      cx.fillRect(-vw / 2, -vh / 2, vw, vh);
+      cx.restore();
+    }
+    if (g?.temperature) {
+      // Warmer or cooler: an orange or blue wash, blended softly into the picture.
+      cx.save();
+      cx.globalCompositeOperation = 'soft-light';
+      cx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * m.opacity * fade);
+      cx.fillStyle = g.temperature > 0 ? '#FF8A1E' : '#1E7BFF';
+      cx.fillRect(-dw / 2, -dh / 2, dw, dh);
+      cx.restore();
+    }
+    if (g?.vignette) {
+      const r = Math.hypot(dw, dh) / 2;
+      const v = cx.createRadialGradient(0, 0, r * 0.45, 0, 0, r);
+      v.addColorStop(0, 'rgba(0,0,0,0)');
+      v.addColorStop(1, `rgba(0,0,0,${(g.vignette * 0.85).toFixed(3)})`);
+      cx.fillStyle = v;
+      cx.fillRect(-dw / 2, -dh / 2, dw, dh);
+    }
+    if (c.glass && !inDevice) glassSheen(cx, vw, vh, radius, m.tiltY);
+    if (shaped) cx.restore();
+    if (c.frame === 'phone') drawNotch(cx, vw, vh);
   };
-  paint(ctx);
-  ctx.filter = 'none';
-  if (c.effects) drawEffects(ctx, c.effects, src, paint, -(shaped ? vw : dw) / 2, -(shaped ? vh : dh) / 2, shaped ? vw : dw, shaped ? vh : dh, t, H);
-  if (m.flash > 0) {
-    ctx.save();
-    ctx.globalAlpha = clamp(m.flash) * m.opacity;
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(-vw / 2, -vh / 2, vw, vh);
-    ctx.restore();
+  if (!tilted) drawCard(ctx, true);
+  else {
+    const cw = Math.ceil(vw) + 2;
+    const ch = Math.ceil(vh) + 2;
+    if (!cardCanvas || cardCanvas.width < cw || cardCanvas.height < ch) cardCanvas = new OffscreenCanvas(Math.max(cw, cardCanvas?.width ?? 0), Math.max(ch, cardCanvas?.height ?? 0));
+    const cc = cardCanvas.getContext('2d')!;
+    cc.setTransform(1, 0, 0, 1, 0, 0);
+    cc.clearRect(0, 0, cardCanvas.width, cardCanvas.height);
+    cc.globalAlpha = 1;
+    cc.translate(cw / 2, ch / 2);
+    drawCard(cc as unknown as CanvasRenderingContext2D, false);
+    // A soft shadow and glow under the floating panel.
+    // Glass: a coloured light behind the panel, as if it glowed onto the backdrop.
+    if (c.glass) {
+      ctx.save();
+      ctx.filter = `blur(${Math.round(H * 0.06)}px)`;
+      ctx.globalAlpha *= 0.55;
+      const glow = ctx.createLinearGradient(-vw / 2, 0, vw / 2, 0);
+      glow.addColorStop(0, 'rgba(139,107,255,0.9)');
+      glow.addColorStop(1, 'rgba(95,212,255,0.8)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.roundRect(-vw * 0.56, -vh * 0.5, vw * 1.12, vh * 1.08, Math.min(vw, vh) * 0.25);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (c.shadow > 0 || c.glass) {
+      ctx.save();
+      ctx.filter = `blur(${Math.round(H * 0.03)}px)`;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.beginPath();
+      ctx.roundRect(-vw * 0.42, -vh * 0.4 + vh * 0.06, vw * 0.84, vh * 0.84, Math.min(vw, vh) * 0.06);
+      ctx.fill();
+      ctx.restore();
+    }
+    drawTilted(ctx, cardCanvas, cw, ch, m.tiltX, m.tiltY);
   }
-  if (g?.temperature) {
-    // Warmer or cooler: an orange or blue wash, blended softly into the picture.
-    ctx.save();
-    ctx.globalCompositeOperation = 'soft-light';
-    ctx.globalAlpha = clamp(Math.abs(g.temperature) * 0.55 * m.opacity * fade);
-    ctx.fillStyle = g.temperature > 0 ? '#FF8A1E' : '#1E7BFF';
-    ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
-    ctx.restore();
-  }
-  if (g?.vignette) {
-    const r = Math.hypot(dw, dh) / 2;
-    const v = ctx.createRadialGradient(0, 0, r * 0.45, 0, 0, r);
-    v.addColorStop(0, 'rgba(0,0,0,0)');
-    v.addColorStop(1, `rgba(0,0,0,${(g.vignette * 0.85).toFixed(3)})`);
-    ctx.fillStyle = v;
-    ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
-  }
-  if (shaped) ctx.restore();
-  if (c.frame === 'phone') drawNotch(ctx, vw, vh);
   ctx.restore();
 }
 

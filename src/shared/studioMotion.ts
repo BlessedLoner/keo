@@ -21,6 +21,9 @@ export interface MotionState {
   flash: number;
   /** Lines and outlines drawing themselves on (0..1). */
   draw: number;
+  /** A turn in 3D (degrees): the top going away (x) and the right side going away (y). */
+  tiltX: number;
+  tiltY: number;
 }
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -112,6 +115,8 @@ export function motionAt(c: MediaClip | TextClip | ShapeClip | MotionClip, t: nu
     reveal: null,
     flash: 0,
     draw: 1,
+    tiltX: val('tiltX', 0),
+    tiltY: val('tiltY', 0),
   };
   if (c.type !== 'text') {
     if (c.enter && rt < c.enter.seconds) applyMotion(m, c.enter, clamp(rt / c.enter.seconds), true, H);

@@ -95,7 +95,7 @@ const call = async (method: string, path: string, body?: unknown, token = 'tok-o
   const r = await handle(new Request(`https://keo.test${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }), e, { fetch: w.fetch, waitUntil: () => undefined, now: () => NOW });
   const text = await r.text();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test answers are read loosely
-  let parsed: Record<string, any> = {};
+  let parsed: Record<string, any>;
   try {
     parsed = JSON.parse(text);
   } catch {

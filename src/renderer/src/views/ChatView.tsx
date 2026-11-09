@@ -400,13 +400,7 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming }: { m: Messa
         {m.meta.model && <span className="muted small">· {m.meta.providerId === 'test' ? 'test provider' : m.meta.model}{m.meta.route && ` (${m.meta.route})`}</span>}
       </div>
       {plan && plan.steps.length > 0 && <PlanChecklist plan={plan} />}
-      {tools.length > 0 && (
-        <div className="tool-list">
-          {tools.map((t) => (
-            <ToolCard key={t.callId} t={t} conversationId={m.conversationId} />
-          ))}
-        </div>
-      )}
+      {tools.length > 0 && <ToolList tools={tools} conversationId={m.conversationId} />}
       <div className="bubble">
         {text ? <Markdown text={text} /> : isStreaming ? <span className="muted small">…</span> : null}
         {isStreaming && <span className="caret" aria-hidden="true" />}
@@ -506,6 +500,47 @@ function mergeTools(stored: ToolActivity[], live: ToolActivity[]): ToolActivity[
     else out.push(l);
   }
   return out;
+}
+
+/** Looking things up on the web: read only, so a page that would not open changes nothing (Keo uses other sources). */
+const LOOKUP = new Set(['web.search', 'web.fetch_page', 'web.read', 'agents.research']);
+const isLookup = (t: ToolActivity) => LOOKUP.has(t.capabilityId) && !t.taskId;
+
+/**
+ * A reply's actions. Web lookups that failed are not shown one by one (they changed nothing and
+ * Keo moved on to other sources): one quiet line says how many, and can show them. A long run of
+ * lookups folds into one line. Every other action always shows, failed or not.
+ */
+function ToolList({ tools, conversationId }: { tools: ToolActivity[]; conversationId: string }) {
+  const [showFailed, setShowFailed] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const failed = tools.filter((t) => isLookup(t) && t.outcome === 'failed');
+  const shown = tools.filter((t) => showFailed || !(isLookup(t) && t.outcome === 'failed'));
+  const lookups = shown.filter(isLookup);
+  // Many lookups: the last two show, the rest fold into "Looked at N sources".
+  const fold = !showAll && lookups.length > 4;
+  const folded = fold ? new Set(lookups.slice(0, lookups.length - 2).map((t) => t.callId)) : new Set<string>();
+  const pages = lookups.filter((t) => t.capabilityId !== 'web.search').length;
+  const n = pages || lookups.length;
+  return (
+    <div className="tool-list">
+      {fold && (
+        <button className="tool-fold" onClick={() => setShowAll(true)} title="Show every search and page">
+          <Icon name="search" size={13} /> Looked at {n} source{n === 1 ? '' : 's'} ({lookups.length} steps) · show all
+        </button>
+      )}
+      {shown
+        .filter((t) => !folded.has(t.callId))
+        .map((t) => (
+          <ToolCard key={t.callId} t={t} conversationId={conversationId} />
+        ))}
+      {failed.length > 0 && !showFailed && (
+        <button className="tool-fold quiet" onClick={() => setShowFailed(true)} title="Show the pages that could not be opened">
+          {failed.length} page{failed.length === 1 ? '' : 's'} could not be opened · Keo used other sources
+        </button>
+      )}
+    </div>
+  );
 }
 
 const OUTCOME: Record<ToolActivity['outcome'], { label: string; cls: string }> = {
@@ -904,7 +939,7 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
   const pressStart = useRef(0);
   const v = app.voice;
   const s = app.settings.data;
-  const sttReady = s?.voice.sttProvider === 'openai' && s.voice.audioExportConsent;
+  const sttReady = (s?.voice.sttProvider === 'openai' || s?.voice.sttProvider === 'keo') && !!s?.voice.audioExportConsent;
 
   useEffect(() => {
     ref.current?.focus();
@@ -936,8 +971,7 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
 
   const startRec = async () => {
     if (!sttReady) {
-      ui.toast('Voice input needs a speech-to-text provider and your consent in Settings → Voice.');
-      return;
+      if (!(await turnOnListening(ui))) return;
     }
     voice.stopSpeaking();
     pressStart.current = Date.now();
@@ -1100,4 +1134,27 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
       </div>
     </div>
   );
+}
+
+/**
+ * One tap to turn on accurate listening (Keo Cloud with a Keo account, else OpenAI with the user's
+ * key): the recording goes there to be turned into text and is not kept.
+ */
+export async function turnOnListening(ui: { confirm(o: { title: string; body: React.ReactNode; confirmLabel?: string }): Promise<boolean>; toast(t: string): void }): Promise<boolean> {
+  const [acct, keys] = await Promise.all([invoke('account:status', {}).catch(() => null), invoke('providers:list', {}).catch(() => null)]);
+  const signedIn = !!(acct as { signedIn?: boolean } | null)?.signedIn;
+  const openai = !!(keys as Array<{ id: string; hasApiKey?: boolean }> | null)?.find?.((p) => p.id === 'openai')?.hasApiKey;
+  if (!signedIn && !openai) {
+    ui.toast('Accurate listening needs your Keo account (or an OpenAI key). Sign in under Settings → Providers.');
+    return false;
+  }
+  const where = signedIn ? 'Keo Cloud' : 'OpenAI';
+  const ok = await ui.confirm({
+    title: 'Turn on accurate listening?',
+    body: `Keo understands speech much better — any accent — when your recording is turned into text by ${where}. The recording is not kept${signedIn ? ' and counts toward your daily voice minutes' : ''}.`,
+    confirmLabel: 'Turn on',
+  });
+  if (!ok) return false;
+  await invoke('settings:update', { patch: { voice: { sttProvider: signedIn ? 'keo' : 'openai', audioExportConsent: true } } });
+  return true;
 }

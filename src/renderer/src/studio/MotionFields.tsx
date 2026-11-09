@@ -6,6 +6,7 @@ import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
 import { Color, Num, Section } from './fields';
+import { MotionEdit } from './MotionEdit';
 
 /**
  * Studio inspector parts for motion design: position with keyframes, entrances, exits and loops,
@@ -472,6 +473,7 @@ export function ElementsPanel({ project, time, onEdit }: { project: Project; tim
           <Icon name="plus" size={13} /> Add at playhead
         </button>
       </div>
+      <MotionEdit project={project} />
       <MotionGraphics time={time} onEdit={onEdit} />
     </div>
   );
@@ -491,6 +493,8 @@ const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp,
   highlight: { text: 'The part that matters most', items: ['matters', 'most'] },
   callout: { text: 'Look here' },
   light_sweep: { text: 'Next' },
+  scene: { text: 'This changes everything', items: ['everything'], sub: 'The big idea', background: '#F4F1EA', color: '#111111' },
+  backdrop: { text: 'Keo', background: '#0D0C12' },
 };
 
 /** Motion graphics: ready-made animated pieces added at the playhead (Keo can sync them to the speech). */
@@ -498,7 +502,7 @@ function MotionGraphics({ time, onEdit }: { time: number; onEdit: (ops: EditOp[]
   const ui = useUi();
   const add = async (piece: (typeof MOTION_PIECES)[number]) => {
     try {
-      await onEdit([{ op: 'add_motion', piece, place: 'auto', start: time, duration: piece === 'light_sweep' ? 1.2 : 4, ...MOTION_SAMPLE[piece] }]);
+      await onEdit([{ op: 'add_motion', piece, place: 'auto', start: time, duration: piece === 'light_sweep' ? 1.2 : piece === 'scene' ? 2.5 : 4, ...MOTION_SAMPLE[piece] }]);
     } catch (e) {
       ui.error(e instanceof Error ? e.message : String(e));
     }

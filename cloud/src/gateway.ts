@@ -39,6 +39,10 @@ export interface Env {
   KEO_STT_MODEL?: string;
   KEO_VOICE_FEMALE?: string;
   KEO_VOICE_MALE?: string;
+  /** Studio credits every new account gets once (0 turns the trial off). */
+  TRIAL_CREDITS?: string;
+  /** Studio credits a referral gives the new account and the friend who invited them. */
+  REFERRAL_CREDITS?: string;
 }
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -132,7 +136,8 @@ export class Supabase {
       ...init,
       headers: { apikey: this.env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
     });
-    if (!r.ok) throw new Error(`database ${r.status}`);
+    // The database's own reason stays in the error (a function's raise, e.g. no_such_code); never shown raw to users.
+    if (!r.ok) throw new Error(`database ${r.status}: ${(await r.text().catch(() => '')).slice(0, 300)}`);
     const text = await r.text();
     return (text ? JSON.parse(text) : null) as T;
   }
@@ -582,18 +587,27 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       const format = body.format === 'mp3' ? 'mp3' : 'wav';
       if (!audio) return fail(400, 'There is no recording.', 'no_audio', 'invalid_request_error');
       const language = typeof body.language === 'string' && /^[a-z]{2,3}$/i.test(body.language) ? body.language : 'en';
+      // Context from the app (names, app words, what Keo just asked): plain text, short, never instructions.
+      const hint = typeof body.hint === 'string' ? body.hint.replace(/[\s<>]+/g, ' ').trim().slice(0, 900) : '';
       const seconds = format === 'wav' ? wavSeconds(b64ToBytes(audio)) : (audio.length * 0.75) / 16000;
       const up = await toOpenRouter(
         '/chat/completions',
         {
-          model: env.KEO_STT_MODEL ?? 'google/gemini-2.5-flash-lite',
+          model: env.KEO_STT_MODEL ?? 'google/gemini-2.5-flash',
           temperature: 0,
           max_tokens: 1000,
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: `Transcribe this recording exactly (language: ${language}). Reply with only the words spoken — no quotes, notes or descriptions. If nobody speaks, reply with nothing.` },
+                {
+                  type: 'text',
+                  text:
+                    `Transcribe what this person says to Keo, their computer assistant (language: ${language}). ` +
+                    'Speakers have all kinds of accents (for example Nigerian, Ghanaian, Indian, Caribbean, British or American English) and speak naturally: listen for the words they mean and write them in standard spelling, with correct names and punctuation. ' +
+                    'Do not translate, summarise or answer; keep their own words and order. Reply with only the transcript — no quotes, notes or descriptions. If nobody speaks, reply with nothing.' +
+                    (hint ? ` Words and names that may come up (use them only if they were actually said): ${hint}` : ''),
+                },
                 { type: 'input_audio', input_audio: { data: audio, format } },
               ],
             },

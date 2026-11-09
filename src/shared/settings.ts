@@ -151,6 +151,13 @@ export const SettingsSchema = z
         observationEnabled: z.boolean().default(false),
         desktopControlEnabled: z.boolean().default(false),
         launchEnabled: z.boolean().default(false),
+        /**
+         * Full control (opt-in, off by default): Keo may use any app like a person at the computer —
+         * see the screen, click, type, press keys, scroll and drag anywhere — without an allowed-apps
+         * list. Password managers and Windows security prompts stay off limits; sending, paying,
+         * deleting and posting still ask; a banner with Stop (and Esc) shows while Keo is in control.
+         */
+        fullControl: z.boolean().default(false),
         /** Send search queries to Brave Search with the user's key. */
         webSearchEnabled: z.boolean().default(false),
         /** Download public web pages as text (private networks always refused). */
@@ -173,7 +180,7 @@ export const SettingsSchema = z
     voice: z
       .object({
         sttProvider: z.enum(['none', 'keo', 'openai']).default('none'),
-        sttModel: modelId.default('gpt-4o-mini-transcribe'),
+        sttModel: modelId.default('gpt-4o-transcribe'),
         ttsEngine: z.enum(['none', 'system', 'keo', 'openai']).default('system'),
         /** Keo's own voice (with a Keo account): a female or a male voice. */
         keoVoice: z.enum(['female', 'male']).default('female'),
@@ -181,6 +188,8 @@ export const SettingsSchema = z
         openaiTtsModel: modelId.default('gpt-4o-mini-tts'),
         openaiTtsVoice: z.string().regex(/^[a-z]{2,20}$/).default('alloy'),
         speakResponses: z.boolean().default(false),
+        /** Voice-first: replies are short and made to be heard (spoken replies and Keo mode on wake come with it). */
+        voiceFirst: z.boolean().default(false),
         /** Explicit consent to send recorded audio to the configured STT provider. */
         audioExportConsent: z.boolean().default(false),
       })

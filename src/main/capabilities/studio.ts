@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { motionCloneCost, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
+import { CHARACTER_PICTURE_USD, REAL_PICTURE_USD, motionCloneCost, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
 import path from 'node:path';
 import { z } from 'zod';
 import { EditOp, FORMATS, isAV, LOOKS, MOTION_ICONS, MOTION_PIECE_INFO, MOTION_PIECES, MOTION_PLACES, projectDuration, TextStyle, timelineWords, type FormatId, type LookId, type Project, type StudioAsk } from '../../shared/studio';
@@ -7,8 +7,12 @@ import { rhythm, type Recipe as LearnedRecipe } from '../../shared/studioRecipe'
 import { PresetError, presetOps, PRESETS, type PresetId } from '../../shared/studioPresets';
 import { STYLES, type StyleId } from '../../shared/studioStyles';
 import { MOMENTS, type MomentId } from '../../shared/studioMoments';
+import { BEAT_INFO, MotionBeatInput } from '../../shared/studioMotionEdit';
 import { BrandPatch } from '../../shared/studioBrand';
 import { CHARACTER_VOICES, CharacterPatch } from '../../shared/studioCharacters';
+import { VIRAL_TEMPLATES, type ViralId } from '../../shared/studioViral';
+import { ShowcaseScene } from '../../shared/studioShowcase';
+import { CharacterPictureJob } from '../../shared/studioCharacterPictures';
 import { AI_VIDEO_MODELS, estimateCost, modelSeconds, swapCost, type AiVideoModelId, type SwapResolution } from '../studio/aiVideo';
 import { Storyboard } from '../../shared/studioFaceless';
 import { captionLines } from '../studio/captions';
@@ -40,7 +44,15 @@ export interface StudioToolDeps {
   userTexts: (conversationId: string) => string[];
   /** Where captions' sound goes (null: no speech-to-text available). */
   captionSource: () => { destination: string; exact: boolean } | null;
-  transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean; skipped?: number }>;
+  transcribe: (projectId: string, o: { force: boolean; signal: AbortSignal }) => Promise<{ words: number; exact: boolean; skipped?: number; fixed?: Array<{ heard: string; meant: string }> }>;
+  /** A premium walkthrough from app screenshots (3D glass screens, narration), in a new project. */
+  showcase?: (o: { projectId?: string; title?: string; scenes?: ShowcaseScene[]; voice?: 'female' | 'male' | 'none'; look?: 'dark' | 'light'; captions?: boolean; remake?: boolean }, signal: AbortSignal) => Promise<{ projectId: string; duration: number; scenes: number; remade: boolean }>;
+  /** Posting: Keo writes the post; a finished export goes to the user's YouTube channel. */
+  writePost?: (projectId: string, platform: 'youtube' | 'tiktok' | 'instagram', signal: AbortSignal) => Promise<{ title: string; caption: string; hashtags: string[] }>;
+  youTube?: () => { connected: boolean; email: string | null; canConnect: boolean };
+  postYouTube?: (o: { projectId?: string; file: string; title: string; description: string; tags: string[]; privacy: 'private' | 'unlisted' | 'public'; forKids: boolean }, signal: AbortSignal) => Promise<{ url: string; privacy: string }>;
+  /** Misheard words put right (the fixes given, or the user's AI model proofreads the transcript). */
+  proofread?: (projectId: string, o: { fixes?: Array<{ heard: string; meant: string }>; names?: string[] }, signal: AbortSignal) => Promise<{ fixed: Array<{ heard: string; meant: string }>; inText: number }>;
   /** Files Keo made itself (its own output folders): usable as media without the user naming them. */
   keoMade: (file: string) => boolean;
   /** Why a faceless video cannot be made now (null: it can). */
@@ -49,13 +61,14 @@ export interface StudioToolDeps {
   reframe: (projectId: string, clipId: string, o: { every?: number; signal: AbortSignal }) => Promise<{ points: number; axis: 'x' | 'y' }>;
   readAloud: (projectId: string, clipId: string, voice: string, signal: AbortSignal) => Promise<{ clip: string; seconds: number }>;
   faceless: (board: Storyboard, o: { projectId?: string; signal: AbortSignal }) => Promise<{ projectId: string; duration: number; scenes: number; pictures: number; voice: string }>;
-  captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean; skipped?: number }>;
+  captions: (projectId: string, o: { maxWords: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal }) => Promise<{ lines: Array<{ text: string; start: number; end: number }>; words: number; exact: boolean; skipped?: number; fixed?: Array<{ heard: string; meant: string }> }>;
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** One shot made again (a new take) or made longer (from its last frame). */
   shotAgain?: (projectId: string, o: { clip: string; mode: 'redo' | 'extend'; prompt?: string; model?: AiVideoModelId; seconds?: number }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
+  characterPictures?: (projectId: string, o: { character: string; pictures: CharacterPictureJob[]; quality?: 'real' | 'draft'; again?: boolean }, signal: AbortSignal) => Promise<{ made: Array<{ from: string; assetId: string; file: string; cached: boolean; clip: string | null }>; failed: Array<{ from: string; error: string }>; costUsd: number; folder: string }>;
   swapCharacter: (projectId: string, o: { clip: string; character?: string; picture?: string; resolution: SwapResolution; smooth?: boolean; mode?: 'stable' | 'quick' }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** A talking character (lip-synced): its plan and price, and making it. */
   talkPlan?: (projectId: string, o: { character: string; text?: string; audioAsset?: string; scene?: string; quality: TalkQuality }) => { seconds: number; picture: boolean; costUsd: number; voice: string; destination: string };
@@ -113,9 +126,9 @@ const MOTION_HELP =
   `. Icons: ${MOTION_ICONS.join(', ')} (or an emoji). place: ${MOTION_PLACES.join('|')} — auto keeps it off the speaker (above the head on tall videos, beside it on wide ones). Sync to the speech with say: the words exactly as they are said (from studio__transcript); the clip then starts on them, its words come in as they are said, and it stays a moment after (start and duration are then optional). For pills, lists and icons give sayItems (the words said for each item) so each item comes in on its own words. Change one later with set {clip, text, motion: {piece, sub, items, icon, value, unit, accent, accent2, color, font, beats}} or set {clip, transform}. Motion for a talking video or podcast: transcribe first (studio__transcript), then put one motion clip on each key moment (about one every 6–12 seconds, never two at once, none in the first second): a headline when a topic starts, a counter when a number is said, a list or pills when steps or points are listed, a word pop on a punchline, a quote card on a strong line, a lower third with the speaker's name near the start, a light sweep between parts. Keep each text short (what is said, not the whole sentence) and use the brand colours when there is a brand kit. Then look at a few frames (studio__look) to check nothing covers the face.`;
 
 const OPS_HELP =
-  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts; use them between different shots, never on the jump cuts inside one talking clip, and not on every cut), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), cutout true (AI background removal: only the people show, no green screen needed; put it on a track above a new background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), eq {low, mid, high: -12..12 dB} or voice|warm|bass|bright|phone (equalizer; null flat), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; text style.curve -100..100 (text along an arc, like a badge or a rainbow); group {clips} / ungroup {clip} (grouped clips move and are deleted together: move or delete one of them); keyframes also take curve [x1, y1, x2, y2] (a custom cubic-bezier ease into that keyframe); add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; replace_words {find, replace} (a word or phrase, any case, in every text and caption, e.g. a name speech-to-text misheard); set_project {name, width, height, fps, background, loudness}. ' +
+  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts; use them between different shots, never on the jump cuts inside one talking clip, and not on every cut), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), cutout true (AI background removal: only the people show, no green screen needed; put it on a track above a new background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), eq {low, mid, high: -12..12 dB} or voice|warm|bass|bright|phone (equalizer; null flat), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; text style.curve -100..100 (text along an arc, like a badge or a rainbow); group {clips} / ungroup {clip} (grouped clips move and are deleted together: move or delete one of them); keyframes also take curve [x1, y1, x2, y2] (a custom cubic-bezier ease into that keyframe); add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; replace_words {find, replace} (a word or phrase, any case, in every text and caption, e.g. a name speech-to-text misheard); set_project {name, width, height, fps, background, loudness}; set_all {trackName (or track, or several names), only text|motion|media|audio|shape, then any set fields except clip and text} (the same change to EVERY clip on those tracks in one op: all captions bigger, yellow or higher up — set_all {trackName "Captions", style {sizePct 5.5, color "#FFD400"}, transform {y 0.8}}; every headline another colour — set_all {trackName "Showcase titles", motion {accent "#FF4D8D"}}; all screens flat — set_all {trackName "Screens", glass false, keys {tiltX null, tiltY null}}). Never send one set per caption line to restyle captions, and never run studio__captions again just to change how captions look: it re-transcribes and replaces them. To change the words of one caption line use set {clip, text}: its word-by-word highlight is kept. ' +
   'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, slide-down (from above), slide-left (in from the right), slide-right (in from the left), spin, bounce, typewriter, blur-in, zoom, wipe, glitch, letters, drop, wave, words (word by word), words-left / words-right / words-up (each word flies in from that side), words-pop; out: fade, pop, slide-down, slide-up, slide-left, slide-right, blur-out, zoom, wipe. To move text across the screen over time use studio__moment sweep. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Fonts that ship with Keo (look the same everywhere): Inter, Montserrat, Poppins, Bebas Neue, Anton, Archivo Black (bold sans), Instrument Serif, Playfair Display, DM Serif Display (elegant serif, lovely in italic); Windows fonts also work (Segoe UI, Arial, Impact, Georgia…). Rich text: add_text, set and caption lines take marks [{words (the words to style, as written in the text) or from/to (word indexes), font, color, scale (size × the text’s), italic, weight, uppercase}] so one text mixes looks, e.g. "This is how you win" with marks [{words:"win", font:"Instrument Serif", italic:true, color:"#E53935", scale:1.4}]. Later tracks are drawn on top. ' +
-  'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height). Videos and pictures: mask {shape rounded|circle, radius}, frame phone|browser|card (a device mock-up), shadow. Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
+  'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur|tiltX|tiltY: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height; tiltX/tiltY turn a video or picture in 3D, in degrees: tiltY 30 turns its right side away, tiltX 20 tips its top away). Videos and pictures: mask {shape rounded|circle, radius}, frame phone|browser|card (a device mock-up), shadow, glass true (a glass panel: sheen, bright edge and a coloured glow behind it). Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
 
 export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   const s = d.studio;
@@ -422,7 +435,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Add captions',
     description:
-      'Transcribe the speech in the Studio timeline and add word-by-word captions (the spoken word lights up) on the Captions track, replacing earlier auto-captions. One edit: it can be undone. maxWords: words per line (2–3 for short-form videos, 5–7 for longer ones). After it, look at a frame or two (studio__look) and fix wrong words with studio__edit set {clip, text}.',
+      'Transcribe the speech in the Studio timeline and add word-by-word captions (the spoken word lights up) on the Captions track, replacing earlier auto-captions. One edit: it can be undone. maxWords: words per line (2–3 for short-form videos, 5–7 for longer ones). After it, look at a frame or two (studio__look) and fix wrong words with studio__edit set {clip, text}. Not for captions that are already there (a showcase’s, or ones made before): to change how they look use studio__edit set_all {trackName "Captions", style, transform, highlight, animIn}; running this again re-transcribes and replaces them.',
     input: z
       .object({
         projectId: ProjectId.optional(),
@@ -431,7 +444,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         highlight: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional().describe('Colour of the word being spoken (null: none); default yellow'),
       })
       .strict(),
-    output: z.object({ lines: z.number(), words: z.number(), exactTiming: z.boolean(), firstLines: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })), note: z.string().optional() }),
+    output: z.object({ lines: z.number(), words: z.number(), exactTiming: z.boolean(), firstLines: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })), proofread: z.array(z.object({ heard: z.string(), meant: z.string() })).optional(), note: z.string().optional() }),
     risk: 'low',
     // The video's sound leaves the PC (to the speech-to-text service): the user approves each time.
     approval: 'always',
@@ -455,7 +468,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         throw e instanceof StudioError ? fail('studio', e.message) : e;
       });
       const note = r.skipped ? `${r.skipped} short part${r.skipped === 1 ? '' : 's'} of the speech got no captions (the speech service failed there); tell the user, and add those lines by hand or run captions again.` : undefined;
-      return { lines: r.lines.length, words: r.words, exactTiming: r.exact, firstLines: r.lines.slice(0, 8).map((l) => ({ text: l.text, start: l.start, end: l.end })), ...(note ? { note } : {}) };
+      return { lines: r.lines.length, words: r.words, exactTiming: r.exact, firstLines: r.lines.slice(0, 8).map((l) => ({ text: l.text, start: l.start, end: l.end })), ...(r.fixed?.length ? { proofread: r.fixed } : {}), ...(note ? { note } : {}) };
     },
   });
 
@@ -483,7 +496,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     description:
       'Turn the speech in the Studio timeline into text with times (speech-to-text; transcripts are kept, so later calls send nothing unless force). Use it to find retakes and bad takes, to place B-roll, music and sound effects at the right words, and before cleaning up filler words. Returns the phrases with their timeline times.',
     input: z.object({ projectId: ProjectId.optional(), force: z.boolean().default(false) }).strict(),
-    output: z.object({ words: z.number(), exactTiming: z.boolean(), phrases: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })), truncated: z.boolean(), note: z.string().optional() }),
+    output: z.object({ words: z.number(), exactTiming: z.boolean(), phrases: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })), truncated: z.boolean(), proofread: z.array(z.object({ heard: z.string(), meant: z.string() })).optional(), note: z.string().optional() }),
     risk: 'low',
     // The video's sound leaves the PC (to the speech-to-text service): the user approves.
     approval: 'always',
@@ -508,7 +521,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       let size = 0;
       const shown = phrases.filter((ph) => (size += ph.text.length + 24) < 14000);
       const note = r.skipped ? `${r.skipped} short part${r.skipped === 1 ? '' : 's'} of the speech could not be turned into text (the speech service failed there); the rest is here. Running it again with force can fill the gap.` : undefined;
-      return { words: words.length, exactTiming: r.exact, phrases: shown, truncated: shown.length < phrases.length, ...(note ? { note } : {}) };
+      return { words: words.length, exactTiming: r.exact, phrases: shown, truncated: shown.length < phrases.length, ...(r.fixed?.length ? { proofread: r.fixed } : {}), ...(note ? { note } : {}) };
     },
   });
 
@@ -763,7 +776,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Make a faceless video',
     description:
-      'Make a whole faceless video in a new Studio project from a storyboard: a voice reads each scene, each scene gets its picture (made with AI from picture.prompt — or the narration — unless you give media of the project), the pictures move (push-in, pull-out, pans), scenes change with transitions and a whoosh, a title shows where a scene has one, captions come word by word, and music (the user’s own sound file in the project) plays under the voice. Write the script yourself first when the user gives only a topic: a strong hook in the first scene, short scenes (1–3 sentences, 3–8 seconds each), one clear picture idea per scene, written for the ear. Give pictureStyle so the pictures look like one set. Afterwards look at a few frames (studio__look), fix what needs it, and offer to export. Never copy someone else’s script, characters or brand.',
+      'Not for app screenshots, UI pictures or product demos (use studio__showcase: 3D glass screens). Make a whole faceless video in a new Studio project from a storyboard: a voice reads each scene, each scene gets its picture (made with AI from picture.prompt — or the narration — unless you give media of the project), the pictures move (push-in, pull-out, pans), scenes change with transitions and a whoosh, a title shows where a scene has one, captions come word by word, and music (the user’s own sound file in the project) plays under the voice. Write the script yourself first when the user gives only a topic: a strong hook in the first scene, short scenes (1–3 sentences, 3–8 seconds each), one clear picture idea per scene, written for the ear. Give pictureStyle so the pictures look like one set. Afterwards look at a few frames (studio__look), fix what needs it, and offer to export. Never copy someone else’s script, characters or brand.',
     input: Storyboard.extend({ projectId: ProjectId.optional() }).strict(),
     output: z.object({ projectId: z.string(), durationSec: z.number(), scenes: z.number(), pictures: z.number(), voice: z.string(), timeline: z.string() }),
     risk: 'low',
@@ -986,6 +999,49 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const motionEdit = defineCapability({
+    ...simple({
+      id: 'studio.motion_edit',
+      title: 'Motion edit the whole video',
+      description:
+        'Edit a WHOLE talking video or podcast like a motion designer, start to end, in one edit (one undo; the user watches it land): the camera moves on the footage (a new framing each sentence, a slow push, punch-ins on strong words), and beats over the whole length: ' +
+        Object.entries(BEAT_INFO)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ') +
+        '. Graphics never cover the face (Keo finds the speaker in the frames), and whooshes and pops land on the moves. Use this (not studio__edit add_motion) when the user wants motion graphics or a "real edit" of a talking video. Run studio__transcript first, read the WHOLE transcript and give beats from the first sentence to the last (one about every 5–9 seconds for the whole length, never only the start; mix the kinds, about a third scenes; frames when points or steps are listed (items + sayItems) or a number is said (value + unit); text short and punchy, in the speaker’s words), and a hook (a short opening line) when it helps. Without beats Keo plans them itself from the speech. look: mix (light and dark scenes taking turns), light or dark; energy: calm, normal or high; accent colours default to the brand kit. Making it again replaces the last motion edit. Look at a few frames after (studio__look).',
+      summary: 'Motion edit the whole video',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        beats: z.array(MotionBeatInput).max(80).optional(),
+        hook: z.string().trim().min(1).max(120).optional(),
+        look: z.enum(['mix', 'light', 'dark']).optional(),
+        energy: z.enum(['calm', 'normal', 'high']).optional(),
+        accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        accent2: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        sounds: z.boolean().optional().describe('whooshes and pops on the moves (default on)'),
+      })
+      .strict(),
+    output: State.extend({ placed: z.array(z.object({ kind: z.string(), at: z.number(), text: z.string() })), missed: z.array(z.string()), note: z.string().nullable() }),
+    timeoutMs: 5 * 60_000,
+    auditView: (i) => ({ beats: i.beats?.length ?? 0 }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const { projectId: _p, ...o } = i;
+      const r = await s.motionEdit(p.id, o).catch((e: unknown) => {
+        if (e instanceof StudioError) throw fail('studio', e.message);
+        throw e;
+      });
+      return {
+        ...state(s, r.project),
+        placed: r.placed,
+        missed: r.missed.slice(0, 20),
+        note: r.missed.length ? `${r.missed.length} beat(s) were left out: their words were not found in the transcript, or they fell on another beat. Use the words exactly as said.` : null,
+      };
+    },
+  });
+
   const moment = defineCapability({
     ...simple({
       id: 'studio.moment',
@@ -1031,19 +1087,215 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       id: 'studio.review',
       title: 'Check the edit',
       description:
-        'Check the edit like a careful editor before saying it is done (on this PC, nothing is sent): text covering the speaker’s face, text cut off at the edge, text where TikTok, Reels and Shorts put their buttons (vertical videos), text on top of other text, titles too short to read, pictures or videos laid over the speaker that cover their face, and the same picture shown twice at once. Each issue names the clip, when, and how to fix it. Fix what is clearly wrong (studio__edit), look at the frame (studio__look), and tell the user anything that is a matter of taste.',
+        'Check the edit like a careful editor before saying it is done (on this PC, nothing is sent): text covering the speaker’s face, text cut off at the edge, text where TikTok, Reels and Shorts put their buttons (vertical videos), text on top of other text, titles too short to read, pictures or videos laid over the speaker that cover their face, the same picture shown twice at once, captions stuck on screen, two titles saying the same words at once, empty frames and a plain-text ending. Each issue names the clip, when, and how to fix it; canFix marks the ones Keo can fix itself. With fix true, Keo fixes every one it can be sure of in one edit (one undo; the user watches it) and checks again — do that first, then fix what is left by hand (studio__edit), look at the frame (studio__look), and tell the user anything that is a matter of taste.',
       summary: 'Check the edit',
     }),
-    input: z.object({ projectId: ProjectId.optional() }).strict(),
-    output: z.object({ issues: z.array(z.object({ kind: z.string(), clip: z.string(), at: z.number(), detail: z.string(), fix: z.string() })), ok: z.boolean() }),
-    timeoutMs: 6 * 60_000,
-    auditView: () => ({}),
+    input: z.object({ projectId: ProjectId.optional(), fix: z.boolean().optional().describe('fix every issue Keo can be sure of, then check again') }).strict(),
+    output: z.object({ issues: z.array(z.object({ kind: z.string(), clip: z.string(), at: z.number(), detail: z.string(), fix: z.string(), canFix: z.boolean() })), fixed: z.number(), ok: z.boolean() }),
+    timeoutMs: 8 * 60_000,
+    auditView: (i) => ({ fix: !!i.fix }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
-      const issues = await s.review(p.id).catch((e: unknown) => {
+      const r = await (i.fix ? s.fixReview(p.id) : s.review(p.id).then((issues) => ({ fixed: 0, issues }))).catch((e: unknown) => {
         throw e instanceof StudioError ? fail('studio', e.message) : e;
       });
-      return { issues, ok: issues.length === 0 };
+      const issues = r.issues.map(({ ops, ...x }) => ({ ...x, canFix: !!ops?.length }));
+      return { issues, fixed: r.fixed, ok: issues.length === 0 };
+    },
+  });
+
+  const proofread = defineCapability({
+    ...simple({
+      id: 'studio.proofread',
+      title: 'Proofread the words',
+      description:
+        'Put right words speech-to-text misheard — names above all ("KUI" → "Keo"), and words that make no sense where they are but sound like one that does — everywhere at once: the saved transcript (so later captions, cuts and motion use the right word) and every caption, title and motion graphic showing them (one edit). New transcripts are proofread automatically by the user’s AI model; use this when you or the user spot more (give fixes), or to proofread again with names the user mentioned (names: e.g. the brand in their request, "@keo.ai" → "Keo"). Never use it to rewrite what was said. Tell the user what was put right.',
+      summary: 'Proofread the words',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        fixes: z.array(z.object({ heard: z.string().trim().min(1).max(60), meant: z.string().trim().min(1).max(60) }).strict()).max(25).optional().describe('what was heard (exact words of the transcript) and what was said'),
+        names: z.array(z.string().trim().min(2).max(40)).max(10).optional().describe('names the speaker uses, to help the proofreading'),
+      })
+      .strict(),
+    output: z.object({ fixed: z.array(z.object({ heard: z.string(), meant: z.string() })), inText: z.number() }),
+    timeoutMs: 3 * 60_000,
+    unavailableReason: () => (d.proofread ? null : 'Proofreading is not available here.'),
+    auditView: (i) => ({ fixes: i.fixes?.length ?? 0 }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      return d.proofread!(p.id, { ...(i.fixes ? { fixes: i.fixes } : {}), ...(i.names ? { names: i.names } : {}) }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+    },
+  });
+
+  const showcase = defineCapability({
+    id: 'studio.showcase',
+    version: '1.0.0',
+    title: 'Make a screen showcase',
+    description:
+      'A premium motion-design walkthrough of an app or product from its SCREENSHOTS (pictures in the project), the modern 3D look of product launch videos: each screen flies in as a glass panel turning in 3D on a living dark backdrop, settles while a kinetic headline names the feature, drifts with a slow push and swings away into the next; a sample clip of the project (an AI video, a clone) floats out beside the screen it belongs to; Keo’s own voice narrates each scene (the scene lasts as long as its line) with captions; the brand end card closes it. Use it — not studio__faceless — when the user wants a promo, demo, tutorial or "motion edit" from screenshots or UI pictures. scenes in order: screen (a picture’s asset id), headline (2–6 punchy words naming the feature), kicker (a tiny line above, e.g. "KEO STUDIO"), narration (one or two short spoken sentences about what this screen does: what the user said they want, never words from another video), clip (a video of the project to float beside it, only on its matching screen). Write the narration yourself from what each screenshot shows (look at them first with studio__understand_media). It is made in a NEW project (the one open stays); the voice is generated (Keo cannot speak in the user’s own voice). Tell the user to press Play, then Export. CHANGING a showcase already made (the timeline then lists its scenes): remake: true with that projectId and only what changes — scenes (the full new list: change one scene\'s narration or headline, reorder, drop or add screens; screens and clips are that project\'s ids), voice, look, captions, title; it is rebuilt in the same project in one edit (one undo), and lines whose words did not change keep their voice for free. Use it for anything about what is said, the voice, the order or the scenes; caption style, a headline\'s colour and other looks are studio__edit (set_all on a track).',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        title: z.string().trim().min(1).max(80).optional(),
+        scenes: z.array(ShowcaseScene).min(1).max(16).optional().describe('Required for a new showcase; with remake, the full new list (left out: the scenes stay)'),
+        voice: z.enum(['female', 'male', 'none']).optional().describe('Default female (a remake keeps the voice it had)'),
+        look: z.enum(['dark', 'light']).optional(),
+        captions: z.boolean().optional(),
+        remake: z.boolean().default(false).describe('Rebuild the showcase open in projectId in place, with what changes'),
+      })
+      .strict(),
+    output: z.object({ projectId: z.string(), duration: z.number(), scenes: z.number(), remade: z.boolean() }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 10 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'A new Studio project in Keo’s own folder (the open one is not changed).',
+    unavailableReason: () => (d.showcase ? null : 'Not available here.'),
+    autonomy: () => ({ tier: 'routine' as const }),
+    preview: (i) => ({ summary: i.remake ? 'Remake the screen showcase with the changes' : `Make the screen showcase “${i.title ?? 'Showcase'}” (${i.scenes?.length ?? 0} screens)`, target: null, consequences: [i.remake ? 'Rebuilds the showcase in the same project (one undo).' : 'Makes a new Studio project; the one open stays as it is.'], dataExport: i.voice === 'none' ? null : 'New narration text is sent to Keo’s voice service to be spoken.' }),
+    auditView: (i) => ({ scenes: i.scenes?.length ?? null, voice: i.voice ?? null, remake: i.remake }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      return d.showcase!({ projectId: p.id, ...(i.title ? { title: i.title } : {}), ...(i.scenes ? { scenes: i.scenes } : {}), ...(i.voice ? { voice: i.voice } : {}), ...(i.look ? { look: i.look } : {}), ...(i.captions !== undefined ? { captions: i.captions } : {}), remake: i.remake }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+    },
+  });
+
+  const viral = defineCapability({
+    ...simple({
+      id: 'studio.viral_template',
+      title: 'Use a viral template',
+      description:
+        'Edit a talking video with a structure short videos that travel are built on, from the speaker’s own words (one edit, one undo; the user watches it): ' +
+        Object.entries(VIRAL_TEMPLATES)
+          .map(([k, v]) => `${k} (${v.label}: ${v.use})`)
+          .join('; ') +
+        '. It makes the motion edit (camera moves, keyword scenes, graphics on what is said), the opening hook, and the brand end card when there is none. Transcribe first. hook: the user’s own opening line if they gave one. Pick the template that fits what is said (a numbered list needs “first… second…”; myth vs fact needs a belief and the truth) or ask with studio__ask.',
+      summary: 'Use a viral template',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), template: z.enum(Object.keys(VIRAL_TEMPLATES) as [ViralId, ...ViralId[]]), hook: z.string().trim().min(1).max(120).optional() }).strict(),
+    output: State.extend({ placed: z.number(), note: z.string().nullable(), endCard: z.boolean() }),
+    timeoutMs: 5 * 60_000,
+    auditView: (i) => ({ template: i.template }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.viral(p.id, i.template, i.hook ? { hook: i.hook } : {}).catch((e: unknown) => {
+        if (e instanceof StudioError) throw fail('studio', e.message);
+        throw e;
+      });
+      return { ...state(s, r.project), placed: r.placed.length, note: r.note, endCard: r.endCard };
+    },
+  });
+
+  const series = defineCapability({
+    ...simple({
+      id: 'studio.series',
+      title: 'Series and episodes',
+      description:
+        'The user’s series (Studio projects that are episodes of one show, in order). list shows them with their episodes; create makes one (name, and projectIds: projects already made, in episode order); add puts a project in as the next episode; remove takes one out. A new episode is made in Studio with New episode on the series (the user picks the clips; Keo makes the last episode’s edit again with them): tell the user to click it.',
+      summary: 'Series and episodes',
+    }),
+    input: z
+      .object({
+        action: z.enum(['list', 'create', 'add', 'remove']),
+        name: z.string().trim().min(1).max(80).optional(),
+        projectIds: z.array(ProjectId).max(200).optional(),
+        seriesId: z.string().regex(/^se_[A-Za-z0-9]{4,24}$/).optional(),
+        projectId: ProjectId.optional(),
+      })
+      .strict(),
+    output: z.object({ series: z.array(z.object({ id: z.string(), name: z.string(), episodes: z.array(z.object({ episode: z.number(), projectId: z.string(), name: z.string() })) })) }),
+    timeoutMs: 20_000,
+    auditView: (i) => ({ action: i.action }),
+    async execute(i) {
+      run(() => {
+        if (i.action === 'create') {
+          if (!i.name) throw new StudioError('Give the series a name.');
+          s.createSeries(i.name, i.projectIds ? { projects: i.projectIds } : {});
+        } else if (i.action === 'add') {
+          if (!i.seriesId || !i.projectId) throw new StudioError('Say which series and which project.');
+          s.addToSeries(i.seriesId, i.projectId);
+        } else if (i.action === 'remove') {
+          if (!i.projectId) throw new StudioError('Say which project.');
+          s.removeFromSeries(i.projectId);
+        }
+      });
+      const names = new Map(s.list().map((p) => [p.id, p.name] as const));
+      return { series: s.seriesList().map((x) => ({ id: x.id, name: x.name, episodes: x.projects.map((pid, k) => ({ episode: k + 1, projectId: pid, name: names.get(pid) ?? pid })) })) };
+    },
+  });
+
+  const writePost = defineCapability({
+    ...simple({
+      id: 'studio.write_post',
+      title: 'Write the post',
+      description: 'Write the post for a finished video (title, caption, hashtags) for YouTube, TikTok or Instagram, from what the video says and the brand kit’s @handle. Show it to the user to change before posting. Nothing is posted.',
+      summary: 'Write the post',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), platform: z.enum(['youtube', 'tiktok', 'instagram']).default('youtube') }).strict(),
+    output: z.object({ title: z.string(), caption: z.string(), hashtags: z.array(z.string()) }),
+    timeoutMs: 2 * 60_000,
+    unavailableReason: () => (d.writePost ? null : 'Not available here.'),
+    auditView: (i) => ({ platform: i.platform }),
+    async execute(i, ctx) {
+      const p = run(() => s.resolve(i.projectId));
+      return d.writePost!(p.id, i.platform, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+    },
+  });
+
+  const postYouTube = defineCapability({
+    id: 'studio.post_youtube',
+    version: '1.0.0',
+    title: 'Post to YouTube',
+    description:
+      'Upload a video Keo exported (a file in the Videos/Keo folder, from studio__export) to the user’s own YouTube channel with a title, description and tags (studio__write_post writes them; show them first). privacy: private (the default: the user publishes it in YouTube Studio when ready), unlisted or public — use public only when the user clearly said so. AI-made footage is declared to YouTube as altered or synthetic content. TikTok and Instagram cannot be posted to by Keo: tell the user to use Post in Studio after exporting (it copies the caption and opens their upload page).',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        file: z.string().min(3).max(1000),
+        title: z.string().trim().min(1).max(100),
+        description: z.string().max(5000).default(''),
+        tags: z.array(z.string().max(60)).max(30).default([]),
+        privacy: z.enum(['private', 'unlisted', 'public']).default('private'),
+        forKids: z.boolean().default(false),
+      })
+      .strict(),
+    output: z.object({ url: z.string(), privacy: z.string() }),
+    risk: 'high',
+    // Publishing on the user's channel: they approve every upload.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 30 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'YouTube answers with the new video’s id; its link is returned.',
+    unavailableReason: () => (!d.youTube || !d.postYouTube ? 'Not available here.' : d.youTube().connected ? null : d.youTube().canConnect ? 'YouTube is not connected: the user connects it in Studio (Post → YouTube → Connect YouTube).' : 'Google sign-in is not set up in this build of Keo.'),
+    autonomy: () => ({ tier: 'important', reason: 'it publishes a video on the user’s YouTube channel' }),
+    preview: (i) => ({
+      summary: `Upload “${i.title}” to YouTube (${i.privacy})`,
+      target: d.youTube?.().email ?? null,
+      consequences: [i.privacy === 'public' ? 'Everyone can see it on YouTube straight away.' : i.privacy === 'unlisted' ? 'Anyone with the link can see it.' : 'Only you can see it until you publish it in YouTube Studio.'],
+      dataExport: 'The video file, its title, description and tags are sent to YouTube.',
+    }),
+    auditView: (i) => ({ privacy: i.privacy }),
+    async execute(i, ctx) {
+      const p = i.projectId ? run(() => s.resolve(i.projectId)) : null;
+      return d.postYouTube!({ ...(p ? { projectId: p.id } : {}), file: i.file, title: i.title, description: i.description, tags: i.tags, privacy: i.privacy, forKids: i.forKids }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
     },
   });
 
@@ -1087,7 +1339,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       Object.entries(AI_VIDEO_MODELS)
         .map(([k, m]) => `${k} (${m.label}, ${m.seconds[0]}–${m.seconds.at(-1)} s, about $${m.perSecond.silent}/s, $${m.perSecond.audio}/s with sound)`)
         .join('; ') +
-      '. kling-3-pro is the everyday choice and keeps a character’s face steady; veo-3.1-fast for cheap drafts. prompt: what moves and how the camera moves, in plain words (e.g. "she turns to the camera and smiles, slow push in, soft daylight"); never ask for real people who have not agreed, or for anything sexual or violent. Every clip costs the user money: say the price and ask before making more than one, prefer short clips, and reuse clips already made (the same request is never paid twice). The clip is marked as AI-made: remind the user to turn on the AI label when they post.',
+      '. kling-3-pro is the everyday choice and keeps a character’s face steady; veo-3.1-fast for cheap drafts. prompt: what moves and how the camera moves, in plain words (e.g. "she turns to the camera and smiles, slow push in, soft daylight"); never ask for real people who have not agreed, or for anything sexual or violent. Every clip costs the user money: say the price and ask before making more than one; when the movement is uncertain, offer a 3-second motion test first (seconds 3, silent: a fraction of the price) and make the full clip only once it looks right; prefer 4–5 second clips (long ones drift and cost more); warn before shots that usually fail (hands up close, crowds, words in the picture, fast action); reuse clips already made (the same request is never paid twice). The clip is marked as AI-made: remind the user to turn on the AI label when they post.',
     input: z
       .object({
         projectId: ProjectId.optional(),
@@ -1202,6 +1454,65 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const characterPictures = defineCapability({
+    id: 'studio.character_pictures',
+    version: '1.0.0',
+    title: 'Put a character in pictures',
+    description:
+      'Put one of the user’s characters into pictures of the project (photos they saved): the same pose, hands, place in the frame, camera angle, background and light, with the character’s face, hair and body, as a real photograph. The character keeps everything that makes them who they are, from their own photos: face, hair, body shape, skin, tattoos, piercings and marks. Per picture: leave outfit out to keep the clothes exactly, give outfit "cute" for a cute, feminine outfit the picture model chooses to suit the picture, or describe one (e.g. "a soft pink knit cardigan over a white lace top and a pleated skirt"); change is anything else the user asked for in their words (a new pose, "smiling", "sitting on the bed"); person says which person to replace when there are several. You do not need to look at the pictures first (the picture model sees them): call it straight away with what the user chose. Each new picture is saved in Pictures\\Keo\\<name> pictures, added to the project and laid over its original wherever that is on the timeline. Realistic (Nano Banana Pro, 2K) by default, about $0.15 a picture (Studio credits or the user’s fal.ai); quality draft is cheaper and rougher. Making the same picture again is free; again: true makes a fresh take (paid). Say the price before (the approval shows it too). Only with the user’s own AI-made characters or people who agreed, and only on pictures they may use; never put a real person’s face on someone else’s body without their consent. Afterwards tell the user where the pictures are and offer a new take (again: true) for any that missed.',
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        character: z.string().regex(/^ch_[A-Za-z0-9]{4,24}$/).describe('The character (studio__characters lists them)'),
+        pictures: z.array(CharacterPictureJob).min(1).max(12),
+        quality: z.enum(['real', 'draft']).default('real'),
+        again: z.boolean().default(false).describe('A fresh take of pictures made before (paid again)'),
+      })
+      .strict(),
+    output: State.partial().extend({ made: z.array(z.object({ from: z.string(), assetId: z.string(), file: z.string(), cached: z.boolean(), clip: z.string().nullable() })), failed: z.array(z.object({ from: z.string(), error: z.string() })), costUsd: z.number(), folder: z.string() }),
+    risk: 'medium',
+    // It spends the user's money and sends their pictures to the picture service: they approve each time.
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 15 * 60_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Each new picture is a new file in Pictures\\Keo and a new picture of the project; the originals are not changed.',
+    unavailableReason: () => (d.characterPictures ? d.aiShotBlocked() : 'Not available here.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs money and sends pictures to the AI picture service' }),
+    preview: (i) => {
+      const via = d.aiVia?.() ?? 'own';
+      const cost = studioPrice(i.pictures.length * (i.quality === 'draft' ? CHARACTER_PICTURE_USD : REAL_PICTURE_USD), via);
+      const changed = i.pictures.filter((x) => x.outfit).length;
+      let name = 'your character';
+      try {
+        name = s.character(i.character).name;
+      } catch {
+        /* the name is only for the summary */
+      }
+      return {
+        summary: `Put ${name} into ${i.pictures.length} picture${i.pictures.length === 1 ? '' : 's'}${changed ? ` (${changed} with a new outfit)` : ''}, about ${cost}`,
+        target: null,
+        consequences: [`Costs about ${cost}${via === 'keo' ? ' (Studio credits)' : ' from your fal.ai account'} (nothing for pictures made before).`, 'Saves the new pictures in Pictures\\Keo and adds them to the project; your originals stay as they are.'],
+        dataExport: `The pictures and ${name}’s photos are sent to the AI picture service (fal.ai${via === 'keo' ? ', through Keo Cloud' : ''}).`,
+      };
+    },
+    auditView: (i) => ({ pictures: i.pictures.length, outfits: i.pictures.filter((x) => x.outfit).length, quality: i.quality, again: i.again }),
+    async execute(i, ctx) {
+      const blocked = d.aiShotBlocked();
+      if (blocked) throw fail('ai_video_unavailable', blocked);
+      const p = run(() => s.resolve(i.projectId));
+      const r = await d.characterPictures!(p.id, { character: i.character, pictures: i.pictures, quality: i.quality, again: i.again }, ctx.signal).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      // Nothing made is a failure the user sees as one (not "completed"), with the reason.
+      if (!r.made.length && r.failed.length) throw fail('studio', `No picture was made, and nothing was charged. ${r.failed[0]!.error}`);
+      return { ...state(s, s.get(p.id)), ...r };
+    },
+  });
+
   const talkingCharacter = defineCapability({
     id: 'studio.talking_character',
     version: '1.0.0',
@@ -1234,7 +1545,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     autonomy: () => ({ tier: 'important', reason: 'it costs money and sends a picture and a voice to fal.ai' }),
     preview: (i) => {
       const via = d.aiVia?.() ?? 'own';
-      let plan: ReturnType<NonNullable<typeof d.talkPlan>> | null = null;
+      let plan: ReturnType<NonNullable<typeof d.talkPlan>> | null;
       try {
         plan = d.talkPlan?.(s.resolve(i.projectId).id, { character: i.character, ...(i.text ? { text: i.text } : {}), ...(i.audioAsset ? { audioAsset: i.audioAsset } : {}), ...(i.scene ? { scene: i.scene } : {}), quality: i.quality }) ?? null;
       } catch {
@@ -1770,7 +2081,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, moment, brand, characters, review, versions, aiShot, shotAgain, swapCharacter, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, motionEdit, moment, brand, characters, review, proofread, showcase, viral, series, writePost, postYouTube, versions, aiShot, shotAgain, swapCharacter, characterPictures, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

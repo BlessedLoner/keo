@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { Asset } from '../../shared/studio';
+import type { PictureAspect } from '../../shared/studioCharacterPictures';
 import fs from 'node:fs';
 import path from 'node:path';
 import { MUSIC_SECONDS, SFX_MAX_SECONDS, TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
@@ -267,11 +268,11 @@ export class FalVideo {
    * The first frame of an AI video shot: from the characters' pictures (and the shot before, so the
    * place, clothes and light carry on) when there are any, else from the words alone.
    */
-  async frame(r: { references: Buffer[]; prompt: string; aspect: '9:16' | '16:9' | '1:1'; quality?: 'real' | 'draft' }, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+  async frame(r: { references: Buffer[]; prompt: string; aspect: PictureAspect; quality?: 'real' | 'draft'; take?: number }, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
     const refs = r.references.slice(0, 4);
     // Real: Nano Banana Pro at 2K (true skin, light and detail); draft: the fast, cheaper Nano Banana.
     const real = (r.quality ?? 'real') === 'real';
-    const hash = crypto.createHash('sha256').update(JSON.stringify(['frame', real ? 'pro' : 'draft', refs.map((b) => crypto.createHash('sha256').update(b).digest('hex')), r.prompt, r.aspect])).digest('hex').slice(0, 24);
+    const hash = crypto.createHash('sha256').update(JSON.stringify(['frame', real ? 'pro' : 'draft', refs.map((b) => crypto.createHash('sha256').update(b).digest('hex')), r.prompt, r.aspect, ...(r.take ? [r.take] : [])])).digest('hex').slice(0, 24);
     const extra = real ? { resolution: '2K' } : {};
     const made = await this.run(
       refs.length
@@ -441,9 +442,21 @@ export class FalVideo {
       // Pictures and videos go to fal.ai's storage first and the model gets their links (fal.ai
       // advises against sending files inside the request: large ones can make the request fail).
       let submitted: Record<string, unknown>;
+      // Why an upload was refused, when a picture went inline instead (said if the request fails too).
+      let refused: string | null = null;
       try {
         const urls: string[] = [];
-        for (const u of spec.uploads) urls.push(await this.retried(signal, () => this.upload(u.bytes, u.type, u.name, route, signal)));
+        for (const u of spec.uploads) {
+          try {
+            urls.push(await this.retried(signal, () => this.upload(u.bytes, u.type, u.name, route, signal)));
+          } catch (e) {
+            // fal.ai's storage would not take it: a picture can go inside the request instead (as fal.ai accepts).
+            if (signal.aborted || !u.type.startsWith('image/') || u.bytes.length > INLINE_PICTURE_BYTES) throw e;
+            refused = e instanceof AiVideoError ? e.message : offline(e);
+            this.d.log.info('studio.upload_inline', { reason: String((e as Error)?.message ?? e).slice(0, 160), kb: Math.round(u.bytes.length / 1024) });
+            urls.push(`data:${u.type};base64,${u.bytes.toString('base64')}`);
+          }
+        }
         // Through Keo Cloud the gateway prices the request, takes the credits and runs it with Keo's key.
         submitted = await this.retried(signal, () =>
           route.kind === 'own'
@@ -452,7 +465,9 @@ export class FalVideo {
         );
       } catch (e) {
         if (signal.aborted) throw new AiVideoError('Stopped.');
-        const message = e instanceof AiVideoError ? e.message : offline(e);
+        let message = e instanceof AiVideoError ? e.message : offline(e);
+        // An older Keo Cloud takes uploaded pictures only: the real reason is the refused upload.
+        if (refused && /^Upload the /.test(message)) message = refused;
         this.d.log.warn('studio.ai_shot_not_sent', { model: spec.model, reason: message.slice(0, 300) });
         throw new AiVideoError(message);
       }
@@ -620,6 +635,9 @@ export class FalVideo {
   }
 }
 
+/** The largest picture sent inside a request when fal.ai's storage cannot take an upload (Keo Cloud takes about 6 MB). */
+const INLINE_PICTURE_BYTES = 4 * 1024 * 1024;
+
 /** Which way AI requests go: the user's own fal.ai key, or Keo Cloud (Studio credits). */
 export type Route = { kind: 'own'; key: string } | { kind: 'keo'; base: string; token: string };
 
@@ -659,7 +677,7 @@ export interface PendingShot {
   cancelUrl: string | null;
   submittedAt: string;
   /** Where the clip goes when it is ready. */
-  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: AiRecipe; replace?: string };
+  context?: { projectId: string; at: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: AiRecipe; replace?: string; finish?: boolean; frameAsset?: string; filmed?: 'test' | 'final'; removeFirst?: string };
 }
 
 /** fal.ai is still making the clip: it is remembered and arrives later. */

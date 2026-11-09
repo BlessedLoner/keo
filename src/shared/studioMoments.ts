@@ -141,6 +141,8 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
           fit: c.fit,
           transform: { ...c.transform },
           cutout: true,
+          // A copy of the talking video: its sound already plays below.
+          volume: 0,
           ...(c.mask ? { mask: c.mask } : {}),
           ...(c.flipX ? { flipX: true } : {}),
           ...(c.color ? { color: c.color } : {}),
@@ -312,7 +314,7 @@ export function momentOps(p: Project, id: MomentId, o: MomentOptions): EditOp[] 
       if (c) {
         const span = Math.min(d, c.start + c.duration - at);
         const offset = (at - c.start) * c.speed;
-        ops.push({ op: 'add_media', assetId: c.assetId, trackName: person, top: true, start: r2(at), in: r2(c.in + offset), duration: r2(span), fit: c.fit, transform: { ...c.transform }, cutout: true, ...(c.mask ? { mask: c.mask } : {}), ...(c.flipX ? { flipX: true } : {}), ...(c.color ? { color: c.color } : {}) });
+        ops.push({ op: 'add_media', assetId: c.assetId, trackName: person, top: true, start: r2(at), in: r2(c.in + offset), duration: r2(span), fit: c.fit, transform: { ...c.transform }, cutout: true, volume: 0, ...(c.mask ? { mask: c.mask } : {}), ...(c.flipX ? { flipX: true } : {}), ...(c.color ? { color: c.color } : {}) });
       }
       return ops;
     }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { studioPrice } from '@shared/aiPrices';
-import { aiVideoCost, castIn, SHOT_MODELS, type AiShot, type ShotModelId } from '@shared/studioAiVideo';
+import { aiVideoCost, castIn, SHOT_MODELS, shotRisks, type AiShot, type ShotModelId } from '@shared/studioAiVideo';
+import { REAL_PICTURE_USD } from '@shared/aiPrices';
 import type { Character } from '@shared/studioCharacters';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -23,7 +24,7 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
   const [characters, setCharacters] = useState<Character[]>([]);
   const [cast, setCast] = useState<string[]>([]);
   const [castTouched, setCastTouched] = useState(false);
-  const [seconds, setSeconds] = useState(20);
+  const [seconds, setSeconds] = useState(15);
   const [format, setFormat] = useState<Format>('vertical');
   const [model, setModel] = useState<ShotModelId>('kling-3-pro');
   const [audio, setAudio] = useState(false);
@@ -43,6 +44,9 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
 
   const cost = plan ? aiVideoCost({ model, audio, shots: plan.shots }) : aiVideoCost({ model, audio, shots: Array.from({ length: Math.max(1, Math.round(seconds / 5)) }, () => ({ frame: 'x'.repeat(10), motion: 'x'.repeat(5), seconds: 5, cast: [] })) });
   const price = studioPrice(cost.usd, via);
+  // Look first: only the frames are made now (Nano Banana Pro); filming is chosen shot by shot after.
+  const framesUsd = (plan ? plan.shots.length : Math.max(1, Math.round(seconds / 5))) * REAL_PICTURE_USD;
+  const framesPrice = studioPrice(framesUsd, via);
   const noFaces = cast.filter((id) => !characters.find((c) => c.id === id)?.pictures.length);
 
   const planShots = async () => {
@@ -58,16 +62,16 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
   const make = async () => {
     if (!plan) return;
     const ok = await ui.confirm({
-      title: `Make this ${cost.seconds}-second AI video?`,
-      body: `Keo makes the first frame of each of the ${plan.shots.length} shots${cast.length ? ` with ${cast.map((id) => characters.find((c) => c.id === id)?.name).join(' and ')}’s own face` : ''}, then films every shot with ${SHOT_MODELS[model].label.split(':')[0]}${audio ? ' with its own sound' : ''}. About ${price} in all. The frames appear on the timeline within a few minutes; the filmed shots go over them as they finish, usually in 5 to 10 minutes (keep working meanwhile).`,
-      confirmLabel: `Make it (about ${price})`,
+      title: `Make the ${plan.shots.length} frames first?`,
+      body: `Keo makes the first frame of each shot${cast.length ? ` with ${cast.map((id) => characters.find((c) => c.id === id)?.name).join(' and ')}’s own face` : ''}: about ${framesPrice}. Nothing is filmed yet. You look at each frame, make again any you do not like, try a short motion test, and film only the shots that look right (filming all of them would be about ${price} more).`,
+      confirmLabel: `Make the frames (about ${framesPrice})`,
     });
     if (!ok) return;
     setBusy('make');
     try {
-      const r = await invoke('studio:aiVideoMake', { plan: { title: plan.title, style: plan.style, format, model, audio, shots: plan.shots } });
+      const r = await invoke('studio:aiVideoMake', { stage: 'frames', plan: { title: plan.title, style: plan.style, format, model, audio, shots: plan.shots } });
       ai.refresh();
-      ui.toast(r.pending ? `The frames are ready. ${r.pending} shot${r.pending === 1 ? ' is' : 's are'} being filmed and arrive by themselves.` : 'Your AI video is ready.', 'success');
+      ui.toast('Keo is making the frames: check each one on the timeline, then test or film the shots you like.', 'success');
       onDone(r.projectId);
     } catch (e) {
       ui.error(errText(e));
@@ -167,7 +171,7 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
               <strong>{plan.title}</strong>
               <span className="grow" />
               <span className="small muted">
-                {plan.shots.length} shots · {cost.seconds} s · about <strong>{price}</strong>
+                {plan.shots.length} shots · {cost.seconds} s · frames about <strong>{framesPrice}</strong> · filming all about {price}
               </span>
             </div>
             {plan.shots.map((s, i) => (
@@ -188,6 +192,9 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
                 <textarea className="textarea" rows={2} value={s.frame} maxLength={1500} disabled={!!busy} onChange={(e) => editShot(i, { frame: e.target.value })} />
                 <label className="small muted">What moves</label>
                 <textarea className="textarea" rows={1} value={s.motion} maxLength={1000} disabled={!!busy} onChange={(e) => editShot(i, { motion: e.target.value })} />
+                {shotRisks(s).map((r) => (
+                  <div key={r} className="small warn-text">⚠ {r}</div>
+                ))}
               </div>
             ))}
           </div>
@@ -199,7 +206,7 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
           </button>
           {!plan ? (
             <button className="btn primary" disabled={description.trim().length < 10 || !!busy || via === null} onClick={() => void planShots()}>
-              {busy === 'plan' ? <span className="spinner tiny" /> : <Icon name="sparkle" size={14} />} {busy === 'plan' ? 'Planning the shots…' : `Plan the shots (about ${price} to make)`}
+              {busy === 'plan' ? <span className="spinner tiny" /> : <Icon name="sparkle" size={14} />} {busy === 'plan' ? 'Planning the shots…' : 'Plan the shots (no credits)'}
             </button>
           ) : (
             <>
@@ -207,7 +214,7 @@ export function AiVideoCreator({ initial, onDone, onCancel, onCharacters }: { in
                 Plan again
               </button>
               <button className="btn primary" disabled={!!busy || plan.shots.some((s) => s.frame.trim().length < 10 || s.motion.trim().length < 5)} onClick={() => void make()}>
-                {busy === 'make' ? <span className="spinner tiny" /> : <Icon name="film" size={14} />} {busy === 'make' ? 'Making the frames…' : `Make the video (about ${price})`}
+                {busy === 'make' ? <span className="spinner tiny" /> : <Icon name="film" size={14} />} {busy === 'make' ? 'Making the frames…' : `Make the frames first (about ${framesPrice})`}
               </button>
             </>
           )}

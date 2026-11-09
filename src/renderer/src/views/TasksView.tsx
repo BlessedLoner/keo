@@ -6,6 +6,7 @@ import { useApp } from '../state/AppState';
 import { Icon } from '../components/Icon';
 import { invoke } from '../lib/api';
 import { useInvoke } from '../lib/hooks';
+import { NewRoutine } from '../components/NewRoutine';
 
 /** Active navigation permissions, with revoke controls. */
 function GrantsBanner() {
@@ -204,11 +205,18 @@ const shortWhen = (iso: string) => new Date(iso).toLocaleString([], { weekday: '
 /** Reminders and routines Keo runs at their time, with pause and delete. */
 function Scheduled() {
   const q = useInvoke('schedule:list', {}, { refreshOn: ['schedule:changed'], pollMs: 60000 });
+  const [adding, setAdding] = useState(false);
   const list = q.data ?? [];
-  if (!list.length) return null;
   return (
     <div style={{ marginBottom: 12 }}>
-      <h3 style={{ margin: '0 0 6px' }}>Scheduled</h3>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <h3 style={{ margin: 0 }} className="grow">Scheduled</h3>
+        <button className="btn sm" onClick={() => setAdding(true)} title="Something Keo does by itself at a time (a daily video idea, a weekly plan…), or a reminder">
+          <Icon name="plus" size={12} /> New routine
+        </button>
+      </div>
+      {adding && <NewRoutine onClose={() => setAdding(false)} />}
+      {!list.length && <p className="small muted">Nothing scheduled. A routine is something Keo does by itself at its time, like a video idea every morning.</p>}
       {list.map((s) => (
         <div key={s.id} className="card">
           <div className="row">
@@ -217,6 +225,11 @@ function Scheduled() {
               {s.title}
             </strong>
             <span className={`chip ${s.state === 'active' ? 'accent' : s.state === 'paused' ? 'warn' : ''}`}>{s.state === 'active' ? (s.kind === 'reminder' ? 'Reminder' : 'Routine') : s.state === 'paused' ? 'Paused' : 'Done'}</span>
+            {s.kind === 'routine' && s.state !== 'done' && (
+              <button className="btn sm" onClick={() => void invoke('schedule:runNow', { id: s.id })} title="Run it now (its schedule stays the same)">
+                Run now
+              </button>
+            )}
             {s.state !== 'done' && (
               <button className="btn sm" onClick={() => void invoke('schedule:pause', { id: s.id, paused: s.state === 'active' })}>
                 {s.state === 'active' ? 'Pause' : 'Resume'}
