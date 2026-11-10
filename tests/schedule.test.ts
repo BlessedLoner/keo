@@ -43,7 +43,7 @@ async function script(req: ChatRequest): Promise<ChatResult> {
   const result = lastToolResult(req);
   if (req.system.includes('# Background job\n')) {
     const word = /TYPE (\w+)/.exec(text)?.[1] ?? 'nothing';
-    if (!result) return toolCall('desktop__type_text', { target: notepad, text: word });
+    if (!result) return toolCall('desktop__type_text', { target: notepad, text: word, method: 'type' });
     return reply(`Typed ${word}: ${result.includes('error') ? 'not done' : 'done'}.`);
   }
   if (result) return reply(`Scheduled: ${result}`);

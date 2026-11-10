@@ -77,7 +77,7 @@ describe('planning multi-step requests', () => {
     expect(systems[4]).toContain('[x] Save it');
     expect(msg.meta.plan?.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
     expect(seen.filter((e) => e.type === 'plan')).toHaveLength(4);
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type', 'focus', 'keys']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste', 'focus', 'keys']);
     expect(h.desktop.documentText).toContain('buy milk');
     // The checklist itself is not shown as an action card.
     expect(msg.meta.tools?.map((t) => t.capabilityId)).toEqual(['desktop.list_windows', 'desktop.type_text', 'desktop.press_keys']);

@@ -55,7 +55,7 @@ describe('several steps in one reply', () => {
     approveAll();
     const c = h.services.conversations.create();
     const msg = await h.services.agent.send(c.id, 'type buy milk in notepad and save').done;
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type', 'focus', 'keys']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste', 'focus', 'keys']);
     expect(msg.meta.tools?.map((t) => t.outcome)).toEqual(['executed', 'executed']);
     // Two actions, one round of thinking in between instead of two.
     expect(rounds).toBe(2);

@@ -130,7 +130,7 @@ describe('tool safety', () => {
     h.services.tasks.approveStep(step.id, step.inputHash);
     const msg = await run.done;
     // Typing first brings the target to the front (approval happened in Keo's window).
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
     expect(msg.meta.tools?.[0]?.outcome).toBe('executed');
     expect(msg.content).toContain('succeeded');
   });
@@ -234,7 +234,7 @@ describe('tool safety', () => {
     expect(h.desktop.inputCalls()).toHaveLength(0);
     h.services.tasks.approvePlan(task!.id, Object.fromEntries(task!.steps.map((s) => [s.id, s.inputHash])));
     await waitFor(() => h.services.tasks.get(task!.id)!.state === 'completed');
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'focus', 'paste']);
   });
 
   it('rejects plans containing unknown capabilities', async () => {

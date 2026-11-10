@@ -55,7 +55,7 @@ export function explainStepError(detail: string | undefined): { text: string; te
   const d = (detail ?? '').trim();
   if (!d) return { text: 'It did not work.', technical: null };
   const hit = STEP.find(([r]) => r.test(d));
-  const looksTechnical = /\b[A-Z]{2,}[A-Z_]{3,}\b|\b(at |Error:|errno|stack|undefined|null)\b|[{}[\]]|\\\\|\b\d{3}\b|\d{4,} ?ms\b/.test(d) || d.length > 220;
+  const looksTechnical = /\b[A-Z]{2,}[A-Z_]{3,}\b|\bat \S+ \(|\b(Error:|errno|stack trace|undefined|null)\b|[{}[\]]|\\\\|\b\d{3}\b|\d{4,} ?ms\b/.test(d) || d.length > 220;
   if (hit && looksTechnical) return { text: hit[1], technical: d };
   if (looksTechnical) return { text: 'It did not work because of a technical problem.', technical: d };
   return { text: d, technical: null };

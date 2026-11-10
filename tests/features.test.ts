@@ -52,7 +52,7 @@ describe('desktop input brings the target to the front', () => {
     expect(st.preview.summary).toContain('to the front');
     h.services.tasks.approveStep(st.id, st.inputHash);
     const msg = await run.done;
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
     expect(msg.meta.tools?.[0]?.outcome).toBe('executed');
   });
 
@@ -274,11 +274,11 @@ describe('reliable text entry', () => {
     expect(task.steps[0]!.result).toMatchObject({ method: 'paste', clipboardRestored: true });
   });
 
-  it('types short single-line text', async () => {
+  it('pastes short single-line text too (typed letters can lag behind in some apps)', async () => {
     h = makeHarness();
     enable(h);
     const task = await runType(h, 'Hello Gideon');
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
     expect(task.steps[0]!.verification).toBe('verified');
   });
 
@@ -333,7 +333,7 @@ describe('honesty guard for claimed actions', () => {
     h.services.tasks.approveStep(st.id, st.inputHash);
     const msg = await run.done;
     expect(msg.content).toContain('⚠ Keo');
-    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'type']);
+    expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
   });
 
   it('warns the user when the model still does not act', async () => {

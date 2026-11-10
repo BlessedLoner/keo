@@ -78,10 +78,56 @@ export async function bringToFront(d: CapabilityDeps, target: TargetT, settings:
 }
 
 
-/** Paste long/multi-line text (exact, atomic); type short single-line text. */
-export function chooseMethod(text: string, method: 'auto' | 'paste' | 'type'): 'paste' | 'type' {
-  if (method !== 'auto') return method;
-  return text.length > 60 || /[\r\n]/.test(text) ? 'paste' : 'type';
+/**
+ * Text is pasted (Ctrl+V: exact, all at once) unless typing is asked for. Letters typed one by one
+ * are sent as Unicode key presses, which some apps (the new Windows Notepad) hold back until the
+ * next mouse or keyboard event — they then land wherever the cursor is by then.
+ */
+export function chooseMethod(_text: string, method: 'auto' | 'paste' | 'type'): 'paste' | 'type' {
+  return method === 'type' ? 'type' : 'paste';
+}
+
+/** Text as an editor holds it, for comparing what was sent with what the window shows. */
+export function normText(t: string): string {
+  return t.replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+/** Every non-empty line of `want` appears in `have`, in order (rich editors may reformat). */
+export function textArrived(have: string, want: string): boolean {
+  const h = normText(have);
+  const w = normText(want);
+  if (h.includes(w)) return true;
+  let at = 0;
+  for (const l of w.split('\n').map((x) => x.trim()).filter(Boolean)) {
+    const k = h.indexOf(l, at);
+    if (k < 0) return false;
+    at = k + l.length;
+  }
+  return true;
+}
+
+/**
+ * Keys and pastes are processed by the application after Windows has accepted them: a busy app
+ * (the new Notepad, a browser) can take a while. Wait until the text is really there — or has
+ * stopped changing — before checking it or doing anything else, so late letters never land on top
+ * of the next step.
+ */
+export async function waitForText(d: CapabilityDeps, hwnd: string, want: string, maxMs: number): Promise<string | null> {
+  if (d.focusSettleMs === 0) return d.desktop.backend.readText(hwnd).catch(() => null);
+  const started = Date.now();
+  let last: string | null = null;
+  let sameSince = Date.now();
+  for (;;) {
+    const now = await d.desktop.backend.readText(hwnd).catch(() => null);
+    if (now === null) return null;
+    if (textArrived(now, want)) return now;
+    if (now !== last) {
+      last = now;
+      sameSince = Date.now();
+    } else if (Date.now() - sameSince > 1200) return now;
+    if (Date.now() - started > maxMs) return now;
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 export const FRESH_TARGET_NOTE = ' Keo brings the window to the front itself as part of the approved action, so you do not need desktop__focus_window first. Take the target from desktop__list_windows in this conversation; never invent handles.';
@@ -520,12 +566,14 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     id: 'desktop.type_text',
     version: '1.2.0',
     title: 'Type text',
-    description: `Put text into an allow-listed window at its cursor. Long or multi-line text is pasted via the clipboard (exact and fast); short text is typed. Write plain text for plain-text apps like Notepad (no Markdown symbols). Never use it to submit forms, send messages or enter credentials without the user explicitly asking.${FRESH_TARGET_NOTE}`,
+    description: `Put text into an allow-listed window. By default it is added at the END of what is already there (never over selected text); newLine: true starts it on a new line; position "replace" replaces everything in the box or document; position "cursor" puts it exactly at the text cursor. Text is pasted via the clipboard (exact and instant; the user's clipboard is put back); method "type" types key by key, only for boxes that refuse pasting. Keo waits until the text has really arrived before reporting. Write plain text for plain-text apps like Notepad (no Markdown symbols). Never use it to submit forms, send messages or enter credentials without the user explicitly asking.${FRESH_TARGET_NOTE}`,
     input: z
       .object({
         target: Target,
         text: z.string().min(1).max(20000),
-        method: z.enum(['auto', 'paste', 'type']).default('auto').describe('auto = paste when long or multi-line, otherwise type'),
+        method: z.enum(['auto', 'paste', 'type']).default('auto').describe('auto = paste (exact and instant); type = key by key, only for boxes that refuse pasting'),
+        position: z.enum(['end', 'replace', 'cursor']).default('end').describe('end = after the existing text (default); replace = instead of all existing text; cursor = at the text cursor'),
+        newLine: z.boolean().default(false).describe('Start on a new line when there is already text'),
       })
       .strict(),
     output: z.object({ chars: z.number(), method: z.enum(['paste', 'type']), clipboardRestored: z.boolean().nullable() }),
@@ -556,10 +604,21 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     auditView: (i) => ({ target: i.target, chars: i.text.length, method: i.method }),
     async execute(i, ctx) {
       const method = chooseMethod(i.text, i.method);
-      const text = i.text.replace(/\r\n?/g, '\n');
+      let text = i.text.replace(/\r\n?/g, '\n');
       await bringToFront(d, i.target, ctx.settings);
+      // Where the text goes: after what is there (nothing selected gets replaced), instead of it, or at the cursor.
+      const before = i.position === 'cursor' ? null : await d.desktop.backend.readText(i.target.hwnd).catch(() => null);
+      if (before !== null && before.trim()) {
+        if (i.position === 'replace') await d.desktop.backend.keys(i.target.hwnd, [0x11], 0x41); // Ctrl+A
+        else {
+          await d.desktop.backend.keys(i.target.hwnd, [0x11], 0x23); // Ctrl+End
+          if (i.newLine && !/\n\s*$/.test(before.replace(/\r/g, ''))) text = `\n${text}`;
+        }
+      }
       if (method === 'type') {
         const r = await d.desktop.backend.typeText(i.target.hwnd, text);
+        // Letters still on their way must land before anything else happens.
+        await waitForText(d, i.target.hwnd, text, Math.min(20000, 2000 + 80 * text.length));
         return { chars: r.chars, method, clipboardRestored: null };
       }
       let previous: string | null;
@@ -572,8 +631,10 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
       let restored = false;
       try {
         await d.desktop.backend.paste(i.target.hwnd);
-        // Give the application time to read the clipboard before restoring it.
-        await new Promise((res) => setTimeout(res, d.focusSettleMs === 0 ? 0 : 400));
+        // The clipboard goes back only once the text is in: a slow app reads it late, and would
+        // otherwise paste the old clipboard instead.
+        const now = await waitForText(d, i.target.hwnd, text, 6000);
+        if (now === null) await new Promise((res) => setTimeout(res, d.focusSettleMs === 0 ? 0 : 400));
       } finally {
         try {
           if (previous !== null) {
@@ -587,21 +648,12 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
       return { chars: text.length, method, clipboardRestored: restored };
     },
     async verify(i) {
-      const got = await d.desktop.backend.readText(i.target.hwnd);
+      const got = await waitForText(d, i.target.hwnd, i.text, 3000);
       if (got === null) return { verified: null, detail: 'This application does not expose its text, so Keo could not read back the result.' };
-      const norm = (t: string) => t.replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
-      const want = norm(i.text);
-      const have = norm(got);
-      if (have.includes(want)) return { verified: true, detail: 'The full text was read back from the window.' };
+      if (normText(got).includes(normText(i.text))) return { verified: true, detail: 'The full text was read back from the window.' };
       // Rich editors may auto-format; accept if every non-empty line arrived in order.
-      const lines = want.split('\n').map((l) => l.trim()).filter(Boolean);
-      let at = 0;
-      for (const l of lines) {
-        const k = have.indexOf(l, at);
-        if (k < 0) return { verified: false, detail: 'The text read back from the window does not match what was sent.' };
-        at = k + l.length;
-      }
-      return { verified: true, detail: 'All lines were read back from the window (formatting may differ).' };
+      if (textArrived(got, i.text)) return { verified: true, detail: 'All lines were read back from the window (formatting may differ).' };
+      return { verified: false, detail: 'The text read back from the window does not match what was sent. Look at the window before doing anything else — do not type it again on top.' };
     },
   });
 

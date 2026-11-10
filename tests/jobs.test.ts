@@ -43,7 +43,7 @@ async function script(req: ChatRequest): Promise<ChatResult> {
   if (req.system.includes('# Background job\n')) {
     const typing = /TYPE (\w+)/.exec(text);
     if (typing) {
-      if (!hasToolResult(req)) return toolCall('desktop__type_text', { target: notepad, text: typing[1] });
+      if (!hasToolResult(req)) return toolCall('desktop__type_text', { target: notepad, text: typing[1], method: 'type' });
       await gate(`after-${typing[1]}`);
       return reply(`Typed ${typing[1]}.`);
     }

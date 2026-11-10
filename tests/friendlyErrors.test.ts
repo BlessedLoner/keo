@@ -32,6 +32,8 @@ describe('problems in normal words', () => {
     // Keo's own messages are already plain: unchanged.
     const plain = explainStepError('No window called WhatsApp is open.');
     expect(plain).toEqual({ text: 'No window called WhatsApp is open.', technical: null });
+    const look = 'The text read back from the window does not match what was sent. Look at the window before doing anything else.';
+    expect(explainStepError(look)).toEqual({ text: look, technical: null });
   });
 });
 
