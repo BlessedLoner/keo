@@ -86,7 +86,7 @@ describe('Keo’s builder: tools', () => {
   it('are in the create group, and the start tool teaches how to build', () => {
     const { p } = make();
     const caps = buildCapabilities({ projects: p, host: null });
-    expect(caps.map((c) => c.id)).toEqual(['build.start', 'build.write', 'build.append', 'build.edit', 'build.read', 'build.update', 'build.picture', 'build.check', 'build.open', 'build.list']);
+    expect(caps.map((c) => c.id)).toEqual(['build.start', 'build.write', 'build.append', 'build.edit', 'build.read', 'build.update', 'build.picture', 'build.check', 'build.open', 'build.list', 'build.history', 'build.undo', 'build.city', 'build.model']);
     expect(groupOf('build__start')).toBe('create');
     const start = caps[0]!;
     expect(start.description).toContain('Cloudflare Worker');

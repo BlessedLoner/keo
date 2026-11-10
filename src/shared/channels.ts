@@ -126,6 +126,8 @@ export const INVOKE_CHANNELS = [
   'builds:folder',
   'builds:todo',
   'builds:delete',
+  'builds:history',
+  'builds:goBack',
   'studio:aiVideoPlan',
   'studio:aiVideoMake',
   'studio:aiJobs',

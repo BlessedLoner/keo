@@ -248,6 +248,13 @@ describe('New Studio models through Keo Cloud', () => {
     await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/nano-banana-pro/edit', input: { prompt: 'p', image_urls: ['https://v3.fal.media/files/a.jpg'], resolution: '4K' } });
     expect(w.fal.at(-1)!.body).toMatchObject({ resolution: '2K' });
   });
+
+  it('a 3D model for a game: priced on the server ($0.35 → 70 credits), game-sized whatever the app asks', async () => {
+    const r = await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/trellis-2', input: { image_url: 'https://v3.fal.media/files/car.png', decimation_target: 5_000_000, texture_size: 4096, resolution: 1536 } });
+    expect(r.body.credits).toBe(70);
+    expect(w.fal.at(-1)!.body).toEqual({ image_url: 'https://v3.fal.media/files/car.png', resolution: 1024, texture_size: 2048, decimation_target: 150_000, remesh: true });
+    expect((await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/trellis-2', input: { image_url: 'https://evil.example/x.png' } })).status).toBe(400);
+  });
 });
 
 /** A 16-bit mono WAV header (and a little of its data) for a recording `seconds` long at 16 kHz. */

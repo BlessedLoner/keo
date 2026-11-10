@@ -236,6 +236,8 @@ export const invokeSchemas = {
   'builds:folder': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), file: z.string().max(300).optional() }).strict(),
   'builds:todo': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), index: z.number().int().min(0).max(39), done: z.boolean() }).strict(),
   'builds:delete': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
+  'builds:history': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
+  'builds:goBack': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), version: z.number().int().min(1) }).strict(),
   // Real AI video from a description: the shot plan (Keo's model, nothing paid yet), then the video.
   'studio:aiVideoPlan': z.object({ description: z.string().trim().min(10).max(8000), seconds: z.number().int().min(5).max(60), model: z.enum(['kling-3-pro', 'veo-3.1-fast']), cast: z.array(CharacterId).max(3) }).strict(),
   'studio:aiVideoMake': z.object({ plan: AiVideoPlan, stage: z.enum(['frames', 'all']).default('frames') }).strict(),
@@ -638,6 +640,8 @@ export interface InvokeOutputs {
   'builds:folder': { opened: boolean };
   'builds:todo': BuildSummary;
   'builds:delete': { deleted: boolean };
+  'builds:history': Array<{ version: number; at: string; lastAt: string; files: string[]; changes: number }>;
+  'builds:goBack': { version: number; restored: string[]; removed: string[] };
   'studio:aiVideoPlan': { title: string; style: string; shots: AiShot[] };
   'studio:aiVideoMake': { projectId: string; shots: number; ready: number; pending: number };
   'studio:aiFilm': { shots: number; costUsd: number };

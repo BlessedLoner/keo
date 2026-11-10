@@ -17,6 +17,10 @@ export interface BuildDeps {
   look?: (png: Buffer, brief: string, signal: AbortSignal) => Promise<string>;
   /** An AI picture for the site (Keo's picture maker): PNG bytes. */
   picture?: (prompt: string, size: '1024x1024' | '1536x1024' | '1024x1536', signal: AbortSignal) => Promise<Buffer>;
+  /** A real place from OpenStreetMap, as the drive kit's city.json. */
+  city?: (place: string, radius: number, signal: AbortSignal) => Promise<{ json: string; name: string; roads: number; buildings: number; attribution: string }>;
+  /** A realistic AI 3D model (GLB bytes) from a description; null when it cannot be made here (and why). */
+  model3d?: { make: (prompt: string, signal: AbortSignal) => Promise<Buffer>; unavailable: () => string | null; costLabel: string };
 }
 
 const fail = (code: string, message: string) => new CapabilityError(code, message, { dispatched: 'no' });
@@ -37,12 +41,13 @@ const HOW_TO_BUILD = [
   '1. Plan first: the pages or screens, the features, the look (colours, fonts, motion), the data the backend keeps. Build the whole thing, not a demo: every page, every button working, real content (no lorem ipsum), mobile and desktop layouts.',
   '2. Files: index.html at the root (and other pages: about.html, shop.html…), css/, js/, assets/. Pages link files by root paths (/css/site.css, /js/app.js). Split the code into several focused files (css/base.css, css/sections.css, js/motion.js, js/form.js…), never one huge file.',
   '   SMALL CALLS (a reply has a length limit; a call that is too long is cut off and fails): one file per build__write call, under 8,000 characters. A longer file is written in parts: build__write its first part, then build__append the next parts, each under 8,000 characters, in order. Never put a whole site in one call.',
-  '3. Libraries come with Keo (never from the internet): list them in build__start or build__update and Keo copies them into /lib. No CDN links, no Google Fonts (use system font stacks, or fonts drawn as SVG), no remote images: make pictures with build__picture, SVG, CSS or canvas.',
+  '3. Libraries come with Keo (never from the internet): list them in build__start or build__update and Keo copies them into /lib. Every site: "fonts" (real web fonts — choose ones that fit the brand) and "icons" (Lucide icons; never emoji as icons). No CDN links, no Google Fonts links, no remote images: make pictures with build__picture, SVG, CSS or canvas.',
   '4. Backend (websites and apps that keep data, have accounts, forms, orders…): api/index.js written like a Cloudflare Worker — export default { async fetch(request, env) { … } } routing on new URL(request.url).pathname under /api/…, answering with Response.json(...). The database is env.DB, like Cloudflare D1: await env.DB.prepare("SELECT … WHERE id = ?").bind(id).all() → { results }, .first(), .run() → { meta: { last_row_id } }, env.DB.batch([...]). Tables in api/schema.sql (CREATE TABLE IF NOT EXISTS …), made automatically. Hash passwords with crypto.subtle (PBKDF2), keep sessions in a table with a random token in an HttpOnly cookie. Pages call it with fetch("/api/…"). Settings go in build__update vars (env.NAME); secrets (payment keys) never in files: put them on the to-do list.',
   '5. Check your work: build__check loads a page like a visitor, reports errors, missing files and what it looks like. Fix everything it finds (build__edit for small changes), check again until clean. Check every page, and the API by using the pages.',
   '6. To-do list: things only the user can do (buy a domain, create a Paystack or Stripe account and add its secret key, an email service, a Cloudflare account, legal pages’ details, real photos or texts) go in build__update todo with how to do each. Never pretend those are done.',
   '7. Finish: build__open shows it to the user in Keo’s preview. Tell them what you built, the pages and features, how to try it, and their to-do list. PUT-IT-ONLINE.md in the folder explains going online.',
   '',
+  'Car and driving games (racing, police chases, open-world city driving): ALWAYS the "drive" library — a tested engine with realistic lighting, a real city, real car physics, traffic, police, races, a garage and a HUD. Never write a car game from scratch. Steps: build__start with libraries ["drive"]; build__city for the real place (a US downtown fits street racing; the credit line is shown by the kit); for realistic cars build__model each car (about one per class, it costs credits: ask how many the user wants if unclear; without credits the kit draws its own cars); then index.html calling createDriveGame with the cars, races and story, and your own js files for missions, story events and extra features on the returned api. Make the brand and car names up (real brands need a licence). Check with build__check, then build__open.',
   'Games: a real game, not a toy — a title screen, clear controls shown on screen (keyboard and touch), several levels or rising difficulty, score and best score (localStorage), lives or health, pause, game over and restart, sound effects and music made with Web Audio, juice (particles, screen shake, easing, hit flashes). 2D: Phaser. 3D: three.js (lights and shadows, fog, post-processing bloom when it suits, a proper camera) with Rapier for physics. Motion sites: GSAP with ScrollTrigger (pinned sections, scrubbed timelines, text reveals), three.js scenes in the background where it fits; respect prefers-reduced-motion.',
   '',
   'Libraries:',
@@ -51,7 +56,7 @@ const HOW_TO_BUILD = [
 
 const Manifest = z.object({ id: z.string(), title: z.string(), kind: z.string(), folder: z.string(), libraries: z.array(z.string()), backend: z.boolean(), todo: z.array(z.object({ what: z.string(), how: z.string(), who: z.string(), done: z.boolean() })) });
 const summary = (d: BuildDeps, m: BuildManifest) => ({ id: m.id, title: m.title, kind: m.kind, folder: run(() => d.projects.dir(m.id)), libraries: m.libraries, backend: m.backend, todo: m.todo });
-const Libraries = z.array(z.enum(BUILD_LIBRARY_IDS as [BuildLibraryId, ...BuildLibraryId[]])).max(4);
+const Libraries = z.array(z.enum(BUILD_LIBRARY_IDS as [BuildLibraryId, ...BuildLibraryId[]])).max(BUILD_LIBRARY_IDS.length);
 
 export function buildCapabilities(d: BuildDeps): AnyCapability[] {
   const base = { version: '1.0.0', risk: 'low' as const, permissions: [], maxAttempts: 1, modelVisible: true };
@@ -82,7 +87,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
       // Asked again in the same chat (Retry, continue, the request sent again): the same build carries on.
       const existing = ctx.conversationId ? d.projects.forConversation(ctx.conversationId) : null;
       if (existing) {
-        const libs = [...new Set([...existing.libraries, ...i.libraries])].slice(0, 4) as BuildLibraryId[];
+        const libs = [...new Set([...existing.libraries, ...i.libraries])] as BuildLibraryId[];
         const m = libs.length !== existing.libraries.length ? run(() => d.projects.update(existing.id, { libraries: libs })) : existing;
         return {
           ...summary(d, m),
@@ -333,5 +338,125 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     },
   });
 
-  return [start, write, append, edit, read, update, picture, check, open, list];
+  const history = defineCapability({
+    ...base,
+    id: 'build.history',
+    title: 'A build’s earlier versions',
+    description: 'The earlier versions of a build (newest first): when each change was made and which files it touched. Use it when the user wants to undo something or go back to how it was.',
+    input: z.object({ build: BuildId }).strict(),
+    output: z.object({ versions: z.array(z.object({ version: z.number(), at: z.string(), lastAt: z.string(), files: z.array(z.string()), changes: z.number() })) }),
+    approval: 'never',
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 15_000,
+    verificationPolicy: 'Read from the project’s history.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: () => ({ summary: 'Look at the build’s earlier versions', target: null, consequences: [], dataExport: null }),
+    auditView: () => ({}),
+    async execute(i) {
+      return { versions: run(() => d.projects.versions(i.build)).slice(0, 30) };
+    },
+  });
+
+  const undo = defineCapability({
+    ...base,
+    id: 'build.undo',
+    title: 'Undo changes to a build',
+    description: 'Go back to how a build was: without version, undo the latest change (“undo that”, “put it back”); with a version from build__history, undo that version and everything after it. Files go back to how they were and files added since are removed. Then build__check it.',
+    input: z.object({ build: BuildId, version: z.number().int().min(1).optional() }).strict(),
+    output: z.object({ version: z.number(), restored: z.array(z.string()), removed: z.array(z.string()) }),
+    approval: 'never',
+    consequential: false,
+    idempotent: false,
+    timeoutMs: 30_000,
+    verificationPolicy: 'Each file is put back from the copy kept before it was changed.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: (i) => ({ summary: i.version ? `Go back to before version ${i.version}` : 'Undo the latest change to the build', target: null, consequences: ['Files go back to how they were; files added since are removed.'], dataExport: null }),
+    auditView: (i) => ({ version: i.version ?? null }),
+    async execute(i) {
+      return run(() => d.projects.goBack(i.build, i.version));
+    },
+  });
+
+  const city = defineCapability({
+    ...base,
+    id: 'build.city',
+    title: 'Put a real city into a game',
+    description:
+      'Download a real place (its streets, lanes, buildings with their real heights, parks and water) from OpenStreetMap and save it in the build as assets/city.json for the drive kit (createDriveGame({ city: "/assets/city.json" })). place: a district or city, e.g. "Downtown Los Angeles, California", "Midtown Manhattan, New York", "The Strip, Las Vegas". radius: metres around its centre (700 is a good driving area; up to 1500). Takes up to two minutes. The game must show "© OpenStreetMap contributors" (the kit does).',
+    input: z
+      .object({
+        build: BuildId,
+        place: z.string().trim().min(3).max(160),
+        radius: z.number().int().min(250).max(1500).default(700),
+        path: z.string().regex(/^assets\/[A-Za-z0-9_/-]{1,80}\.json$/).default('assets/city.json'),
+      })
+      .strict(),
+    output: z.object({ path: z.string(), name: z.string(), roads: z.number(), buildings: z.number(), attribution: z.string(), use: z.string() }),
+    approval: 'never',
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 300_000,
+    verificationPolicy: 'The city file is saved in the build.',
+    unavailableReason: () => (d.city ? null : 'Real cities need Keo’s map download (not available here).'),
+    autonomy: () => ({ tier: 'routine' }),
+    preview: (i) => ({ summary: `Put ${i.place} into the game`, target: null, consequences: ['Downloads map data from OpenStreetMap (free).'], dataExport: 'The place name goes to OpenStreetMap’s search.' }),
+    auditView: (i) => ({ radius: i.radius }),
+    async execute(i, ctx) {
+      if (!d.city) throw fail('unavailable', 'Real cities need Keo’s map download.');
+      let c: Awaited<ReturnType<NonNullable<BuildDeps['city']>>>;
+      try {
+        c = await d.city(i.place, i.radius, ctx.signal);
+      } catch (e) {
+        throw fail('city_failed', e instanceof Error ? e.message : String(e));
+      }
+      const rel = run(() => d.projects.writeBinary(i.build, i.path, Buffer.from(c.json)));
+      return { path: rel, name: c.name, roads: c.roads, buildings: c.buildings, attribution: c.attribution, use: `createDriveGame({ city: "/${rel}" }) — or buildCity(world, await (await fetch("/${rel}")).json(), { physics })` };
+    },
+  });
+
+  const model = defineCapability({
+    ...base,
+    id: 'build.model',
+    title: 'Make a realistic 3D model for a game',
+    description:
+      'Make a realistic 3D model (a textured .glb) from a description, for a game: a car, a vehicle, a prop. Keo makes a studio picture of it with AI, then turns the picture into a 3D model (takes a few minutes). Describe it like a car photographer would: body style, era, colour and finish, details (e.g. "a low two-door supercar, sharp LED headlights, matte black with carbon details, big rear wing"); never a real brand or logo. Use the file as a car\'s model in the drive kit (cars: [{ …, model: "/assets/cars/name.glb" }]) or with loadCarModel. It costs Studio credits and the user approves each one.',
+    input: z
+      .object({
+        build: BuildId,
+        path: z.string().regex(/^assets\/[A-Za-z0-9_/-]{1,100}\.glb$/).describe('Where it goes, like assets/cars/raptor.glb'),
+        prompt: z.string().trim().min(10).max(1500),
+      })
+      .strict(),
+    output: z.object({ path: z.string(), kb: z.number(), use: z.string() }),
+    approval: 'always',
+    consequential: true,
+    idempotent: true,
+    timeoutMs: 15 * 60_000,
+    verificationPolicy: 'The model file is saved in the build.',
+    unavailableReason: () => (d.model3d ? d.model3d.unavailable() : 'Making 3D models needs Keo Cloud or your own fal.ai key.'),
+    autonomy: () => ({ tier: 'important', reason: 'it costs Studio credits' }),
+    preview: (i) => ({
+      summary: `Make the 3D model ${i.path}`,
+      target: null,
+      consequences: [`Costs ${d.model3d?.costLabel ?? 'Studio credits'} (a realistic picture, then the 3D model).`, `Description: “${i.prompt.slice(0, 300)}”`],
+      dataExport: 'The description and the picture go to fal.ai (through Keo Cloud, or your own fal.ai key).',
+    }),
+    auditView: (i) => ({ path: i.path }),
+    async execute(i, ctx) {
+      if (!d.model3d) throw fail('unavailable', 'Making 3D models needs Keo Cloud or your own fal.ai key.');
+      const why = d.model3d.unavailable();
+      if (why) throw fail('unavailable', why);
+      let glb: Buffer;
+      try {
+        glb = await d.model3d.make(i.prompt, ctx.signal);
+      } catch (e) {
+        throw fail('model_failed', e instanceof Error ? e.message : String(e));
+      }
+      const rel = run(() => d.projects.writeBinary(i.build, i.path, glb));
+      return { path: rel, kb: Math.round(glb.length / 1024), use: `cars: [{ id, name, style, price, spec, model: "/${rel}" }] in createDriveGame, or await loadCarModel("/${rel}")` };
+    },
+  });
+
+  return [start, write, append, edit, read, update, picture, check, open, list, history, undo, city, model];
 }

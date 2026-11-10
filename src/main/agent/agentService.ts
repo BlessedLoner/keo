@@ -79,6 +79,13 @@ interface ActiveTurn {
 export class AgentService {
   /** Live state appended to the system prompt each turn (e.g. running live chats). */
   systemExtra: (conversationId: string) => string = () => '';
+  /**
+   * Big creative work (building a website, app or game) gets the strongest model the user can use
+   * on this provider (the Keo account's best model in its plan); null = keep the chosen model.
+   */
+  heavyModel: ((provider: ChatProvider) => string | null) | null = null;
+  /** This turn is building something (a build already in this chat, or a request to make one). */
+  isBuildWork: ((conversationId: string, text: string) => boolean) | null = null;
   /** A consequential action the user approved worked: Keo may learn from it (who a name means). */
   learned: ((capabilityId: string, input: unknown, result: unknown) => void) | null = null;
   /** Tool groups a conversation always gets (e.g. Studio's tools for Keo Studio's own conversations). */
@@ -424,7 +431,24 @@ export class AgentService {
       const { route } = picked;
       // A routed model id the provider does not list uses the capabilities declared for that provider.
       const modelInfo = (p: ChatProvider, id: string, routed: boolean) => p.models().find((m) => m.id === id) ?? (routed ? p.models()[0] : undefined);
-      let info = modelInfo(provider, model, !!route);
+      // Building a site, app or game: the strongest model available, from the first word on.
+      const toHeavy = () => {
+        const heavy = this.heavyModel?.(provider) ?? null;
+        if (!heavy || heavy === model) return false;
+        model = heavy;
+        meta.model = model;
+        meta.escalated = 'building';
+        this.log.info('agent.heavy_model', { providerId: provider.id, model }, correlationId);
+        return true;
+      };
+      const latestText = this.conversations.getMessage(sourceMessageId)?.content ?? '';
+      let heavyOn = false;
+      try {
+        heavyOn = !!this.isBuildWork?.(conversationId, latestText) && toHeavy();
+      } catch {
+        heavyOn = false;
+      }
+      let info = modelInfo(provider, model, !!route || heavyOn);
       meta.providerId = provider.id;
       meta.model = model;
       if (route) meta.route = route.route;
@@ -665,7 +689,15 @@ export class AgentService {
         // Several on-screen steps in one reply (open → type → save) run in order; once one does not
         // work, the rest are not run — they would act on the wrong window or text.
         let chainBroken = false;
-        if (result.toolCalls.some((c) => c.name.startsWith('build__'))) building = true;
+        if (result.toolCalls.some((c) => c.name.startsWith('build__'))) {
+          building = true;
+          // A build that started on a lighter model continues on the strongest one.
+          if (!heavyOn && toHeavy()) {
+            heavyOn = true;
+            info = modelInfo(provider, model, true);
+            maxOut = outputLimit(provider, info);
+          }
+        }
         for (const call of result.toolCalls) {
           if (call.name === LOAD_TOOLS) {
             // Groups this conversation leaves out (the old video pipeline inside Studio) stay out.

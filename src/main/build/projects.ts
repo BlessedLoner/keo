@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { BUILD_LIBRARY_IDS, copyLibrary, withImportMap, type BuildLibraryId } from './libraries';
+import { BUILD_LIBRARY_IDS, copyLibrary, withImportMap, withNeeds, type BuildLibraryId } from './libraries';
+import { goBack, HISTORY_DIR, recordBefore, versions, type BuildVersion } from './history';
 
 /**
  * Keo's builder: websites (with their backend), web apps and games as real projects, each a folder
@@ -19,7 +20,7 @@ export type BuildKind = z.infer<typeof BuildKind>;
 const TEXT_EXT = 'html|css|js|mjs|json|svg|txt|md|sql|glsl|frag|vert|webmanifest|xml|toml|csv';
 export const FILE_PATH = new RegExp(`^(?!.*\\.\\.)(?:[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}/){0,6}[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}\\.(?:${TEXT_EXT})$`);
 /** Files Keo manages itself: never written by the model. */
-const RESERVED = /^(lib\/|data\/|keo-build\.json$|PUT-IT-ONLINE\.md$|wrangler\.toml$|\.assetsignore$)/;
+const RESERVED = /^(lib\/|data\/|\.keo-history\/|keo-build\.json$|PUT-IT-ONLINE\.md$|wrangler\.toml$|\.assetsignore$)/;
 
 export const TodoItem = z
   .object({
@@ -167,6 +168,8 @@ export class BuildProjects {
   update(id: string, patch: Partial<Pick<BuildManifest, 'title' | 'brief' | 'libraries' | 'backend' | 'vars' | 'todo'>>): BuildManifest {
     const m = this.manifest(id);
     const next = BuildManifest.parse({ ...m, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)), updatedAt: new Date().toISOString() });
+    // A library brings what it needs (the drive kit: three.js, Rapier, the fonts).
+    next.libraries = withNeeds(next.libraries);
     // Libraries newly listed (or missing from the folder) are copied in.
     for (const lib of next.libraries) if (!m.libraries.includes(lib) || !fs.existsSync(path.join(this.dir(id), 'lib', lib))) copyLibrary(lib, this.d.modules(), this.dir(id));
     this.saveManifest(next);
@@ -201,6 +204,12 @@ export class BuildProjects {
     if (count > MAX_FILES) throw new BuildError(`A project can have up to ${MAX_FILES} files of its own.`);
     const size = existing.filter((f) => !planned.some((p) => p.rel === f.path)).reduce((n, f) => n + f.bytes, 0) + planned.reduce((n, p) => n + Buffer.byteLength(p.content), 0);
     if (size > MAX_PROJECT) throw new BuildError('The project would be over 40 MB of its own files.');
+    // How these files were, so the change can be undone.
+    try {
+      recordBefore(this.dir(id), planned.map((p) => p.rel));
+    } catch (e) {
+      this.d.log.info('build.history_failed', { error: String(e).slice(0, 200) });
+    }
     for (const p of planned) {
       fs.mkdirSync(path.dirname(p.full), { recursive: true });
       fs.writeFileSync(`${p.full}.keo-tmp`, p.content);
@@ -250,6 +259,26 @@ export class BuildProjects {
     return { path: r.written[0]!, bytes: Buffer.byteLength(text + content) };
   }
 
+  /** Earlier versions of the build's files, newest first. */
+  versions(id: string): BuildVersion[] {
+    this.manifest(id);
+    return versions(this.dir(id));
+  }
+
+  /** Goes back to how the build was before a version (the latest one when none is given). */
+  goBack(id: string, version?: number): { version: number; restored: string[]; removed: string[] } {
+    this.manifest(id);
+    let r: { version: number; restored: string[]; removed: string[] };
+    try {
+      r = goBack(this.dir(id), version);
+    } catch (e) {
+      throw new BuildError(e instanceof Error ? e.message : String(e));
+    }
+    this.d.log.info('build.went_back', { version: r.version, restored: r.restored.length, removed: r.removed.length });
+    this.d.changed?.(id);
+    return r;
+  }
+
   /** The project's own files (not the copied libraries or the preview data). */
   files(id: string): Array<{ path: string; bytes: number }> {
     const dir = this.dir(id);
@@ -259,7 +288,7 @@ export class BuildProjects {
         const full = path.join(d, e.name);
         const rel = path.relative(dir, full).replace(/\\/g, '/');
         if (e.isDirectory()) {
-          if (rel === 'lib' || rel === 'data' || rel === 'node_modules') continue;
+          if (rel === 'lib' || rel === 'data' || rel === 'node_modules' || rel === HISTORY_DIR) continue;
           walk(full);
         } else if (!e.name.endsWith('.keo-tmp')) out.push({ path: rel, bytes: fs.statSync(full).size });
       }
@@ -280,7 +309,7 @@ export class BuildProjects {
   /** A picture (or other binary file) saved into the project, e.g. an AI picture for the hero. */
   writeBinary(id: string, rel: string, bytes: Buffer): string {
     const clean = rel.replace(/\\/g, '/').replace(/^\.?\//, '');
-    if (!/^(?!.*\.\.)(?:[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}\/){0,6}[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}\.(png|jpe?g|webp|gif|mp3|wav|ogg|glb|woff2)$/.test(clean) || RESERVED.test(clean)) throw new BuildError(`“${rel}” is not a picture, sound, model or font path Keo can save.`);
+    if (!/^(?!.*\.\.)(?:[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}\/){0,6}[A-Za-z0-9_-][A-Za-z0-9_.-]{0,80}\.(png|jpe?g|webp|gif|mp3|wav|ogg|glb|woff2|json)$/.test(clean) || RESERVED.test(clean)) throw new BuildError(`“${rel}” is not a picture, sound, model or font path Keo can save.`);
     const full = path.resolve(this.dir(id), clean);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, bytes);
@@ -316,7 +345,7 @@ export class BuildProjects {
         '',
       ].join('\n'),
     );
-    fs.writeFileSync(path.join(dir, '.assetsignore'), ['api', 'data', 'wrangler.toml', 'keo-build.json', 'PUT-IT-ONLINE.md', '.assetsignore', ''].join('\n'));
+    fs.writeFileSync(path.join(dir, '.assetsignore'), ['api', 'data', HISTORY_DIR, 'wrangler.toml', 'keo-build.json', 'PUT-IT-ONLINE.md', '.assetsignore', ''].join('\n'));
     fs.writeFileSync(path.join(dir, 'PUT-IT-ONLINE.md'), onlineGuide(m, name));
   }
 }

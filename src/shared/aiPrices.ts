@@ -44,6 +44,15 @@ export function studioPrice(usd: number, via: 'own' | 'keo' | null): string {
 /** A realistic frame or picture (Nano Banana Pro, 1K or 2K), US dollars. */
 export const REAL_PICTURE_USD = 0.15;
 
+/**
+ * A 3D model from a picture (fal.ai Trellis 2, textured GLB), US dollars. fal.ai's page does not
+ * state it; third-party listings say $0.25–0.35, so the top of that range is charged.
+ */
+export const MODEL_3D_USD = 0.35;
+
+/** A game car: its realistic studio picture, then the 3D model made from it. */
+export const CAR_MODEL_USD = REAL_PICTURE_USD + MODEL_3D_USD;
+
 /** Clone with Kling Motion Control (the character performs the video's moves): US dollars a second. */
 export const MOTION_CLONE_PER_SECOND = 0.112;
 

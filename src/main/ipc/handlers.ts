@@ -650,6 +650,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       if (!m.todo[index]) throw new KeoError('build', 'That to-do item is not there any more.');
       return buildSummary(s.builds.update(id, { todo: m.todo.map((t, i) => (i === index ? { ...t, done } : t)) }));
     },
+    'builds:history': ({ id }) => buildErr(() => s.builds.versions(id)).slice(0, 50),
+    'builds:goBack': ({ id, version }) => buildErr(() => s.builds.goBack(id, version)),
     'builds:delete': async ({ id }) => {
       const dir = buildErr(() => s.builds.dir(id));
       if (!host.trashItem) throw new KeoError('unavailable', 'Keo cannot move folders to the Recycle Bin here.');

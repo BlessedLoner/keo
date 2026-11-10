@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BuildSummary } from '@shared/ipc';
 import { Icon } from '../components/Icon';
 import { Empty, ErrorBanner, useUi } from '../components/ui';
-import { errText, invoke } from '../lib/api';
+import { errText, invoke, subscribe } from '../lib/api';
 import { timeAgo } from '../lib/format';
 import { useInvoke } from '../lib/hooks';
 import { useApp } from '../state/AppState';
@@ -303,6 +303,8 @@ function BuildDetail({ id, onChange, onDeleted }: { id: string; onChange: (b: { 
         </details>
       )}
 
+      <BuildHistory id={id} />
+
       <details className="card">
         <summary>
           <strong>Files</strong> <span className="small muted">· {d.files.length} of its own{b.libraries.length ? ` · libraries: ${b.libraries.join(', ')}` : ''}</span>
@@ -320,5 +322,52 @@ function BuildDetail({ id, onChange, onDeleted }: { id: string; onChange: (b: { 
         <p className="small muted">{d.folder}</p>
       </details>
     </div>
+  );
+}
+
+/** Earlier versions: go back to how the build was before a change (Keo keeps a copy before every change). */
+function BuildHistory({ id }: { id: string }) {
+  const ui = useUi();
+  const [list, setList] = useState<Array<{ version: number; at: string; lastAt: string; files: string[]; changes: number }> | null>(null);
+  const load = useCallback(() => void invoke('builds:history', { id }).then(setList).catch(() => setList([])), [id]);
+  useEffect(() => {
+    load();
+    return subscribe('builds:changed', () => load());
+  }, [load]);
+  if (!list?.length) return null;
+  const back = async (v: { version: number; at: string; files: string[] }) => {
+    const ok = await ui.confirm({
+      title: 'Go back to before this change?',
+      body: `The ${v.files.length} file${v.files.length === 1 ? '' : 's'} changed ${timeAgo(v.at)} — and everything changed after — go back to how they were. Files added since are removed.`,
+      confirmLabel: 'Go back',
+    });
+    if (!ok) return;
+    try {
+      const r = await invoke('builds:goBack', { id, version: v.version });
+      ui.toast(`Went back: ${r.restored.length} file${r.restored.length === 1 ? '' : 's'} restored${r.removed.length ? `, ${r.removed.length} removed` : ''}.`);
+      load();
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <details className="card">
+      <summary>
+        <strong>History</strong> <span className="small muted">· {list.length} version{list.length === 1 ? '' : 's'} · undo any change</span>
+      </summary>
+      <ul className="build-files">
+        {list.map((v, i) => (
+          <li key={v.version}>
+            <span>
+              {i === 0 ? 'Latest change' : 'Change'} · {timeAgo(v.at)} · {v.files.length} file{v.files.length === 1 ? '' : 's'}
+              <span className="small muted"> ({v.files.slice(0, 3).join(', ')}{v.files.length > 3 ? '…' : ''})</span>
+            </span>
+            <button className="btn sm" onClick={() => void back(v)}>
+              {i === 0 ? 'Undo' : 'Go back to before this'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

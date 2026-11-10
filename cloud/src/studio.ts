@@ -8,6 +8,7 @@
  */
 
 import { audioSeconds } from './audioLength';
+import { MODEL_3D_USD } from '../../src/shared/aiPrices';
 import { fail, json, type Env, type Fetch, type Plan, type Supabase } from './gateway';
 
 /** 1 credit is 1 US cent to the user and covers half a cent of fal.ai's price. */
@@ -93,6 +94,12 @@ const ENDPOINTS: Record<string, Pricer> = {
     if (!urls.length) return 'Upload the picture first.';
     const aspect = ['1:1', '4:5', '3:4', '9:16', '16:9', '4:3', '5:4', '2:3', '3:2', '21:9'].includes(String(i.aspect_ratio)) ? String(i.aspect_ratio) : 'auto';
     return { input: { prompt: String(i.prompt ?? '').slice(0, 4000), image_urls: urls, num_images: 1, output_format: 'png', aspect_ratio: aspect, resolution: i.resolution === '1K' ? '1K' : '2K' }, credits: credits(0.15) };
+  },
+  // Game models: a picture made into a textured 3D model (GLB), game-sized.
+  'fal-ai/trellis-2': (i) => {
+    if (!falFile(i.image_url)) return 'Upload the picture first.';
+    const detail = Math.max(20_000, Math.min(150_000, Math.round(Number(i.decimation_target) || 90_000)));
+    return { input: { image_url: i.image_url, resolution: 1024, texture_size: 2048, decimation_target: detail, remesh: true }, credits: credits(MODEL_3D_USD) };
   },
   'fal-ai/nano-banana-pro': (i) => {
     const prompt = String(i.prompt ?? '').trim().slice(0, 4000);
@@ -475,5 +482,6 @@ export function jobLabel(endpoint: string): string {
   if (endpoint.includes('music')) return 'AI music';
   if (endpoint.includes('sound-effects')) return 'Sound effect';
   if (endpoint.includes('chatterbox') || endpoint.includes('voice')) return 'Character voice';
+  if (endpoint.includes('trellis')) return '3D model (games)';
   return 'AI request';
 }

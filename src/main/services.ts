@@ -66,6 +66,7 @@ import { Scheduler, whenText } from './schedule/scheduler';
 import { fileCapabilities } from './capabilities/files';
 import { workflowCapabilities, WorkflowStore } from './workflows/workflows';
 import { KnownPeople } from './memory/knownPeople';
+import { fetchCity } from './build/city';
 import { AppDiscovery, launchByAppId, type StartApp } from './desktop/appDiscovery';
 import { installedBrowsers, openInProfile, type InstalledBrowser } from './desktop/browserProfiles';
 import { LiveChatService } from './livechat/liveChatService';
@@ -105,7 +106,7 @@ import { TERMINAL_TASK } from './tasks/stateMachine';
 import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 import { captionLines, spreadWords, wavOf } from './studio/captions';
 import { audioSeconds, speakingSeconds } from '../shared/audioLength';
-import { CHARACTER_PICTURE_USD, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
+import { CAR_MODEL_USD, CHARACTER_PICTURE_USD, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
 import { checkFixes, proofreadPrompt, type WordFix } from '../shared/studioProofread';
 import { showcaseOps, type ShowcaseScene } from '../shared/studioShowcase';
 import { characterPicturePrompt, nearestAspect, type CharacterPictureJob } from '../shared/studioCharacterPictures';
@@ -834,6 +835,15 @@ export class Services {
             `This is a screenshot of a ${brief.slice(0, 400)} that Keo built, as a visitor sees it. In a few short lines: what it shows, and anything that looks broken, empty, unfinished, overlapping, unreadable, off-screen or ugly (be specific: where and what). Say "Looks right." if nothing is wrong.`,
             signal,
           ),
+        city: async (place, radius, signal) => {
+          const c = await fetchCity({ place, radius }, (url, init) => fetch(url, init) as never, signal);
+          return { json: JSON.stringify(c), name: c.name, roads: c.roads.length, buildings: c.buildings.length, attribution: c.attribution };
+        },
+        model3d: {
+          make: async (prompt, signal) => fs.readFileSync((await this.aiVideo.model3d({ prompt }, signal)).file),
+          unavailable: () => (this.secrets.has('fal') || this.account.signedIn() ? null : 'Making 3D models needs your Keo account (sign in) or your own fal.ai key (Settings → Advanced).'),
+          costLabel: `about ${usdToCredits(CAR_MODEL_USD)} Studio credits`,
+        },
         picture: async (prompt, size, signal) => {
           if (!this.pictures.aiAvailable()) throw new StudioError('Making pictures needs your Keo account (sign in) or an OpenAI API key.');
           const r = await this.pictures.generate(prompt, { name: 'Keo build picture', size, quality: this.settings.get().pictures.aiQuality, background: 'opaque' }, signal);
@@ -941,6 +951,15 @@ export class Services {
     this.agent.excludeGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['video', 'desktop', 'screen'] : []);
     // A whole edit (transcribe, look at the clips, plan, style, moments, review) takes many steps.
     // Full control works in small look → act steps: a whole task takes many of them.
+    // Building a site, app or game: the best model the Keo plan includes (Keo Best, then Keo Strong).
+    this.agent.heavyModel = (provider) => {
+      if (provider.id !== 'keo') return null;
+      const have = new Set(this.account.models().map((m) => m.id));
+      return ['keo-best', 'keo-strong'].find((id) => have.has(id)) ?? null;
+    };
+    this.agent.isBuildWork = (conversationId, text) =>
+      !!this.builds.forConversation(conversationId) ||
+      /\b(build|make|create|rebuild|redesign|code|develop)\b[^.?!]{0,80}\b(game|website|web ?site|web app|app|landing page|online shop|store|dashboard|portfolio|site)\b/i.test(text);
     // A WhatsApp message the user approved reached the chat Keo verified: remember who that name means.
     this.agent.learned = (capabilityId, input, result) => {
       if (capabilityId !== 'whatsapp.send_message') return;

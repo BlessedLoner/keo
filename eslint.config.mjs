@@ -17,6 +17,11 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
+    // Keo's game kits run in the built games' pages (a browser), never in Keo itself.
+    files: ['kits/**/*.js'],
+    languageOptions: { sourceType: 'module', globals: { ...globals.browser } },
+  },
+  {
     files: ['src/renderer/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },

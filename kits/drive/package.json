@@ -1,0 +1,9 @@
+{
+  "name": "keo-drive-kit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keo's driving game kit: a real 3D city from OpenStreetMap data, raycast-vehicle car physics, chase camera, traffic, police pursuits, garage and upgrades, HUD and sound. Copied into Keo builds; needs three.js and Rapier.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT"
+}

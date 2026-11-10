@@ -3,7 +3,7 @@ import type { Asset } from '../../shared/studio';
 import type { PictureAspect } from '../../shared/studioCharacterPictures';
 import fs from 'node:fs';
 import path from 'node:path';
-import { MUSIC_SECONDS, SFX_MAX_SECONDS, TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
+import { MUSIC_SECONDS, SFX_MAX_SECONDS, TALK_MAX_SECONDS, type TalkQuality, CHARACTER_PICTURE_USD, MODEL_3D_USD, MOTION_CLONE_PER_SECOND, REAL_PICTURE_USD, SWAP_PER_SECOND, swapCost, type SwapResolution } from '../../shared/aiPrices';
 
 /**
  * AI shots: a picture turned into a short video clip by an AI video model, through fal.ai (one
@@ -90,6 +90,9 @@ export const REAL_PICTURE_MODEL = { label: 'Nano Banana Pro', edit: 'fal-ai/nano
 export const MOTION_CLONE_MODEL = { label: 'Kling Motion Control', endpoint: 'fal-ai/kling-video/v2.6/pro/motion-control', perSecond: MOTION_CLONE_PER_SECOND, maxSeconds: 30 } as const;
 
 /** A picture from words alone (fal.ai's Nano Banana), for AI video shots without a character. */
+/** Pictures to 3D models (textured GLB) for game cars and props. */
+export const MODEL_3D = { label: 'Trellis 2', endpoint: 'fal-ai/trellis-2', perModel: MODEL_3D_USD } as const;
+
 export const FRAME_MODEL = { label: 'Nano Banana', endpoint: 'fal-ai/nano-banana', perPicture: CHARACTER_PICTURE_USD } as const;
 
 /** Music made for a video from a description (ElevenLabs Music v2.5). */
@@ -290,6 +293,41 @@ export class FalVideo {
       { waitMs: 4 * 60_000 },
     );
     return { file: made.file, cached: made.cached };
+  }
+
+  /**
+   * A realistic 3D model for a game: a studio picture of it (Nano Banana Pro) from the words, then
+   * a textured 3D model made from that picture (Trellis 2). The same words give the same model
+   * (never paid twice). Returns the GLB file and the picture it was made from.
+   */
+  async model3d(r: { prompt: string; take?: number; detail?: number }, signal: AbortSignal): Promise<{ file: string; picture: string; cached: boolean }> {
+    const pictureOf = await this.frame(
+      {
+        references: [],
+        prompt: `${r.prompt}. Studio product photograph of the whole object, three-quarter front view from slightly above, centred and fully in frame with space around it, plain light grey seamless background, soft even lighting, sharp detail, no text, no logos, no badges, no people.`,
+        aspect: '4:3' as PictureAspect,
+        quality: 'real',
+        ...(r.take ? { take: r.take } : {}),
+      },
+      signal,
+    );
+    const picture = fs.readFileSync(pictureOf.file);
+    const hash = crypto.createHash('sha256').update(JSON.stringify(['model3d', MODEL_3D.endpoint, crypto.createHash('sha256').update(picture).digest('hex'), r.detail ?? 90000])).digest('hex').slice(0, 24);
+    const made = await this.run(
+      {
+        hash,
+        model: 'trellis-2',
+        seconds: 0,
+        ext: 'glb',
+        endpoint: MODEL_3D.endpoint,
+        uploads: [{ bytes: picture, type: 'image/png', name: 'keo-model.png' }],
+        // A game-sized mesh (about 90k triangles) with 2K textures: detailed but light enough to drive.
+        input: ([image]) => ({ image_url: image, resolution: 1024, texture_size: 2048, decimation_target: r.detail ?? 90000, remesh: true }),
+      },
+      signal,
+      { waitMs: 8 * 60_000 },
+    );
+    return { file: made.file, picture: pictureOf.file, cached: made.cached && pictureOf.cached };
   }
 
   /** The same stable clone (video, picture) gives the same id. */
@@ -521,7 +559,12 @@ export class FalVideo {
       }
       const result = await this.retried(signal, () => this.call(job.resultUrl, 'GET', signal));
       // A video model answers with video.url, a picture model with images[0].url, a voice with audio.url.
-      const url = (result.video as { url?: unknown } | undefined)?.url ?? (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url ?? (result.audio as { url?: unknown } | undefined)?.url;
+      const url =
+        (result.video as { url?: unknown } | undefined)?.url ??
+        (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url ??
+        (result.audio as { url?: unknown } | undefined)?.url ??
+        // A 3D model (Trellis 2).
+        (result.model_glb as { url?: unknown } | undefined)?.url;
       if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new AiVideoError('fal.ai finished but sent nothing to download.');
       o.progress?.('saving');
       const video = await this.d.fetch(url, { signal });
@@ -651,7 +694,7 @@ class NoRoute extends Error {
 }
 
 /** What a finished request is saved as. */
-export type ShotExt = 'mp4' | 'png' | 'wav' | 'mp3';
+export type ShotExt = 'mp4' | 'png' | 'wav' | 'mp3' | 'glb';
 
 /** Speaking like a voice sample (fal.ai's Chatterbox: any voice from 5 to 30 seconds of it). */
 export const OWN_VOICE_MODEL = { label: 'Chatterbox', endpoint: 'fal-ai/chatterbox/text-to-speech' } as const;
@@ -668,7 +711,7 @@ export interface OwnVoiceRequest {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'elevenlabs-music' | 'elevenlabs-sfx' | 'chatterbox' | 'minimax-voice-design';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'elevenlabs-music' | 'elevenlabs-sfx' | 'chatterbox' | 'minimax-voice-design' | 'trellis-2';
   /** What the result is saved as (a video unless said). */
   ext?: ShotExt;
   seconds: number;
