@@ -225,6 +225,24 @@ export function monthlyBudget(plan: Plan): number {
   return day > 0 ? day * 30 : 0;
 }
 
+/**
+ * Paid plans are never cut off when the month's budget is used: Keo keeps answering on its
+ * lightest model (a small fraction of the cost) until this much more of the budget is spent.
+ * With the plan's budget set below its price, what a plan can cost stays under what it earns.
+ */
+export const STEP_DOWN_EXTRA = 0.25;
+
+/** The month's budget is used, and this plan may carry on with the lightest model. */
+export function canStepDown(a: { plan: Plan; usage: Usage }): boolean {
+  const cap = monthlyBudget(a.plan);
+  return a.plan.max_tier > 1 && cap > 0 && a.usage.month_cost_usd >= cap && a.usage.month_cost_usd < cap * (1 + STEP_DOWN_EXTRA);
+}
+
+/** The cheapest model that can do the request (tools always; pictures when it has some). */
+export function lightestModel(models: ModelRow[], needsVision: boolean): ModelRow | null {
+  return [...models].sort((x, y) => x.tier - y.tier).find((m) => m.tools && (!needsVision || m.vision)) ?? null;
+}
+
 /** This month's AI budget used up (bigger models use it faster than small ones). */
 function overBudget(a: Account): boolean {
   const cap = monthlyBudget(a.plan);
@@ -489,7 +507,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       // cost_usd stays inside Keo Cloud: the app gets the allowance as a percentage.
       const { cost_usd: _cost, month_cost_usd: _month, ...usage } = a.usage;
       const { daily_cost_usd: _cap, monthly_cost_usd: _monthCap, ...plan } = a.plan;
-      return json(200, { user: a.user, plan, usage: { day: a.day, ...usage, allowanceUsed: allowanceUsed(a), monthUsed: monthUsed(a) }, billing: a.billing });
+      return json(200, { user: a.user, plan, usage: { day: a.day, ...usage, allowanceUsed: allowanceUsed(a), monthUsed: monthUsed(a), steppedDown: canStepDown(a) }, billing: a.billing });
     }
 
     const OR = env.OPENROUTER_URL ?? 'https://openrouter.ai/api/v1';
@@ -696,22 +714,28 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       if (a instanceof Response) return a;
       // Past the day's allowance, the user's Studio credits pay (when the app says the user allows it).
       let onCredits = false;
+      // Or, on a paid plan whose month's budget is used, Keo carries on with its lightest model at no cost to the user.
+      let stepDown = false;
       const hit = limitHit(a);
       if (hit) {
         const left = await creditsLeft(db, a.user.id, a.plan, now);
-        const start = usedUp(a, hit);
-        if (left <= 0) return fail(429, `${start} To keep going now, buy Studio credits or upgrade your plan.`, 'daily_limit', 'plan_limit');
-        if (req.headers.get('x-keo-credits') !== 'allow')
+        const allowed = req.headers.get('x-keo-credits') === 'allow';
+        if (left > 0 && allowed) onCredits = true;
+        else if (hit === 'month' && canStepDown(a)) stepDown = true;
+        else {
+          const start = usedUp(a, hit);
+          if (left <= 0) return fail(429, `${start} To keep going now, buy Studio credits or upgrade your plan.`, 'daily_limit', 'plan_limit');
           return fail(429, `${start} You have ${left} Studio credits: turn on “Keep going with my credits” in Settings → Providers to continue now.`, 'daily_limit_credits_off', 'plan_limit');
-        onCredits = true;
+        }
       }
       const body = await readJson(req, 30_000_000);
       if (body instanceof Response) return body;
       const models = await db.models();
       const wanted = typeof body.model === 'string' ? body.model : 'keo-fast';
-      const model = models.find((m) => m.id === wanted);
+      let model = models.find((m) => m.id === wanted);
       if (!model) return fail(400, `Keo has no model called ${wanted}.`, 'unknown_model', 'invalid_request_error');
       if (model.tier > a.plan.max_tier) return fail(403, `${model.label} is not in the ${a.plan.name} plan. Upgrade to use it.`, 'model_not_in_plan', 'plan_limit');
+      if (stepDown) model = lightestModel(models, JSON.stringify(body.messages ?? '').includes('"image_url"')) ?? model;
       const stream = body.stream === true;
       const maxOut = Math.min(Number(body.max_tokens ?? body.max_completion_tokens ?? model.max_output_tokens) || model.max_output_tokens, model.max_output_tokens);
       const upstreamBody = {
@@ -730,7 +754,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
         add(a, { requests: 1, ...u });
         if (onCredits) deps.waitUntil(payWithCredits(db, a.user.id, a.plan, now, u.cost).catch(() => undefined));
       };
-      const paidBy: Record<string, string> = onCredits ? { 'x-keo-paid-with': 'credits' } : {};
+      const paidBy: Record<string, string> = { ...(onCredits ? { 'x-keo-paid-with': 'credits' } : {}), ...(stepDown ? { 'x-keo-stepped-down': model.id } : {}) };
       if (!up.ok || !up.body) {
         // Count the attempt (no tokens), so a failing loop still uses up the day's requests —
         // unless the problem is Keo's own account, which costs the user nothing.

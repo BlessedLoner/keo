@@ -132,7 +132,11 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
             <div className="small muted">The month’s allowance is one pool: use a lot on a building day and little on others. Big jobs on the strongest model use it fastest.</div>
             {used >= 100 && (
               <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>
-                {month >= 100 ? 'This month’s allowance is used up.' : 'Today’s steps or tokens are used up.'} With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.
+                {month >= 100
+                  ? plan.id === 'free'
+                    ? 'This month’s allowance is used up. With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.'
+                    : 'This month’s full-power allowance is used. Keo keeps working on its standard model at no extra cost; with “Keep going with my credits” on, it stays on the strongest model and pays with your Studio credits.'
+                  : 'Today’s steps or tokens are used up. With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.'}
               </div>
             )}
             <div className="small muted">{extras(plan.features, u)}</div>

@@ -323,6 +323,37 @@ describe('Keo Cloud gateway', () => {
     expect(me.plan).not.toHaveProperty('daily_cost_usd');
   });
 
+  it('a paid plan is never cut off when the month’s budget is used: Keo carries on with its lightest model, up to a ceiling', async () => {
+    w.profiles.set('u-ana', { plan: 'pro', plan_until: null, blocked: false });
+    (w.plans[1] as Record<string, unknown>).daily_cost_usd = 0.1; // a month's budget of 3
+    const ask = () => w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-strong', messages: [] } });
+    // Within the budget: the model that was asked for.
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, cost_usd: 2.9 } as never);
+    expect((await ask()).status).toBe(200);
+    expect(w.upstream.at(-1)!.body.model).toBe('openrouter/auto');
+    await w.settle();
+    // Budget used: still answered, by the lightest model, and the app is told.
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, cost_usd: 3.2 } as never);
+    const stepped = await ask();
+    expect(stepped.status).toBe(200);
+    expect(stepped.headers.get('x-keo-stepped-down')).toBe('keo-fast');
+    expect(w.upstream.at(-1)!.body.model).toBe('openai/gpt-4o-mini');
+    await w.settle();
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, cost_usd: 3.2 } as never);
+    const me = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { usage: { steppedDown: boolean; monthUsed: number } };
+    expect(me.usage).toMatchObject({ steppedDown: true, monthUsed: 100 });
+    await w.settle();
+    // Past the ceiling (a quarter more than the budget): now it stops, in plain words.
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, cost_usd: 3.8 } as never);
+    const over = await ask();
+    expect(over.status).toBe(429);
+    expect(((await over.json()) as { error: { message: string } }).error.message).toContain('this month’s Pro AI allowance');
+    // The Free plan has no lighter model to move to: it stops at its budget, as before.
+    const { canStepDown, lightestModel } = await import('../src/gateway');
+    expect(canStepDown({ plan: { ...w.plans[0]!, daily_cost_usd: 0.1 } as never, usage: { month_cost_usd: 3.2 } as never })).toBe(false);
+    expect(lightestModel(w.models as never, true)?.id).toBe('keo-fast');
+  });
+
   it('a problem with Keo’s own AI account is never shown to the user as their credits, and costs them nothing', async () => {
     const said = 'This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.';
     const base = w.fetch;
