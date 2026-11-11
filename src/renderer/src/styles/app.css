@@ -610,3 +610,14 @@ details.tech { margin-top: 4px; }
 details.tech summary { cursor: pointer; color: var(--muted, #8a8f98); }
 details.tech code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 4px; opacity: 0.85; }
 .turn-status { overflow: hidden; text-overflow: ellipsis; }
+/* Keo at work: three points (know, own, execute) circling and lighting up in turn. */
+.turn-spark { position: relative; display: inline-block; width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; animation: spark-turn 2.4s linear infinite; }
+.turn-spark i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--accent, #7a8cff); box-shadow: 0 0 6px var(--accent, #7a8cff); animation: spark-beat 1.2s ease-in-out infinite; }
+.turn-spark i:nth-child(1) { left: 5px; top: 0; }
+.turn-spark i:nth-child(2) { left: 0; top: 9px; animation-delay: 0.4s; }
+.turn-spark i:nth-child(3) { left: 10px; top: 9px; animation-delay: 0.8s; }
+.turn-spark.waiting { animation: none; }
+.turn-spark.waiting i { background: var(--warn, #ffb547); box-shadow: 0 0 6px var(--warn, #ffb547); animation-duration: 2.4s; }
+@keyframes spark-turn { to { transform: rotate(360deg); } }
+@keyframes spark-beat { 0%, 100% { transform: scale(0.6); opacity: 0.45; } 40% { transform: scale(1.25); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .turn-spark, .turn-spark i { animation: none; } }

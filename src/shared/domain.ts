@@ -126,6 +126,8 @@ export interface ToolActivity {
     | 'proposed';
   detail: string;
   taskId?: string;
+  /** How long the step took (ms), approvals included. */
+  ms?: number;
   /** Product cards to show with this step (research.show_products). */
   cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }>; resultId?: string; title?: string };
   /** Choices to offer as buttons when the action needs the user to pick (app, profile, window). */
@@ -159,10 +161,14 @@ export interface PlanStep {
   status: 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped';
   /** What was found or checked, or why it failed. */
   note?: string;
+  /** What will show that the step worked ("the check reports a speed above zero"). Keo's own rule; not shown as a status. */
+  doneWhen?: string;
 }
 
 export interface WorkPlan {
   steps: PlanStep[];
+  /** What the user will have when the work is finished, in one line. */
+  goal?: string;
 }
 
 /** A file or picture the user attached to a message ("+", drag and drop, paste, a screenshot). */
@@ -211,6 +217,10 @@ export interface MessageMeta {
   plan?: WorkPlan;
   /** Smart routing moved this reply to the strong model part-way (a failure, a plan or a long run). */
   escalated?: string;
+  /** The model failed or declined, so Keo carried on with another one. */
+  fallback?: { from: string; to: string; reason: string };
+  /** How long this reply took (ms): waiting for the model, running steps, and in all. */
+  timings?: { modelMs: number; toolMs: number; totalMs: number; modelCalls: number };
   /** Older tool results shortened during this reply to keep the context small. */
   compactedResults?: number;
   /** Files and pictures the user attached to this message. */

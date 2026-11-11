@@ -81,6 +81,8 @@ export const SettingsSchema = z
     activeProvider: z.enum(['keo', 'anthropic', 'openai', 'openrouter', 'local', 'test']).nullable().default(null),
     providers: z
       .object({
+        /** Keo account: when the day's allowance runs out, keep going by paying with the user's Studio credits. */
+        keoUseCredits: z.boolean().default(true),
         /** Keo's own AI through Keo Cloud (the user's Keo account; no key). */
         keo: OpenAICompatSettings.default({
           baseUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',

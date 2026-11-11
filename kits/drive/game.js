@@ -13,6 +13,7 @@ import { Hud } from './hud.js';
 import { GameAudio } from './audio.js';
 import { Effects } from './effects.js';
 import { CARS, GADGETS, PAINTS, Profile, UPGRADES } from './garage.js';
+import { Jobs } from './jobs.js';
 
 const MENU_CSS = `
 .kd-menu{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 30% 20%,rgba(10,20,40,.55),rgba(0,0,0,.82));font-family:"Plus Jakarta Sans","Inter",system-ui,sans-serif;color:#fff}
@@ -35,11 +36,17 @@ const MENU_CSS = `
 .kd-lv{display:inline-flex;gap:3px;margin-left:8px}.kd-lv i{width:14px;height:6px;border-radius:2px;background:rgba(255,255,255,.2)}.kd-lv i.on{background:#7af0ff}
 .kd-money-big{font:700 26px "Orbitron",sans-serif;float:right}
 .kd-close{float:right;margin-left:12px}
+.kd-job{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:6;padding:10px 18px;border-radius:999px;background:rgba(10,12,18,.82);border:1px solid rgba(255,210,61,.6);color:#ffd23d;font:600 15px "Plus Jakarta Sans","Inter",sans-serif;letter-spacing:.5px;pointer-events:none}
+.kd-job.late{border-color:#ff5d5d;color:#ff8a8a}
+.kd-job[hidden]{display:none}
 `;
 
 /**
  * opts: {
- *   city: url of the city JSON (Keo's build__city) — required,
+ *   city: url of the city JSON (Keo's build__city) — required (or cities),
+ *   cities: [{ id, name, country, file: '/assets/cities/x.json', cost: 0, blurb }] — a world of
+ *     several real cities; the player travels between them (the game reloads into the new city),
+ *   jobs: { offers, baseFare, perKm, tip, names } or false — passengers to pick up and drive,
  *   title, subtitle, gameId (save slot), startMoney,
  *   time: 'night' | 'dusk' | 'day', rain: false, quality,
  *   cars: catalogue (defaults to garage.js CARS; a car may have model: '/assets/cars/x.glb'),
@@ -58,19 +65,25 @@ export async function createDriveGame(opts = {}) {
     document.head.appendChild(s);
   }
   const loading = menuLayer();
-  loading.innerHTML = `<div class="kd-panel"><h1 class="kd-title">${esc(opts.title ?? 'Night Run')}</h1><p class="kd-sub">Loading the city…</p></div>`;
+  const profile = new Profile(opts.gameId ?? `drive:${(opts.title ?? 'game').toLowerCase().replace(/\W+/g, '-')}`, opts.startMoney ?? 15000);
+  const catalog = opts.cars ?? CARS;
+  profile.fit(catalog);
+  // A world of several cities: the one the player is in now (saved), or the first.
+  const cities = Array.isArray(opts.cities) && opts.cities.length ? opts.cities : null;
+  const place = cities ? (cities.find((c) => c.id === profile.data.city) ?? cities[0]) : null;
+  loading.innerHTML = `<div class="kd-panel"><h1 class="kd-title">${esc(opts.title ?? 'Night Run')}</h1><p class="kd-sub">${place ? `Arriving in ${esc(place.name)}…` : 'Loading the city…'}</p></div>`;
   loading.hidden = false;
 
-  const data = typeof opts.city === 'string' ? await (await fetch(opts.city)).json() : opts.city;
+  const source = place ? place.file : opts.city;
+  const data = typeof source === 'string' ? await (await fetch(source)).json() : source;
   const world = createWorld(canvas, { time: opts.time ?? 'night', quality: opts.quality });
   const physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   physics.timestep = 1 / 60;
   const events = new RAPIER.EventQueue(true);
   const ctx = { scene: world.scene, physics: { world: physics, RAPIER } };
   const city = buildCity(world, data, { physics: ctx.physics });
-  const catalog = opts.cars ?? CARS;
-  const profile = new Profile(opts.gameId ?? `drive:${(opts.title ?? 'game').toLowerCase().replace(/\W+/g, '-')}`, opts.startMoney ?? 15000);
   const hud = new Hud(city);
+  const jobLine = Object.assign(document.body.appendChild(document.createElement('div')), { className: 'kd-job', hidden: true });
   const audio = new GameAudio();
   const fx = new Effects(world.scene);
   const cam = new ChaseCamera(world.camera);
@@ -110,6 +123,7 @@ export async function createDriveGame(opts = {}) {
 
   const traffic = new Traffic(ctx, city, { count: opts.traffic ?? 26 });
   const police = new Police(ctx, city, opts.police ?? {});
+  const jobs = new Jobs(ctx, city, opts.jobs || {});
   let race = null;
   let state = 'menu';
   let empUntil = 0;
@@ -126,6 +140,23 @@ export async function createDriveGame(opts = {}) {
     fx,
     police,
     traffic,
+    jobs,
+    /** The cities of this game's world and the one the player is in (null for a one-city game). */
+    cities,
+    place,
+    /** Travels to another city of the world (pays its cost, saves, and loads it). False when it cannot. */
+    travelTo(id) {
+      const to = cities?.find((c) => c.id === id);
+      if (!to || to.id === place?.id) return false;
+      if (police.pursuit) return (hud.toast('Lose the police before you travel.'), false);
+      if (!profile.spend(to.cost ?? 0)) return (hud.toast('Not enough cash for the trip yet.'), false);
+      profile.data.city = to.id;
+      profile.data.stats.trips = (profile.data.stats.trips ?? 0) + 1;
+      profile.save();
+      api.emit({ type: 'travel', from: place?.id ?? null, to: to.id });
+      location.reload();
+      return true;
+    },
     player: null,
     get state() {
       return state;
@@ -137,8 +168,13 @@ export async function createDriveGame(opts = {}) {
       player.recover(race.startAt);
       hud.big(o.name ?? 'STREET RACE', `${race.gates.length} checkpoints · $${race.reward.toLocaleString('en-US')}`);
       race.countdown = 3;
+      jobs.setEnabled(false);
       state = 'play';
       menus.hidden = true;
+    },
+    /** Turns passenger jobs on (people wait at the kerb; stop beside one) or off. */
+    setJobs(on) {
+      jobs.setEnabled(on && opts.jobs !== false);
     },
     openGarage: () => showGarage(),
     addMoney(n, why) {
@@ -162,17 +198,19 @@ export async function createDriveGame(opts = {}) {
     menus.innerHTML = `<div class="kd-panel">
       <span class="kd-money-big">$${profile.money.toLocaleString('en-US')}</span>
       <h1 class="kd-title">${esc(opts.title ?? 'Night Run')}</h1>
-      <p class="kd-sub">${esc(opts.subtitle ?? `${data.name ?? 'The city'} · real streets`)}</p>
+      <p class="kd-sub">${esc(opts.subtitle ?? `${place?.name ?? data.name ?? 'The city'} · real streets`)}</p>
       <div class="kd-btns">
-        <button class="kd-btn primary" data-a="drive">Drive<small>Free roam. Outrun the police, drift for cash.</small></button>
+        <button class="kd-btn primary" data-a="drive">Drive<small>Free roam. ${opts.jobs === false ? '' : 'Pick up passengers, '}outrun the police, drift for cash.</small></button>
         <button class="kd-btn" data-a="races">Street races<small>Checkpoint races through real streets.</small></button>
+        ${cities && cities.length > 1 ? `<button class="kd-btn" data-a="travel">Travel<small>${cities.length} cities to drive in. You are in ${esc(place.name)}.</small></button>` : ''}
         <button class="kd-btn" data-a="garage">Garage<small>Cars, upgrades, paint and gadgets.</small></button>
         <button class="kd-btn" data-a="settings">Settings<small>Time of day, weather, quality, sound.</small></button>
       </div>
       <p class="kd-sub" style="margin-top:22px;font-size:13px">W/S or ↑/↓ drive · A/D steer · Space drift · Shift nitro · C camera · R back on the road · 1 shield · 2 EMP · 3 nitro refill · 4 repair · P pause</p>
     </div>`;
-    on(menus, 'drive', () => play());
+    on(menus, 'drive', () => (api.setJobs(true), play()));
     on(menus, 'races', showRaces);
+    on(menus, 'travel', showTravel);
     on(menus, 'garage', showGarage);
     on(menus, 'settings', showSettings);
   }
@@ -186,6 +224,17 @@ export async function createDriveGame(opts = {}) {
       <div class="kd-btns" style="margin-top:20px">${list.map((r, i) => `<button class="kd-btn" data-a="race${i}">${esc(r.name)}<small>${(r.length / 1000).toFixed(1)} km · ${r.rivals} rivals · win $${r.reward.toLocaleString('en-US')}</small></button>`).join('')}</div></div>`;
     on(menus, 'back', showMain);
     list.forEach((r, i) => on(menus, `race${i}`, () => api.startRace(r)));
+  }
+  function showTravel() {
+    menus.innerHTML = `<div class="kd-panel"><button class="kd-btn kd-close" data-a="back">Back</button><span class="kd-money-big">$${profile.money.toLocaleString('en-US')}</span><h1 class="kd-title" style="font-size:54px">Travel</h1>
+      <div class="kd-btns" style="margin-top:20px">${cities
+        .map((c) => {
+          const here = c.id === place.id;
+          return `<button class="kd-btn ${here ? 'primary' : ''}" data-a="go-${esc(c.id)}" ${here ? 'disabled' : ''}>${esc(c.name)}<small>${esc([c.country, c.blurb].filter(Boolean).join(' · '))}${c.country || c.blurb ? '<br>' : ''}${here ? 'You are here' : c.cost ? `Trip $${c.cost.toLocaleString('en-US')}` : 'Free trip'}</small></button>`;
+        })
+        .join('')}</div></div>`;
+    on(menus, 'back', showMain);
+    for (const c of cities) on(menus, `go-${c.id}`, () => api.travelTo(c.id));
   }
   function showSettings() {
     const t = world.time.name;
@@ -277,7 +326,7 @@ export async function createDriveGame(opts = {}) {
       <button class="kd-btn primary" data-a="resume">Resume</button><button class="kd-btn" data-a="garage" ${police.pursuit ? 'disabled' : ''}>Garage<small>${police.pursuit ? 'Lose the police first' : ''}</small></button><button class="kd-btn" data-a="menu">Main menu</button></div></div>`;
     on(menus, 'resume', play);
     on(menus, 'garage', showGarage);
-    on(menus, 'menu', () => (race?.end(), (race = null), hud.race(null), showMain()));
+    on(menus, 'menu', () => (race?.end(), (race = null), hud.race(null), jobs.setEnabled(false), showMain()));
   }
 
   // Keys ----------------------------------------------------------------------------------------
@@ -335,6 +384,7 @@ export async function createDriveGame(opts = {}) {
             c.update(1 / 60, time);
           }
         if (race && !(race.countdown > 0)) race.update(1 / 60, player, time);
+        else if (!race) jobs.update(1 / 60, player, time);
         physics.step(events);
         events.drainContactForceEvents((e) => crash(e));
       }
@@ -355,8 +405,14 @@ export async function createDriveGame(opts = {}) {
     const near = police.pursuit ? Math.min(...police.cops.map((c) => c.position.distanceTo(player.position)), Infinity) : Infinity;
     audio.update({ speed: player.speed, throttle: player.input.throttle, topSpeed: player.spec.topSpeed, slip: player.slip, siren: near, boost: player.boosting });
     hud.set({ speed: Math.abs(player.speed), topSpeed: player.spec.topSpeed, nitro: player.nitro, health: player.health, heat: Math.floor(police.heat), pursuit: police.pursuit, money: profile.money, boost: player.boosting });
-    hud.map(player, [...police.cops.map((c) => ({ ...xz(c), color: police.pursuit ? '#ff3030' : '#3a6cff' })), ...(race ? race.rivals.map((r) => ({ ...xz(r), color: '#ffffff', r: 5 })) : []), ...(race && race.gates[race.next] ? [{ x: race.gates[race.next].x, z: race.gates[race.next].z, color: '#ffb000', r: 10 }] : [])]);
+    hud.map(player, [...jobs.marks(), ...police.cops.map((c) => ({ ...xz(c), color: police.pursuit ? '#ff3030' : '#3a6cff' })), ...(race ? race.rivals.map((r) => ({ ...xz(r), color: '#ffffff', r: 5 })) : []), ...(race && race.gates[race.next] ? [{ x: race.gates[race.next].x, z: race.gates[race.next].z, color: '#ffb000', r: 10 }] : [])]);
     if (race) hud.race(race.standings(player), race.next, race.gates.length);
+    const ride = state === 'play' ? jobs.status() : null;
+    jobLine.hidden = !ride;
+    if (ride) {
+      jobLine.textContent = ride.text;
+      jobLine.classList.toggle('late', ride.late);
+    }
     world.render();
     requestAnimationFrame(frame);
   }
@@ -424,6 +480,21 @@ export async function createDriveGame(opts = {}) {
         }
         api.emit(e);
       }
+    for (const e of jobs.events.splice(0)) {
+      if (e.type === 'pickup') {
+        hud.big(`${e.name.toUpperCase()} GOT IN`, `Drive to the yellow marker · $${e.fare.toLocaleString('en-US')} · ${(e.metres / 1000).toFixed(1)} km`, 3200);
+        audio.blip(990, 140);
+      }
+      if (e.type === 'dropoff') {
+        hud.big(e.late ? 'LATE' : 'DROPPED OFF', e.tip ? `Fare $${e.fare.toLocaleString('en-US')} + tip $${e.tip.toLocaleString('en-US')}` : `Fare $${e.fare.toLocaleString('en-US')}`, 3000);
+        api.addMoney(e.total);
+        profile.data.stats.rides = (profile.data.stats.rides ?? 0) + 1;
+        profile.save();
+        audio.blip(1320, 220);
+      }
+      if (e.type === 'job_failed') hud.toast(`${e.name} got out: far too late.`);
+      api.emit(e);
+    }
     for (const e of player.events.splice(0)) api.emit(e);
   }
 

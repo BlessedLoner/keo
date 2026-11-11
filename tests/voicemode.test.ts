@@ -157,6 +157,8 @@ describe('voice mode', () => {
 
   it('speaks plain text: no Markdown, code or links; long answers point to the screen', () => {
     expect(spokenVersion('**Hi** there, see [docs](https://x.y) and `npm test`.\n```js\nx()\n```')).toBe('Hi there, see docs and npm test. (code is on screen)');
+    // Keo's own notes about a reply are for the screen, never spoken.
+    expect(spokenVersion('The game is ready.\n\n> ⚠ Keo could not confirm this: the reply says Keo clicked, but Keo has no record of doing that in this chat.')).toBe('The game is ready.');
     const long = spokenVersion(`${'This is a sentence. '.repeat(60)}`);
     expect(long.endsWith('The rest is on screen.')).toBe(true);
     expect(long.length).toBeLessThan(650);

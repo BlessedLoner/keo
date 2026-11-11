@@ -106,13 +106,43 @@ describe('the driving game kit in the builder', () => {
     const model = caps.find((c) => c.id === 'build.model')!;
     // Costs credits: the user approves each one, and it says what it costs.
     expect(model.approval).toBe('always');
-    expect(model.preview(model.input.parse({ build: m.id, path: 'assets/cars/raptor.glb', prompt: 'a low two-door supercar, matte black' }) as never).consequences[0]).toContain('100 Studio credits');
+    expect(model.preview(model.input.parse({ build: m.id, path: 'assets/cars/raptor.glb', prompt: 'a low two-door supercar, matte black' }) as never, {} as never).consequences[0]).toContain('100 Studio credits');
     const out = (await model.execute(model.input.parse({ build: m.id, path: 'assets/cars/raptor.glb', prompt: 'a low two-door supercar, matte black' }) as never, ctx)) as { path: string };
     expect(out.path).toBe('assets/cars/raptor.glb');
     expect(made).toBe(1);
     expect(model.input.safeParse({ build: m.id, path: '../evil.glb', prompt: 'a car that is long enough' }).success).toBe(false);
     // Car games are told to use the kit, never to start from scratch.
     expect(caps.find((c) => c.id === 'build.start')!.description).toContain('ALWAYS the "drive" library');
+  });
+
+  it('has one page that explains the whole kit, so Keo never reads the kit’s source (which uses up the allowance)', () => {
+    const p = projects();
+    const m = p.create({ title: 'World Tour', kind: 'game', libraries: ['drive'] });
+    const guide = p.read(m.id, 'lib/drive/README.md');
+    for (const word of ['createDriveGame', 'cities:', 'travelTo', 'Passengers', 'newtons', 'metres per second']) expect(guide, word).toContain(word);
+    expect(guide.length).toBeLessThan(9000);
+    expect(fs.existsSync(path.join(p.dir(m.id), 'lib/drive/jobs.js'))).toBe(true);
+    expect(BUILD_LIBRARIES.drive.usage).toContain('lib/drive/README.md');
+    const caps = buildCapabilities({ projects: p, host: null });
+    const how = caps.find((c) => c.id === 'build.start')!.description;
+    expect(how).toContain('lib/drive/README.md');
+    expect(how).toContain('once per city');
+  });
+
+  it('car stats written as ratings, km/h or with gaps still make a car that drives', async () => {
+    const { normalSpec, DEFAULT_SPEC } = (await import('../kits/drive/vehicle.js' as string)) as { normalSpec: (s?: Record<string, unknown>) => Record<string, number>; DEFAULT_SPEC: Record<string, number> };
+    // What a model wrote once: 0–1 ratings, which gave an engine force of half a newton.
+    const rated = normalSpec({ power: 0.55, topSpeed: 0.7, grip: 0.5 });
+    expect(rated.power).toBeGreaterThan(8000);
+    expect(rated.topSpeed).toBeGreaterThan(60);
+    expect(rated.grip).toBeGreaterThan(2.6);
+    expect(normalSpec({ power: 8, topSpeed: 9 }).power).toBeGreaterThan(12000);
+    // km/h becomes metres per second; real values are kept as they are.
+    expect(normalSpec({ topSpeed: 320 }).topSpeed).toBeCloseTo(88.9, 0);
+    expect(normalSpec({ power: 12800, topSpeed: 84, grip: 3.6, mass: 1400 })).toMatchObject({ power: 12800, topSpeed: 84, grip: 3.6, mass: 1400 });
+    // Nothing, or broken numbers: the default car.
+    expect(normalSpec({ power: Number.NaN, brake: undefined })).toEqual(DEFAULT_SPEC);
+    expect(normalSpec()).toEqual(DEFAULT_SPEC);
   });
 
   it('without Keo Cloud or a fal.ai key, 3D models say how to turn them on', () => {

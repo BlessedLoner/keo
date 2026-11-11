@@ -107,6 +107,11 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
   if (a.signedIn) {
     const u = a.usage;
     const plan = a.plan;
+    // The fullest meter: Keo Cloud's own figure when it sends one (it also counts the day's AI budget).
+    const today = plan && u ? Math.max(pct(u.requests, plan.dailyRequests), pct(u.inputTokens + u.outputTokens, plan.dailyTokens)) : 0;
+    // The month's AI allowance (Keo Cloud's figure; older servers send only the fullest meter).
+    const month = u ? (u.monthUsed ?? u.allowanceUsed ?? 0) : 0;
+    const used = Math.max(today, month);
     return (
       <div className="account-panel">
         <div className="row">
@@ -118,12 +123,20 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
         </div>
         {plan && u && (
           <div className="account-usage">
-            <div className="small muted">Today: {u.requests.toLocaleString()} of {plan.dailyRequests.toLocaleString()} AI steps · {(u.inputTokens + u.outputTokens).toLocaleString()} of {plan.dailyTokens.toLocaleString()} tokens</div>
-            <div className="usage-bar" role="progressbar" aria-valuenow={pct(u.requests, plan.dailyRequests)} aria-valuemin={0} aria-valuemax={100}>
-              <span style={{ width: `${Math.max(pct(u.requests, plan.dailyRequests), pct(u.inputTokens + u.outputTokens, plan.dailyTokens))}%` }} />
+            <div className="small muted">
+              <strong>{month}% of this month’s AI allowance used</strong> · Today: {u.requests.toLocaleString()} of {plan.dailyRequests.toLocaleString()} AI steps · {(u.inputTokens + u.outputTokens).toLocaleString()} of {plan.dailyTokens.toLocaleString()} tokens
             </div>
+            <div className="usage-bar" role="progressbar" aria-valuenow={used} aria-valuemin={0} aria-valuemax={100}>
+              <span style={{ width: `${used}%` }} />
+            </div>
+            <div className="small muted">The month’s allowance is one pool: use a lot on a building day and little on others. Big jobs on the strongest model use it fastest.</div>
+            {used >= 100 && (
+              <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>
+                {month >= 100 ? 'This month’s allowance is used up.' : 'Today’s steps or tokens are used up.'} With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.
+              </div>
+            )}
             <div className="small muted">{extras(plan.features, u)}</div>
-            <div className="small muted">Resets every day at midnight UTC.</div>
+            <div className="small muted">Steps, tokens, searches, pictures and voice reset every day at midnight UTC; the month’s allowance renews on the 1st.</div>
           </div>
         )}
         {a.billing && <div className="small muted">{billingLine(a.billing)}</div>}

@@ -150,7 +150,8 @@ describe('checking steps and recovering from failures', () => {
     // "All done!" over a failed step was sent back with the facts.
     expect(notes(seenRequests[3]!)).toHaveLength(1);
     expect(notes(seenRequests[3]!)[0]).toMatchObject({ text: expect.stringContaining('did not succeed') });
-    expect(msg.content).toContain('Keo: not everything above worked');
+    // The first, unfinished answer was sent back quietly: the user is not shown a note about it.
+    expect(msg.content).not.toContain('not everything above worked');
     expect(msg.meta.tools?.map((t) => t.outcome)).toEqual(['failed', 'rejected', 'executed']);
     expect(h.desktop.documentText).toContain('buy milk');
     // The honest final answer stands without a warning.

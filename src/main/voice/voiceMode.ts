@@ -55,6 +55,8 @@ function listenProblem(reason: string): string {
 /** Plain, speakable text: no Markdown, code or URLs; long answers end with a pointer to the screen. */
 export function spokenVersion(md: string, max = 600): string {
   const t = md
+    // Keo's own notes about a reply are for the screen, never read aloud.
+    .replace(/^>\s*⚠.*$/gm, '')
     .replace(/```[\s\S]*?```/g, ' (code is on screen) ')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')

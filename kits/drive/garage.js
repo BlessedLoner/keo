@@ -1,6 +1,8 @@
 // The player's profile and the garage: cars to buy, upgrades, paint, gadgets. Saved in the browser.
 // Car names are made up on purpose: real brands need a licence before a game is sold.
 
+import { normalSpec } from './vehicle.js';
+
 export const CARS = [
   { id: 'vanta-gt', name: 'Vanta GT', style: 'sports', price: 0, color: '#a3101b', spec: { power: 9000, topSpeed: 72, grip: 3.1, mass: 1350 }, blurb: 'A balanced street car. Your first ride.' },
   { id: 'stallion-v8', name: 'Stallion V8', style: 'muscle', price: 28000, color: '#0f2a5c', spec: { power: 11800, topSpeed: 76, grip: 2.9, mass: 1600 }, blurb: 'Big American V8: brutal pull, loose rear end.' },
@@ -62,6 +64,16 @@ export class Profile {
     this.save();
     return true;
   }
+  /** Makes the save fit this game's cars: the first car is owned, and the current one exists. */
+  fit(catalog = CARS) {
+    if (!catalog.length) return;
+    const ids = new Set(catalog.map((c) => c.id));
+    this.data.owned = this.data.owned.filter((id) => ids.has(id));
+    const first = catalog.find((c) => !c.price) ?? catalog[0];
+    if (!this.data.owned.includes(first.id)) this.data.owned.unshift(first.id);
+    if (!this.data.owned.includes(this.data.current)) this.data.current = this.data.owned[0];
+    this.save();
+  }
   car(id = this.data.current, catalog = CARS) {
     return catalog.find((c) => c.id === id) ?? catalog[0];
   }
@@ -70,7 +82,7 @@ export class Profile {
   }
   /** The car's specs with its upgrades. */
   spec(carId = this.data.current, catalog = CARS, base = {}) {
-    let s = { ...base, ...this.car(carId, catalog).spec };
+    let s = normalSpec({ ...base, ...this.car(carId, catalog).spec });
     for (const [k, u] of Object.entries(UPGRADES)) {
       const l = this.level(carId, k);
       if (l) s = { ...s, ...u.apply(s, l) };

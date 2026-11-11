@@ -260,6 +260,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_schedules_next ON schedules(state, next_run_at);
     `,
   },
+  {
+    version: 5,
+    name: 'model_call_timings',
+    sql: `
+      ALTER TABLE usage_log ADD COLUMN duration_ms INTEGER;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

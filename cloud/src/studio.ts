@@ -175,6 +175,30 @@ interface CreditsRow {
   monthly_used: number;
   bought: number;
 }
+/**
+ * Pays for AI steps made after the day's allowance ran out, from the user's Studio credits (the
+ * month's first, then bought ones). Takes what is left when the step cost more than that.
+ */
+export async function payWithCredits(db: Supabase, userId: string, plan: Plan, now: number, usd: number): Promise<number> {
+  if (!(usd > 0)) return 0;
+  const want = credits(usd);
+  const spend = (amount: number) => db.rest('rpc/spend_credits', { method: 'POST', body: JSON.stringify({ p_user: userId, p_month: month(now), p_allowance: monthlyCredits(plan), p_amount: amount }) });
+  try {
+    await spend(want);
+    return want;
+  } catch {
+    const left = (await balance(db, userId, plan, now)).total;
+    if (left <= 0) return 0;
+    await spend(Math.min(left, want)).catch(() => undefined);
+    return Math.min(left, want);
+  }
+}
+
+/** How many Studio credits the user has (the month's and bought ones). */
+export async function creditsLeft(db: Supabase, userId: string, plan: Plan, now: number): Promise<number> {
+  return (await balance(db, userId, plan, now).catch(() => ({ total: 0 }))).total;
+}
+
 async function balance(db: Supabase, userId: string, plan: Plan, now: number): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number }> {
   const row = (await db.rest<CreditsRow[]>(`studio_credits?user_id=eq.${encodeURIComponent(userId)}&select=month,monthly_used,bought`))[0];
   const allowance = monthlyCredits(plan);

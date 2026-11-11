@@ -12,7 +12,7 @@ import { handleAdmin } from './admin';
 import { accountPage } from './pages';
 import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
-import { handleStudio } from './studio';
+import { creditsLeft, handleStudio, payWithCredits } from './studio';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -56,6 +56,8 @@ export interface Plan {
   features: Record<string, unknown>;
   /** What the plan may cost per day in AI charges (US$), whichever models are used; null: no cap. */
   daily_cost_usd?: number | null;
+  /** What the plan may cost per month in AI charges (US$); when not set, 30 times the daily figure. */
+  monthly_cost_usd?: number | null;
 }
 export interface ModelRow {
   id: string;
@@ -80,6 +82,8 @@ interface Usage {
   voice_seconds: number;
   /** What today's AI calls cost (US$, as OpenRouter charged). */
   cost_usd: number;
+  /** What this calendar month's AI calls cost so far (US$), today included. */
+  month_cost_usd: number;
 }
 /** What one call adds to the user's day. */
 interface Added {
@@ -159,10 +163,12 @@ export class Supabase {
 
   async usage(userId: string, day: string): Promise<Usage> {
     // select=* so a database without the newer columns (voice_seconds) still works.
-    const rows = await this.rest<Array<Partial<Usage>>>(`usage_daily?user_id=eq.${encodeURIComponent(userId)}&day=eq.${day}&select=*`);
-    const r = rows[0] ?? {};
+    // The whole month in one read: today's row for the daily meters, all rows for the month's AI budget.
+    const rows = await this.rest<Array<Partial<Usage> & { day?: string }>>(`usage_daily?user_id=eq.${encodeURIComponent(userId)}&day=gte.${day.slice(0, 8)}01&select=*`);
+    const r = rows.find((x) => x.day === day) ?? (rows.length === 1 && !rows[0]!.day ? rows[0]! : {});
     const n = (v: unknown) => Number(v) || 0;
-    return { requests: n(r.requests), input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens), web_searches: n(r.web_searches), images: n(r.images), voice_seconds: n(r.voice_seconds), cost_usd: n(r.cost_usd) };
+    const month = rows.reduce((sum, x) => sum + n(x.cost_usd), 0);
+    return { requests: n(r.requests), input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens), web_searches: n(r.web_searches), images: n(r.images), voice_seconds: n(r.voice_seconds), cost_usd: n(r.cost_usd), month_cost_usd: month };
   }
 
   async addUsage(userId: string, day: string, u: Added): Promise<void> {
@@ -207,16 +213,50 @@ async function account(req: Request, db: Supabase, now: number): Promise<Account
   return { user, plan, usage: await db.usage(user.id, day), day, billing };
 }
 
-/** Today's spending cap reached (bigger models use it up faster than small ones). */
-function overBudget(a: Account): boolean {
-  const cap = Number(a.plan.daily_cost_usd);
-  return cap > 0 && a.usage.cost_usd >= cap;
+/**
+ * The plan's AI budget for the month (US$). A month's pool, not a daily wall: someone who builds a
+ * game today and does little tomorrow is never stopped on the first day, and what Keo can spend on
+ * a plan in a month stays the same.
+ */
+export function monthlyBudget(plan: Plan): number {
+  const month = Number(plan.monthly_cost_usd);
+  if (month > 0) return month;
+  const day = Number(plan.daily_cost_usd);
+  return day > 0 ? day * 30 : 0;
 }
 
-function overLimit(a: Account): Response | null {
-  if (a.usage.requests >= a.plan.daily_requests || a.usage.input_tokens + a.usage.output_tokens >= a.plan.daily_tokens || overBudget(a))
-    return fail(429, `You’ve used today’s ${a.plan.name} allowance. It resets at midnight UTC — or upgrade your plan for more.`, 'daily_limit', 'plan_limit');
-  return null;
+/** This month's AI budget used up (bigger models use it faster than small ones). */
+function overBudget(a: Account): boolean {
+  const cap = monthlyBudget(a.plan);
+  return cap > 0 && a.usage.month_cost_usd >= cap;
+}
+
+/** Which allowance ran out: today's steps or tokens, or the month's AI budget; null when none did. */
+function limitHit(a: Account): 'day' | 'month' | null {
+  if (a.usage.requests >= a.plan.daily_requests || a.usage.input_tokens + a.usage.output_tokens >= a.plan.daily_tokens) return 'day';
+  return overBudget(a) ? 'month' : null;
+}
+
+function usedUp(a: Account, hit: 'day' | 'month'): string {
+  return hit === 'day'
+    ? `You’ve used today’s ${a.plan.name} AI allowance. It resets at midnight UTC.`
+    : `You’ve used this month’s ${a.plan.name} AI allowance (big building jobs on the strongest model use it fastest). It renews on the 1st.`;
+}
+
+/**
+ * How much of the day's AI allowance is used, 0–100: the fullest of its three meters (steps, tokens
+ * and the day's AI budget, which the strongest models use up fastest).
+ */
+export function allowanceUsed(a: { plan: Plan; usage: Usage }): number {
+  const part = (used: number, max: number) => (max > 0 ? used / max : 0);
+  const most = Math.max(part(a.usage.requests, a.plan.daily_requests), part(a.usage.input_tokens + a.usage.output_tokens, a.plan.daily_tokens), monthUsed(a) / 100);
+  return Math.min(100, Math.round(most * 100));
+}
+
+/** How much of the month's AI budget is used, 0–100 (0 when the plan has none). */
+export function monthUsed(a: { plan: Plan; usage: Usage }): number {
+  const cap = monthlyBudget(a.plan);
+  return cap > 0 ? Math.min(100, Math.round((a.usage.month_cost_usd / cap) * 100)) : 0;
 }
 
 /**
@@ -234,6 +274,19 @@ export function withPromptCache(upstream: string, body: Record<string, unknown>)
     parts[parts.length - 1] = { ...parts[parts.length - 1], cache_control: { type: 'ephemeral' } };
     return { ...m, content: parts };
   });
+  // And the conversation so far, up to the user's latest message: a long task re-sends it on every
+  // step, and reads it back at a fraction of the price.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'user') continue;
+    const parts = typeof m.content === 'string' ? (m.content ? [{ type: 'text', text: m.content }] : null) : Array.isArray(m.content) ? [...(m.content as Array<Record<string, unknown>>)] : null;
+    const at = parts ? parts.map((p) => p.type).lastIndexOf('text') : -1;
+    if (parts && at >= 0) {
+      parts[at] = { ...parts[at], cache_control: { type: 'ephemeral' } };
+      messages[i] = { ...m, content: parts };
+    }
+    break;
+  }
   return { ...body, messages };
 }
 
@@ -254,7 +307,7 @@ export function allowance(plan: Plan, f: Feature): number {
 
 /** Refuses a feature the plan does not include, or whose daily allowance is used up. */
 function featureRefused(a: Account, f: Feature): Response | null {
-  if (overBudget(a)) return fail(429, `You’ve used today’s ${a.plan.name} allowance. It resets at midnight UTC — or upgrade your plan for more.`, 'daily_limit', 'plan_limit');
+  if (overBudget(a)) return fail(429, `${usedUp(a, 'month')} Upgrade your plan for more.`, 'daily_limit', 'plan_limit');
   const max = allowance(a.plan, f);
   const used = f === 'web_search' ? a.usage.web_searches : f === 'images' ? a.usage.images : a.usage.voice_seconds / 60;
   if (max === 0) return fail(403, `${FEATURE_NAME[f]} is not in the ${a.plan.name} plan. Upgrade your Keo plan to use it.`, 'feature_not_in_plan', 'plan_limit');
@@ -274,6 +327,14 @@ async function readJson(req: Request, maxBytes: number): Promise<Record<string, 
 }
 
 /** OpenRouter's error, passed on in OpenAI's shape. */
+/**
+ * Keo's own account with the AI service has a problem (out of credit, a spending limit, a bad key).
+ * That is Keo's to fix, never the user's: they must not be told about "your credits".
+ */
+export function keoSideProblem(status: number, message: string): boolean {
+  return status === 402 || status === 401 || status === 403 || /\b(credits?|billing|insufficient|payment|key limit|spend(ing)? limit|no auth|api key)\b/i.test(message);
+}
+
 async function upstreamFailed(up: Response): Promise<Response> {
   const text = await up.text();
   let message = `The AI service answered ${up.status}.`;
@@ -281,6 +342,11 @@ async function upstreamFailed(up: Response): Promise<Response> {
     message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? message;
   } catch {
     /* not JSON */
+  }
+  if (keoSideProblem(up.status, message)) {
+    // For the owner, in the Worker's log (wrangler tail / the Cloudflare dashboard).
+    console.error(`KEO CLOUD NEEDS ATTENTION: the AI service refused Keo's own account (${up.status}): ${message.slice(0, 300)}`);
+    return fail(503, 'Keo’s AI service is busy right now. Nothing was taken from your allowance or credits. Please try again in a few minutes.', 'service_unavailable', 'api_error');
   }
   return fail(up.status >= 500 ? 502 : up.status, message, 'upstream_error', 'api_error');
 }
@@ -420,7 +486,10 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     if (req.method === 'GET' && route === '/v1/me') {
       const a = await account(req, db, now);
       if (a instanceof Response) return a;
-      return json(200, { user: a.user, plan: a.plan, usage: { day: a.day, ...a.usage }, billing: a.billing });
+      // cost_usd stays inside Keo Cloud: the app gets the allowance as a percentage.
+      const { cost_usd: _cost, month_cost_usd: _month, ...usage } = a.usage;
+      const { daily_cost_usd: _cap, monthly_cost_usd: _monthCap, ...plan } = a.plan;
+      return json(200, { user: a.user, plan, usage: { day: a.day, ...usage, allowanceUsed: allowanceUsed(a), monthUsed: monthUsed(a) }, billing: a.billing });
     }
 
     const OR = env.OPENROUTER_URL ?? 'https://openrouter.ai/api/v1';
@@ -625,8 +694,17 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     if (req.method === 'POST' && route === '/v1/chat/completions') {
       const a = await account(req, db, now);
       if (a instanceof Response) return a;
-      const limit = overLimit(a);
-      if (limit) return limit;
+      // Past the day's allowance, the user's Studio credits pay (when the app says the user allows it).
+      let onCredits = false;
+      const hit = limitHit(a);
+      if (hit) {
+        const left = await creditsLeft(db, a.user.id, a.plan, now);
+        const start = usedUp(a, hit);
+        if (left <= 0) return fail(429, `${start} To keep going now, buy Studio credits or upgrade your plan.`, 'daily_limit', 'plan_limit');
+        if (req.headers.get('x-keo-credits') !== 'allow')
+          return fail(429, `${start} You have ${left} Studio credits: turn on “Keep going with my credits” in Settings → Providers to continue now.`, 'daily_limit_credits_off', 'plan_limit');
+        onCredits = true;
+      }
       const body = await readJson(req, 30_000_000);
       if (body instanceof Response) return body;
       const models = await db.models();
@@ -644,17 +722,25 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
         usage: { include: true },
         ...(stream ? { stream_options: { include_usage: true } } : {}),
       };
-      const up = await toOpenRouter('/chat/completions', upstreamBody, a.user.id);
-      const record = (u: { input: number; output: number; cost: number }) => add(a, { requests: 1, ...u });
+      let up = await toOpenRouter('/chat/completions', upstreamBody, a.user.id);
+      // The AI service holds back credit for the longest possible answer: when Keo's own balance is
+      // too low for that, a shorter answer limit often still goes through.
+      if (up.status === 402 && maxOut > 4096) up = await toOpenRouter('/chat/completions', { ...upstreamBody, max_tokens: 4096 }, a.user.id);
+      const record = (u: { input: number; output: number; cost: number }) => {
+        add(a, { requests: 1, ...u });
+        if (onCredits) deps.waitUntil(payWithCredits(db, a.user.id, a.plan, now, u.cost).catch(() => undefined));
+      };
+      const paidBy: Record<string, string> = onCredits ? { 'x-keo-paid-with': 'credits' } : {};
       if (!up.ok || !up.body) {
-        // Count the attempt (no tokens), so a failing loop still uses up the day's requests.
-        record({ input: 0, output: 0, cost: 0 });
+        // Count the attempt (no tokens), so a failing loop still uses up the day's requests —
+        // unless the problem is Keo's own account, which costs the user nothing.
+        if (up.status !== 402 && up.status !== 401 && up.status !== 403) record({ input: 0, output: 0, cost: 0 });
         return upstreamFailed(up);
       }
       if (!stream) {
         const data = (await up.json()) as Record<string, unknown> & { model?: string };
         record(usageOf(data as never));
-        return json(200, { ...data, model: model.id });
+        return new Response(JSON.stringify({ ...data, model: model.id }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...paidBy } });
       }
       // Streaming: pass every chunk straight through, and read the usage from the last one.
       let tail = '';
@@ -680,7 +766,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
           record(used);
         },
       });
-      return new Response(up.body.pipeThrough(watch), { status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' } });
+      return new Response(up.body.pipeThrough(watch), { status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', ...paidBy } });
     }
 
     return fail(404, 'Not found.', 'not_found', 'invalid_request_error');

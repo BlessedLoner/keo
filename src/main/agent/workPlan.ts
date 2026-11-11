@@ -17,6 +17,7 @@ export const PLAN_TOOL_SPEC: ToolSpec = {
   inputSchema: {
     type: 'object',
     properties: {
+      goal: { type: 'string', description: 'What the user will have when this is finished, in one line (send it with the first plan).' },
       steps: {
         type: 'array',
         minItems: 1,
@@ -26,7 +27,8 @@ export const PLAN_TOOL_SPEC: ToolSpec = {
           properties: {
             title: { type: 'string', description: 'Short imperative step, e.g. "Find the cheapest flight".' },
             status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'failed', 'skipped'] },
-            note: { type: 'string', description: 'Optional: what was found or checked, or why it failed.' },
+            note: { type: 'string', description: 'What was found or checked, or why it failed. Required when a step with doneWhen is marked done: say what you saw that meets it.' },
+            doneWhen: { type: 'string', description: 'What will show that this step worked, something you can check: "the page check reports no errors", "the speed measured after holding W is above zero", "the message appears in the chat".' },
           },
           required: ['title', 'status'],
           additionalProperties: false,
@@ -52,9 +54,26 @@ export function parsePlan(input: unknown): { plan: WorkPlan } | { error: string 
     if (!title) return { error: `Step ${i + 1} needs a title.` };
     if (!STATUSES.has(o.status as PlanStep['status'])) return { error: `Step ${i + 1} has an unknown status.` };
     const note = typeof o.note === 'string' ? o.note.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
-    out.push({ title: title.slice(0, 120), status: o.status as PlanStep['status'], ...(note ? { note } : {}) });
+    const doneWhen = typeof o.doneWhen === 'string' ? o.doneWhen.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+    out.push({ title: title.slice(0, 120), status: o.status as PlanStep['status'], ...(note ? { note } : {}), ...(doneWhen ? { doneWhen } : {}) });
   }
-  return { plan: { steps: out } };
+  const g = (input as { goal?: unknown }).goal;
+  const goal = typeof g === 'string' ? g.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+  return { plan: { steps: out, ...(goal ? { goal } : {}) } };
+}
+
+/** A newer plan keeps the goal and each step's done-when rule from the one before, when it does not repeat them. */
+export function carryPlan(prev: WorkPlan | undefined, next: WorkPlan): WorkPlan {
+  if (!prev) return next;
+  const rules = new Map(prev.steps.filter((s) => s.doneWhen).map((s) => [s.title.toLowerCase(), s.doneWhen!]));
+  const steps = next.steps.map((s) => (s.doneWhen || !rules.has(s.title.toLowerCase()) ? s : { ...s, doneWhen: rules.get(s.title.toLowerCase())! }));
+  const goal = next.goal ?? prev.goal;
+  return { steps, ...(goal ? { goal } : {}) };
+}
+
+/** Steps marked done that had a way to tell, but say nothing about what was seen. */
+export function unprovenSteps(plan: WorkPlan | undefined): PlanStep[] {
+  return (plan?.steps ?? []).filter((s) => s.status === 'done' && s.doneWhen && !s.note);
 }
 
 export function openSteps(plan: WorkPlan | undefined): PlanStep[] {
@@ -64,16 +83,17 @@ export function openSteps(plan: WorkPlan | undefined): PlanStep[] {
 const MARK: Record<PlanStep['status'], string> = { pending: '[ ]', in_progress: '[~]', done: '[x]', failed: '[!]', skipped: '[-]' };
 
 export function renderPlan(plan: WorkPlan): string {
-  return plan.steps.map((s) => `${MARK[s.status]} ${s.title}${s.note ? ` — ${s.note}` : ''}`).join('\n');
+  const steps = plan.steps.map((s) => `${MARK[s.status]} ${s.title}${s.doneWhen ? ` (done when: ${s.doneWhen})` : ''}${s.note ? ` — ${s.note}` : ''}`).join('\n');
+  return plan.goal ? `Goal: ${plan.goal}\n${steps}` : steps;
 }
 
 /** Per-turn instructions for a request that needs several steps (added to the system text for that turn only). */
 export function planContext(planned: boolean, plan: WorkPlan | undefined): string {
   if (plan) {
-    return `\n\n# Your working plan (shown to the user as a checklist)\n${renderPlan(plan)}\nKeep it current with ${PLAN_TOOL} as steps finish or fail. Before your final answer, every step must be done, failed or skipped.`;
+    return `\n\n# Your working plan (shown to the user as a checklist)\n${renderPlan(plan)}\nKeep it current with ${PLAN_TOOL} as steps finish or fail. A step is done only when its "done when" is met by something you saw in a tool result: put that in its note. Before your final answer, every step must be done, failed or skipped, and the goal must be met or you say plainly what is missing.`;
   }
   if (!planned) return '';
-  return `\n\n# This request needs several steps\nIn your first reply, call ${PLAN_TOOL} with a short checklist (2–8 steps) together with your first action — not on its own. Then work through it: after each action, check its result (the tool's verification, or re-read the window, page or file) before marking the step done. If a step fails, do not repeat the same call: try another tool or different input, or ask the user. Record key facts in step notes, since older tool results are shortened on long runs. Finish with what was done, what was checked, and what is still open.`;
+  return `\n\n# This request needs several steps\nFirst be sure what the user will have at the end. In your first reply, call ${PLAN_TOOL} with that goal and a short checklist (2–8 steps, each with doneWhen: what will show the step worked, something a tool can check) together with your first action — not on its own. Then work through it: after each action, check its result (the tool's verification, or re-read the window, page or file) before marking the step done. If a step fails, do not repeat the same call: try another tool or different input, or ask the user. Record key facts in step notes, since older tool results are shortened on long runs. Finish with what was done, what was checked, and what is still open.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +240,8 @@ export interface Problem {
 export interface FinishIssue {
   open: PlanStep[];
   problems: Problem[];
+  /** Steps called done without a word on what showed it. */
+  unproven: PlanStep[];
 }
 
 /**
@@ -231,8 +253,9 @@ export function finishIssues(reply: string, plan: WorkPlan | undefined, problems
   const open = openSteps(plan);
   const claimsSuccess = SUCCESS.test(reply) && !HEDGED.test(reply);
   const unmentioned = claimsSuccess ? problems : [];
-  if (!open.length && !unmentioned.length) return null;
-  return { open, problems: unmentioned };
+  const unproven = unprovenSteps(plan);
+  if (!open.length && !unmentioned.length && !unproven.length) return null;
+  return { open, problems: unmentioned, unproven };
 }
 
 export function describeProblems(problems: Problem[]): string {
@@ -243,5 +266,6 @@ export function finishNote(issue: FinishIssue): string {
   const parts: string[] = [];
   if (issue.open.length) parts.push(`your plan still has open steps: ${issue.open.map((s) => `"${s.title}"`).join(', ')}`);
   if (issue.problems.length) parts.push(`these actions did not succeed or could not be verified: ${describeProblems(issue.problems)}`);
+  if (issue.unproven.length) parts.push(`these steps are marked done but nothing says what showed it: ${issue.unproven.map((s) => `"${s.title}" (done when: ${s.doneWhen})`).join(', ')} — check each one now and record what you saw in its note, or mark it failed`);
   return `[Keo application note — not typed by the user] Before you finish: ${parts.join(', and ')}. Do not call the work done. Either continue (try a different tool or input for what failed, or re-check the result), or tell the user plainly what was done, what was verified, and what is still open, and update ${PLAN_TOOL} so no step is left pending.`;
 }

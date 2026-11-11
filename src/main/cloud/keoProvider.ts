@@ -23,6 +23,11 @@ export class KeoCloudProvider extends OpenAICompatProvider {
     return m.map((x) => ({ id: x.id, label: x.label, capabilities: { tools: x.tools, vision: x.vision, streaming: true, contextTokens: x.contextTokens, maxOutputTokens: x.maxOutputTokens } }));
   }
 
+  /** The user's OK to pay with their Studio credits once the day's allowance is used up. */
+  protected override extraHeaders(): Record<string, string> {
+    return this.getSettings().providers.keoUseCredits ? { 'x-keo-credits': 'allow' } : {};
+  }
+
   override status(): ProviderStatus {
     if (!this.account.signedIn()) return { kind: 'unconfigured', reason: 'Sign in to your Keo account (Settings → Providers → Keo account).' };
     return super.status();

@@ -313,6 +313,10 @@ describe('honesty guard for claimed actions', () => {
     expect(unsupportedClaims("I couldn't type it into Notepad because the window was closed.", new Set())).toEqual([]);
     expect(unsupportedClaims('Let me try focusing on the open Notepad window.', new Set())).toEqual([]);
     expect(unsupportedClaims('I wrote a short summary below.', new Set())).toEqual([]);
+    // Summing up builder work that really ran (now or earlier in the chat) is not a false claim.
+    const built = 'I started the build, wrote the three game files, checked the page on desktop and mobile, and opened it in the preview window.';
+    expect(unsupportedClaims(built, new Set(['build.start', 'build.write', 'build.check', 'build.open']))).toEqual([]);
+    expect(unsupportedClaims(built, new Set())).not.toEqual([]);
   });
 
   it('nudges the model once, which then actually performs the action', async () => {
@@ -332,7 +336,8 @@ describe('honesty guard for claimed actions', () => {
     const st = h.services.tasks.list(5)[0]!.steps[0]!;
     h.services.tasks.approveStep(st.id, st.inputHash);
     const msg = await run.done;
-    expect(msg.content).toContain('⚠ Keo');
+    // It corrected itself, so the user gets no warning.
+    expect(msg.content).not.toContain('⚠');
     expect(h.desktop.inputCalls().map((x) => x.op)).toEqual(['focus', 'paste']);
   });
 
@@ -343,7 +348,7 @@ describe('honesty guard for claimed actions', () => {
     const msg = await h.services.agent.send(c.id, 'paste it again').done;
     expect(h.provider.calls).toBe(2); // exactly one nudge
     expect(msg.meta.unsupportedClaims).toEqual(expect.arrayContaining(['typed or pasted text']));
-    expect(msg.content).toContain('Nothing was done on your computer');
+    expect(msg.content).toContain('Keo could not confirm this');
     expect(h.desktop.inputCalls()).toHaveLength(0);
   });
 });

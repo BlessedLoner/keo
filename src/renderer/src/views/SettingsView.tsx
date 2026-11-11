@@ -428,6 +428,11 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
         <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the daily allowance.</p>
         <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
         <StudioCreditsLine />
+        {s.activeProvider === 'keo' && (
+          <div style={{ marginTop: 10 }}>
+            <Toggle checked={s.providers.keoUseCredits} onChange={(v) => void patch({ providers: { keoUseCredits: v } })} label="Keep going with my credits when my allowance runs out (AI steps then cost Studio credits until it renews)" />
+          </div>
+        )}
       </section>
       <details className="card">
         <summary>

@@ -21,6 +21,37 @@ export const DEFAULT_SPEC = {
   suspension: 32,
 };
 
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+/**
+ * Car specs in the units the physics needs, whatever way they were written. Ratings are accepted
+ * (0–1, 0–10 or 0–100: power, topSpeed, grip, brake) and so is a top speed in km/h or mph-like
+ * numbers above 130; mass may be in tonnes. Missing or broken values fall back to DEFAULT_SPEC.
+ */
+export function normalSpec(spec = {}) {
+  const s = { ...DEFAULT_SPEC };
+  for (const [k, v] of Object.entries(spec ?? {})) if (typeof v === 'number' && Number.isFinite(v)) s[k] = v;
+  const rating = (v) => clamp01(v <= 1 ? v : v <= 10 ? v / 10 : v / 100);
+  // Power: real values are thousands of newtons.
+  if (s.power <= 100) s.power = 7000 + rating(s.power) * 9000;
+  else if (s.power < 2000) s.power = 7000 + clamp01(s.power / 1000) * 9000; // horsepower-like
+  // Top speed: m/s; ratings and km/h are converted.
+  if (s.topSpeed <= 10) s.topSpeed = 55 + rating(s.topSpeed) * 45;
+  else if (s.topSpeed > 130) s.topSpeed = s.topSpeed / 3.6;
+  s.topSpeed = Math.max(30, Math.min(120, s.topSpeed));
+  if (s.grip <= 1) s.grip = 2.6 + rating(s.grip) * 1.5;
+  else if (s.grip > 6) s.grip = 2.6 + rating(s.grip) * 1.5;
+  if (s.brake <= 10) s.brake = 60 + rating(s.brake) * 60;
+  if (s.mass < 50) s.mass = s.mass < 5 ? s.mass * 1000 : 1350;
+  s.mass = Math.max(600, Math.min(4000, s.mass));
+  s.armor = Math.max(0, Math.min(0.9, s.armor > 1 ? s.armor / 100 : s.armor));
+  if (!(s.steer > 0.2 && s.steer < 1.2)) s.steer = DEFAULT_SPEC.steer;
+  if (!(s.nitroForce > 500)) s.nitroForce = DEFAULT_SPEC.nitroForce;
+  if (!(s.nitroSeconds > 0.5)) s.nitroSeconds = DEFAULT_SPEC.nitroSeconds;
+  if (!(s.suspension > 5 && s.suspension < 120)) s.suspension = DEFAULT_SPEC.suspension;
+  return s;
+}
+
 const tmpQ = new THREE.Quaternion();
 const tmpV = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -33,7 +64,7 @@ export class Vehicle {
   constructor(ctx, model, spec = {}, at = { x: 0, z: 0, heading: 0 }) {
     this.ctx = ctx;
     this.model = model;
-    this.spec = { ...DEFAULT_SPEC, ...spec };
+    this.spec = normalSpec(spec);
     this.health = 1;
     this.nitro = 1;
     this.steerNow = 0;
@@ -84,7 +115,7 @@ export class Vehicle {
 
   /** Re-applies the specs (after an upgrade). */
   applySpec(spec) {
-    if (spec) this.spec = { ...this.spec, ...spec };
+    if (spec) this.spec = normalSpec({ ...this.spec, ...spec });
     const s = this.spec;
     for (let i = 0; i < 4; i++) {
       this.vc.setWheelSuspensionStiffness(i, s.suspension);

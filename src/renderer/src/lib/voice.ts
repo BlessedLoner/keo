@@ -481,6 +481,8 @@ class VoiceController {
 /** Removes code blocks and Markdown syntax so speech stays natural. */
 export function speakable(md: string): string {
   return md
+    // Keo's own notes about a reply are for the screen, never read aloud.
+    .replace(/^>\s*⚠.*$/gm, '')
     .replace(/```[\s\S]*?```/g, ' (code omitted) ')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/[*_#>]+/g, '')

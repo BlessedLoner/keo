@@ -23,7 +23,7 @@ export interface AccountStatus {
   /** Keo signs in by itself as soon as that email is confirmed. */
   waitingForConfirmation: boolean;
   plan: { id: string; name: string; dailyRequests: number; dailyTokens: number; features: Record<string, unknown> } | null;
-  usage: { day: string; requests: number; inputTokens: number; outputTokens: number; webSearches: number; images: number; voiceSeconds: number } | null;
+  usage: { day: string; requests: number; inputTokens: number; outputTokens: number; webSearches: number; images: number; voiceSeconds: number; /** How much of the day's AI allowance is used, 0–100 (its fullest meter; the strongest models use it fastest). */ allowanceUsed?: number; /** How much of this month's AI allowance is used, 0–100 (a month's pool: a heavy day does not stop the user). */ monthUsed?: number } | null;
   /** A paid plan: paid until when, and whether it renews ('active', 'non-renewing', 'attention', 'cancelled'). */
   billing: { until: string | null; status: string } | null;
   /** Why plan/usage could not be read just now (offline, gateway not deployed yet…). */

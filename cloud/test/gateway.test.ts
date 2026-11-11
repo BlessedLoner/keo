@@ -41,8 +41,11 @@ class World {
       if (url.pathname === '/rest/v1/plans') return j(200, this.plans);
       if (url.pathname === '/rest/v1/models') return j(200, this.models);
       if (url.pathname === '/rest/v1/usage_daily') {
-        const u = this.usage.get(`${(q.get('user_id') ?? '').replace('eq.', '')}|${(q.get('day') ?? '').replace('eq.', '')}`);
-        return j(200, u ? [u] : []);
+        // The month's rows from a day on (day=gte.…), each with its day.
+        const user = (q.get('user_id') ?? '').replace('eq.', '');
+        const from = (q.get('day') ?? '').replace(/^(eq|gte)\./, '');
+        const rows = [...this.usage.entries()].filter(([k]) => k.startsWith(`${user}|`) && k.slice(user.length + 1) >= from).map(([k, v]) => ({ ...v, day: k.slice(user.length + 1) }));
+        return j(200, rows);
       }
       if (url.pathname === '/rest/v1/rpc/add_usage') {
         const b = JSON.parse(String(init.body)) as Record<string, number> & { p_user: string; p_day: string };
@@ -171,9 +174,9 @@ describe('Keo Cloud gateway', () => {
   });
 
   it('passes OpenRouter’s error message on, and still counts the attempt', async () => {
-    w.upstreamStatus = 402;
+    w.upstreamStatus = 422;
     const r = await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } });
-    expect(r.status).toBe(402);
+    expect(r.status).toBe(422);
     expect(((await r.json()) as { error: { message: string } }).error.message).toBe('Upstream says no');
     await w.settle();
     expect(w.usage.get(`u-ana|${DAY}`)?.requests).toBe(1);
@@ -229,9 +232,34 @@ describe('Keo Cloud gateway', () => {
     expect((await w.call('/v1/speech', { token: 'tok-ana', body: { text: 'More' } })).status).toBe(429);
   });
 
-  it('stops at the plan’s daily spending cap, whichever models used it up', async () => {
+  it('the AI budget is a pool for the month, not a wall each day: a heavy day is fine, the month’s total is what stops', async () => {
     (w.plans[0] as Record<string, unknown>).daily_cost_usd = 0.05;
-    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost: 0, cost_usd: 0.051 } as never);
+    // More than a "day's share" today: still fine, the month has 30 of them.
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost_usd: 0.9 } as never);
+    expect((await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } })).status).toBe(200);
+    w.upstream.length = 0;
+    // Earlier days of the same month count; last month's do not.
+    await w.settle();
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost_usd: 0.9 } as never);
+    w.usage.set('u-ana|2026-09-30', { cost_usd: 50 } as never);
+    expect((await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } })).status).toBe(200);
+    w.upstream.length = 0;
+    await w.settle();
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost_usd: 0.9 } as never);
+    w.usage.set('u-ana|2026-10-03', { cost_usd: 0.7 } as never);
+    const over = await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } });
+    expect(over.status).toBe(429);
+    expect(((await over.json()) as { error: { message: string } }).error.message).toContain('this month’s Free AI allowance');
+    w.usage.delete('u-ana|2026-10-03');
+    w.usage.delete('u-ana|2026-09-30');
+    // A plan can name its monthly budget itself.
+    (w.plans[0] as Record<string, unknown>).monthly_cost_usd = 0.5;
+    clearCache();
+    expect((await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } })).status).toBe(429);
+    delete (w.plans[0] as Record<string, unknown>).monthly_cost_usd;
+    clearCache();
+    w.upstream.length = 0;
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost: 0, cost_usd: 1.6 } as never);
     const r = await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } });
     expect(r.status).toBe(429);
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe('daily_limit');
@@ -239,12 +267,100 @@ describe('Keo Cloud gateway', () => {
     expect(w.upstream).toHaveLength(0);
   });
 
+  it('past the day’s allowance, the user’s Studio credits pay — only when the app says the user allows it', async () => {
+    (w.plans[0] as Record<string, unknown>).daily_cost_usd = 0.05;
+    (w.plans[0] as Record<string, unknown>).features = { studio_credits: 0 };
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost_usd: 1.6 } as never);
+    let bought = 500;
+    const spent: number[] = [];
+    const base = w.fetch;
+    w.fetch = async (input, init = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/rest/v1/studio_credits') return new Response(JSON.stringify([{ month: '2026-10', monthly_used: 0, bought }]), { status: 200 });
+      if (url.pathname === '/rest/v1/rpc/spend_credits') {
+        const n = (JSON.parse(String(init.body)) as { p_amount: number }).p_amount;
+        if (n > bought) return new Response(JSON.stringify({ message: 'not_enough_credits' }), { status: 400 });
+        bought -= n;
+        spent.push(n);
+        return new Response('{}', { status: 200 });
+      }
+      return base(input, init);
+    };
+    const ask = (headers: Record<string, string>) =>
+      handle(new Request('https://keo-cloud.example.workers.dev/v1/chat/completions', { method: 'POST', headers: { authorization: 'Bearer tok-ana', 'content-type': 'application/json', ...headers }, body: JSON.stringify({ model: 'keo-fast', messages: [] }) }), env, {
+        fetch: w.fetch,
+        waitUntil: (p) => void w.pending.push(p),
+        now: () => NOW,
+      });
+    // Not allowed by the user: refused, and told about the credits they have.
+    const no = await ask({});
+    expect(no.status).toBe(429);
+    const err = ((await no.json()) as { error: { code: string; message: string } }).error;
+    expect(err.code).toBe('daily_limit_credits_off');
+    expect(err.message).toContain('500 Studio credits');
+    expect(w.upstream).toHaveLength(0);
+    // Allowed: the step runs and its cost comes off the credits ($0.0003 → 1 credit).
+    const yes = await ask({ 'x-keo-credits': 'allow' });
+    expect(yes.status).toBe(200);
+    expect(yes.headers.get('x-keo-paid-with')).toBe('credits');
+    await w.settle();
+    expect(spent).toEqual([1]);
+    // No credits left: the plain refusal.
+    bought = 0;
+    w.usage.set(`u-ana|${DAY}`, { requests: 2, cost_usd: 1.7 } as never);
+    const out = await ask({ 'x-keo-credits': 'allow' });
+    expect(((await out.json()) as { error: { code: string } }).error.code).toBe('daily_limit');
+  });
+
+  it('tells the app how much of the day’s allowance is used (the fullest meter), never the money', async () => {
+    (w.plans[0] as Record<string, unknown>).daily_cost_usd = 0.05;
+    w.usage.set(`u-ana|${DAY}`, { requests: 1, input_tokens: 10, output_tokens: 10, cost_usd: 1.2 } as never);
+    const me = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { plan: Record<string, unknown>; usage: Record<string, unknown> };
+    expect(me.usage.allowanceUsed).toBe(80);
+    expect(me.usage.monthUsed).toBe(80);
+    expect(me.usage).not.toHaveProperty('cost_usd');
+    expect(me.usage).not.toHaveProperty('month_cost_usd');
+    expect(me.plan).not.toHaveProperty('daily_cost_usd');
+  });
+
+  it('a problem with Keo’s own AI account is never shown to the user as their credits, and costs them nothing', async () => {
+    const said = 'This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.';
+    const base = w.fetch;
+    const limits: unknown[] = [];
+    w.fetch = async (input, init = {}) => {
+      if (new URL(input).host !== 'or.test') return base(input, init);
+      limits.push((JSON.parse(String(init.body)) as { max_tokens?: number }).max_tokens);
+      return new Response(JSON.stringify({ error: { message: said, code: 402 } }), { status: 402 });
+    };
+    w.models[0]!.max_output_tokens = 16000;
+    const r = await w.call('/v1/chat/completions', { token: 'tok-ana', body: { model: 'keo-fast', messages: [] } });
+    expect(r.status).toBe(503);
+    const err = ((await r.json()) as { error: { message: string; code: string } }).error;
+    expect(err.code).toBe('service_unavailable');
+    expect(err.message).not.toContain('your available credits');
+    expect(err.message).toContain('Nothing was taken');
+    // It tried once more with a shorter answer limit before giving up.
+    expect(limits).toEqual([16000, 4096]);
+    await w.settle();
+    expect(w.usage.get(`u-ana|${DAY}`)).toBeUndefined();
+    // A model's own refusal of the request is still passed on as it is.
+    const { keoSideProblem } = await import('../src/gateway');
+    expect(keoSideProblem(400, 'The prompt is too long for this model.')).toBe(false);
+    expect(keoSideProblem(429, 'Rate limit exceeded: free-models-per-min.')).toBe(false);
+    expect(keoSideProblem(402, 'Insufficient credits')).toBe(true);
+  });
+
   it('marks the instructions for caching on Claude models only', async () => {
     const { withPromptCache } = await import('../src/gateway');
     const body = { messages: [{ role: 'system', content: 'Long Keo instructions' }, { role: 'user', content: 'hi' }] };
     const claude = withPromptCache('anthropic/claude-sonnet-5.5', body) as { messages: Array<{ content: unknown }> };
     expect(claude.messages[0]!.content).toEqual([{ type: 'text', text: 'Long Keo instructions', cache_control: { type: 'ephemeral' } }]);
-    expect(claude.messages[1]!.content).toBe('hi');
+    // The conversation up to the user's latest message is marked too, so each step of a long task reads it back cheaply.
+    expect(claude.messages[1]!.content).toEqual([{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
+    const long = withPromptCache('anthropic/claude-sonnet-5.5', { messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'first' }, { role: 'assistant', content: 'a' }, { role: 'user', content: 'second' }, { role: 'assistant', content: null, tool_calls: [] }, { role: 'tool', content: 'result' }] }) as { messages: Array<{ content: unknown }> };
+    expect(long.messages[1]!.content).toBe('first');
+    expect(long.messages[3]!.content).toEqual([{ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } }]);
+    expect(long.messages[5]!.content).toBe('result');
     expect(withPromptCache('openai/gpt-6-luna', body)).toBe(body);
   });
 

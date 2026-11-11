@@ -19,7 +19,7 @@ import { chooseGroups, groupOf, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUP
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
-import { compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
+import { carryPlan, compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
 
 /** Capabilities whose outputs carry text from outside Keo (other apps, screenshots). */
 const UNTRUSTED_OUTPUT = new Set([
@@ -509,6 +509,43 @@ export class AgentService {
       const outputLimit = (p: ChatProvider, i: typeof info) =>
         Math.min(i?.capabilities.maxOutputTokens ?? 4096, p.id === 'anthropic' ? settings.providers.anthropic.maxOutputTokens : p.id === 'test' ? 8192 : settings.providers[p.id].maxOutputTokens);
       let maxOut = outputLimit(provider, info);
+      // Carrying on with another model when this one fails or declines: the same service's other
+      // models (strongest first), then the two sides of smart routing, then the service in use.
+      // Only services the user has set up; never more than twice in one reply.
+      const triedModels = new Set<string>();
+      let fallbacks = 0;
+      const nextModel = (needTools: boolean): { provider: ChatProvider; model: string } | null => {
+        triedModels.add(`${provider.id}|${model}`);
+        if (fallbacks >= 2) return null;
+        const options: Array<{ provider: ChatProvider; model: string }> = [];
+        for (const m of [...provider.models()].reverse()) options.push({ provider, model: m.id });
+        if (settings.routing.enabled) for (const side of ['strong', 'fast'] as const) options.push(...[this.routeSide(settings, side)].filter((x): x is { provider: ChatProvider; model: string } => !!x));
+        const active = this.providers.active();
+        options.push({ provider: active, model: active.selectedModel() });
+        for (const o of options) {
+          if (triedModels.has(`${o.provider.id}|${o.model}`) || o.provider.status().kind !== 'ready') continue;
+          const caps = modelInfo(o.provider, o.model, true)?.capabilities;
+          if (needTools && caps && !caps.tools) continue;
+          return o;
+        }
+        return null;
+      };
+      const switchModel = (to: { provider: ChatProvider; model: string }, reason: string) => {
+        const from = `${provider.id}/${model}`;
+        fallbacks++;
+        provider = to.provider;
+        model = to.model;
+        info = modelInfo(provider, model, true);
+        maxOut = outputLimit(provider, info);
+        meta.providerId = provider.id;
+        meta.model = model;
+        meta.fallback = { from, to: `${provider.id}/${model}`, reason };
+        this.log.warn('agent.model_fallback', { from, to: meta.fallback.to, reason }, correlationId);
+      };
+      const turnStarted = Date.now();
+      let modelMs = 0;
+      let toolMs = 0;
+      let modelCalls = 0;
       // Clearly multi-step requests get a working checklist; questions and single actions never do.
       const planned = tools.length > 0 && needsPlan(this.conversations.getMessage(sourceMessageId)?.content ?? '');
       this.log.info(
@@ -521,7 +558,13 @@ export class AgentService {
       let usageIn = 0;
       let claimNudged = false;
       let finishNudged = false;
-      const succeeded = () => new Set((meta.tools ?? []).filter((t) => t.outcome === 'executed').map((t) => t.capabilityId));
+      // What worked earlier in this conversation: a reply that sums it up is not making anything up.
+      const earlier = this.conversations
+        .messages(conversationId)
+        .flatMap((m) => (m.role === 'assistant' ? (m.meta.tools ?? []) : []))
+        .filter((t) => t.outcome === 'executed')
+        .map((t) => t.capabilityId);
+      const succeeded = () => new Set([...earlier, ...(meta.tools ?? []).filter((t) => t.outcome === 'executed').map((t) => t.capabilityId)]);
       let usageOut = 0;
       // Long multi-step work: repeated calls, actions not shown to work, and where this turn's own messages begin.
       const repeats = new RepeatGuard();
@@ -558,8 +601,10 @@ export class AgentService {
         // A model call that drops or comes back garbled (a connection cut mid-stream, a provider hiccup) is
         // made again, up to twice, when nothing of it was shown yet: the turn keeps all its work so far.
         let result!: Awaited<ReturnType<typeof provider.stream>>;
+        let callStarted = Date.now();
         for (let attempt = 1; ; attempt++) {
           let streamed = false;
+          callStarted = Date.now();
           try {
             result = await provider.stream(
               {
@@ -589,18 +634,38 @@ export class AgentService {
             break;
           } catch (e) {
             const again = e instanceof ProviderError && !signal.aborted && !streamed && attempt < 3 && (e.kind === 'malformed' || e.kind === 'network' || e.kind === 'timeout' || e.kind === 'server');
-            if (!again) throw e;
+            if (!again) {
+              // This model cannot answer just now (its own problem, not the user's account or sign-in): carry on with another.
+              const elsewhere = e instanceof ProviderError && !signal.aborted && !streamed && (e.kind === 'malformed' || e.kind === 'network' || e.kind === 'timeout' || e.kind === 'server' || e.kind === 'rate_limit' || e.kind === 'bad_request');
+              const other = elsewhere ? nextModel(tools.length > 0) : null;
+              if (!other) throw e;
+              switchModel(other, `the model had a problem (${(e as ProviderError).kind})`);
+              attempt = 0;
+              continue;
+            }
             this.log.warn('agent.model_retry', { attempt, kind: e.kind, error: e.message.slice(0, 240), round: iteration }, correlationId);
             await new Promise((r) => setTimeout(r, 1500 * attempt));
           }
         }
+        const callMs = Date.now() - callStarted;
+        modelMs += callMs;
+        modelCalls++;
         if (result.usage) {
           usageIn += result.usage.inputTokens;
           usageOut += result.usage.outputTokens;
-          this.audit.recordUsage({ providerId: provider.id, model: result.model, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, correlationId });
+          this.audit.recordUsage({ providerId: provider.id, model: result.model, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, correlationId, durationMs: callMs });
         }
         meta.stopReason = result.stopReason;
         if (result.stopReason === 'refusal') {
+          // One model declining is its own judgement: another model looks at the same request with its own
+          // (once, and only when nothing of the declined answer was shown).
+          const other = !result.text && !result.toolCalls.length && !meta.fallback ? nextModel(tools.length > 0) : null;
+          if (other) {
+            switchModel(other, 'the model declined');
+            freeRounds++;
+            phase('thinking');
+            continue;
+          }
           text += `${text ? '\n\n' : ''}_The model declined to continue this request._`;
           break;
         }
@@ -622,9 +687,11 @@ export class AgentService {
           if (claims.length && tools.length && !claimNudged && used + 1 < roundLimit()) {
             claimNudged = true;
             this.log.warn('agent.unsupported_claim', { claims, nudged: true }, correlationId);
-            const note = `\n\n> ⚠ Keo: the text above says Keo ${claims.join(' and ')}, but no such action was run. Keo asked the model to actually do it or correct itself.\n\n`;
-            text += note;
-            this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: note });
+            // Said quietly to the model only: the user sees a warning only if it still does not act.
+            if (text && !text.endsWith('\n')) {
+              text += '\n\n';
+              this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: '\n\n' });
+            }
             messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(no text)' }], native: result.native });
             messages.push({
               role: 'user',
@@ -640,7 +707,7 @@ export class AgentService {
           }
           if (claims.length) {
             this.log.warn('agent.unsupported_claim', { claims, nudged: false }, correlationId);
-            const warn = `\n\n> ⚠ Keo: this reply says Keo ${claims.join(' and ')}, but no such action was run in this reply. Nothing was done on your computer.`;
+            const warn = `\n\n> ⚠ Keo could not confirm this: the reply says Keo ${claims.join(' and ')}, but Keo has no record of doing that in this chat. Please check before relying on it.`;
             text += warn;
             this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: warn });
             meta.unsupportedClaims = claims;
@@ -649,8 +716,9 @@ export class AgentService {
           const issue = claims.length || !tools.length ? null : finishIssues(result.text, meta.plan, [...problems.values()]);
           if (issue && !finishNudged && used + 1 < roundLimit()) {
             finishNudged = true;
-            this.log.warn('agent.finish_checked', { openSteps: issue.open.length, problems: issue.problems.length }, correlationId);
-            if (issue.problems.length) note(`\n\n> Keo: not everything above worked — ${describeProblems(issue.problems)}. Keo asked the model to fix it or say so.\n\n`);
+            // Said to the model only: the user is told only if it still ends without fixing or saying so.
+            this.log.warn('agent.finish_checked', { openSteps: issue.open.length, problems: issue.problems.length, unproven: issue.unproven.length }, correlationId);
+            if (text && !text.endsWith('\n')) note('\n\n');
             messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(no text)' }], native: result.native });
             messages.push({ role: 'user', content: [{ type: 'text', text: finishNote(issue) }] });
             phase('thinking');
@@ -727,8 +795,8 @@ export class AgentService {
           if (call.name === PLAN_TOOL) {
             const parsed = parsePlan(call.input);
             if ('plan' in parsed) {
-              meta.plan = parsed.plan;
-              this.emit({ type: 'plan', conversationId, messageId: assistant.id, plan: parsed.plan });
+              meta.plan = carryPlan(meta.plan, parsed.plan);
+              this.emit({ type: 'plan', conversationId, messageId: assistant.id, plan: meta.plan });
               flush(true);
             }
             results.push({ type: 'tool_result', callId: call.id, content: json('plan' in parsed ? { status: 'shown_to_user' } : { status: 'rejected', error: parsed.error }), isError: !('plan' in parsed) });
@@ -767,6 +835,7 @@ export class AgentService {
             continue;
           }
           turnGroups.add(groupOf(call.name));
+          const stepStarted = Date.now();
           const r = await this.handleToolCall(call, {
             conversationId,
             sourceMessageId,
@@ -780,6 +849,8 @@ export class AgentService {
               flush(true);
             },
           });
+          r.activity.ms = Date.now() - stepStarted;
+          toolMs += r.activity.ms;
           upsert(r.activity);
           this.notePending(conversationId, call, r);
           repeats.record(call, iteration, r.activity.outcome);
@@ -822,6 +893,8 @@ export class AgentService {
         phase('thinking');
       }
       if (usageIn || usageOut) meta.usage = { inputTokens: usageIn, outputTokens: usageOut };
+      meta.timings = { modelMs, toolMs, totalMs: Date.now() - turnStarted, modelCalls };
+      this.log.info('agent.turn_timing', { ...meta.timings, steps: (meta.tools ?? []).length, model }, correlationId);
       if (!text.trim() && !(meta.tools ?? []).length) {
         finalStatus = 'error';
         meta.error = 'The model returned an empty response.';

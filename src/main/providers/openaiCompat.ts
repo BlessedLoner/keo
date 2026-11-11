@@ -52,7 +52,7 @@ export class OpenAICompatProvider implements ChatProvider {
 
   constructor(
     private readonly kind: Kind,
-    private readonly getSettings: () => Settings,
+    protected readonly getSettings: () => Settings,
     private readonly getKey: () => string | null,
     private readonly clientFactory: ClientFactory = ({ apiKey, baseURL }) => new OpenAI({ apiKey, baseURL, maxRetries: 2, timeout: 10 * 60 * 1000 }),
   ) {
@@ -102,6 +102,11 @@ export class OpenAICompatProvider implements ChatProvider {
     if (this.requiresApiKey && !this.getKey()) return { kind: 'unconfigured', reason: `Add an ${this.label} API key in Settings → Providers.` };
     if (!c.model) return { kind: 'unconfigured', reason: 'Enter a model id in Settings → Providers.' };
     return { kind: 'ready' };
+  }
+
+  /** Headers a provider adds to each chat request (none by default). */
+  protected extraHeaders(): Record<string, string> {
+    return {};
   }
 
   client(): OpenAI {
@@ -168,13 +173,13 @@ export class OpenAICompatProvider implements ChatProvider {
     try {
       let stream;
       try {
-        stream = await client.chat.completions.create(body, { signal });
+        stream = await client.chat.completions.create(body, { signal, headers: this.extraHeaders() });
       } catch (err) {
         // "Function tools with reasoning_effort are not supported for <model> … set reasoning_effort to 'none'".
         const status = (err as { status?: number }).status;
         if (status !== 400 || !tools.length || body.reasoning_effort === 'none' || !/reasoning_effort/i.test(String((err as Error).message))) throw err;
         this.noReasoningWithTools.add(req.model);
-        stream = await client.chat.completions.create({ ...body, reasoning_effort: 'none' }, { signal });
+        stream = await client.chat.completions.create({ ...body, reasoning_effort: 'none' }, { signal, headers: this.extraHeaders() });
       }
       handlers.onPhase?.('generating');
       for await (const chunk of stream) {

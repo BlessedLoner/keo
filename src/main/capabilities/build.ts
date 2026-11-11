@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CheckAction } from '../build/checkActions';
 import { BUILD_LIBRARIES, BUILD_LIBRARY_IDS, type BuildLibraryId } from '../build/libraries';
 import { BuildError, BuildId, BuildKind, TodoItem, type BuildManifest, type BuildProjects } from '../build/projects';
 import type { BuildCheck } from '../build/host';
@@ -12,7 +13,7 @@ import { CapabilityError, defineCapability, type AnyCapability } from './types';
 export interface BuildDeps {
   projects: BuildProjects;
   /** The preview and its checks (Keo's sandboxed windows); null in tests without Electron. */
-  host: { open(id: string, page?: string): Promise<void>; check(id: string, page?: string, o?: { waitMs?: number; width?: number; height?: number }): Promise<BuildCheck>; changed?(id: string): void } | null;
+  host: { open(id: string, page?: string): Promise<void>; check(id: string, page?: string, o?: { waitMs?: number; width?: number; height?: number; actions?: CheckAction[] }): Promise<BuildCheck>; changed?(id: string): void } | null;
   /** Keo's vision model looks at a screenshot: what it shows and what looks wrong; null when no model sees pictures. */
   look?: (png: Buffer, brief: string, signal: AbortSignal) => Promise<string>;
   /** An AI picture for the site (Keo's picture maker): PNG bytes. */
@@ -47,7 +48,8 @@ const HOW_TO_BUILD = [
   '6. To-do list: things only the user can do (buy a domain, create a Paystack or Stripe account and add its secret key, an email service, a Cloudflare account, legal pages’ details, real photos or texts) go in build__update todo with how to do each. Never pretend those are done.',
   '7. Finish: build__open shows it to the user in Keo’s preview. Tell them what you built, the pages and features, how to try it, and their to-do list. PUT-IT-ONLINE.md in the folder explains going online.',
   '',
-  'Car and driving games (racing, police chases, open-world city driving): ALWAYS the "drive" library — a tested engine with realistic lighting, a real city, real car physics, traffic, police, races, a garage and a HUD. Never write a car game from scratch. Steps: build__start with libraries ["drive"]; build__city for the real place (a US downtown fits street racing; the credit line is shown by the kit); for realistic cars build__model each car (about one per class, it costs credits: ask how many the user wants if unclear; without credits the kit draws its own cars); then index.html calling createDriveGame with the cars, races and story, and your own js files for missions, story events and extra features on the returned api. Make the brand and car names up (real brands need a licence). Check with build__check, then build__open.',
+  'Car and driving games (racing, police chases, taxi and delivery, open-world city driving): ALWAYS the "drive" library — a tested engine with realistic lighting, real cities, real car physics, traffic, police, races, passengers to pick up, travel between cities, a garage and a HUD. Never write a car game from scratch. Steps: build__start with libraries ["drive"]; build__read lib/drive/README.md once (the whole API on one page — never read the kit\'s other files); build__city for the real place (a US downtown fits street racing; the kit shows the credit line). For a game across several cities or countries, build__city once per city into its own file (path "assets/cities/<name>.json") and list them in cities: the player travels between them; a whole country as one map is not possible, so say so and offer its main cities. For realistic cars build__model each car (about one per class, it costs credits: ask how many the user wants if unclear; without credits the kit draws its own cars). Then index.html calling createDriveGame with the cars, races, cities and jobs, and your own js files for missions and story on the returned game object. Car specs are in real units (power in newtons, about 8000–16000; topSpeed in metres per second, about 60–100), never 0–1 ratings. Make the brand and car names up (real brands need a licence). Check with build__check, then build__open.',
+  'Before saying a game or an app works, USE it with build__check actions: start it, hold the controls, and measure that it responds (a speed above zero, a score that changed, a new item in the list). Report to the user what you tried and what you could not try. For the drive kit: expose the game as window.game, then actions [{do:"click",text:"Drive"},{do:"keys",keys:["KeyW"],holdSeconds:4},{do:"measure",expression:"Math.round(window.game.player.mph)"}] must show a speed above zero.',
   'Games: a real game, not a toy — a title screen, clear controls shown on screen (keyboard and touch), several levels or rising difficulty, score and best score (localStorage), lives or health, pause, game over and restart, sound effects and music made with Web Audio, juice (particles, screen shake, easing, hit flashes). 2D: Phaser. 3D: three.js (lights and shadows, fog, post-processing bloom when it suits, a proper camera) with Rapier for physics. Motion sites: GSAP with ScrollTrigger (pinned sections, scrubbed timelines, text reveals), three.js scenes in the background where it fits; respect prefers-reduced-motion.',
   '',
   'Libraries:',
@@ -260,9 +262,24 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     ...base,
     id: 'build.check',
     title: 'Check a page of a build',
-    description: 'Load a page of a build like a visitor would (in Keo’s sandbox, with its API), let it run, and report its errors, missing files, the text it shows, and what it looks like (Keo’s vision model looks at a screenshot). Fix what it finds and check again. Use mobile: true to check the phone layout.',
-    input: z.object({ build: BuildId, page: z.string().max(300).default(''), mobile: z.boolean().default(false), waitSeconds: z.number().min(1).max(15).default(3) }).strict(),
-    output: z.object({ page: z.string(), title: z.string(), ok: z.boolean(), errors: z.array(z.string()), warnings: z.array(z.string()), missing: z.array(z.string()), text: z.string(), looks: z.string().nullable(), next: z.string() }),
+    description:
+      'Load a page of a build like a visitor would (in Keo’s sandbox, with its API), let it run, and report its errors, missing files, the text it shows, and what it looks like (Keo’s vision model looks at a screenshot). Then USE it with actions, in order: {do:"click", text:"Play"} (the words on a button or link; or selector, or x and y for a canvas), {do:"keys", keys:["KeyW"], holdSeconds:3} (keys as KeyboardEvent.code, held together), {do:"type", text:"…", selector:"#email"}, {do:"scroll", y:800}, {do:"wait", seconds:2}, {do:"measure", expression:"window.game.player.mph"} (a JavaScript expression read in the page: a score, a speed, a count of items, whether a message is shown). The report lists what each action did; text and the screenshot are from after the actions. A page that loads is not proof it works: play the game (start it, hold the controls, measure that things move and the score changes), submit the form, open the menu. Fix what it finds and check again. Use mobile: true to check the phone layout.',
+    input: z
+      .object({ build: BuildId, page: z.string().max(300).default(''), mobile: z.boolean().default(false), waitSeconds: z.number().min(1).max(15).default(3), actions: z.array(CheckAction).max(14).default([]) })
+      .strict(),
+    output: z.object({
+      page: z.string(),
+      title: z.string(),
+      ok: z.boolean(),
+      errors: z.array(z.string()),
+      warnings: z.array(z.string()),
+      missing: z.array(z.string()),
+      text: z.string(),
+      steps: z.array(z.string()),
+      used: z.boolean(),
+      looks: z.string().nullable(),
+      next: z.string(),
+    }),
     approval: 'never',
     consequential: false,
     idempotent: true,
@@ -275,10 +292,15 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     async execute(i, ctx) {
       if (!d.host) throw fail('unavailable', 'The preview is not available here.');
       const m = run(() => d.projects.manifest(i.build));
-      const r = await d.host.check(i.build, i.page, { waitMs: i.waitSeconds * 1000, ...(i.mobile ? { width: 390, height: 844 } : {}) });
+      const r = await d.host.check(i.build, i.page, { waitMs: i.waitSeconds * 1000, actions: i.actions, ...(i.mobile ? { width: 390, height: 844 } : {}) });
+      const steps = r.steps ?? [];
+      // An action that found nothing to act on, or a value that could not be read, is a finding too.
+      const stuck = steps.filter((s) => /: not (found|clicked)|→ error:|no answer from the page/.test(s));
       let looks: string | null = null;
       if (r.screenshot && d.look) looks = await d.look(r.screenshot, `${m.kind} “${m.title}”: ${m.brief}`, ctx.signal).catch(() => null);
-      const ok = !r.errors.length && !r.missing.length;
+      const ok = !r.errors.length && !r.missing.length && !stuck.length;
+      const used = steps.length > 0;
+      const interactive = m.kind === 'game' || m.kind === 'app';
       return {
         page: r.page,
         title: r.title,
@@ -287,8 +309,16 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
         warnings: r.warnings,
         missing: r.missing,
         text: r.text,
+        steps,
+        used,
         looks,
-        next: ok ? 'No errors. Fix anything the look reveals, check the other pages (and mobile), then build__open it for the user.' : 'Fix the errors and missing files (build__edit / build__write), then check again.',
+        next: !ok
+          ? stuck.length && !r.errors.length && !r.missing.length
+            ? 'Some actions did not work (see steps): either the page does not respond as it should — fix it — or the action named the wrong thing: read the page text and try again.'
+            : 'Fix the errors and missing files (build__edit / build__write), then check again.'
+          : !used && interactive
+            ? `It loads without errors, but nothing was tried yet: check again with actions that use the ${m.kind} (start it, hold the controls or fill the form, and measure that it responds) before telling the user it works.`
+            : 'No errors. Compare the measured values and the look with what should have happened; fix anything wrong, check the other pages (and mobile), then build__open it for the user.',
       };
     },
   });
@@ -383,7 +413,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     id: 'build.city',
     title: 'Put a real city into a game',
     description:
-      'Download a real place (its streets, lanes, buildings with their real heights, parks and water) from OpenStreetMap and save it in the build as assets/city.json for the drive kit (createDriveGame({ city: "/assets/city.json" })). place: a district or city, e.g. "Downtown Los Angeles, California", "Midtown Manhattan, New York", "The Strip, Las Vegas". radius: metres around its centre (700 is a good driving area; up to 1500). Takes up to two minutes. The game must show "© OpenStreetMap contributors" (the kit does).',
+      'Download a real place (its streets, lanes, buildings with their real heights, parks and water) from OpenStreetMap and save it in the build as assets/city.json for the drive kit (createDriveGame({ city: "/assets/city.json" })). For a game with several cities, call it once per city with its own path (assets/cities/tokyo.json) and list them in createDriveGame({ cities: [...] }). place: a district or city, e.g. "Downtown Los Angeles, California", "Midtown Manhattan, New York", "The Strip, Las Vegas". radius: metres around its centre (700 is a good driving area; up to 1500). Takes up to two minutes. The game must show "© OpenStreetMap contributors" (the kit does).',
     input: z
       .object({
         build: BuildId,

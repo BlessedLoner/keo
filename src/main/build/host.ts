@@ -4,6 +4,7 @@ import { BrowserWindow, session, type Session } from 'electron';
 import { BuildError, type BuildProjects } from './projects';
 import { libraryAlias } from './libraries';
 import { RUNNER_HTML } from './runner';
+import { actionLabel, actionScript, type CheckAction } from './checkActions';
 
 /**
  * Where Keo's builds run: the preview window and the backend sandbox.
@@ -59,8 +60,10 @@ export interface BuildCheck {
   missing: string[];
   /** What the page shows, as text (start of it). */
   text: string;
-  /** A picture of the page after it ran for a moment. */
+  /** A picture of the page after it ran for a moment (and after the actions, when there were any). */
   screenshot: Buffer | null;
+  /** What each action did, in order ("click “Play”: clicked play"). */
+  steps: string[];
 }
 
 interface Runner {
@@ -366,7 +369,7 @@ export class BuildHost {
    * Loads a page in a hidden window like a visitor would, lets it run a few seconds, and reports
    * its errors, missing files, text and a screenshot: how Keo checks its own work.
    */
-  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number } = {}): Promise<BuildCheck> {
+  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number; actions?: CheckAction[] } = {}): Promise<BuildCheck> {
     this.d.projects().manifest(id);
     this.preview();
     this.logs.set(id, { errors: [], warnings: [], missing: new Set() });
@@ -380,11 +383,26 @@ export class BuildHost {
     try {
       await win.loadURL(this.page(id, page)).catch((e: unknown) => this.note(id, 'errors', `The page did not load: ${e instanceof Error ? e.message : String(e)}`));
       await new Promise((r) => setTimeout(r, o.waitMs ?? 2500));
+      // Using the page like a visitor: each action runs in the page, then it gets a moment to react.
+      const steps: string[] = [];
+      for (const a of o.actions ?? []) {
+        if (win.isDestroyed()) break;
+        const { script, settleMs } = actionScript(a);
+        let did = 'done';
+        if (script) {
+          did = await Promise.race([
+            win.webContents.executeJavaScript(script, true).then((v: unknown) => String(v ?? 'done')),
+            new Promise<string>((r) => setTimeout(() => r('no answer from the page (it may be frozen)'), 12_000)),
+          ]).catch((e: unknown) => `error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        steps.push(`${actionLabel(a)}${a.do === 'measure' ? ' → ' : ': '}${did}`.slice(0, 700));
+        if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
+      }
       const title = win.isDestroyed() ? '' : win.webContents.getTitle();
       const text = win.isDestroyed() ? '' : String(await win.webContents.executeJavaScript('(document.body && document.body.innerText || "").slice(0, 1500)').catch(() => ''));
       const shot = win.isDestroyed() ? null : await win.webContents.capturePage().then((img) => img.resize({ width: o.shotWidth ?? 960 }).toPNG()).catch(() => null);
       const l = this.logOf(id);
-      return { page: page || 'index.html', title, errors: [...l.errors], warnings: [...l.warnings].slice(-12), missing: [...l.missing], text, screenshot: shot };
+      return { page: page || 'index.html', title, errors: [...l.errors], warnings: [...l.warnings].slice(-12), missing: [...l.missing], text, screenshot: shot, steps };
     } finally {
       if (!win.isDestroyed()) win.destroy();
     }

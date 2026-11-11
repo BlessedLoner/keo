@@ -9,6 +9,14 @@ afterEach(async () => {
   await h?.close();
 });
 
+it('keeps Keo Cloud’s own words about the allowance and credits (a credit count is not an error code)', () => {
+  const said = 'You’ve used today’s Max AI allowance (the strongest models use it up fastest). It resets at midnight UTC. You have 500 Studio credits: turn on “Keep going with my credits” in Settings → Providers to continue now.';
+  const e = explainReplyError('quota', said);
+  expect(e.what).toBe(said);
+  expect(e.todo).toContain('Settings → Providers');
+  expect(explainReplyError('quota', '429 {"error":"insufficient_quota"}').what).not.toContain('429');
+});
+
 describe('problems in normal words', () => {
   it('a failed reply says what happened and what to do', () => {
     const net = explainReplyError('network', 'fetch failed: ECONNRESET');

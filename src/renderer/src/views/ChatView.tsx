@@ -334,6 +334,11 @@ function TurnStatus({ turn }: { turn: TurnInfo }) {
   const waiting = turn.phase === 'waiting_approval';
   return (
     <span className="turn-status">
+      <span className={`turn-spark${waiting ? ' waiting' : ''}`} aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
       {phaseLabel(turn.phase, turn.detail)}
       {!waiting && secs >= 5 && <span className="muted"> · {secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`}</span>}
     </span>

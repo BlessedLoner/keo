@@ -30,9 +30,11 @@ const REPLY: Record<ProviderErrorKind, Explained> = {
 export function explainReplyError(kind: ProviderErrorKind | undefined, message: string | undefined): Explained {
   const base = REPLY[kind ?? 'unknown'] ?? REPLY.unknown;
   // Keo Cloud's own refusals (plan, daily allowance) are already written for people: keep them.
-  if ((kind === 'quota' || kind === 'rate_limit') && message && /\b(plan|allowance|upgrade|today|minutes|credits?)\b/i.test(message) && !/\b\d{3}\b|{|}/.test(message)) {
-    return { ...base, what: message };
+  if ((kind === 'quota' || kind === 'rate_limit') && message && /\b(plan|allowance|upgrade|today|minutes|credits?)\b/i.test(message) && !/^\s*\d{3}\b|status code|{|}/i.test(message)) {
+    return { ...base, what: message, todo: 'Your allowance, credits and plan are in Settings → Providers.' };
   }
+  // Keo Cloud saying its own service is busy: its words, and nothing for the user to fix.
+  if (message && /^Keo’s AI service/.test(message)) return { ...base, what: message, todo: 'Press Retry in a few minutes.', action: 'retry' };
   return base;
 }
 

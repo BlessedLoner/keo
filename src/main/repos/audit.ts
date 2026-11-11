@@ -69,10 +69,31 @@ export class AuditRepo {
     return Math.round(total * 100) / 100;
   }
 
-  recordUsage(u: { providerId: string; model: string; inputTokens: number; outputTokens: number; correlationId?: string }): void {
+  recordUsage(u: { providerId: string; model: string; inputTokens: number; outputTokens: number; correlationId?: string; durationMs?: number }): void {
     this.db.run(
-      'INSERT INTO usage_log (id, ts, provider_id, model, input_tokens, output_tokens, correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [newId(), nowIso(), u.providerId, u.model, u.inputTokens, u.outputTokens, u.correlationId ?? null],
+      'INSERT INTO usage_log (id, ts, provider_id, model, input_tokens, output_tokens, correlation_id, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [newId(), nowIso(), u.providerId, u.model, u.inputTokens, u.outputTokens, u.correlationId ?? null, u.durationMs === undefined ? null : Math.round(u.durationMs)],
     );
+  }
+
+  /** How each model has been doing lately: calls, typical and slow answer times, tokens (newest `days` days). */
+  modelSpeeds(days = 7): Array<{ providerId: string; model: string; calls: number; medianMs: number; slowMs: number; inputTokens: number; outputTokens: number }> {
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    const rows = this.db.all<{ provider_id: string; model: string; duration_ms: number | null; input_tokens: number; output_tokens: number }>(
+      'SELECT provider_id, model, duration_ms, input_tokens, output_tokens FROM usage_log WHERE ts >= ?',
+      [since],
+    );
+    const by = new Map<string, { providerId: string; model: string; ms: number[]; calls: number; inputTokens: number; outputTokens: number }>();
+    for (const r of rows) {
+      const k = `${r.provider_id}|${r.model}`;
+      const g = by.get(k) ?? { providerId: r.provider_id, model: r.model, ms: [], calls: 0, inputTokens: 0, outputTokens: 0 };
+      g.calls++;
+      g.inputTokens += r.input_tokens;
+      g.outputTokens += r.output_tokens;
+      if (typeof r.duration_ms === 'number') g.ms.push(r.duration_ms);
+      by.set(k, g);
+    }
+    const at = (ms: number[], q: number) => (ms.length ? [...ms].sort((a, b) => a - b)[Math.min(ms.length - 1, Math.floor(ms.length * q))]! : 0);
+    return [...by.values()].map((g) => ({ providerId: g.providerId, model: g.model, calls: g.calls, medianMs: at(g.ms, 0.5), slowMs: at(g.ms, 0.9), inputTokens: g.inputTokens, outputTokens: g.outputTokens })).sort((a, b) => b.calls - a.calls);
   }
 }

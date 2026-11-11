@@ -374,7 +374,7 @@ export class KeoAccount {
     try {
       const me = await this.gateway<{
         plan: { id: string; name: string; daily_requests: number; daily_tokens: number; features: Record<string, unknown> };
-        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number };
+        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number; allowanceUsed?: number; monthUsed?: number };
         billing?: { until: string | null; status: string } | null;
       }>('/me');
       this.me = {
@@ -387,6 +387,8 @@ export class KeoAccount {
           webSearches: me.usage.web_searches ?? 0,
           images: me.usage.images ?? 0,
           voiceSeconds: me.usage.voice_seconds ?? 0,
+          ...(typeof me.usage.allowanceUsed === 'number' ? { allowanceUsed: me.usage.allowanceUsed } : {}),
+          ...(typeof me.usage.monthUsed === 'number' ? { monthUsed: me.usage.monthUsed } : {}),
         },
         billing: me.billing ?? null,
         at: this.now(),
