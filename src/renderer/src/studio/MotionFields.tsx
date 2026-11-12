@@ -1,3 +1,4 @@
+import { SAMPLE_SCENE } from '@shared/scene';
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
 import { keyValue, MOTION_PIECE_INFO, MOTION_PIECES, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
@@ -495,6 +496,7 @@ const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp,
   light_sweep: { text: 'Next' },
   scene: { text: 'This changes everything', items: ['everything'], sub: 'The big idea', background: '#F4F1EA', color: '#111111' },
   backdrop: { text: 'Keo', background: '#0D0C12' },
+  scene3d: { text: SAMPLE_SCENE.title, visual: SAMPLE_SCENE },
 };
 
 /** Motion graphics: ready-made animated pieces added at the playhead (Keo can sync them to the speech). */
@@ -502,7 +504,7 @@ function MotionGraphics({ time, onEdit }: { time: number; onEdit: (ops: EditOp[]
   const ui = useUi();
   const add = async (piece: (typeof MOTION_PIECES)[number]) => {
     try {
-      await onEdit([{ op: 'add_motion', piece, place: 'auto', start: time, duration: piece === 'light_sweep' ? 1.2 : piece === 'scene' ? 2.5 : 4, ...MOTION_SAMPLE[piece] }]);
+      await onEdit([{ op: 'add_motion', piece, place: 'auto', start: time, duration: piece === 'light_sweep' ? 1.2 : piece === 'scene' ? 2.5 : piece === 'scene3d' ? 12 : 4, ...MOTION_SAMPLE[piece] }]);
     } catch (e) {
       ui.error(e instanceof Error ? e.message : String(e));
     }

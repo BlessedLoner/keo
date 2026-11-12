@@ -691,6 +691,24 @@ export class KeoBrowser {
     return { png: Buffer.from(data, 'base64'), url: p.url, title: p.title };
   }
 
+  /**
+   * A picture of the page for a how-to guide, and — when an element is named — where it is in the
+   * picture (fractions of its width and height), so the guide can point at it.
+   */
+  async guideShot(ref?: string): Promise<{ png: Buffer; url: string; title: string; box: { x: number; y: number; w: number; h: number } | null }> {
+    const p = ref ? this.pageForRef(ref) : await this.page();
+    let box: { x: number; y: number; w: number; h: number } | null = null;
+    if (ref) {
+      const b = await this.call<{ x: number; y: number; w: number; h: number; vw: number; vh: number } | null>(p, 'box', [ref]);
+      if (!b) throw new WebError('stale_ref', `${ref} is no longer on the page. Read the page again (web__read).`);
+      await sleep(250); // the page settles after scrolling the element into view
+      const clamp = (v: number) => Math.max(0, Math.min(1, v));
+      if (b.vw > 0 && b.vh > 0 && b.w > 1 && b.h > 1) box = { x: clamp(b.x / b.vw), y: clamp(b.y / b.vh), w: clamp(b.w / b.vw), h: clamp(b.h / b.vh) };
+    }
+    const { data } = await this.cdp!.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, p.sessionId!);
+    return { png: Buffer.from(data, 'base64'), url: p.url, title: p.title, box };
+  }
+
   /** Stops the browser at once (Delete all data). */
   kill(): void {
     const proc = this.proc;

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ResearchResultView } from '@shared/domain';
+import type { VisualGuide, VisualScene } from '@shared/scene';
 import { Icon } from '../components/Icon';
+import { GuidePlayer, VisualPlayer, type Speech } from '../components/VisualExplain';
 import { errText, invoke, subscribe } from '../lib/api';
 
 /**
@@ -12,7 +14,45 @@ type Busy = null | 'pdf' | 'png' | 'page' | 'send';
 
 const FORMAT_LABEL: Record<'pdf' | 'png' | 'page', string> = { pdf: 'PDF', png: 'Picture', page: 'Web page' };
 
+/**
+ * Keo's results panel. Besides research results it shows a 3D explanation or a how-to guide the
+ * user asked for by voice or from another app: the same player as in the chat, playing by itself.
+ */
 export function ResultsApp() {
+  const [shown, setShown] = useState<{ scene: VisualScene | null; guide: VisualGuide | null; at: number } | null>(null);
+  const [speech, setSpeech] = useState<Speech>(null);
+  useEffect(() => {
+    document.documentElement.classList.add('results-root');
+    const load = () =>
+      void Promise.all([invoke('visual:latest', {}), invoke('settings:get', {})])
+        .then(([v, s]) => {
+          setSpeech({ engine: s.voice.ttsEngine, systemVoice: s.voice.systemVoice });
+          setShown(v);
+        })
+        .catch(() => setShown(null));
+    const offShow = subscribe('visual:show', load);
+    // A newer research result takes the panel back.
+    const offResearch = subscribe('results:changed', () => setShown(null));
+    return () => {
+      offShow();
+      offResearch();
+    };
+  }, []);
+  if (!shown || (!shown.scene && !shown.guide)) return <ResearchResults />;
+  const close = () => {
+    setShown(null);
+    void invoke('results:close', {}).catch(() => undefined);
+  };
+  return (
+    <div className="results-stage">
+      <section key={shown.at} className="results-panel results-visual" aria-label="Explanation">
+        {shown.scene ? <VisualPlayer scene={shown.scene} speech={speech} onClose={close} inline /> : <GuidePlayer guide={shown.guide!} speech={speech} onClose={close} inline />}
+      </section>
+    </div>
+  );
+}
+
+function ResearchResults() {
   const [r, setR] = useState<ResearchResultView | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [entering, setEntering] = useState(0);

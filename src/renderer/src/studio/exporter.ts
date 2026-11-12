@@ -1,3 +1,5 @@
+import { prepareScenes } from './scene3d';
+import type { MotionClip } from '@shared/studio';
 import { bridged, clipEnd, findClip, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
 import { denoise } from '@shared/denoise';
 import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
@@ -294,6 +296,8 @@ export async function runExport(
   });
   encoder.configure(config);
   try {
+    // 3D scene clips: the viewer and any realistic models are in place before the first frame.
+    await prepareScenes(p.tracks.flatMap((tr) => tr.clips).filter((c): c is MotionClip => c.type === 'motion'));
     for (let i = 0; i < total; i++) {
       if (cancelled()) throw new Error('The export was cancelled.');
       if (failed) throw failed;

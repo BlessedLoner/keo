@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
 import { Markdown } from '../components/Markdown';
 import { ApprovalCard } from '../components/TaskWidgets';
+import { GuideBox, VisualBox, type Speech } from '../components/VisualExplain';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
 import { clock, humanize, timeAgo } from '../lib/format';
@@ -592,6 +593,20 @@ function ToolCard({ t, conversationId }: { t: ToolActivity; conversationId: stri
     } else if (task.state === 'cancelled') o = step?.state === 'denied' ? OUTCOME.denied : { label: 'Cancelled', cls: 'danger' };
   }
   if (t.cards) return <ProductCards data={t.cards} />;
+  // A 3D explanation: a box like a picture Keo made; clicking it opens it large.
+  if ((t.visual || t.guide) && t.outcome === 'executed') {
+    const v = app.settings.data?.voice;
+    const speech: Speech = v ? { engine: v.ttsEngine, systemVoice: v.systemVoice } : null;
+    if (t.guide) return <GuideBox guide={t.guide} speech={speech} />;
+    // "Open in Studio": the scene goes onto a new Studio timeline as a clip, ready to change and export.
+    const toStudio = async (scene: NonNullable<ToolActivity['visual']>) => {
+      const p = await invoke('studio:create', { name: scene.title.slice(0, 100), format: 'landscape' });
+      await invoke('studio:edit', { id: p.id, ops: [{ op: 'add_motion', piece: 'scene3d', place: 'auto', text: scene.title, start: 0, visual: scene }] });
+      await invoke('studio:open', { id: p.id });
+      app.setView('studio');
+    };
+    return <VisualBox scene={t.visual!} speech={speech} onStudio={toStudio} />;
+  }
   // A step that did not work says why in normal words; the technical text stays under Details.
   const bad = o.cls === 'danger' && t.outcome !== 'denied' && task?.state !== 'cancelled';
   const said = bad ? explainStepError(detail) : { text: detail, technical: null };

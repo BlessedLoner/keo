@@ -99,6 +99,17 @@ export const invokeSchemas = {
   'results:send': z.object({ id: z.string().regex(/^rr_[a-z0-9]{6,20}$/), contact: z.string().trim().min(1).max(120), which: z.enum(['app', 'web']).optional(), note: z.string().trim().max(300).optional() }).strict(),
   'results:openFolder': z.object({ folder: z.string().min(3).max(500) }).strict(),
   'results:close': empty,
+  'visual:latest': empty,
+  'visual:file': z.object({ kind: z.enum(['model', 'shot']), name: z.string().trim().min(1).max(60) }).strict(),
+  'visual:renderInfo': empty,
+  'visual:render': z
+    .object({
+      /** The finished scene as Keo's viewer drew it (JPEG, base64). */
+      image: z.string().min(100).max(12_000_000),
+      title: z.string().trim().min(1).max(80),
+      about: z.string().trim().max(200),
+    })
+    .strict(),
   'video:get': empty,
   'video:preview': z.object({ id: z.string().regex(/^vp_[a-z0-9]{6,20}$/), version: z.number().int().min(1).max(1_000_000) }).strict(),
   'video:say': z.object({ text: z.string().trim().min(1).max(1000) }).strict(),
@@ -533,6 +544,14 @@ export interface InvokeOutputs {
   'results:send': { ok: boolean; error: string | null; detail: string | null };
   'results:openFolder': { opened: boolean };
   'results:close': { closed: boolean };
+  /** The explanation to show in the results panel (asked for by voice or from another app), newest only. */
+  'visual:latest': { scene: import('./scene').VisualScene | null; guide: import('./scene').VisualGuide | null; at: number } | null;
+  /** A realistic model (.glb) or a guide's page picture (.png) that Keo made, by name. */
+  'visual:file': { mimeType: string; dataBase64: string };
+  /** Whether a photoreal picture of an explanation can be made here, and what it costs. */
+  'visual:renderInfo': { available: boolean; why: string | null; price: string };
+  /** The photoreal picture (PNG) and where it was saved. */
+  'visual:render': { dataBase64: string; file: string };
   'video:get': VideoView | null;
   'video:preview': { bytes: Uint8Array | null };
   'video:say': { applied: boolean; changes: string[]; forwarded: boolean; error: string | null };

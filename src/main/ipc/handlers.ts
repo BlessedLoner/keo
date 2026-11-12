@@ -193,6 +193,22 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       if (file) s.settings.update({ wake: { porcupine: { keywordPath: file, builtin: null } } });
       return { path: file };
     },
+    'visual:latest': () => {
+      const v = s.visuals.latest();
+      return v ? { scene: v.scene ?? null, guide: v.guide ?? null, at: v.at } : null;
+    },
+    'visual:file': ({ kind, name }) => {
+      const bytes = kind === 'model' ? s.visuals.readModel(name) : s.visuals.readShot(name);
+      if (!bytes) throw new KeoError('not_found', kind === 'model' ? 'That 3D model is no longer there.' : 'That picture is no longer there.');
+      if (bytes.length > 80 * 1024 * 1024) throw new KeoError('too_large', 'That file is too large to show.');
+      return { mimeType: kind === 'model' ? 'model/gltf-binary' : 'image/png', dataBase64: bytes.toString('base64') };
+    },
+    'visual:renderInfo': () => s.visualRenderInfo(),
+    // The button in the explanation is the user's own request; its price is shown on it.
+    'visual:render': async ({ image, title, about }) => {
+      const r = await s.renderVisual({ image: Buffer.from(image, 'base64'), title, about }, AbortSignal.timeout(5 * 60_000));
+      return { dataBase64: r.png.toString('base64'), file: r.file };
+    },
     'results:get': ({ id }) => {
       const r = s.results.get(id);
       return r ? { id: r.id, title: r.title, summary: r.summary, criteria: r.criteria, cards: r.cards, createdAt: r.createdAt } : null;

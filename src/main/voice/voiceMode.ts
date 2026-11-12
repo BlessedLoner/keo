@@ -278,6 +278,11 @@ export class VoiceMode {
     }
     // Say what was not spoken early: the rest of the same text, or the whole (corrected) reply.
     const rest = spokenUpTo > 0 && reply.content.startsWith(raw.slice(0, spokenUpTo)) ? reply.content.slice(spokenUpTo) : spokenUpTo > 0 ? '' : reply.content;
+    // An explanation that is now playing on screen reads its own steps aloud: Keo only says it is there.
+    if ((reply.meta.tools ?? []).some((t) => t.outcome === 'executed' && (t.visual || t.guide))) {
+      if (spokenUpTo === 0) await this.sayQueued(session, 'Here it is. I’m showing you now.');
+      return;
+    }
     const spoken = spokenVersion(rest);
     if (spoken) await this.sayQueued(session, spoken);
   }

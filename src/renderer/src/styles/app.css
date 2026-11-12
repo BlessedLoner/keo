@@ -610,6 +610,52 @@ details.tech { margin-top: 4px; }
 details.tech summary { cursor: pointer; color: var(--muted, #8a8f98); }
 details.tech code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 4px; opacity: 0.85; }
 .turn-status { overflow: hidden; text-overflow: ellipsis; }
+/* A 3D explanation: a box in the chat like a picture Keo made, and the large player it opens. */
+.visual-box { margin: 8px 0; max-width: 560px; }
+.visual-thumb { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; padding: 0; border: 1px solid var(--line, rgba(255, 255, 255, 0.1)); border-radius: 14px; overflow: hidden; background: #0d1017; cursor: pointer; }
+.visual-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 300ms ease; }
+.visual-thumb:hover img { transform: scale(1.03); }
+.visual-play { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: rgba(10, 12, 18, 0.62); border: 1px solid rgba(255, 255, 255, 0.35); backdrop-filter: blur(6px); transition: transform 200ms ease, background 200ms ease; }
+.visual-thumb:hover .visual-play { transform: scale(1.1); background: var(--accent, #7a8cff); }
+.visual-chip { position: absolute; left: 10px; bottom: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; background: rgba(10, 12, 18, 0.7); }
+.visual-wait { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; font-size: 13px; color: #c9d1dc; }
+.visual-box figcaption { margin-top: 6px; font-size: 13px; }
+.visual-lightbox { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(0, 0, 0, 0.82); }
+.visual-player { display: flex; flex-direction: column; width: min(1180px, 94vw); height: min(760px, 92vh); border-radius: 16px; overflow: hidden; background: var(--panel, #12151c); border: 1px solid var(--line, rgba(255, 255, 255, 0.12)); box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7); }
+.visual-player > header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.visual-player .grow { flex: 1; }
+.visual-stage { position: relative; flex: 1; min-height: 0; background: #0d1017; cursor: grab; }
+.visual-stage:active { cursor: grabbing; }
+.visual-player > footer { padding: 12px 16px 14px; border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.visual-caption { min-height: 64px; }
+.visual-step { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent, #7a8cff); }
+.visual-caption p { margin: 4px 0 0; font-size: 16px; line-height: 1.45; }
+.visual-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.visual-dots { display: flex; gap: 6px; margin: 0 8px; }
+.visual-dots button { width: 22px; height: 6px; padding: 0; border: 0; border-radius: 3px; background: rgba(127, 127, 127, 0.35); cursor: pointer; }
+.visual-dots button.past { background: rgba(122, 140, 255, 0.5); }
+.visual-dots button.on { background: var(--accent, #7a8cff); }
+.visual-look { width: auto; min-width: 0; padding: 4px 8px; font-size: 12px; }
+/* The photoreal picture over the 3D view, and the question before it is made. */
+.visual-real { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; background: #0b0d12; animation: guide-in 300ms ease-out both; }
+.visual-real img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+.visual-real-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #dfe4ee; background: rgba(10, 12, 18, 0.9); }
+.visual-ask { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px; font-size: 13px; color: #f2f4f8; background: rgba(122, 140, 255, 0.14); border-top: 1px solid rgba(122, 140, 255, 0.3); }
+/* The same player inside Keo's results panel (asked for by voice or from another app). */
+.visual-player.inline { width: 100%; height: 100%; border-radius: inherit; box-shadow: none; border: 0; color: #f2f4f8; background: #12151c; }
+.results-panel.results-visual { padding: 0; overflow: hidden; display: flex; }
+.visual-player.inline .visual-caption p { font-size: 14px; }
+.visual-player.inline .visual-controls > .muted { display: none; }
+/* A how-to guide: the real page, with the place to act outlined. */
+.guide-stage { display: grid; place-items: center; padding: 14px; cursor: default; overflow: hidden; }
+.guide-shot { position: relative; max-width: 100%; max-height: 100%; line-height: 0; border-radius: 10px; overflow: hidden; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); animation: guide-in 260ms ease-out both; }
+.guide-shot img { display: block; max-width: 100%; max-height: calc(92vh - 260px); object-fit: contain; }
+.visual-player.inline .guide-shot img { max-height: 360px; }
+.guide-mark { position: absolute; box-sizing: content-box; margin: -6px; padding: 6px; border-radius: 10px; border: 3px solid #ffcf3d; box-shadow: 0 0 0 9999px rgba(8, 10, 16, 0.45), 0 0 22px rgba(255, 207, 61, 0.9); animation: guide-pulse 1.4s ease-in-out infinite; pointer-events: none; }
+@keyframes guide-in { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes guide-pulse { 0%, 100% { border-color: #ffcf3d; } 50% { border-color: #fff3c2; } }
+@media (prefers-reduced-motion: reduce) { .guide-mark, .guide-shot { animation: none; } }
+
 /* Keo at work: three points (know, own, execute) circling and lighting up in turn. */
 .turn-spark { position: relative; display: inline-block; width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; animation: spark-turn 2.4s linear infinite; }
 .turn-spark i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--accent, #7a8cff); box-shadow: 0 0 6px var(--accent, #7a8cff); animation: spark-beat 1.2s ease-in-out infinite; }

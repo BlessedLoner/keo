@@ -16,6 +16,7 @@ export interface PushPayloads {
   'livechat:changed': { sessions: LiveChatSession[] };
   'update:changed': UpdateDownload;
   'results:changed': { id: string };
+  'visual:show': { at: number };
   'video:changed': { id: string };
   'video:setupChanged': VideoToolsSetup;
   'files:photosChanged': PhotoIndexState;

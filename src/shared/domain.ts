@@ -128,6 +128,10 @@ export interface ToolActivity {
   taskId?: string;
   /** How long the step took (ms), approvals included. */
   ms?: number;
+  /** A 3D explanation to show with this step (visual.explain): a box in the chat that opens large. */
+  visual?: import('./scene').VisualScene;
+  /** A how-to guide on a real web page to show with this step (visual.guide). */
+  guide?: import('./scene').VisualGuide;
   /** Product cards to show with this step (research.show_products). */
   cards?: { summary: string; criteria: string[]; cards: ProductCard[]; dropped: Array<{ name: string; reason: string }>; resultId?: string; title?: string };
   /** Choices to offer as buttons when the action needs the user to pick (app, profile, window). */

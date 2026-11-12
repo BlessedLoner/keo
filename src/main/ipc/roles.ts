@@ -61,7 +61,7 @@ const COMMAND: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
 ]);
 
 /** The research results window: show results, save or send them, open sources. Nothing else. */
-const RESULTS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl', 'presence:openMain', 'settings:get']);
+const RESULTS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['results:get', 'results:save', 'results:send', 'results:openFolder', 'results:close', 'app:openUrl', 'presence:openMain', 'settings:get', 'visual:latest', 'visual:file', 'visual:renderInfo', 'visual:render', 'voice:speak']);
 
 /** The video preview window: watch the preview, give instructions, undo, save the finished video. Nothing else. */
 const VIDEO: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['video:get', 'video:preview', 'video:say', 'video:undo', 'video:export', 'video:openFolder', 'video:close', 'presence:openMain', 'settings:get']);
@@ -73,7 +73,7 @@ const PENCIL: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['pencil:conte
 const KEOMODE: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['presence:get', 'voice:modeStart', 'voice:modeStop', 'keomode:close', 'settings:get', 'wake:status']);
 
 /** Keo's hidden render window: read projects and their media frames, write exports, report back. Nothing else. */
-const RENDER: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['studio:get', 'studio:videoTrack', 'studio:videoSamples', 'studio:exportBegin', 'studio:exportChunk', 'studio:exportEnd', 'studio:exportAbort', 'studio:exportProgress', 'studio:jobDone', 'studio:renderReady', 'settings:get']);
+const RENDER: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['studio:get', 'studio:videoTrack', 'studio:videoSamples', 'studio:exportBegin', 'studio:exportChunk', 'studio:exportEnd', 'studio:exportAbort', 'studio:exportProgress', 'studio:jobDone', 'studio:renderReady', 'settings:get', 'visual:file']);
 
 export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolean {
   if (role === 'main') return true;

@@ -228,6 +228,17 @@ export const PAGE_SCRIPT = String.raw`(function (docTag) {
     snapshot: snapshot,
     el: el,
     describe: function (ref) { var e = el(ref); return e ? info(e) : null; },
+    box: function (ref) {
+      var e = el(ref);
+      if (!e) return null;
+      e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      var r = e.getBoundingClientRect();
+      var off = frameOffset(e);
+      var top = window.top === window ? window : window.top;
+      var vw = 0, vh = 0;
+      try { vw = top.innerWidth; vh = top.innerHeight; } catch (x) { vw = window.innerWidth; vh = window.innerHeight; }
+      return { x: r.left + off.x, y: r.top + off.y, w: r.width, h: r.height, vw: vw, vh: vh };
+    },
     point: function (ref) {
       var e = el(ref);
       if (!e) return null;

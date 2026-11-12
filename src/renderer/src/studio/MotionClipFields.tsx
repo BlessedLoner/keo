@@ -1,3 +1,4 @@
+import type { VisualScene } from '@shared/scene';
 import { useEffect, useState } from 'react';
 import { MOTION_ICONS, MOTION_PIECE_INFO, MOTION_PIECES, type EditOp, type MotionClip } from '@shared/studio';
 import { Color, Num, Section } from './fields';
@@ -20,7 +21,64 @@ const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: b
   light_sweep: {},
   scene: { sub: 'Kicker (small line above)', items: 'Words in the accent italic (one per line; default the last word)', icon: true, value: true, background: true },
   backdrop: { background: true },
+  scene3d: {},
 };
+
+const SETTINGS: Array<[VisualScene['background'], string]> = [['sky', 'Daylight'], ['sunset', 'Sunset'], ['night', 'Night'], ['light', 'Light studio'], ['dark', 'Dark studio']];
+const GROUNDS: Array<[VisualScene['ground'], string]> = [['grass', 'Grass'], ['concrete', 'Concrete'], ['asphalt', 'Asphalt'], ['floor', 'Plain floor'], ['grid', 'Grid'], ['none', 'None']];
+
+/** A 3D scene clip: its setting, ground, captions, and the colour of each named part. Bigger changes: ask Keo. */
+function SceneFields({ clip, set }: { clip: MotionClip; set: (p: SetPatch) => void }) {
+  const scene = clip.visual;
+  if (!scene) return null;
+  const change = (next: VisualScene) => set({ motion: { visual: next } });
+  const named = scene.objects.filter((o) => o.label && o.shape !== 'model');
+  return (
+    <Section title="3D scene">
+      <label className="insp-num wide">
+        <span>Setting</span>
+        <select className="select" value={scene.background} onChange={(e) => change({ ...scene, background: e.target.value as VisualScene['background'] })}>
+          {SETTINGS.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="insp-num wide">
+        <span>Look</span>
+        <select className="select" value={scene.style} onChange={(e) => change({ ...scene, style: e.target.value as VisualScene['style'] })}>
+          <option value="reveal">Build reveal (sketch lines fill in)</option>
+          <option value="clay">White model</option>
+          <option value="real">Realistic</option>
+        </select>
+      </label>
+      <label className="insp-num wide">
+        <span>Ground</span>
+        <select className="select" value={scene.ground} onChange={(e) => change({ ...scene, ground: e.target.value as VisualScene['ground'] })}>
+          {GROUNDS.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="row" style={{ gap: 8, margin: '6px 0' }}>
+        <input type="checkbox" checked={clip.sub !== '-'} onChange={(e) => set({ motion: { sub: e.target.checked ? null : '-' } })} />
+        <span>Show the step captions in the video</span>
+      </label>
+      {named.map((o) => (
+        <label key={o.id} className="insp-num wide">
+          <span>{o.label}</span>
+          <input type="color" value={o.color} onChange={(e) => change({ ...scene, objects: scene.objects.map((x) => (x.id === o.id ? { ...x, color: e.target.value } : x)) })} />
+        </label>
+      ))}
+      <p className="small muted insp-tip-inline">
+        {scene.steps.length} steps, fitted to the clip’s length: make the clip longer to slow it down. To change shapes, steps or the camera, ask Keo (“make the roof flat”, “add a garage”, “start from the back”).
+      </p>
+    </Section>
+  );
+}
 
 /** The Motion tab: a motion clip's piece, words, items, icon, number and colours. */
 export function MotionClipFields({ clip, set }: { clip: MotionClip; set: (p: SetPatch) => void }) {
@@ -41,6 +99,7 @@ export function MotionClipFields({ clip, set }: { clip: MotionClip; set: (p: Set
     .filter(Boolean)
     .slice(0, 8)
     .map((x) => x.slice(0, 60));
+  if (clip.piece === 'scene3d') return <SceneFields clip={clip} set={set} />;
   return (
     <>
       <Section title="Motion">

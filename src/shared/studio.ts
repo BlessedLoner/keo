@@ -1,3 +1,4 @@
+import { sceneSeconds, VisualScene } from './scene';
 import { z } from 'zod';
 
 /**
@@ -616,7 +617,7 @@ export const ADJUST_TRACK = 'Adjustments';
  * sweeps. Each piece animates in, lives (floats) and animates out on its own; `beats` (seconds into
  * the clip) make its words or items appear on the spoken words.
  */
-export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop'] as const;
+export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop', 'scene3d'] as const;
 export const MotionPiece = z.enum(MOTION_PIECES);
 export type MotionPiece = z.infer<typeof MotionPiece>;
 /** What each piece is for (shown to Keo and in the Studio). */
@@ -634,6 +635,7 @@ export const MOTION_PIECE_INFO: Record<MotionPiece, { label: string; use: string
   callout: { label: 'Callout', use: 'a note with a hand-drawn arrow pointing at something: text = the note; rotate the layer to aim the arrow' },
   light_sweep: { label: 'Light sweep', use: 'a full-frame flash of light between topics, with an optional word (text) — about 1 second' },
   scene: { label: 'Keyword scene', use: 'FULL SCREEN: the video cuts away to a clean animated background and the key words slam in as they are said (text = 1–5 words, items = the word(s) in the accent serif italic, default the last; sub = a small kicker; icon optional; value + unit make it a big counter). background = its colour (light #F4F1EA, dark #0D0C12 or a brand colour), color = the words. The voice keeps playing; 1.2–3 s' },
+  scene3d: { label: '3D scene', use: 'FULL SCREEN 3D explanation that plays step by step with labels and captions: visual = the scene (the same data as visual__explain), text = its title; the scene is fitted to the clip\'s length; sub: "-" hides the captions' },
   backdrop: { label: 'Backdrop', use: 'FULL SCREEN animated background (soft glows, a moving dot grid, text as a giant faint word drifting behind) to put under a framed video or a graphic; background = its colour' },
 };
 /** Icons motion clips draw (line icons); anything else in an icon field is drawn as an emoji. */
@@ -659,6 +661,8 @@ const MotionFields = {
   font: z.string().trim().min(1).max(60).default('Poppins'),
   /** Full-screen pieces (scene, backdrop): the background colour. */
   background: Hex.optional(),
+  /** The 3D scene piece: the explanation it plays (objects, labels and steps, as data). */
+  visual: VisualScene.optional(),
   /** Seconds into the clip when each word or item appears (on the spoken words); evenly spread when missing. */
   beats: z.array(Sec).max(16).optional(),
 };
@@ -697,7 +701,7 @@ export function motionPlace(place: (typeof MOTION_PLACES)[number], piece: Motion
     'bottom-right': { x: tall ? 0.64 : 0.75, y: tall ? 0.8 : 0.8 },
   };
   if (place !== 'auto') return at[place];
-  if (piece === 'light_sweep' || piece === 'scene' || piece === 'backdrop') return at.center;
+  if (piece === 'light_sweep' || piece === 'scene' || piece === 'backdrop' || piece === 'scene3d') return at.center;
   if (piece === 'lower_third') return at['bottom-left'];
   // A talking head fills the middle: tall videos get graphics above the head, wide ones beside it.
   return tall ? at.top : at.right;
@@ -975,6 +979,8 @@ const SetOp = z
         font: z.string().trim().min(1).max(60).optional(),
         background: Hex.nullable().optional(),
         beats: z.array(Sec).max(16).nullable().optional(),
+        /** The 3D scene piece: the whole scene, changed (colours, materials, camera, steps, setting). */
+        visual: VisualScene.optional(),
       })
       .strict()
       .optional(),
@@ -2195,7 +2201,8 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         if (op.say && !synced) throw new EditError(`Could not find “${op.say.slice(0, 60)}” in the transcript${timelineWords(p).length ? '' : ' (there is no transcript yet: run studio__transcript first)'}. Use the words exactly as they are said, or give start instead.`);
         const start = synced?.start ?? op.start;
         if (start === undefined) throw new EditError('A motion clip needs a start (seconds) or say (the spoken words it goes with).');
-        const duration = op.duration ?? synced?.duration ?? 3;
+        if (op.piece === 'scene3d' && !op.visual) throw new EditError('A 3D scene clip needs visual: the scene to show (the same data as visual__explain).');
+        const duration = op.duration ?? synced?.duration ?? (op.visual ? Math.min(600, sceneSeconds(op.visual)) : 3);
         const beats = op.beats ?? synced?.beats;
         const c = MotionClip.parse({
           id: rid('cl', rand),
@@ -2214,6 +2221,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.color ? { color: op.color } : {}),
           ...(op.font ? { font: op.font } : {}),
           ...(op.background ? { background: op.background } : {}),
+          ...(op.visual ? { visual: op.visual } : {}),
           ...(beats?.length ? { beats: [...beats].filter((b) => b >= 0 && b < duration).sort((a, b) => a - b).map(round) } : {}),
           transform: { ...spot, ...(op.transform ?? {}) },
           ...(op.loop ? { loop: op.loop } : {}),

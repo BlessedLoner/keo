@@ -1033,7 +1033,15 @@ export class AgentService {
         // The model gets the cards without the image bytes.
         const forModel = cards ? { ...cards, cards: cards.cards.map((c) => ({ ...c, image: c.image ? '(image shown to the user)' : null })) } : out;
         const briefing = cap.id === 'briefing.today' ? briefingCard(out) : undefined;
-        return { activity: { ...base, summary, outcome, detail: brief(forModel), ...(cards ? { cards } : {}), ...(briefing ? { briefing } : {}) }, content: wrap(cap.id, { status: 'succeeded', result: forModel }), isError: false };
+        // A 3D explanation: the scene goes to the chat; the model gets a short receipt, not its own scene back.
+        const visual = cap.id === 'visual.explain' ? (out as { scene?: ToolActivity['visual'] }).scene : undefined;
+        const guide = cap.id === 'visual.guide' ? (out as { guide?: ToolActivity['guide'] }).guide : undefined;
+        const toModel = visual ? { ...(out as Record<string, unknown>), scene: '(shown to the user)' } : guide ? { ...(out as Record<string, unknown>), guide: '(shown to the user)' } : forModel;
+        return {
+          activity: { ...base, summary, outcome, detail: brief(toModel), ...(cards ? { cards } : {}), ...(briefing ? { briefing } : {}), ...(visual ? { visual } : {}), ...(guide ? { guide } : {}) },
+          content: wrap(cap.id, { status: 'succeeded', result: toModel }),
+          isError: false,
+        };
       } catch (err) {
         if (ctx.signal.aborted) throw new ProviderError('cancelled', 'Request cancelled.');
         const msg = errorMessage(err);

@@ -75,6 +75,8 @@ import { SnapshotStore } from './desktop/uia';
 import { GrantService } from './tasks/grants';
 import { CapabilityRegistry } from './capabilities/registry';
 import { briefingCapabilities } from './capabilities/briefing';
+import { visualCapabilities } from './capabilities/visual';
+import { VisualStore } from './visual/visualStore';
 import { localDate, morningDue } from './briefing/briefing';
 import type { PlannedStep } from './tasks/orchestrator';
 import { openDatabase, type Database } from './db/database';
@@ -106,6 +108,7 @@ import { TERMINAL_TASK } from './tasks/stateMachine';
 import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 import { captionLines, spreadWords, wavOf } from './studio/captions';
 import { audioSeconds, speakingSeconds } from '../shared/audioLength';
+import { studioPrice } from '../shared/aiPrices';
 import { CAR_MODEL_USD, CHARACTER_PICTURE_USD, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, motionCloneCost, REAL_PICTURE_USD, ownVoiceCost, talkCost, TALK_MAX_SECONDS, TALK_PER_SECOND, usdToCredits, VOICE_DESIGN_PER_1M_CHARS, type TalkQuality } from '../shared/aiPrices';
 import { checkFixes, proofreadPrompt, type WordFix } from '../shared/studioProofread';
 import { showcaseOps, type ShowcaseScene } from '../shared/studioShowcase';
@@ -756,11 +759,20 @@ export class Services {
         destination: () => this.providers.active().destination(),
         visionBlocked: () => this.visionBlocked('the page'),
         look: (png, question, signal) => this.lookAtPage(png, question, signal),
+        saveShot: (png, meta) => this.visuals.saveShot(png, meta),
         fileRefused: (p) => (!this.fileSearch.allowed(p) ? 'That file is outside the folders Keo may use (Settings → Files).' : looksSecret(p) ? 'That file usually holds passwords or keys; Keo does not upload it.' : null),
       }),
       ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
       ...connectedAppCapabilities({ ...this.connected, unavailable: (app) => this.connectedUnavailable(app) }),
       ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => this.googleClientId(), timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
+      ...visualCapabilities({
+        store: this.visuals,
+        model3d: {
+          make: async (prompt, signal) => fs.readFileSync((await this.aiVideo.model3d({ prompt }, signal)).file),
+          unavailable: () => (this.secrets.has('fal') || this.account.signedIn() ? null : 'Making realistic 3D models needs your Keo account (sign in) or your own fal.ai key (Settings → Advanced).'),
+          costLabel: `about ${usdToCredits(CAR_MODEL_USD)} Studio credits`,
+        },
+      }),
       ...briefingCapabilities({
         sources: {
           calendar: { unavailable: () => (!this.googleClientId() ? 'not set up' : this.googleAuth.signedIn() ? null : 'signed out'), list: (o, signal) => this.calendar.list(o, signal) },
@@ -920,6 +932,7 @@ export class Services {
       getSettings,
       (e: AgentEvent) => {
         this.push('agent:event', e);
+        if (e.type === 'turn_finished') this.showVisualOutsideChat(e.conversationId, e.message);
         if (e.type === 'text_delta') for (const fn of this.textListeners) fn(e.conversationId, e.delta);
       },
       (capId) => {
@@ -3715,11 +3728,61 @@ export class Services {
     }
   }
 
+  /**
+   * An explanation asked for by voice or from another app (Keo's quick-command conversation, with
+   * the main window not in front) is shown in the results panel, where the user is looking.
+   */
+  /** What the photoreal-picture button of a 3D explanation shows: whether it can be made here, and its price. */
+  visualRenderInfo(): { available: boolean; why: string | null; price: string } {
+    const via = this.secrets.has('fal') ? 'own' : this.account.signedIn() ? 'keo' : null;
+    return { available: !!via, why: via ? null : 'A photoreal picture needs your Keo account (sign in) or your own fal.ai key (Settings → Advanced).', price: studioPrice(REAL_PICTURE_USD, via) };
+  }
+
+  /**
+   * A photoreal picture of a finished 3D explanation (the user pressed the button, its price on it):
+   * the viewer's picture goes to the realistic picture model, which keeps the shape and adds real light,
+   * surfaces and surroundings. Saved in Documents\Keo\Visuals\Renders.
+   */
+  async renderVisual(o: { image: Buffer; title: string; about: string }, signal: AbortSignal): Promise<{ file: string; png: Buffer }> {
+    const info = this.visualRenderInfo();
+    if (!info.available) throw new KeoError('unavailable', info.why ?? 'Not available.');
+    const prompt = [
+      `Turn this 3D model render into a photorealistic, professional visualization photograph of the same thing: ${o.title}${o.about ? ` (${o.about})` : ''}.`,
+      'Keep EXACTLY the same design: the same shapes, proportions, number and position of windows, doors and parts, the same materials and colours, and the same camera angle and framing. Do not add, remove or move any part of it.',
+      'Make it real: true-to-life materials and textures, natural daylight with soft shadows, subtle reflections in glass and metal, a believable real setting with natural landscaping and sky where it fits.',
+      'High detail, sharp, like a high-end architectural or product visualization. No text, no labels, no watermark.',
+    ].join(' ');
+    let made: { file: string; cached: boolean };
+    try {
+      made = await this.aiVideo.frame({ references: [o.image], prompt, aspect: '16:9', quality: 'real' }, signal);
+    } catch (e) {
+      throw new KeoError('render_failed', `The photoreal picture could not be made: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const png = fs.readFileSync(made.file);
+    const file = this.visuals.saveRender(png, o.title);
+    this.audit.record({ kind: 'visual.render', decision: 'sent', detail: { destination: this.aiVia(), costUsd: made.cached ? 0 : REAL_PICTURE_USD } });
+    return { file, png };
+  }
+
+  private showVisualOutsideChat(conversationId: string, message: Message): void {
+    try {
+      const step = [...(message.meta.tools ?? [])].reverse().find((t) => t.outcome === 'executed' && (t.visual || t.guide));
+      if (!step || conversationId !== this.settings.get().commandBar.conversationId || this.ui.mainFocused?.()) return;
+      this.visuals.show({ ...(step.visual ? { scene: step.visual } : {}), ...(step.guide ? { guide: step.guide } : {}) });
+      this.push('visual:show', { at: Date.now() });
+      this.ui.showResults?.();
+    } catch (e) {
+      this.log.warn('visual.show_failed', { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   /** Documents\\Keo, where Keo saves what it makes. */
   private keoOutputRoot(d: ServiceDeps): string {
     return this.documentsDir ? path.join(this.documentsDir, 'Keo') : path.join(d.profile.userData, 'created');
   }
   /** Files and pictures attached in the chat, waiting to be sent. */
+  /** Realistic models and guide pictures made for visual explanations, and the one to show in the results panel. */
+  readonly visuals = new VisualStore(() => path.join(this.keoOutputRoot(this.deps), 'Visuals'));
   readonly attachments: AttachmentStaging;
   readonly fileIndex: IndexBackend | null;
   /** Keo's own browser window for working inside websites (Settings → Web). */
