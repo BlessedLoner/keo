@@ -173,7 +173,7 @@ export class StudioService {
         const first = p.tracks.flatMap((t) => t.clips).filter((c) => c.type === 'media').sort((x, y) => x.start - y.start)[0];
         const cover = (first?.type === 'media' ? p.assets.find((a) => a.id === first.assetId) : undefined) ?? p.assets.find((a) => a.kind !== 'audio') ?? null;
         const se = seriesOf.get(p.id);
-        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined, scenes: undefined } : null, ...(se ? { series: se } : {}) });
+        out.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, width: p.width, height: p.height, duration: projectDuration(p), ...(p.conversationId ? { conversationId: p.conversationId } : {}), ...(p.panelConversationId ? { panelConversationId: p.panelConversationId } : {}), clips: p.tracks.reduce((n, t) => n + t.clips.length, 0), cover: cover ? { ...cover, words: undefined, speech: undefined, beats: undefined, scenes: undefined } : null, ...(se ? { series: se } : {}) });
       } catch {
         /* a damaged file is left alone */
       }
@@ -445,6 +445,15 @@ export class StudioService {
     this.current = p.id;
     this.d.log.info('studio.created', { format });
     return p;
+  }
+
+  /** Remembers the chat a project was worked on from (and Studio's own panel chat); the edit history is not touched. */
+  link(id: string, l: { conversationId?: string; panelConversationId?: string }): Project {
+    const p = this.get(id);
+    if ((!l.conversationId || p.conversationId === l.conversationId) && (!l.panelConversationId || p.panelConversationId === l.panelConversationId)) return p;
+    const next = Project.parse({ ...p, ...l });
+    this.save(next, false);
+    return next;
   }
 
   open(id: string): Project {
@@ -1116,6 +1125,18 @@ export class StudioService {
     file: string,
     o: { at: number; seconds: number; about: string; in?: number; duration?: number; trackName?: string; muted?: boolean; volume?: number; duck?: number | null; recipe?: Asset['aiRecipe']; replace?: string },
   ): Promise<{ project: Project; asset: Asset; clip: string }> {
+    // An AI video is checked before it goes in: long enough and big enough to be the clip that was asked for.
+    const bad = await this.aiClipProblem(file, o.seconds);
+    if (bad) {
+      // Set aside, so the same broken file is never reused as "made before".
+      try {
+        fs.renameSync(file, `${file}.unusable`);
+      } catch {
+        /* already gone */
+      }
+      this.d.log.warn('studio.ai_clip_unusable', { problem: bad });
+      throw new StudioError(`The AI clip came back unusable (${bad}), so it was not added. Ask Keo to make it again.`);
+    }
     // A clip used again (made before) is already media of the project.
     const imported = await this.importFiles(id, [file]);
     const asset = imported.added[0] ?? imported.project.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file).toLowerCase());
@@ -1142,6 +1163,21 @@ export class StudioService {
     // A swapped video is silent over the original, whose sound carries on underneath (one undo).
     const done = o.muted ? this.mergeLast(id, { op: 'set', clip: clip.id, volume: 0 }) : r;
     return { project: done.project, asset, clip: clip.id };
+  }
+
+  /**
+   * What is wrong with an AI video file, or null: it must be a video of at least half the length
+   * asked for (models round to their own lengths) and at least 240 pixels on its short side.
+   * Pictures, sounds and files Keo cannot measure here are left to the import.
+   */
+  async aiClipProblem(file: string, seconds: number): Promise<string | null> {
+    if (!/\.(mp4|mov|webm)$/i.test(file) || !fs.existsSync(file)) return null;
+    const p = await this.probeFile(file, 'video').catch(() => null);
+    if (!p) return null;
+    if (p.kind !== 'video' || !p.width || !p.height) return 'it has no picture';
+    if (seconds > 0 && p.duration < Math.max(0.5, seconds * 0.5)) return `it lasts ${p.duration.toFixed(1)} s instead of about ${Math.round(seconds)} s`;
+    if (Math.min(p.width, p.height) < 240) return `it is only ${p.width}×${p.height} pixels`;
+    return null;
   }
 
   /** What Keo saw in a media file, kept with it. */

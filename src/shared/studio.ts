@@ -827,6 +827,10 @@ export const Project = z
     markers: z.array(z.object({ t: Sec, label: z.string().trim().min(1).max(60) }).strict()).max(300).default([]),
     assets: z.array(Asset).max(2000).default([]),
     tracks: z.array(Track).max(60).default([]),
+    /** The chat Keo worked on it from (kept across restarts, so the project and its conversation stay linked). */
+    conversationId: z.string().max(80).optional(),
+    /** The conversation of Studio's own Ask Keo panel for this project. */
+    panelConversationId: z.string().max(80).optional(),
   })
   .strict();
 export type Project = z.infer<typeof Project>;
@@ -835,6 +839,9 @@ export type Project = z.infer<typeof Project>;
 export interface ProjectSummary {
   id: string;
   name: string;
+  /** The chat it was worked on from, and Studio's own panel chat for it. */
+  conversationId?: string;
+  panelConversationId?: string;
   updatedAt: string;
   width: number;
   height: number;

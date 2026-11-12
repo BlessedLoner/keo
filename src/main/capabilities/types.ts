@@ -55,6 +55,10 @@ export interface Capability<I = unknown, O = unknown> {
   maxAttempts: number;
   /** Takes the desktop input lock itself around its desktop steps (it hands work to a service that locks on its own). */
   locksDesktopItself?: boolean;
+  /** 'external': its result carries text from outside Keo (web pages, email, other apps, the screen); the model is told it is data only. */
+  outputTrust?: 'external';
+  /** 'context': it only gathers information (shown as "gathering context" while it runs). */
+  category?: 'context';
   /** Whether the model may propose this capability as a tool call. */
   modelVisible: boolean;
   /** Verification policy, surfaced in the UI. */

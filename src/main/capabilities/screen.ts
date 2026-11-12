@@ -35,6 +35,7 @@ export type Mark = z.infer<typeof MarkSchema>;
 export function screenCapabilities(d: ScreenDeps): AnyCapability[] {
   const look = defineCapability({
     id: 'screen.look',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Look at the screen',
     description:

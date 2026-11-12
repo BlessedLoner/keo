@@ -65,6 +65,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
 
   const search = defineCapability({
     id: 'files.search',
+    category: 'context',
     version: '1.0.0',
     title: 'Find files and folders',
     description:

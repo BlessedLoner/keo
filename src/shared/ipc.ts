@@ -102,6 +102,7 @@ export const invokeSchemas = {
   'visual:latest': empty,
   'visual:file': z.object({ kind: z.enum(['model', 'shot']), name: z.string().trim().min(1).max(60) }).strict(),
   'visual:renderInfo': empty,
+  'projects:work': z.object({ projectId: z.string().min(1).max(80) }).strict(),
   'visual:render': z
     .object({
       /** The finished scene as Keo's viewer drew it (JPEG, base64). */
@@ -517,6 +518,8 @@ export const invokeSchemas = {
   'report:preview': z.object({ message: z.string().max(4000), includeLog: z.boolean() }).strict(),
   'report:send': z.object({ message: z.string().trim().min(3).max(4000), includeLog: z.boolean(), to: z.enum(['keo', 'file']) }).strict(),
   'diagnostics:audit': z.object({ limit: z.number().int().min(1).max(1000).default(200) }).strict(),
+  'diagnostics:activity': z.object({ limit: z.number().int().min(1).max(500).default(200) }).strict(),
+  'diagnostics:speed': z.object({ days: z.number().int().min(1).max(90).default(7) }).strict(),
 
   'data:backup': empty,
   'data:deleteAll': z.object({ confirm: z.literal('DELETE') }).strict(),
@@ -550,6 +553,8 @@ export interface InvokeOutputs {
   'visual:file': { mimeType: string; dataBase64: string };
   /** Whether a photoreal picture of an explanation can be made here, and what it costs. */
   'visual:renderInfo': { available: boolean; why: string | null; price: string };
+  /** What was made in a Keo project (builds and Studio videos from its chats). */
+  'projects:work': { builds: Array<{ id: string; title: string; kind: string; updatedAt: string }>; videos: Array<{ id: string; name: string; updatedAt: string }> };
   /** The photoreal picture (PNG) and where it was saved. */
   'visual:render': { dataBase64: string; file: string };
   'video:get': VideoView | null;
@@ -830,6 +835,10 @@ export interface InvokeOutputs {
   'report:preview': { text: string; canSend: boolean };
   'report:send': { sent: boolean; reference: string | null; file: string | null };
   'diagnostics:audit': AuditRecord[];
+  /** What Keo did, in plain words (newest first). */
+  'diagnostics:activity': Array<{ id: string; ts: string; text: string; tone: 'done' | 'failed' | 'you' | 'cost' | 'info'; times: number }>;
+  /** How fast each model answered over the last days. */
+  'diagnostics:speed': Array<{ providerId: string; model: string; calls: number; medianMs: number; slowMs: number; inputTokens: number; outputTokens: number }>;
   'data:backup': { path: string };
   'data:deleteAll': { deleted: boolean };
 }

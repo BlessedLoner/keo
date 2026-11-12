@@ -235,17 +235,19 @@ export class BackgroundJobs {
     job.finishedAt = nowIso();
     if (this.closing) job.state = 'interrupted';
     else if (job.state !== 'cancelled') {
-      if (m?.status === 'complete') {
+      if (m?.status === 'complete' && m.meta.ending?.kind !== 'failed') {
         job.state = 'completed';
         job.result = m.content.trim().slice(0, 20_000) || 'Done.';
+        job.ending = m.meta.ending ?? null;
       } else if (m?.status === 'cancelled') job.state = 'cancelled';
       else {
         job.state = 'failed';
-        job.error = (thrown ?? m?.meta.error ?? 'The job stopped without a result.').slice(0, 1000);
+        job.error = (thrown ?? m?.meta.error ?? m?.meta.ending?.why ?? 'The job stopped without a result.').slice(0, 1000);
+        job.ending = m?.meta.ending ?? { kind: 'failed', why: job.error };
       }
     }
-    this.d.log.info('jobs.finished', { jobId: job.id, state: job.state });
-    this.d.audit.record({ kind: 'jobs.finished', decision: job.state, detail: { jobId: job.id } });
+    this.d.log.info('jobs.finished', { jobId: job.id, state: job.state, ending: job.ending?.kind ?? null });
+    this.d.audit.record({ kind: 'jobs.finished', decision: job.state, detail: { jobId: job.id, ending: job.ending?.kind ?? null } });
     this.save();
     if (!this.closing) this.d.finished({ ...job }, this.report(job));
     this.pump();
@@ -254,9 +256,11 @@ export class BackgroundJobs {
   /** Posts the job's outcome in the conversation that started it. */
   private report(job: BackgroundJob): Message | null {
     if (!this.d.conversations.get(job.parentConversationId)) return null;
+    // The heading says how it really ended: a job is "done" only when its work was done.
+    const heading = !job.ending || job.ending.kind === 'done_checked' ? 'done' : job.ending.kind === 'done_unchecked' ? 'done (not checked)' : job.ending.kind === 'partly_done' ? 'partly done' : 'waiting on you';
     const content =
       job.state === 'completed'
-        ? `**Background job done — ${job.title}**\n\n${job.result ?? ''}`
+        ? `**Background job ${heading} — ${job.title}**\n\n${job.result ?? ''}`
         : job.state === 'cancelled'
           ? `**Background job stopped — ${job.title}.** Nothing more will run for it.`
           : job.state === 'interrupted'

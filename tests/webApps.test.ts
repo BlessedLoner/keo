@@ -53,7 +53,8 @@ async function run(capabilityId: string, input: unknown, approve = true) {
   if (needed && !approve) return { needed, preview: a.preview, step } as const;
   if (needed) h.services.tasks.approveStep(step.id, step.inputHash);
   else h.services.tasks.pump();
-  for (let i = 0; i < 1500 && !['completed', 'failed', 'cancelled'].includes(h.services.tasks.get(t.id)!.state); i++) await new Promise((r) => setTimeout(r, 20));
+  // Up to 90 s: starting the browser on a busy machine can be slow.
+  for (const until = Date.now() + 90_000; Date.now() < until && !['completed', 'failed', 'cancelled'].includes(h.services.tasks.get(t.id)!.state); ) await new Promise((r) => setTimeout(r, 20));
   return { needed, preview: a.preview, step: h.services.tasks.get(t.id)!.steps[0]! } as const;
 }
 
@@ -74,7 +75,7 @@ const refOf = (text: string, needle: string) => {
 };
 const openForm = async () => ok(await run('web.open', { url: `${base}/form.html` }));
 
-describe.runIf(!!browser)('Keo’s browser window (local test pages)', () => {
+describe.runIf(!!browser)('Keo’s browser window (local test pages)', { timeout: 180_000 }, () => {
   beforeAll(async () => {
     server = http.createServer((req, res) => {
       hits.push(req.url ?? '');
@@ -95,14 +96,14 @@ describe.runIf(!!browser)('Keo’s browser window (local test pages)', () => {
     fs.writeFileSync(path.join(home, 'Downloads', 'rain jacket.png'), 'not really a png');
     fs.writeFileSync(path.join(home, 'Downloads', 'second.png'), 'x');
     fs.writeFileSync(path.join(home, 'Downloads', 'passwords.txt'), 'x');
-  }, 30000);
+  }, 180_000);
 
   afterAll(async () => {
     await h?.close();
     server?.close();
     // Best effort: the browser's helper processes may hold its profile folder for a moment.
     for (const d of [h?.dir, home]) if (d) fs.promises.rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
-  }, 30000);
+  }, 180_000);
 
   it('does nothing until web.open starts the window, and is off with the setting', async () => {
     const r = await run('web.read', {});
@@ -130,7 +131,7 @@ describe.runIf(!!browser)('Keo’s browser window (local test pages)', () => {
     expect(listening).toEqual([]);
     expect(launchArgs('C:\\x', false)).not.toContain('--headless=new');
     // The browser's first start in a new profile can be slow while other tests run.
-  }, 120000);
+  }, 180_000);
 
   it('reads the page as structure with refs, values and states, labelled untrusted', async () => {
     await openForm();

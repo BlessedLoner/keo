@@ -13,7 +13,7 @@ export const PLAN_TOOL = 'plan__update';
 export const PLAN_TOOL_SPEC: ToolSpec = {
   name: PLAN_TOOL,
   description:
-    'Show the user your working checklist for a request that needs several steps or tools, and keep it current. Send the whole list each time: 2–8 short steps, each with a status. Call it in the same reply as your first action, then again as steps finish or fail (record key facts you found in the step note). Never use it for a simple question or a single action. It does not run anything and is not an approval.',
+    'Show the user your working checklist for a request that needs several steps or tools, and keep it current. Send the whole list each time: 2–8 short steps, each with a status. Call it in the same reply as your first action, then again as steps finish or fail (record key facts you found in the step note). Never use it for a simple question or a single action. It does not run anything and is not an approval (when the user wants to approve a plan before anything runs, that is task__propose_plan instead — never both).',
   inputSchema: {
     type: 'object',
     properties: {

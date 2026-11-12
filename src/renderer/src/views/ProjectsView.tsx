@@ -108,6 +108,48 @@ function WorkspaceCard({ projectId }: { projectId: string }) {
   );
 }
 
+/** Builds and Studio videos made from this project's chats: they stay linked after a restart. */
+function MadeHere({ projectId }: { projectId: string }) {
+  const app = useApp();
+  const ui = useUi();
+  const work = useInvoke('projects:work', { projectId });
+  const w = work.data;
+  if (!w || (!w.builds.length && !w.videos.length)) return null;
+  const openVideo = async (id: string) => {
+    try {
+      await invoke('studio:open', { id });
+      app.setView('studio');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+  return (
+    <section className="card" aria-label="Made in this project">
+      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Made in this project</h3>
+      {w.builds.map((b) => (
+        <div key={b.id} className="row" style={{ gap: 8, padding: '4px 0' }}>
+          <span className="grow">
+            {b.title} <span className="muted small">· {b.kind} · {timeAgo(b.updatedAt)}</span>
+          </span>
+          <button className="btn ghost sm" onClick={() => void invoke('builds:open', { id: b.id }).catch((e) => ui.error(errText(e)))}>
+            Open
+          </button>
+        </div>
+      ))}
+      {w.videos.map((v) => (
+        <div key={v.id} className="row" style={{ gap: 8, padding: '4px 0' }}>
+          <span className="grow">
+            {v.name} <span className="muted small">· Studio video · {timeAgo(v.updatedAt)}</span>
+          </span>
+          <button className="btn ghost sm" onClick={() => void openVideo(v.id)}>
+            Open in Studio
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: () => void }) {
   const ui = useUi();
   const app = useApp();
@@ -157,6 +199,7 @@ function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: ()
         </button>
       </div>
       <WorkspaceCard projectId={project.id} />
+      <MadeHere projectId={project.id} />
       <div className="field">
         <label htmlFor="proj-desc">Description</label>
         <textarea id="proj-desc" className="textarea" value={desc} maxLength={2000} onChange={(e) => setDesc(e.target.value)} onBlur={() => desc !== project.description && void run(invoke('projects:update', { id: project.id, description: desc }))} />

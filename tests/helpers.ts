@@ -329,6 +329,8 @@ export function makeHarness(
     openTab: async () => undefined,
     // Never the real Windows Search index or the user's own folders.
     fileIndex: null,
+    // A slow, busy test machine must not cut a folder scan short.
+    fileScanBudgetMs: 20_000,
     homeDir: `${dir}-home`,
     ...(opts.deps ?? {}),
   });

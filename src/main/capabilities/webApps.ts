@@ -119,6 +119,8 @@ export function webAppCapabilities(d: WebAppsDeps): AnyCapability[] {
 
   const read = defineCapability({
     id: 'web.read',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Read the page in Keo’s browser window',
     description:

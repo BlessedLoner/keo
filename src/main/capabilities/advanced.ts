@@ -837,6 +837,8 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
 
   const inspectWindow = defineCapability({
     id: 'desktop.inspect_window',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Inspect a window',
     description:
@@ -1104,6 +1106,8 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
 
   const readPage = defineCapability({
     id: 'browser.read_page',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Read the current browser tab',
     description:
@@ -1166,6 +1170,7 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
 
   const openChat = defineCapability({
     id: 'whatsapp.open_chat',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Open a WhatsApp chat',
     description:
@@ -1204,6 +1209,8 @@ export function advancedCapabilities(d: AdvancedDeps): AnyCapability[] {
 
   const readChat = defineCapability({
     id: 'whatsapp.read_chat',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Read the open WhatsApp chat',
     description:

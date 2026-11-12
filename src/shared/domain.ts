@@ -195,6 +195,13 @@ export interface MessageAttachment {
   note?: string;
 }
 
+/** How a piece of work really ended (worked out by Keo from what ran and was checked). */
+export interface TurnEnding {
+  kind: 'done_checked' | 'done_unchecked' | 'partly_done' | 'blocked' | 'failed';
+  /** In plain words: what was not done, what to check, or what Keo waits for. */
+  why?: string;
+}
+
 export interface MessageMeta {
   providerId?: ProviderId;
   model?: string;
@@ -229,6 +236,8 @@ export interface MessageMeta {
   compactedResults?: number;
   /** Files and pictures the user attached to this message. */
   attachments?: MessageAttachment[];
+  /** How the work in this reply really ended; absent for a plain answer with no steps. */
+  ending?: TurnEnding;
 }
 
 /** A long request Keo runs in the background in its own hidden conversation. */
@@ -251,6 +260,8 @@ export interface BackgroundJob {
   error: string | null;
   /** Set when a scheduled routine started this job. */
   scheduleId?: string | null;
+  /** How the job's work really ended (completed jobs can still be partly done or waiting on the user). */
+  ending?: TurnEnding | null;
 }
 
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';

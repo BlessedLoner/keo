@@ -74,6 +74,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
   const listNew = defineCapability({
     ...readOnly,
     id: 'email.list_new',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Check new email',
     description:
@@ -101,6 +102,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
   const search = defineCapability({
     ...readOnly,
     id: 'email.search',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Search email',
     description:
@@ -145,6 +147,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
   const readThread = defineCapability({
     ...readOnly,
     id: 'email.read_thread',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Read an email conversation',
     description:

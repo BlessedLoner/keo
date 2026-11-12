@@ -1,3 +1,4 @@
+import { describeActivity } from '../agent/activity';
 import { issueKey, StudioError } from '../studio/studioService';
 import type { ReviewIssue } from '../../shared/studioReview';
 import { learnStyle } from '../../shared/studioStyleLearn';
@@ -956,6 +957,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'memory:revisions': ({ id }) => s.memory.revisions(id),
 
     'projects:list': () => s.projects.list(),
+    'projects:work': ({ projectId }) => s.projectWork(projectId),
     'projects:create': ({ name, description }) => {
       const p = s.projects.create(name, description);
       changed('projects:changed', { projectId: p.id });
@@ -1328,6 +1330,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { sent: false, reference: null, file };
     },
     'diagnostics:audit': ({ limit }) => s.audit.recent(limit),
+    'diagnostics:activity': ({ limit }) => describeActivity(s.audit.recent(Math.min(1000, limit * 5)), (id) => s.registry.get(id)?.title ?? id, limit),
+    'diagnostics:speed': ({ days }) => s.audit.modelSpeeds(days),
 
     'data:backup': () => {
       const target = path.join(s.profile.backupsDir, `keo-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);

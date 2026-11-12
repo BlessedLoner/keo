@@ -293,7 +293,8 @@ export class VoiceMode {
     while (Date.now() < until && this.alive(session)) {
       const st = this.d.tasks.get(taskId)?.steps.find((x) => x.id === stepId);
       if (!st) return;
-      if (st.state === 'succeeded') return this.say(session, st.verification === 'verification_failed' ? 'It ran, but the result did not check out. Details are on screen.' : 'Done.');
+      if (st.state === 'succeeded')
+        return this.say(session, st.verification === 'verification_failed' ? 'It ran, but the result did not check out. Details are on screen.' : st.verification === 'unverified' ? 'It ran, but I couldn’t confirm it worked. Please check it on screen.' : 'Done.');
       if (st.state === 'failed') return this.say(session, `That didn’t work: ${spokenVersion(st.error ?? 'unknown error', 200)}`);
       if (st.state === 'outcome_uncertain') return this.say(session, 'I’m not sure that went through. Please check it on screen.');
       if (st.state === 'cancelled' || st.state === 'denied') return;

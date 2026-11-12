@@ -41,6 +41,7 @@ export const BriefingOutput = z.object({
 export function briefingCapabilities(d: BriefingDeps): AnyCapability[] {
   const today = defineCapability({
     id: 'briefing.today',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Morning briefing',
     description:

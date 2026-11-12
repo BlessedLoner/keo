@@ -24,6 +24,7 @@ function rootOf(s: Settings, projectId: string): string {
 export function fileCapabilities(d: CapabilityDeps): AnyCapability[] {
   const list = defineCapability({
     id: 'files.list',
+    category: 'context',
     version: '1.0.0',
     title: 'List project files',
     description: 'List files and folders in a project’s workspace folder (skips node_modules, .git, build output). Optional dir to list a subfolder.',
@@ -49,6 +50,8 @@ export function fileCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const read = defineCapability({
     id: 'files.read',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Read a project file',
     description: 'Read a text file in a project’s workspace folder. Returns its text and a hash; pass that hash to files__write when editing it. Files that usually hold secrets (.env, keys) are read only when the user asked for that file by name.',

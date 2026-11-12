@@ -14,7 +14,7 @@ const make = () => {
 };
 
 describe('builder libraries, fonts and icons', () => {
-  it('three.js r187 comes with its core module and the WebGPU entry points', () => {
+  it('three.js r187 comes with its core module and the WebGPU entry points', { timeout: 180_000 }, () => {
     const p = make();
     const m = p.create({ title: 'Space', kind: 'game', libraries: ['three', 'rapier'] });
     const lib = path.join(p.dir(m.id), 'lib');

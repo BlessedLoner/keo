@@ -200,6 +200,8 @@ export interface ServiceDeps {
   fontsDir?: string;
   /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
   fileIndex?: IndexBackend | null;
+  /** How long a file search may look through folders when there is no index (tests on a busy machine give it longer). */
+  fileScanBudgetMs?: number;
   /** The user's own folder (C:\Users\<name>): what "my files" means by default. */
   homeDir?: string;
   /** Where pictures usually are (Pictures, Downloads, Desktop); by default those names under homeDir. */
@@ -550,6 +552,12 @@ export class Services {
       showProject: (projectId) => this.push('studio:show', { projectId }),
       proofread: (transcript, names, signal) => this.studioProofreadText(transcript, names, signal),
     });
+    // Studio's own panel chats are known again after a restart (their tools and context come back with them).
+    try {
+      for (const p of this.studio.list()) if (p.panelConversationId) this.studioConversations.add(p.panelConversationId);
+    } catch {
+      /* no Studio folder yet */
+    }
     this.aiVideo = new FalVideo({
       key: () => this.secrets.get('fal'),
       // Without the user's own key, Keo Cloud runs it with Keo's key and takes Studio credits.
@@ -645,6 +653,7 @@ export class Services {
     this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
     this.fileSearch = new FileSearch({
       index: this.fileIndex,
+      ...(d.fileScanBudgetMs ? { scanBudgetMs: d.fileScanBudgetMs } : {}),
       roots: () => {
         const r = getSettings().files.roots;
         return r.length ? r : [home];
@@ -932,7 +941,10 @@ export class Services {
       getSettings,
       (e: AgentEvent) => {
         this.push('agent:event', e);
-        if (e.type === 'turn_finished') this.showVisualOutsideChat(e.conversationId, e.message);
+        if (e.type === 'turn_finished') {
+          this.showVisualOutsideChat(e.conversationId, e.message);
+          this.linkWork(e.conversationId, e.message);
+        }
         if (e.type === 'text_delta') for (const fn of this.textListeners) fn(e.conversationId, e.delta);
       },
       (capId) => {
@@ -3202,13 +3214,48 @@ export class Services {
     this.studioFocus = { ...f, at: Date.now() };
   }
 
-  /** The conversation the Studio panel uses for a project (made on first use). */
+  /** The conversation the Studio panel uses for a project (made on first use, remembered with the project). */
   studioConversation(projectId: string, name: string): string {
+    const saved = this.studio.get(projectId).panelConversationId;
+    if (saved && this.conversations.get(saved)) {
+      this.studioConversations.add(saved);
+      return saved;
+    }
     const title = `Studio · ${name}`.slice(0, 200);
     const existing = this.conversations.list().find((c) => c.title === title || c.title === `Studio · ${projectId}`);
     const id = existing?.id ?? this.conversations.create(title).id;
     this.studioConversations.add(id);
+    this.studio.link(projectId, { panelConversationId: id });
     return id;
+  }
+
+  /**
+   * After a reply that worked on a Studio project, the project remembers that chat (once), so the
+   * link survives a restart and the project shows under the chat's Keo project.
+   */
+  private linkWork(conversationId: string, message: Message): void {
+    try {
+      const id = this.studio.current;
+      if (!id || this.studioConversations.has(conversationId)) return;
+      if (!(message.meta.tools ?? []).some((t) => t.outcome === 'executed' && t.capabilityId.startsWith('studio.'))) return;
+      if (!this.studio.get(id).conversationId) this.studio.link(id, { conversationId });
+    } catch (e) {
+      this.log.warn('studio.link_failed', { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** What was made in a Keo project: builds and Studio videos whose chat belongs to it. */
+  projectWork(projectId: string): { builds: Array<{ id: string; title: string; kind: string; updatedAt: string }>; videos: Array<{ id: string; name: string; updatedAt: string }> } {
+    const inProject = (conversationId?: string) => !!conversationId && this.conversations.get(conversationId)?.projectId === projectId;
+    const builds = this.builds
+      .list()
+      .filter((m) => inProject(m.conversationId))
+      .map((m) => ({ id: m.id, title: m.title, kind: m.kind, updatedAt: m.updatedAt }));
+    const videos = this.studio
+      .list()
+      .filter((p) => inProject(p.conversationId) || inProject(p.panelConversationId))
+      .map((p) => ({ id: p.id, name: p.name, updatedAt: p.updatedAt }));
+    return { builds: builds.slice(0, 50), videos: videos.slice(0, 50) };
   }
 
   private videoContext(): string {

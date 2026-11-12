@@ -185,6 +185,7 @@ export type PlanInput = z.infer<typeof PlanInput>;
 export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
   const memorySearch = defineCapability({
     id: 'memory.search',
+    category: 'context',
     version: '1.0.0',
     title: 'Search memory',
     description: 'Search Keo’s user-confirmed long-term memory. Returns stored items with provenance and dates. Use before claiming to remember something.',
@@ -280,6 +281,8 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const webSearch = defineCapability({
     id: 'web.search',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Search the web',
     description:
@@ -316,6 +319,8 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const webFetch = defineCapability({
     id: 'web.fetch_page',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Read a web page',
     description:
@@ -346,6 +351,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const projectList = defineCapability({
     id: 'project.list',
+    category: 'context',
     version: '1.0.0',
     title: 'List projects',
     description: 'List the user’s tracked projects with status and count of open items.',
@@ -369,6 +375,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const projectGet = defineCapability({
     id: 'project.get',
+    category: 'context',
     version: '1.0.0',
     title: 'Get project details',
     description: 'Get a project with its objectives, decisions, blockers, open questions and progress notes, including whether each was confirmed by the user.',
@@ -442,7 +449,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Propose a multi-step plan',
     description:
-      'Propose a multi-step plan built from registered capabilities. Nothing runs: the plan is validated and shown to the user in Task Activity, where they may approve or reject it. Steps referencing unknown capabilities or invalid inputs are rejected.',
+      'Propose a multi-step plan built from registered capabilities. Nothing runs: the plan is validated and shown to the user in Task Activity, where they may approve or reject it. Use it ONLY when the user asks to review or approve a plan before anything happens, or for a batch of several actions on their computer or accounts to approve as one; for ordinary multi-step work keep your checklist with plan__update instead, and never use both for the same work. After proposing, stop and wait. Steps referencing unknown capabilities or invalid inputs are rejected.',
     input: PlanInput,
     output: z.object({ taskId: z.string(), state: z.literal('proposed'), rejectedSteps: z.array(z.string()) }),
     risk: 'low',
@@ -464,6 +471,8 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const listWindows = defineCapability({
     id: 'desktop.list_windows',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'List allowed windows',
     description: 'List open top-level windows that belong to applications the user has allow-listed. Returns window handles needed by other desktop capabilities.',
@@ -862,6 +871,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const observeWindow = defineCapability({
     id: 'vision.observe_window',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'Observe a window',
     description:
@@ -907,6 +917,8 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const getObservation = defineCapability({
     id: 'vision.get_observation',
+    outputTrust: 'external',
+    category: 'context',
     version: '1.0.0',
     title: 'Get a stored observation',
     description: 'Return metadata and earlier analyses of a PREVIOUS observation by id. This is not a fresh capture; use only when the user explicitly refers to an earlier result.',
@@ -944,6 +956,7 @@ export function builtinCapabilities(d: CapabilityDeps): AnyCapability[] {
 
   const datetime = defineCapability({
     id: 'system.datetime',
+    category: 'context',
     version: '1.0.0',
     title: 'Current date and time',
     description: 'Get the current local date, time and time zone of this computer.',

@@ -64,6 +64,7 @@ export function calendarCapabilities(d: CalendarDeps): AnyCapability[] {
 
   const listEvents = defineCapability({
     id: 'calendar.list_events',
+    outputTrust: 'external',
     version: '1.0.0',
     title: 'List calendar events',
     description:

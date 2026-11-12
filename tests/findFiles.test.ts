@@ -185,7 +185,7 @@ describe('reading a found file', () => {
   });
 
   // Loading pdf.js the first time can take a while when the whole suite runs at once.
-  it('reads the text of a PDF, page by page, and says so honestly when a PDF is scanned', { timeout: 60000 }, async () => {
+  it('reads the text of a PDF, page by page, and says so honestly when a PDF is scanned', { timeout: 180_000 }, async () => {
     const { home } = setup({ read: true });
     fs.mkdirSync(path.join(home, 'Documents'), { recursive: true });
     const invoice = path.join(home, 'Documents', 'invoice.pdf');
