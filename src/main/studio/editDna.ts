@@ -48,7 +48,7 @@ import {
   talkParts,
 } from '../../shared/editDna';
 import { classifyTransition, type MotionEstimate } from '../../shared/editDnaMotion';
-import { readStyle, styleEditOps, type DnaStyle, type StyleFrame } from '../../shared/editDnaStyle';
+import { parsePicks, phrasesOf, picksPrompt, readStyle, styleEditOps, type DnaStyle, type StyleFrame, type StylePicks } from '../../shared/editDnaStyle';
 import { DNA_STAGES, stagesOf, type DnaJob, type DnaStage, type DnaVisionModel, type SharedDna } from '../../shared/editDna';
 export { DNA_STAGES, type DnaJob, type SharedDna };
 import { guessShotKind } from '../../shared/studioRecipe';
@@ -80,6 +80,8 @@ export interface EditDnaDeps {
   captions?: (projectId: string, o: { maxWords: number; style: DnaCaptionPlan['style']; highlight: string | null; animIn: DnaCaptionPlan['animIn']; transform: { y: number } }) => Promise<{ lines: number }>;
   /** The project's spoken words with their timeline times (speech-to-text first where needed); absent: no words on screen. */
   words?: (projectId: string) => Promise<Array<{ text: string; start: number; end: number }>>;
+  /** A question to the user's AI model about the transcript (text in, text out); absent: Keo's own word rule. */
+  ask?: (prompt: string) => Promise<string>;
 }
 
 /** A reference downloaded from a link stops at this size. */
@@ -547,6 +549,19 @@ export class EditDnaService {
     // Where the user's face is, so their words go above or below it, never on it.
     const span = Math.max(0.5, end - o.at);
     const face = talking ? await st.faceBand(projectId, [0.2, 0.4, 0.6, 0.8].map((f) => Math.round((o.at + span * f) * 100) / 100)) : null;
+    // The editor's choices: the word that carries each phrase, and the lines strong enough for a card.
+    const spoken = words.filter((w) => w.start >= o.at - 0.01 && w.end <= end + 0.05);
+    let picks: StylePicks | null = null;
+    if (spoken.length && style.words.on && this.d.ask) {
+      const phrases = phrasesOf(spoken.filter((w) => w.end > w.start && w.text.trim()), style.words.perGroup);
+      try {
+        picks = parsePicks(await this.d.ask(picksPrompt(phrases, style)), phrases);
+      } catch (e) {
+        this.d.log.warn('dna.picks_failed', { error: e instanceof Error ? e.message.slice(0, 120) : String(e) });
+      }
+      if (picks) notes.push(`Your AI model chose the ${Object.keys(picks.stress).length} words that carry your phrases and ${picks.cards.length} lines for the cards.`);
+      else notes.push('Your AI model did not choose the stressed words, so Keo picked them by its own rule.');
+    }
     // Black bars baked into the user's videos (a wide video saved in a tall frame): cropped away.
     const bars = new Map<string, { left: number; top: number; right: number; bottom: number }>();
     for (const aid of new Set(main.map((c) => c.assetId))) bars.set(aid, await st.videoBars(projectId, aid));
@@ -560,7 +575,8 @@ export class EditDnaService {
         return { id: c.id, assetId: c.assetId, start: c.start, duration: c.duration, in: c.in, speed: c.speed, width: a?.width ?? p.width, height: a?.height ?? p.height, ...(b && b.left + b.right + b.top + b.bottom > 0.06 ? { bars: b } : {}) };
       }),
       track: o.trackName,
-      words: words.filter((w) => w.start >= o.at - 0.01 && w.end <= end + 0.05),
+      words: spoken,
+      picks,
       end,
       handle: brand.handle ?? null,
       brand: brand.name ?? null,

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { applyEdits, newProject, type MediaClip } from '../src/shared/studio';
-import { DnaStyle, phrasesOf, readStyle, styleEditOps, type StyleFrame } from '../src/shared/editDnaStyle';
+import { DnaStyle, parsePicks, phrasesOf, picksPrompt, readStyle, styleEditOps, type StyleFrame } from '../src/shared/editDnaStyle';
 import { Blueprint, fingerprintOf } from '../src/shared/editDna';
 import { Mp4Writer } from '../src/main/studio/mp4';
 import { StudioService } from '../src/main/studio/studioService';
@@ -132,6 +132,27 @@ describe('Edit DNA — rebuilding a style on the user’s talking video', () => 
     expect(() => applyEdits(p, r.ops)).not.toThrow();
   });
 
+  it('uses the words and card lines the AI model chose, checked against what was said', () => {
+    const { p, main } = setup();
+    const ph = phrasesOf(words(), kinetic().words.perGroup);
+    const prompt = picksPrompt(ph, kinetic());
+    expect(prompt).toMatch(/1\. Most people/);
+    // Words not in their phrase, small words and out-of-range numbers are dropped.
+    const picks = parsePicks('Sure: {"stress":{"1":"people","2":"banana","3":"the","4":"perfect"},"cards":[0,3,99]}', ph)!;
+    expect(picks.stress[0]).toBe('people');
+    expect(picks.stress[1]).toBeUndefined();
+    expect(picks.cards).toEqual([2]);
+    expect(parsePicks('no idea', ph)).toBeNull();
+    // The model picks "build" in its phrase, and the phrase with "small" for a card.
+    const at = (w: string) => ph.findIndex((x) => x.some((y) => y.text.replace(/\W/g, '') === w));
+    const chosen = parsePicks(JSON.stringify({ stress: { 1: 'people', [at('build') + 1]: 'build' }, cards: [at('small') + 1] }), ph)!;
+    const r = styleEditOps(p, kinetic(), { main, track: 'Edit DNA · t', words: words(), end: 14, picks: chosen });
+    const lines = (r.ops.filter((o) => o.op === 'add_captions') as Array<Extract<(typeof r.ops)[number], { op: 'add_captions' }>>).flatMap((c) => c.lines).sort((x, y) => x.start - y.start);
+    expect(lines[0]!.marks![0]!.words).toBe('people');
+    expect(lines.filter((l) => l.marks?.length).map((l) => l.marks![0]!.words)).toEqual(expect.arrayContaining(['people', 'build']));
+    expect(r.ops.filter((o) => o.op === 'add_shape' && o.start > 0 && o.start < 14 && o.style?.fill === '#000000').length).toBe(1);
+  });
+
   it('frames the video like the reference (rounded card, phones with the raw clip) and punches in inside the frame', () => {
     const { p, main } = setup();
     const s = DnaStyle.parse({ ...kinetic(), layout: { kind: 'phones', background: '#F2F2F2', x: 0.66, y: 0.56, w: 0.5, h: 0.5, radius: 0.08, raw: { x: 0.24, y: 0.6, w: 0.36, h: 0.36 }, labels: ['RAW CLIP', 'OUR WORK'], labelColor: '#111111' }, punch: { every: 3, scale: 1.2 }, outro: { kind: 'instagram', seconds: 3, background: '#000000' } });
@@ -164,7 +185,8 @@ describe('Edit DNA — applying a style', () => {
     w.finish();
     const studio = new StudioService({ dir: path.join(dir, 'studio'), log: log as never, exportsDir: () => path.join(dir, 'Videos'), changed: () => undefined, sendJob: () => undefined });
     const heard = vi.fn(async () => words(0.5));
-    const dna = new EditDnaService({ dir: path.join(dir, 'studio'), studio, log, words: heard });
+    const asked = vi.fn(async (prompt: string) => (/1\. Most people/.test(prompt) ? '{"stress":{"1":"people"},"cards":[2]}' : '{}'));
+    const dna = new EditDnaService({ dir: path.join(dir, 'studio'), studio, log, words: heard, ask: asked });
     const p = studio.create('Mine', 'vertical');
     const mine = (await studio.importFiles(p.id, [file])).added[0]!;
     studio.edit(p.id, [{ op: 'add_media', assetId: mine.id, start: 0 }]);
@@ -184,6 +206,8 @@ describe('Edit DNA — applying a style', () => {
     const r = await dna.apply(p.id, b.id, { assets: [mine.id] });
     expect(heard).toHaveBeenCalled();
     expect(faced).toHaveBeenCalled();
+    expect(asked).toHaveBeenCalled();
+    expect(r.notes.join(' ')).toMatch(/Your AI model chose the 1 words/);
     // Words never on the measured face (inside the card it sits at 0.24 + 0.52 × 0.3–0.5).
     for (const c of studio.get(p.id).tracks.find((t) => t.name === 'Captions')!.clips) if (c.type === 'text' && c.transform.y !== 0.5) expect(c.transform.y < 0.4 || c.transform.y > 0.5).toBe(true);
     expect(r.mode).toBe('talk');
