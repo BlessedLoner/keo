@@ -843,6 +843,14 @@ app.whenReady().then(() => {
           return r.canceled ? [] : r.filePaths;
         },
         pickMedia: pickStudioMedia,
+        pickDna: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import an Edit DNA file', properties: ['openFile'], filters: [{ name: 'Keo Edit DNA', extensions: ['keodna'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+        pickLut: async () => {
+          const r = await dialog.showOpenDialog(mainWindow ?? undefined!, { title: 'Import a colour LUT', properties: ['openFile'], filters: [{ name: 'Colour LUT', extensions: ['cube'] }] });
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
         // The screen as the user sees it, with Keo's main window out of the way for a moment.
         screenshotBehindKeo: async () => {
           const w = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;

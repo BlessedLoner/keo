@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { exportSize, projectDuration, QUALITY_BPP, type ExportOptions, type Project } from '@shared/studio';
+import { EXPORT_PRESETS, exportSize, projectDuration, QUALITY_BPP, type ExportOptions, type Project } from '@shared/studio';
 import { Icon } from '../components/Icon';
 
 /** The Export window: size, frame rate, quality and file name, with the file size to expect. */
@@ -9,6 +9,19 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
   const [quality, setQuality] = useState<ExportOptions['quality']>('high');
   const [name, setName] = useState(project.name);
   const [format, setFormat] = useState<ExportOptions['format']>('mp4');
+  const [preset, setPreset] = useState<string | null>(null);
+  const video = format === 'mp4' || format === 'mov';
+  const shape = project.width > project.height * 1.15 ? 'wide' : project.height > project.width * 1.15 ? (project.height / project.width > 1.5 ? 'tall' : 'portrait') : 'square';
+  const applyPreset = (id: string) => {
+    const p = EXPORT_PRESETS.find((x) => x.id === id)!;
+    setPreset(id);
+    setResolution(p.options.resolution);
+    setFps(p.options.fps);
+    setQuality(p.options.quality);
+    setFormat(p.options.format);
+  };
+  const chosen = EXPORT_PRESETS.find((x) => x.id === preset);
+  const mismatch = chosen && chosen.shape !== 'any' && !(chosen.shape === shape || (chosen.shape === 'portrait' && shape === 'square'));
   const size = exportSize(project, { resolution, fps });
   const seconds = projectDuration(project);
   // Video at the chosen quality plus sound (192 kb/s).
@@ -36,15 +49,25 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
           <label htmlFor="ex-name">File name</label>
           <input id="ex-name" className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
         </div>
+        <div className="export-presets" role="radiogroup" aria-label="Where it goes">
+          {EXPORT_PRESETS.map((p) => (
+            <button key={p.id} role="radio" aria-checked={preset === p.id} className={preset === p.id ? 'on' : ''} onClick={() => applyPreset(p.id)}>
+              <strong>{p.label}</strong>
+              <span>{p.for}</span>
+            </button>
+          ))}
+        </div>
+        {mismatch && <p className="small warn-text">This project is {shape === 'wide' ? 'wide' : shape === 'tall' ? 'tall' : shape}; {chosen!.label} looks best {chosen!.shape === 'tall' ? 'tall (9:16)' : chosen!.shape === 'wide' ? 'wide (16:9)' : '4:5 or square'}. Change the project’s shape in Details, or export as it is.</p>}
         <div className="field">
           <label htmlFor="ex-format">Format</label>
           <select id="ex-format" className="select" value={format} onChange={(e) => setFormat(e.target.value as ExportOptions['format'])}>
             <option value="mp4">Video (MP4)</option>
+            <option value="mov">Video (MOV, for editors and Macs)</option>
             <option value="gif">Animated GIF (for chats and sites)</option>
             <option value="wav">Sound only (WAV)</option>
           </select>
         </div>
-        {format === 'mp4' && (
+        {video && (
         <div className="export-grid">
           <div className="field">
             <label htmlFor="ex-res">Resolution</label>
@@ -79,10 +102,10 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
         )}
         {format === 'gif' && <p className="small muted">{Math.min(480, project.width)} px wide · {Math.min(15, project.fps)} fps · no sound · saved in Videos\Keo{seconds > 60 ? ' — a GIF can be at most 60 seconds' : ''}</p>}
         {format === 'wav' && <p className="small muted">The whole mix as heard in the video · stereo, 48 kHz · about {Math.max(0.1, (seconds * 192_000) / 1_000_000).toFixed(1)} MB · saved in Videos\Keo</p>}
-        {format === 'mp4' && <p className="small muted">
-          {size.width}×{size.height} · {size.fps} fps · MP4 (H.264 + AAC) · about {mb < 1 ? `${Math.max(0.1, mb).toFixed(1)}` : Math.round(mb)} MB · saved in Videos\Keo
+        {video && <p className="small muted">
+          {size.width}×{size.height} · {size.fps} fps · {format === 'mov' ? 'MOV' : 'MP4'} (H.264 + AAC) · about {mb < 1 ? `${Math.max(0.1, mb).toFixed(1)}` : Math.round(mb)} MB · saved in Videos\Keo
         </p>}
-        {format === 'mp4' && Math.max(size.width, size.height) > 2600 && <p className="small warn-text">4K takes much longer to make, and some PCs cannot encode it; 1080p is what most apps show.</p>}
+        {video && Math.max(size.width, size.height) > 2600 && <p className="small warn-text">4K takes much longer to make, and some PCs cannot encode it; 1080p is what most apps show.</p>}
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn" onClick={onClose}>
             Cancel

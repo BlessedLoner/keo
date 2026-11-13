@@ -20,6 +20,10 @@ const Hex = z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/);
 const SourceWord = z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict();
 export type SourceWord = z.infer<typeof SourceWord>;
 
+/** The colour ranges of the HSL panel, by the hue at their middle. */
+export const HSL_RANGES = ['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const;
+const HslBand = z.object({ hue: z.number().min(-1).max(1).default(0), sat: z.number().min(-1).max(1).default(0), lum: z.number().min(-1).max(1).default(0) }).strict();
+
 /** A colour grade (0 = unchanged for all of them). */
 export const ColorGrade = z
   .object({
@@ -30,9 +34,32 @@ export const ColorGrade = z
     temperature: z.number().min(-1).max(1).default(0),
     /** Darker corners. */
     vignette: z.number().min(0).max(1).default(0),
+    // Pro grading (drawn on the graphics card; absent = unchanged). -1 to 1 unless said.
+    /** Green (-) or magenta (+). */
+    tint: z.number().min(-1).max(1).optional(),
+    /** Brighter or darker bright parts, dark parts, the brightest and the darkest. */
+    highlights: z.number().min(-1).max(1).optional(),
+    shadows: z.number().min(-1).max(1).optional(),
+    whites: z.number().min(-1).max(1).optional(),
+    blacks: z.number().min(-1).max(1).optional(),
+    /** Crisper edges (0–1). */
+    sharpen: z.number().min(0).max(1).optional(),
+    /** A faded, film-like lift of the blacks (0–1). */
+    fade: z.number().min(0).max(1).optional(),
+    /** Each colour range on its own: its hue shifted, its saturation and its lightness. */
+    hsl: z.object(Object.fromEntries(HSL_RANGES.map((r) => [r, HslBand.optional()])) as Record<(typeof HSL_RANGES)[number], z.ZodOptional<typeof HslBand>>).strict().optional(),
+    /** A tone curve: [input, output] points from 0 to 1 (a gentle S adds contrast). */
+    curve: z.array(z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)])).min(2).max(12).optional(),
+    /** A LUT the user imported (.cube), by its name, and how strongly it is applied. */
+    lut: z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9 _-]{0,47}$/), amount: z.number().min(0).max(1).default(1) }).strict().optional(),
   })
   .strict();
 export type ColorGrade = z.infer<typeof ColorGrade>;
+
+/** The fields of a grade that need the graphics card (the others are plain picture filters). */
+export function proGrade(g: ColorGrade | undefined | null): boolean {
+  return !!g && !!(g.tint || g.highlights || g.shadows || g.whites || g.blacks || g.sharpen || g.fade || (g.hsl && Object.values(g.hsl).some((b) => b && (b.hue || b.sat || b.lum))) || g.curve || (g.lut && g.lut.amount > 0));
+}
 
 /**
  * A zoom keyframe of a clip: from `at` seconds into the clip, this scale centred on x, y (fractions
@@ -205,6 +232,26 @@ export type Counter = z.infer<typeof Counter>;
 /** A video or picture shown in a shape (rounded corners, a circle for avatars). */
 export const Mask = z.object({ shape: z.enum(['rounded', 'circle']), radius: z.number().min(0).max(0.5).default(0.08) }).strict();
 export type Mask = z.infer<typeof Mask>;
+/**
+ * A cut-out mask over a layer (like CapCut's masks): only the part inside the shape shows (or only
+ * the part outside, inverted). x, y: its middle from the layer's middle, as fractions of the layer;
+ * w, h: its size as fractions of the layer; angle in degrees; feather 0–1 softens its edge.
+ * linear: everything on one side of a line; mirror: a band across.
+ */
+export const CUT_SHAPES = ['linear', 'mirror', 'circle', 'rect', 'star', 'heart'] as const;
+export const Cut = z
+  .object({
+    shape: z.enum(CUT_SHAPES),
+    x: z.number().min(-1).max(1).default(0),
+    y: z.number().min(-1).max(1).default(0),
+    w: z.number().min(0.02).max(3).default(0.6),
+    h: z.number().min(0.02).max(3).default(0.6),
+    angle: z.number().min(-360).max(360).default(0),
+    feather: z.number().min(0).max(1).default(0),
+    invert: z.boolean().default(false),
+  })
+  .strict();
+export type Cut = z.infer<typeof Cut>;
 /** Shown inside a device: a phone, a browser window or a floating card. */
 export const DeviceFrame = z.enum(['phone', 'browser', 'card']);
 
@@ -235,6 +282,7 @@ export const TextStyle = z
     /** Text along an arc: 100 bends it into a half circle like a rainbow, 200 a full circle, negative the other way (0: straight). */
     curve: z.number().min(-200).max(200).default(0),
     lineHeight: z.number().min(0.6).max(3).default(1.15),
+    italic: z.boolean().default(false),
   })
   .strict();
 export type TextStyle = z.infer<typeof TextStyle>;
@@ -247,16 +295,48 @@ export interface StudioVersion {
   seconds: number;
 }
 
+/** A creative direction Keo offers for a whole edit: a card the user picks (like a director's strategy board). */
+export interface StudioDirection {
+  name: string;
+  about: string;
+  /** 1–5 each: how much moves, how fast it is cut, how hard it hits. */
+  motion: number;
+  pace: number;
+  impact: number;
+  /** A few words each, shown on the card. */
+  look?: string;
+  music?: string;
+  /** A colour that sets the card's mood. */
+  accent?: string;
+}
+
 /** Keo asks the user in Studio: a question, answers to click, and maybe the edit it plans (moments with times). */
 export interface StudioAsk {
   projectId: string;
   question: string;
   options: string[];
-  plan?: Array<{ at: string; what: string }>;
+  /** The edit as a storyboard: each moment, and (when known) the media and second it shows. */
+  plan?: Array<{ at: string; what: string; asset?: string; from?: number }>;
+  /** Directions to choose between (the first is Keo's pick); choosing one sends its name back. */
+  directions?: StudioDirection[];
 }
 
 /** Fonts that ship with Keo (free licences): the same on every PC and in every export. */
-export const KEO_FONTS = ['Inter', 'Montserrat', 'Poppins', 'Bebas Neue', 'Anton', 'Archivo Black', 'Instrument Serif', 'Playfair Display', 'DM Serif Display'] as const;
+export const KEO_FONTS = [
+  'Inter', 'Montserrat', 'Poppins', 'Manrope', 'DM Sans', 'Plus Jakarta Sans', 'Outfit', 'Sora', 'Space Grotesk', 'Bricolage Grotesque', 'Syne', 'Raleway',
+  'Bebas Neue', 'Anton', 'Archivo Black', 'Oswald', 'Big Shoulders Display', 'Teko', 'Unbounded', 'Bungee', 'Rubik Mono One', 'Righteous', 'Black Ops One', 'Orbitron', 'Monoton', 'Bangers', 'Luckiest Guy', 'Shrikhand', 'Abril Fatface',
+  'Instrument Serif', 'Playfair Display', 'DM Serif Display', 'Fraunces', 'Lora', 'Cormorant Garamond',
+  'Pacifico', 'Lobster', 'Dancing Script', 'Great Vibes', 'Kaushan Script', 'Caveat', 'Permanent Marker',
+  'JetBrains Mono', 'Space Mono', 'Press Start 2P',
+] as const;
+/** What kind of lettering each Keo font is (for the font gallery). */
+export const FONT_KIND: Record<(typeof KEO_FONTS)[number], 'Sans' | 'Display' | 'Serif' | 'Script' | 'Mono'> = {
+  Inter: 'Sans', Montserrat: 'Sans', Poppins: 'Sans', Manrope: 'Sans', 'DM Sans': 'Sans', 'Plus Jakarta Sans': 'Sans', Outfit: 'Sans', Sora: 'Sans', 'Space Grotesk': 'Sans', 'Bricolage Grotesque': 'Sans', Syne: 'Sans', Raleway: 'Sans',
+  'Bebas Neue': 'Display', Anton: 'Display', 'Archivo Black': 'Display', Oswald: 'Display', 'Big Shoulders Display': 'Display', Teko: 'Display', Unbounded: 'Display', Bungee: 'Display', 'Rubik Mono One': 'Display', Righteous: 'Display', 'Black Ops One': 'Display', Orbitron: 'Display', Monoton: 'Display', Bangers: 'Display', 'Luckiest Guy': 'Display', Shrikhand: 'Display', 'Abril Fatface': 'Display',
+  'Instrument Serif': 'Serif', 'Playfair Display': 'Serif', 'DM Serif Display': 'Serif', Fraunces: 'Serif', Lora: 'Serif', 'Cormorant Garamond': 'Serif',
+  Pacifico: 'Script', Lobster: 'Script', 'Dancing Script': 'Script', 'Great Vibes': 'Script', 'Kaushan Script': 'Script', Caveat: 'Script', 'Permanent Marker': 'Script',
+  'JetBrains Mono': 'Mono', 'Space Mono': 'Mono', 'Press Start 2P': 'Mono',
+};
 /** Fonts of Windows itself (on every Windows PC). */
 export const SYSTEM_FONTS = ['Segoe UI', 'Segoe UI Black', 'Arial', 'Arial Black', 'Impact', 'Georgia', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Consolas', 'Comic Sans MS', 'Bahnschrift'] as const;
 
@@ -327,9 +407,29 @@ export const Effects = z
     glow: z.number().min(0).max(1).optional(),
     rgbSplit: z.number().min(0).max(1).optional(),
     lightLeak: z.number().min(0).max(1).optional(),
+    /** Cinema bars top and bottom (strength: how wide; 1 is a 2.39:1 frame on 16:9). */
+    letterbox: z.number().min(0).max(1).optional(),
+    /** Film burn: warm flares flickering in from the edges. */
+    filmBurn: z.number().min(0).max(1).optional(),
+    /** Dreamy: a soft, pastel bloom. */
+    dream: z.number().min(0).max(1).optional(),
+    /** Digital glitch: slices of the picture jump sideways now and then. */
+    glitch: z.number().min(0).max(1).optional(),
+    /** Old TV: scanlines, a curved dark edge and a faint flicker. */
+    crt: z.number().min(0).max(1).optional(),
+    /** Twinkling sparkles over the picture. */
+    sparkle: z.number().min(0).max(1).optional(),
+    /** Soft out-of-focus circles of light drifting by. */
+    bokeh: z.number().min(0).max(1).optional(),
+    /** A rainbow lens flare sweeping across. */
+    prism: z.number().min(0).max(1).optional(),
+    /** Fast white flashes, like a club light. */
+    strobe: z.number().min(0).max(1).optional(),
   })
   .strict();
 export type Effects = z.infer<typeof Effects>;
+/** Every effect's name (for the edit operations). */
+export const EFFECT_KEYS = Object.keys(Effects.shape) as [keyof Effects, ...Array<keyof Effects>];
 
 /** A point of a speed curve: at fraction x of the clip, this speed (1 = normal). */
 export const SpeedPoint = z.object({ x: z.number().min(0).max(1), speed: z.number().min(0.1).max(10) }).strict();
@@ -418,7 +518,7 @@ export const Crop = z
 export type Crop = z.infer<typeof Crop>;
 
 /** Transitions between two clips that touch on a track: the change is centred on the cut. */
-export const TRANSITIONS = ['crossfade', 'slide', 'push', 'zoom', 'whip', 'wipe', 'blur', 'flash', 'dip'] as const;
+export const TRANSITIONS = ['crossfade', 'slide', 'push', 'zoom', 'whip', 'wipe', 'blur', 'flash', 'dip', 'iris', 'slide-up', 'wipe-down', 'spin', 'zoom-out', 'flip', 'glitch', 'stretch', 'push-up', 'shrink', 'slide-down', 'wipe-left', 'wipe-up'] as const;
 export const Transition = z.object({ kind: z.enum(TRANSITIONS), seconds: z.number().min(0.1).max(3).default(0.5) }).strict();
 export type Transition = z.infer<typeof Transition>;
 
@@ -476,6 +576,8 @@ export const MediaClip = z
     /** A speed curve over the clip (x: fraction of the clip); replaces `speed` while set. */
     speedCurve: z.array(SpeedPoint).min(2).max(16).optional(),
     mask: Mask.optional(),
+    /** A cut-out mask (linear, mirror, circle, rectangle, star, heart). */
+    cut: Cut.optional(),
     frame: DeviceFrame.optional(),
     /** A drop shadow under the layer (0: none). */
     shadow: z.number().min(0).max(60).default(0),
@@ -617,7 +719,7 @@ export const ADJUST_TRACK = 'Adjustments';
  * sweeps. Each piece animates in, lives (floats) and animates out on its own; `beats` (seconds into
  * the clip) make its words or items appear on the spoken words.
  */
-export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop', 'scene3d'] as const;
+export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop', 'scene3d', 'ticker', 'countdown', 'location', 'subscribe', 'progress', 'split_title', 'price_tag', 'social_card', 'viewfinder', 'glitch_title'] as const;
 export const MotionPiece = z.enum(MOTION_PIECES);
 export type MotionPiece = z.infer<typeof MotionPiece>;
 /** What each piece is for (shown to Keo and in the Studio). */
@@ -636,6 +738,16 @@ export const MOTION_PIECE_INFO: Record<MotionPiece, { label: string; use: string
   light_sweep: { label: 'Light sweep', use: 'a full-frame flash of light between topics, with an optional word (text) — about 1 second' },
   scene: { label: 'Keyword scene', use: 'FULL SCREEN: the video cuts away to a clean animated background and the key words slam in as they are said (text = 1–5 words, items = the word(s) in the accent serif italic, default the last; sub = a small kicker; icon optional; value + unit make it a big counter). background = its colour (light #F4F1EA, dark #0D0C12 or a brand colour), color = the words. The voice keeps playing; 1.2–3 s' },
   scene3d: { label: '3D scene', use: 'FULL SCREEN 3D explanation that plays step by step with labels and captions: visual = the scene (the same data as visual__explain), text = its title; the scene is fitted to the clip\'s length; sub: "-" hides the captions' },
+  ticker: { label: 'News ticker', use: 'a breaking-news band with a label block (sub, default LIVE) and the text (plus items) scrolling past; for news, updates, announcements' },
+  countdown: { label: 'Countdown', use: 'a big number counting down from value (default 3) in a ring that empties; text = what is coming ("Launch", "Drop")' },
+  location: { label: 'Location pin', use: 'a map pin drops in and the place name (text) slides out, sub = a smaller line (city, country, date); for travel and real estate' },
+  subscribe: { label: 'Subscribe button', use: 'a pill button (text, default Subscribe) a pointer taps; it turns into sub (default Subscribed) with a bell ring' },
+  progress: { label: 'Chapters', use: 'the parts of the video as a row (items), the current one (value, from 1) lit while its bar fills; for tutorials and long videos' },
+  split_title: { label: 'Split title', use: 'a two-line title: text (bold caps) slides in from the left, sub (elegant serif) from the right, an accent bar between' },
+  price_tag: { label: 'Price tag', use: 'a rotating starburst badge: value + unit ("$", "€") as the price, sub = the old price (struck through), text = a small line under it ("today only")' },
+  social_card: { label: 'Social post', use: 'a glass post card: avatar, sub = the @handle, text = the post, value = likes counting up; for testimonials and reactions' },
+  viewfinder: { label: 'Camera viewfinder', use: 'FULL FRAME camera overlay: corner brackets, a blinking REC dot with text (default REC), a running timecode, sub = a line at the bottom; for vlogs and behind the scenes' },
+  glitch_title: { label: 'Glitch title', use: 'big caps words that arrive in digital slices with red and cyan fringes and glitch again now and then; sub = a kicker; for tech, gaming, music' },
   backdrop: { label: 'Backdrop', use: 'FULL SCREEN animated background (soft glows, a moving dot grid, text as a giant faint word drifting behind) to put under a framed video or a graphic; background = its colour' },
 };
 /** Icons motion clips draw (line icons); anything else in an icon field is drawn as an emoji. */
@@ -862,6 +974,14 @@ export type RenderJob =
   | { kind: 'cancel'; exportId: string }
   | { kind: 'asset_audio'; projectId: string; assetId: string; sampleRate: number }
   | { kind: 'signatures'; projectId: string; assetId: string; times: number[] }
+  /** Edit DNA: the camera move between pairs of frames of a video (zoom, pan, how much changes). */
+  | { kind: 'motion'; projectId: string; assetId: string; pairs: Array<[number, number]> }
+  /** Edit DNA's quality pass: the project's timeline at each time against a video of it at `source` times (how alike, 0–1). */
+  | { kind: 'compare'; projectId: string; assetId: string; times: number[]; source: number[] }
+  /** Black bars baked into a video's picture (letterbox or pillarbox): the share of each edge that is always black. */
+  | { kind: 'bars'; projectId: string; assetId: string; times: number[] }
+  /** The camera move between pairs of times of the project's own timeline (as drawn). */
+  | { kind: 'timeline_motion'; projectId: string; pairs: Array<[number, number]> }
   | { kind: 'review'; projectId: string; times: number[] }
   | { kind: 'asset_sheet'; projectId: string; assetId: string }
   | { kind: 'export_file'; projectId: string; exportId: string; format: 'gif' | 'wav' }
@@ -876,8 +996,8 @@ export const ExportOptions = z
     resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project'),
     fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
     quality: ExportQuality.default('high'),
-    /** mp4: the video; gif: an animated GIF (up to 480 px wide, 15 fps); wav: the sound alone. */
-    format: z.enum(['mp4', 'gif', 'wav']).default('mp4'),
+    /** mp4: the video; mov: the same video as a QuickTime .mov (for Final Cut, Premiere, Macs); gif: an animated GIF (up to 480 px wide, 15 fps); wav: the sound alone. */
+    format: z.enum(['mp4', 'mov', 'gif', 'wav']).default('mp4'),
     name: z.string().trim().min(1).max(80).optional(),
   })
   .strict();
@@ -892,6 +1012,17 @@ export function exportSize(p: { width: number; height: number; fps: number }, o:
   const k = short / Math.min(p.width, p.height);
   return { width: even(p.width * k), height: even(p.height * k), fps };
 }
+
+/** One-click export settings for where the video goes (the shape stays the project's own). */
+export const EXPORT_PRESETS: Array<{ id: string; label: string; for: string; shape: 'tall' | 'wide' | 'square' | 'portrait' | 'any'; options: Pick<ExportOptions, 'resolution' | 'fps' | 'quality' | 'format'> }> = [
+  { id: 'tiktok', label: 'TikTok / Reels / Shorts', for: '1080p · 30 fps · tall 9:16', shape: 'tall', options: { resolution: '1080', fps: 30, quality: 'high', format: 'mp4' } },
+  { id: 'youtube', label: 'YouTube HD', for: '1080p · 30 fps · wide 16:9', shape: 'wide', options: { resolution: '1080', fps: 30, quality: 'high', format: 'mp4' } },
+  { id: 'youtube-4k', label: 'YouTube 4K', for: '2160p · 30 fps · best quality', shape: 'wide', options: { resolution: '2160', fps: 30, quality: 'best', format: 'mp4' } },
+  { id: 'instagram', label: 'Instagram feed', for: '1080p · 30 fps · 4:5 or square', shape: 'portrait', options: { resolution: '1080', fps: 30, quality: 'high', format: 'mp4' } },
+  { id: 'smooth', label: 'Smooth 60 fps', for: '1080p · 60 fps · sport, gaming', shape: 'any', options: { resolution: '1080', fps: 60, quality: 'high', format: 'mp4' } },
+  { id: 'master', label: 'Master (for editors)', for: 'project size · best · .mov', shape: 'any', options: { resolution: 'project', fps: 'project', quality: 'best', format: 'mov' } },
+  { id: 'small', label: 'Small (WhatsApp, email)', for: '720p · 30 fps · small file', shape: 'any', options: { resolution: '720', fps: 30, quality: 'standard', format: 'mp4' } },
+];
 
 /** Bits per pixel per frame for each quality (H.264). */
 export const QUALITY_BPP: Record<ExportQuality, number> = { standard: 0.09, high: 0.16, best: 0.26 };
@@ -912,8 +1043,32 @@ export const LOOKS = {
   punchy: { exposure: 0.06, contrast: 0.3, saturation: 0.3, temperature: 0.05, vignette: 0.1 },
   cinematic: { exposure: -0.04, contrast: 0.25, saturation: -0.15, temperature: 0.12, vignette: 0.4 },
   'black-white': { exposure: 0.02, contrast: 0.3, saturation: -1, temperature: 0, vignette: 0.2 },
+  'teal-orange': { exposure: 0, contrast: 0.2, saturation: 0.1, temperature: 0.08, vignette: 0.2, shadows: 0.1, hsl: { orange: { hue: 0, sat: 0.25, lum: 0.05 }, blue: { hue: -0.15, sat: 0.2, lum: -0.1 }, aqua: { hue: 0.2, sat: 0.15, lum: -0.05 }, green: { hue: 0.3, sat: -0.3, lum: 0 } }, curve: [[0, 0.02], [0.25, 0.2], [0.75, 0.82], [1, 1]] },
+  film: { exposure: 0.02, contrast: 0.08, saturation: -0.12, temperature: 0.1, vignette: 0.25, fade: 0.45, highlights: -0.2, curve: [[0, 0.06], [0.3, 0.27], [0.7, 0.74], [1, 0.95]] },
+  moody: { exposure: -0.08, contrast: 0.18, saturation: -0.25, temperature: -0.08, vignette: 0.45, shadows: -0.2, highlights: -0.15, tint: 0.05, hsl: { green: { hue: 0.2, sat: -0.4, lum: -0.2 }, blue: { hue: 0, sat: -0.2, lum: -0.15 } } },
+  'golden-hour': { exposure: 0.06, contrast: 0.12, saturation: 0.15, temperature: 0.45, vignette: 0.2, highlights: 0.1, hsl: { orange: { hue: 0, sat: 0.2, lum: 0.1 }, yellow: { hue: -0.1, sat: 0.2, lum: 0.05 } } },
+  'clean-bright': { exposure: 0.1, contrast: 0.05, saturation: 0.05, temperature: 0, vignette: 0, shadows: 0.25, whites: 0.15, sharpen: 0.25 },
+  neon: { exposure: 0, contrast: 0.3, saturation: 0.35, temperature: -0.2, vignette: 0.35, tint: 0.2, hsl: { purple: { hue: 0, sat: 0.4, lum: 0.1 }, magenta: { hue: 0, sat: 0.4, lum: 0.1 }, blue: { hue: 0.1, sat: 0.3, lum: 0 } } },
+  vintage: { exposure: 0.04, contrast: -0.05, saturation: -0.3, temperature: 0.25, vignette: 0.35, fade: 0.6, tint: -0.08, curve: [[0, 0.1], [0.5, 0.52], [1, 0.9]] },
+  'crisp-bw': { exposure: 0.04, contrast: 0.45, saturation: -1, temperature: 0, vignette: 0.25, sharpen: 0.35, blacks: 0.2, whites: 0.15 },
 } as const satisfies Record<string, ColorGrade>;
 export type LookId = keyof typeof LOOKS;
+export const LOOK_LABEL: Record<LookId, string> = {
+  natural: 'Natural',
+  warm: 'Warm',
+  cool: 'Cool',
+  punchy: 'Punchy',
+  cinematic: 'Cinematic',
+  'black-white': 'Black & white',
+  'teal-orange': 'Teal & orange',
+  film: 'Film',
+  moody: 'Moody',
+  'golden-hour': 'Golden hour',
+  'clean-bright': 'Clean & bright',
+  neon: 'Neon night',
+  vintage: 'Vintage',
+  'crisp-bw': 'Crisp B&W',
+};
 
 /** The overlay track elements go on by default. */
 export const GRAPHICS_TRACK = 'Graphics';
@@ -965,6 +1120,7 @@ const SetOp = z
     exit: Entrance.nullable().optional(),
     loop: Loop.nullable().optional(),
     mask: Mask.nullable().optional(),
+    cut: Cut.nullable().optional(),
     frame: DeviceFrame.nullable().optional(),
     shadow: z.number().min(0).max(60).optional(),
     glass: z.boolean().optional(),
@@ -1005,7 +1161,7 @@ const SetOp = z
     eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
     chroma: Chroma.partial().nullable().optional(),
     /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
-    effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1).nullable()).nullable().optional(),
+    effects: z.partialRecord(z.enum(EFFECT_KEYS), z.number().min(0).max(1).nullable()).nullable().optional(),
     /** Adjustment layers: blur of everything under it, and how much of it shows. */
     blur: z.number().min(0).max(20).optional(),
     strength: z.number().min(0).max(1).optional(),
@@ -1126,7 +1282,7 @@ export const EditOp = z.discriminatedUnion('op', [
       start: Sec,
       duration: z.number().min(0.04).max(24 * 3600),
       color: ColorGrade.partial().optional(),
-      effects: z.partialRecord(z.enum(['grain', 'vhs', 'glow', 'rgbSplit', 'lightLeak']), z.number().min(0).max(1)).optional(),
+      effects: z.partialRecord(z.enum(EFFECT_KEYS), z.number().min(0).max(1)).optional(),
       blur: z.number().min(0).max(20).optional(),
       strength: z.number().min(0).max(1).optional(),
     })
@@ -1190,7 +1346,7 @@ export const EditOp = z.discriminatedUnion('op', [
     .strict(),
   z.object({ op: z.literal('add_track'), kind: TrackKind, name: z.string().trim().min(1).max(60).optional() }).strict(),
   /** position: the track drawn under all others (bottom) or over them (top). trackName: the track by its name instead of track. */
-  z.object({ op: z.literal('set_track'), track: TrackRef.optional(), trackName: z.string().trim().min(1).max(60).optional(), hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional(), position: z.enum(['bottom', 'top']).optional() }).strict(),
+  z.object({ op: z.literal('set_track'), track: TrackRef.optional(), trackName: z.string().trim().min(1).max(60).optional(), hidden: z.boolean().optional(), muted: z.boolean().optional(), locked: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional(), position: z.enum(['bottom', 'top', 'up', 'down']).optional() }).strict(),
   z.object({ op: z.literal('delete_track'), track: TrackRef }).strict(),
   /** Every whole-word match of a word or phrase, in all text and captions, replaced (e.g. a name speech-to-text misheard). */
   z.object({ op: z.literal('replace_words'), find: z.string().trim().min(1).max(80), replace: z.string().trim().min(1).max(80) }).strict(),
@@ -2123,9 +2279,9 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           if (op.loop === null) delete v.loop;
           else v.loop = op.loop;
         }
-        for (const k of ['mask', 'frame'] as const)
+        for (const k of ['mask', 'cut', 'frame'] as const)
           if (op[k] !== undefined) {
-            only(k === 'mask' ? 'mask' : 'device frame', c.type === 'media');
+            only(k === 'mask' ? 'mask' : k === 'cut' ? 'cut-out mask' : 'device frame', c.type === 'media');
             const m = c as MediaClip;
             if (op[k] === null) delete m[k];
             else (m[k] as unknown) = op[k];
@@ -2307,9 +2463,12 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const t = p.tracks.find((x) => (op.track ? x.id === op.track : x.name === op.trackName));
         if (!t) throw new EditError(`There is no track ${op.track ?? op.trackName ?? '(none named)'}.`);
         if (op.position) {
-          p.tracks.splice(p.tracks.indexOf(t), 1);
+          const at = p.tracks.indexOf(t);
+          p.tracks.splice(at, 1);
+          // Tracks are kept bottom (first) to top (last): "up" is one layer higher.
           if (op.position === 'bottom') p.tracks.unshift(t);
-          else p.tracks.push(t);
+          else if (op.position === 'top') p.tracks.push(t);
+          else p.tracks.splice(Math.max(0, Math.min(p.tracks.length, at + (op.position === 'up' ? 1 : -1))), 0, t);
         }
         if (op.hidden !== undefined) t.hidden = op.hidden;
         if (op.muted !== undefined) t.muted = op.muted;
@@ -2466,7 +2625,7 @@ export function followTalking(p: Project): void {
       const m = look as MediaClip;
       c.transform = { ...m.transform };
       c.fit = m.fit;
-      for (const k of ['flipX', 'flipY', 'mask', 'color', 'zooms', 'keys'] as const) {
+      for (const k of ['flipX', 'flipY', 'mask', 'cut', 'color', 'zooms', 'keys'] as const) {
         const v = m[k];
         const empty = v === undefined || v === false || (Array.isArray(v) && !v.length) || (k === 'keys' && !Object.keys(v as object).length);
         if (empty) delete c[k];
@@ -2505,7 +2664,7 @@ export function describeProject(p: Project): string {
       else if (c.type === 'motion') lines.push(`  ${c.id} ${span} motion ${c.piece} “${c.text.slice(0, 60)}”${c.sub ? ` / “${c.sub.slice(0, 40)}”` : ''}${c.items ? ` items ${c.items.map((x) => JSON.stringify(x)).join(', ')}` : ''}${c.icon ? ` icon ${c.icon}` : ''}${c.value !== undefined ? ` value ${c.value}${c.unit ?? ''}` : ''}${c.beats ? ` beats ${c.beats.join(',')}` : ''} at ${round(c.transform.x)},${round(c.transform.y)}${c.transform.scale !== 1 ? ` scale ${round(c.transform.scale)}` : ''}${motionNote(c)}`);
       else if (c.type === 'shape') lines.push(`  ${c.id} ${span} ${c.shape} ${round(c.style.width)}x${round(c.style.height)} at ${round(c.transform.x)},${round(c.transform.y)}${c.style.fill ? ` ${c.style.fill}` : ''}${motionNote(c)}`);
       else if (c.type === 'adjust') {
-        const g = c.color ? Object.entries(c.color).filter(([, v]) => v).map(([k, v]) => `${k} ${round(v)}`) : [];
+        const g = c.color ? Object.entries(c.color).filter(([, v]) => v).map(([k, v]) => `${k} ${typeof v === 'number' ? round(v) : JSON.stringify(v)}`) : [];
         const fx = c.effects ? Object.entries(c.effects).map(([k, v]) => `${k} ${round(v ?? 0)}`) : [];
         lines.push(`  ${c.id} ${span} adjustment layer${g.length ? ` colour ${g.join(', ')}` : ''}${fx.length ? ` effects ${fx.join(', ')}` : ''}${c.blur ? ` blur ${c.blur}` : ''}${c.strength !== 1 ? ` strength ${c.strength}` : ''}`);
       } else {

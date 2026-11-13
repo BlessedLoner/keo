@@ -24,12 +24,30 @@ export const TRANSITION_LABEL: Record<Transition['kind'], string> = {
   blur: 'Blur',
   flash: 'Flash (white)',
   dip: 'Dip to black',
+  iris: 'Iris (circle)',
+  'slide-up': 'Slide up',
+  'wipe-down': 'Wipe down',
+  spin: 'Spin',
+  'zoom-out': 'Zoom out',
+  flip: 'Flip',
+  glitch: 'Glitch',
+  stretch: 'Stretch',
+  'push-up': 'Push up',
+  shrink: 'Shrink',
+  'slide-down': 'Slide down',
+  'wipe-left': 'Wipe left',
+  'wipe-up': 'Wipe up',
 };
 
 type Drag =
   | { kind: 'move'; clip: Clip; track: Track; dx: number; startX: number; startY: number; targetTrack: string }
   | { kind: 'trim-start' | 'trim-end'; clip: Clip; track: Track; startX: number; dx: number }
-  | { kind: 'scrub' };
+  | { kind: 'scrub' }
+  /** A box dragged over empty space selects every clip it touches. */
+  | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; add: boolean };
+
+/** A right-click menu: on a clip, on a track's name, or on empty space of a track. */
+type Menu = { x: number; y: number; at: number; clip?: string; track?: string };
 
 export function Timeline({
   project,
@@ -45,6 +63,7 @@ export function Timeline({
   zoom,
   onZoom,
   height,
+  snapping = true,
 }: {
   project: Project;
   time: number;
@@ -63,6 +82,8 @@ export function Timeline({
   zoom: number;
   onZoom?: (z: number) => void;
   height?: number;
+  /** Clips stick to edges, the playhead, markers and music beats (N turns it off). */
+  snapping?: boolean;
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [cutMenu, setCutMenu] = useState<{ clip: string; x: number; y: number } | null>(null);
@@ -74,6 +95,18 @@ export function Timeline({
     window.addEventListener('pointerdown', close);
     return () => window.removeEventListener('pointerdown', close);
   }, [cutMenu]);
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('blur', close);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('blur', close);
+    };
+  }, [menu]);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
   dragRef.current = drag;
@@ -89,13 +122,22 @@ export function Timeline({
   // Room after the end to drop clips there (the same on screen at any zoom).
   const width = Math.ceil(duration * pps + Math.max(240, pps * 2));
 
-  // Snapping: clip edges and the playhead.
+  // Snapping: clip edges, the playhead, markers and the beats of the music on the timeline.
   const edges = (except: string) => {
-    const out = [time, 0];
-    for (const t of project.tracks) for (const c of t.clips) if (c.id !== except) out.push(c.start, clipEnd(c));
+    const out = [time, 0, ...project.markers.map((m) => m.t)];
+    for (const t of project.tracks)
+      for (const c of t.clips) {
+        if (c.id === except) continue;
+        out.push(c.start, clipEnd(c));
+        if (c.type === 'audio') {
+          const beats = project.assets.find((a) => a.id === c.assetId)?.beats;
+          for (const b of beats ?? []) if (b >= c.in && b <= c.in + c.duration) out.push(c.start + (b - c.in));
+        }
+      }
     return out;
   };
   const snap = (sec: number, except: string) => {
+    if (!snapping) return Math.max(0, sec);
     let best = sec;
     let bestPx = SNAP_PX;
     for (const e of edges(except)) {
@@ -129,6 +171,7 @@ export function Timeline({
       const d = dragRef.current;
       if (!d) return;
       if (d.kind === 'scrub') onTime(timeAt(e.clientX));
+      else if (d.kind === 'box') setDrag({ ...d, x1: e.clientX, y1: e.clientY });
       else if (d.kind === 'move') {
         const over = trackAt(e.clientY);
         const target = over && project.tracks.find((t) => t.id === over)?.kind === d.track.kind ? over : d.targetTrack;
@@ -139,6 +182,24 @@ export function Timeline({
       const d = dragRef.current;
       setDrag(null);
       if (!d || d.kind === 'scrub') return;
+      if (d.kind === 'box') {
+        if (Math.abs(d.x1 - d.x0) < 5 && Math.abs(d.y1 - d.y0) < 5) {
+          // Just a click on empty space: nothing selected, the playhead goes there.
+          if (!d.add) onSelect(null);
+          onTime(timeAt(d.x0));
+          return;
+        }
+        const box = { l: Math.min(d.x0, d.x1), r: Math.max(d.x0, d.x1), t: Math.min(d.y0, d.y1), b: Math.max(d.y0, d.y1) };
+        const hit: string[] = [];
+        for (const el of area.current?.querySelectorAll<HTMLElement>('.tl-clip[data-clip]') ?? []) {
+          const r = el.getBoundingClientRect();
+          if (r.right >= box.l && r.left <= box.r && r.bottom >= box.t && r.top <= box.b) hit.push(el.dataset.clip!);
+        }
+        const ids = d.add ? [...new Set([...(selectedIds ?? []), ...hit])] : hit;
+        if (onSelectMany) onSelectMany(ids);
+        else onSelect(ids.at(-1) ?? null);
+        return;
+      }
       const sec = d.dx / pps;
       if (d.kind === 'move') {
         if (Math.abs(d.dx) < 2 && d.targetTrack === d.track.id) return;
@@ -176,7 +237,7 @@ export function Timeline({
   const where = (c: Clip, t: Track) => {
     let start = c.start;
     let dur = c.duration;
-    if (drag && drag.kind !== 'scrub' && drag.clip.id === c.id) {
+    if (drag && drag.kind !== 'scrub' && drag.kind !== 'box' && drag.clip.id === c.id) {
       const sec = drag.dx / pps;
       if (drag.kind === 'move') start = Math.max(0, c.start + sec);
       else if (drag.kind === 'trim-start') {
@@ -318,14 +379,44 @@ export function Timeline({
               else onEdit([{ op: 'add_media', assetId, start }]);
             }}
             onPointerDown={(e) => {
-              if ((e.target as HTMLElement).closest('.tl-clip, .tl-head')) return;
-              onSelect(null);
-              onTime(timeAt(e.clientX));
+              if (e.button !== 0 || (e.target as HTMLElement).closest('.tl-clip, .tl-head')) return;
+              setDrag({ kind: 'box', x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, add: e.shiftKey || e.ctrlKey });
+            }}
+            onContextMenu={(e) => {
+              if ((e.target as HTMLElement).closest('.tl-clip')) return;
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY, at: timeAt(e.clientX), track: t.id });
             }}
           >
-            <div className="tl-head">
+            <div className="tl-head" onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setMenu({ x: e.clientX, y: e.clientY, at: time, track: t.id });
+            }}>
               <Icon name={t.kind === 'video' ? 'film' : t.kind === 'text' ? 'text' : 'music'} size={14} />
-              <span className="grow">{t.name}</span>
+              {renaming === t.id ? (
+                <input
+                  className="tl-rename"
+                  autoFocus
+                  defaultValue={t.name}
+                  maxLength={60}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    if (e.key === 'Escape') setRenaming(null);
+                    e.stopPropagation();
+                  }}
+                  onBlur={(e) => {
+                    const name = e.target.value.trim();
+                    setRenaming(null);
+                    if (name && name !== t.name) onEdit([{ op: 'set_track', track: t.id, name }]);
+                  }}
+                />
+              ) : (
+                <span className="grow" onDoubleClick={() => setRenaming(t.id)} title="Double-click to rename; right-click for more">
+                  {t.name}
+                </span>
+              )}
               {t.kind !== 'audio' && (
                 <button className="tl-btn" title={t.hidden ? 'Show this track' : 'Hide this track'} onClick={() => onEdit([{ op: 'set_track', track: t.id, hidden: !t.hidden }])}>
                   <Icon name={t.hidden ? 'eyeoff' : 'eye'} size={13} />
@@ -368,11 +459,19 @@ export function Timeline({
               return (
                 <div
                   key={c.id}
+                  data-clip={c.id}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!(selectedIds ?? []).includes(c.id)) onSelect(c.id);
+                    setMenu({ x: e.clientX, y: e.clientY, at: timeAt(e.clientX), clip: c.id, track: t.id });
+                  }}
                   className={`tl-clip ${c.type} ${selected === c.id || selectedIds?.includes(c.id) ? 'sel' : ''} ${w.ghost ? 'ghost' : ''} ${t.hidden ? 'hidden' : ''} ${t.locked ? 'locked' : ''} ${c.group ? 'grouped' : ''}`}
                   style={{ left: LABEL_W + w.left, width: w.width, top: 4 + lane * ROW_H[t.kind], height: ROW_H[t.kind] - 8, bottom: 'auto' }}
                   title={`${label(c)} · ${c.start.toFixed(2)}s–${clipEnd(c).toFixed(2)}s`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
+                    if (e.button !== 0) return;
                     if (e.shiftKey || e.ctrlKey) {
                       onSelect(c.id, true);
                       return;
@@ -420,6 +519,17 @@ export function Timeline({
           </div>
         ))}
         <div className="tl-playhead" style={{ left: LABEL_W + time * pps }} />
+        {drag?.kind === 'box' && (Math.abs(drag.x1 - drag.x0) > 4 || Math.abs(drag.y1 - drag.y0) > 4) && (() => {
+          const r = area.current!.getBoundingClientRect();
+          const el = area.current!;
+          return (
+            <div
+              className="tl-box"
+              style={{ left: Math.min(drag.x0, drag.x1) - r.left + el.scrollLeft, top: Math.min(drag.y0, drag.y1) - r.top + el.scrollTop, width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0) }}
+            />
+          );
+        })()}
+        {menu && <TimelineMenu menu={menu} project={project} selectedIds={selectedIds ?? []} time={time} onEdit={onEdit} onRename={setRenaming} onClose={() => setMenu(null)} />}
         {keo && (
           <>
             {keo.end !== undefined && keo.end > keo.at && <div className={`tl-keo-range ${keo.kind}`} style={{ left: LABEL_W + keo.at * pps, width: Math.max(2, (keo.end - keo.at) * pps) }} />}
@@ -549,5 +659,77 @@ function FadeHandles({ clip, pps, onEdit }: { clip: Extract<Clip, { type: 'media
       <span className="tl-fade-dot" style={{ left: Math.max(2, fi * pps - 5) }} title={`Fade in: ${fi.toFixed(2)} s (drag)`} onPointerDown={(e) => drag('fadeIn', e)} />
       <span className="tl-fade-dot" style={{ right: Math.max(2, fo * pps - 5) }} title={`Fade out: ${fo.toFixed(2)} s (drag)`} onPointerDown={(e) => drag('fadeOut', e)} />
     </>
+  );
+}
+
+/** The right-click menu of the timeline: what can be done to this clip, this track or at this moment. */
+function TimelineMenu({ menu, project, selectedIds, time, onEdit, onRename, onClose }: { menu: Menu; project: Project; selectedIds: string[]; time: number; onEdit: (ops: EditOp[]) => void; onRename: (track: string) => void; onClose: () => void }) {
+  const found = menu.clip ? findClip(project, menu.clip) : undefined;
+  const c = found?.clip;
+  const track = project.tracks.find((t) => t.id === menu.track);
+  const ids = c && selectedIds.includes(c.id) ? selectedIds : c ? [c.id] : [];
+  const at = Math.max(0, menu.at);
+  const items: Array<{ label: string; key?: string; run: () => void; off?: boolean } | 'sep'> = [];
+  if (c) {
+    const inside = (t: number) => t > c.start + 0.04 && t < clipEnd(c) - 0.04;
+    const splitAt = inside(time) ? time : at;
+    items.push({ label: 'Split here', key: 'S', off: !inside(splitAt), run: () => onEdit([{ op: 'split', clip: c.id, at: splitAt }]) });
+    items.push({ label: 'Trim start to playhead', key: 'Q', off: !inside(time), run: () => onEdit([{ op: 'trim', clip: c.id, trimStart: time - c.start }]) });
+    items.push({ label: 'Trim end to playhead', key: 'W', off: !inside(time), run: () => onEdit([{ op: 'trim', clip: c.id, duration: time - c.start }]) });
+    items.push('sep');
+    items.push({ label: ids.length > 1 ? `Duplicate ${ids.length} clips` : 'Duplicate', key: 'Ctrl+D', run: () => onEdit(ids.map((id) => ({ op: 'duplicate' as const, clip: id }))) });
+    if (ids.length >= 2) items.push({ label: 'Group', key: 'Ctrl+G', run: () => onEdit([{ op: 'group', clips: ids }]) });
+    if (c.group) items.push({ label: 'Ungroup', key: 'Ctrl+Shift+G', run: () => onEdit([{ op: 'ungroup', clip: c.id }]) });
+    if (c.type === 'media') {
+      items.push('sep');
+      for (const sp of [0.5, 1, 1.5, 2]) items.push({ label: `Speed ${sp}×${c.speed === sp ? '  ✓' : ''}`, run: () => onEdit([{ op: 'set', clip: c.id, speed: sp }]) });
+      if (c.volume > 0 && project.assets.find((a) => a.id === c.assetId)?.hasAudio) items.push({ label: 'Detach audio', run: () => onEdit([{ op: 'detach_audio', clip: c.id }]) });
+    }
+    if (c.type === 'media' || c.type === 'audio') items.push({ label: c.volume === 0 ? 'Unmute clip' : 'Mute clip', run: () => onEdit([{ op: 'set', clip: c.id, volume: c.volume === 0 ? 1 : 0 }]) });
+    items.push('sep');
+    items.push({ label: ids.length > 1 ? `Delete ${ids.length} clips` : 'Delete', key: 'Del', run: () => onEdit(ids.map((id) => ({ op: 'delete' as const, clip: id }))) });
+    items.push({ label: 'Delete and close the gap', key: 'Shift+Del', run: () => onEdit(ids.map((id) => ({ op: 'delete' as const, clip: id, ripple: true }))) });
+  } else if (track) {
+    const i = project.tracks.indexOf(track);
+    items.push({ label: 'Add a marker here', key: 'M', run: () => onEdit([{ op: 'marker', at }]) });
+    if (track.kind === 'text') items.push({ label: 'Add text here', run: () => onEdit([{ op: 'add_text', text: 'Your text', start: at, duration: 3, track: track.id }]) });
+    items.push('sep');
+    items.push({ label: 'Rename track', run: () => onRename(track.id) });
+    items.push({ label: 'Move track up (in front)', off: i >= project.tracks.length - 1, run: () => onEdit([{ op: 'set_track', track: track.id, position: 'up' }]) });
+    items.push({ label: 'Move track down (behind)', off: i <= 0, run: () => onEdit([{ op: 'set_track', track: track.id, position: 'down' }]) });
+    if (track.kind !== 'audio') items.push({ label: track.hidden ? 'Show track' : 'Hide track', run: () => onEdit([{ op: 'set_track', track: track.id, hidden: !track.hidden }]) });
+    if (track.kind !== 'text') items.push({ label: track.muted ? 'Unmute track' : 'Mute track', run: () => onEdit([{ op: 'set_track', track: track.id, muted: !track.muted }]) });
+    items.push({ label: track.locked ? 'Unlock track' : 'Lock track', run: () => onEdit([{ op: 'set_track', track: track.id, locked: !track.locked }]) });
+    items.push('sep');
+    items.push({ label: 'New video / overlay track', run: () => onEdit([{ op: 'add_track', kind: 'video' }]) });
+    items.push({ label: 'New text track', run: () => onEdit([{ op: 'add_track', kind: 'text' }]) });
+    items.push({ label: 'New audio track', run: () => onEdit([{ op: 'add_track', kind: 'audio' }]) });
+    items.push('sep');
+    items.push({ label: track.clips.length ? `Delete track and its ${track.clips.length} clip${track.clips.length === 1 ? '' : 's'}` : 'Delete track', run: () => onEdit([{ op: 'delete_track', track: track.id }]) });
+  }
+  // Kept on screen near the edges.
+  const x = Math.min(menu.x, window.innerWidth - 250);
+  const y = Math.min(menu.y, window.innerHeight - 24 * items.length - 20);
+  return (
+    <div className="tl-ctx" role="menu" style={{ left: x, top: Math.max(8, y) }} onPointerDown={(e) => e.stopPropagation()}>
+      {items.map((it, n) =>
+        it === 'sep' ? (
+          <hr key={n} />
+        ) : (
+          <button
+            key={n}
+            role="menuitem"
+            disabled={it.off}
+            onClick={() => {
+              onClose();
+              it.run();
+            }}
+          >
+            <span className="grow">{it.label}</span>
+            {it.key && <kbd>{it.key}</kbd>}
+          </button>
+        ),
+      )}
+    </div>
   );
 }

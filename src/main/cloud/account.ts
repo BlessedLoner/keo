@@ -333,6 +333,13 @@ export class KeoAccount {
     return `${this.cfg.upgradePageUrl}#t=${encodeURIComponent(j.ticket)}`;
   }
 
+  /** A call to one of Keo Cloud's JSON endpoints (path after /v1), its answer as JSON. */
+  async call(path: string, body: unknown, signal: AbortSignal): Promise<unknown> {
+    if (!/^\/[a-z0-9/_-]{1,60}$/.test(path)) throw new AccountError('Not a Keo Cloud endpoint.');
+    const r = await this.post(path, body, signal);
+    return r.json().catch(() => ({}));
+  }
+
   /** A problem report (the text the user saw and agreed to send). Returns its reference. */
   async report(o: { message: string; report: string; version: string }, signal: AbortSignal): Promise<string> {
     const r = await this.post('/report', o, signal);

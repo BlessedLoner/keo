@@ -1,3 +1,5 @@
+import { estimateMotion, type MotionEstimate } from '@shared/editDnaMotion';
+import { prepareLuts } from './grade';
 import { prepareScenes } from './scene3d';
 import type { MotionClip } from '@shared/studio';
 import { bridged, clipEnd, findClip, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
@@ -298,6 +300,8 @@ export async function runExport(
   try {
     // 3D scene clips: the viewer and any realistic models are in place before the first frame.
     await prepareScenes(p.tracks.flatMap((tr) => tr.clips).filter((c): c is MotionClip => c.type === 'motion'));
+    // Imported LUTs are read before the first frame, so every frame has its look.
+    await prepareLuts(p.tracks.flatMap((tr) => tr.clips).map((c) => (c.type === 'media' || c.type === 'adjust' ? c.color : undefined)));
     for (let i = 0; i < total; i++) {
       if (cancelled()) throw new Error('The export was cancelled.');
       if (failed) throw failed;
@@ -510,6 +514,194 @@ export async function assetSignatures(p: Project, assetId: string, times: number
       const bins = new Array<number>(64).fill(0);
       for (let i = 0; i < px.length; i += 4) bins[((px[i]! >> 6) << 4) | ((px[i + 1]! >> 6) << 2) | (px[i + 2]! >> 6)]! += 1;
       out.push(bins.map((b) => Math.round((b / (W * H)) * 1e4) / 1e4));
+    }
+  } finally {
+    source.close();
+  }
+  return out;
+}
+
+/**
+ * Edit DNA's quality pass: the timeline drawn at each time (as the export draws it) beside the
+ * reference video's frame at the matching time, both 64 pixels wide — how alike they are in
+ * picture (correlation of the greyscale, 0–1) and in colour (histogram overlap, 0–1).
+ */
+/**
+ * Black bars baked into a video (a wide video saved in a tall frame, and so on): for each edge, the
+ * share of the picture that is black in every frame looked at (0 when there is none).
+ */
+export async function videoBars(p: Project, assetId: string, times: number[]): Promise<{ left: number; top: number; right: number; bottom: number }> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind !== 'video') return { left: 0, top: 0, right: 0, bottom: 0 };
+  const exact = await ClipDecoder.open(p.id, assetId);
+  const video = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+  const W = 96;
+  const H = Math.max(16, Math.round((W * (a.height || 16)) / Math.max(1, a.width || 9)));
+  const c = new OffscreenCanvas(W, H);
+  const ctx = c.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  // Rows and columns that have picture in them, in any frame.
+  const rows = new Array<boolean>(H).fill(false);
+  const cols = new Array<boolean>(W).fill(false);
+  let seen = 0;
+  try {
+    for (const t of times) {
+      const f = await video.frameAt(Math.max(0, Math.min(t, a.duration - 0.05)));
+      if (!f) continue;
+      seen++;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(f as CanvasImageSource, 0, 0, W, H);
+      const px = ctx.getImageData(0, 0, W, H).data;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          if (px[i]! + px[i + 1]! + px[i + 2]! > 3 * 22) {
+            rows[y] = true;
+            cols[x] = true;
+          }
+        }
+    }
+  } finally {
+    video.close();
+  }
+  if (!seen) return { left: 0, top: 0, right: 0, bottom: 0 };
+  const first = (xs: boolean[]) => Math.max(0, xs.indexOf(true));
+  const last = (xs: boolean[]) => Math.max(0, xs.length - 1 - xs.lastIndexOf(true));
+  // Only real bars (more than 3% of an edge), cut a hair inside so no black line is left.
+  const edge = (n: number, of: number) => (n / of > 0.03 ? Math.min(0.45, Math.round((n / of + 0.005) * 1000) / 1000) : 0);
+  if (!rows.includes(true)) return { left: 0, top: 0, right: 0, bottom: 0 };
+  return { left: edge(first(cols), W), right: edge(last(cols), W), top: edge(first(rows), H), bottom: edge(last(rows), H) };
+}
+
+export async function compareTimeline(p: Project, assetId: string, times: number[], source: number[]): Promise<Array<{ picture: number; colour: number }>> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind !== 'video') throw new Error('That is not a video of this project.');
+  const W = 64;
+  const H = Math.max(16, Math.round((W * p.height) / p.width));
+  const tl = new OffscreenCanvas(W, H);
+  const tctx = tl.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  const ref = new OffscreenCanvas(W, H);
+  const rctx = ref.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  await prepareCutout(p);
+  const sources = new ExactSources(p.id);
+  const exact = await ClipDecoder.open(p.id, assetId);
+  const video = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+  const read = (ctx: OffscreenCanvasRenderingContext2D) => {
+    const px = ctx.getImageData(0, 0, W, H).data;
+    const grey = new Float32Array(W * H);
+    const bins = new Array<number>(64).fill(0);
+    for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+      grey[j] = 0.2126 * px[i]! + 0.7152 * px[i + 1]! + 0.0722 * px[i + 2]!;
+      bins[((px[i]! >> 6) << 4) | ((px[i + 1]! >> 6) << 2) | (px[i + 2]! >> 6)]! += 1 / (W * H);
+    }
+    return { grey, bins };
+  };
+  const out: Array<{ picture: number; colour: number }> = [];
+  try {
+    for (let k = 0; k < times.length; k++) {
+      const t = times[k]!;
+      const media = visibleAt(p, t).filter((c): c is MediaClip => c.type === 'media');
+      await sources.prepare(p, media, t);
+      drawFrame(tctx as unknown as CanvasRenderingContext2D, p, t, sources);
+      const f = await video.frameAt(Math.max(0, Math.min(source[k] ?? t, a.duration - 0.01)));
+      if (!f) {
+        out.push({ picture: 0, colour: 0 });
+        continue;
+      }
+      // The reference fills the frame the way a "cover" clip does.
+      const iw = (f as { displayWidth?: number; width?: number }).displayWidth ?? (f as { width: number }).width;
+      const ih = (f as { displayHeight?: number; height?: number }).displayHeight ?? (f as { height: number }).height;
+      const s = Math.max(W / Math.max(1, iw), H / Math.max(1, ih));
+      rctx.fillStyle = '#000';
+      rctx.fillRect(0, 0, W, H);
+      rctx.drawImage(f as CanvasImageSource, (W - iw * s) / 2, (H - ih * s) / 2, iw * s, ih * s);
+      const A = read(tctx);
+      const B = read(rctx);
+      let ma = 0;
+      let mb = 0;
+      for (let i = 0; i < A.grey.length; i++) {
+        ma += A.grey[i]!;
+        mb += B.grey[i]!;
+      }
+      ma /= A.grey.length;
+      mb /= B.grey.length;
+      let num = 0;
+      let da = 0;
+      let db = 0;
+      for (let i = 0; i < A.grey.length; i++) {
+        const x = A.grey[i]! - ma;
+        const y = B.grey[i]! - mb;
+        num += x * y;
+        da += x * x;
+        db += y * y;
+      }
+      // Two flat pictures of the same brightness are alike; one flat and one busy are not.
+      const corr = da < 1e-3 || db < 1e-3 ? (Math.abs(ma - mb) < 12 && da < 1e-3 && db < 1e-3 ? 1 : 0) : num / Math.sqrt(da * db);
+      let overlap = 0;
+      for (let i = 0; i < 64; i++) overlap += Math.min(A.bins[i]!, B.bins[i]!);
+      out.push({ picture: Math.round(Math.max(0, corr) * 1000) / 1000, colour: Math.round(overlap * 1000) / 1000 });
+    }
+  } finally {
+    sources.close();
+    video.close();
+  }
+  return out;
+}
+
+/** Edit DNA's quality pass: the camera move of the timeline itself between pairs of times (as drawn, 96 pixels wide). */
+export async function timelineMotion(p: Project, pairs: Array<[number, number]>): Promise<MotionEstimate[]> {
+  const W = 96;
+  const H = Math.max(16, Math.round((W * p.height) / p.width));
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  await prepareCutout(p);
+  const sources = new ExactSources(p.id);
+  const grey = async (t: number): Promise<Uint8Array> => {
+    const media = visibleAt(p, t).filter((c): c is MediaClip => c.type === 'media');
+    await sources.prepare(p, media, t);
+    drawFrame(ctx as unknown as CanvasRenderingContext2D, p, t, sources);
+    const px = ctx.getImageData(0, 0, W, H).data;
+    const out = new Uint8Array(W * H);
+    for (let i = 0, j = 0; i < px.length; i += 4, j++) out[j] = Math.round(0.2126 * px[i]! + 0.7152 * px[i + 1]! + 0.0722 * px[i + 2]!);
+    return out;
+  };
+  const out: MotionEstimate[] = [];
+  try {
+    for (const [t0, t1] of pairs) out.push(estimateMotion(await grey(t0), await grey(t1), W, H));
+  } finally {
+    sources.close();
+  }
+  return out;
+}
+
+/**
+ * Edit DNA: the camera move between each pair of times of a video — frames decoded one at a time,
+ * shrunk to 96 pixels wide and greyscale, then compared (zoom, pan, how much changes).
+ */
+export async function assetMotion(p: Project, assetId: string, pairs: Array<[number, number]>): Promise<MotionEstimate[]> {
+  const a = p.assets.find((x) => x.id === assetId);
+  if (!a || a.kind !== 'video') throw new Error('That is not a video of this project.');
+  const W = 96;
+  const H = Math.max(16, Math.round((W * (a.height || 9)) / (a.width || 16)));
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
+  const exact = await ClipDecoder.open(p.id, assetId);
+  const source = exact ?? new ElementSeeker(mediaUrl(p.id, assetId));
+  const grey = async (t: number): Promise<Uint8Array | null> => {
+    const f = await source.frameAt(Math.max(0, Math.min(t, a.duration - 0.01)));
+    if (!f) return null;
+    ctx.drawImage(f as CanvasImageSource, 0, 0, W, H);
+    const px = ctx.getImageData(0, 0, W, H).data;
+    const out = new Uint8Array(W * H);
+    for (let i = 0, j = 0; i < px.length; i += 4, j++) out[j] = Math.round(0.2126 * px[i]! + 0.7152 * px[i + 1]! + 0.0722 * px[i + 2]!);
+    return out;
+  };
+  const out: MotionEstimate[] = [];
+  try {
+    for (const [t0, t1] of pairs) {
+      const g0 = await grey(t0);
+      const g1 = await grey(t1);
+      out.push(g0 && g1 ? estimateMotion(g0, g1, W, H) : { zoom: 1, dx: 0, dy: 0, residual: 1, energy: 0, brightness: 0 });
     }
   } finally {
     source.close();

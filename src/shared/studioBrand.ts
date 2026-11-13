@@ -6,6 +6,11 @@ import { z } from 'zod';
  */
 const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
+/** A file of the brand kit, kept in Studio's library (brand-logo.png, brand-intro.mp4…). */
+const BrandFile = z.string().regex(/^brand-(logo|intro|outro)\.[a-z0-9]{2,5}$/);
+export const BRAND_FILES = ['logo', 'intro', 'outro'] as const;
+export type BrandFileKind = (typeof BRAND_FILES)[number];
+
 const Spelling = z.object({ heard: z.string().trim().min(1).max(60), say: z.string().trim().min(1).max(60) }).strict();
 
 export const Brand = z
@@ -19,6 +24,12 @@ export const Brand = z
     style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack', 'cinematic']).optional(),
     /** Words speech-to-text gets wrong, and how they are written ("KUI" heard, "Keo" meant). */
     spellings: z.array(Spelling).max(40).optional(),
+    /** The brand's colours besides the accent (up to 8). */
+    palette: z.array(Hex).max(8).optional(),
+    /** The logo (a picture, best a PNG with a clear background), the intro and the outro (a short video or picture). */
+    logo: BrandFile.optional(),
+    intro: BrandFile.optional(),
+    outro: BrandFile.optional(),
   })
   .strict();
 export type Brand = z.infer<typeof Brand>;
@@ -34,6 +45,10 @@ export const BrandPatch = z
     endText: z.string().trim().min(1).max(120).nullable().optional(),
     style: z.enum(['podcast-frame', 'doc-serif', 'bold-stack', 'cinematic']).nullable().optional(),
     spellings: z.array(Spelling).max(40).nullable().optional(),
+    palette: z.array(Hex).max(8).nullable().optional(),
+    logo: BrandFile.nullable().optional(),
+    intro: BrandFile.nullable().optional(),
+    outro: BrandFile.nullable().optional(),
   })
   .strict();
 export type BrandPatch = z.infer<typeof BrandPatch>;
@@ -59,6 +74,10 @@ export function describeBrand(b: Brand): string {
     b.endText && `end card line ${JSON.stringify(b.endText)}`,
     b.style && `favourite style ${b.style}`,
     b.spellings?.length && `spellings ${b.spellings.map((x) => `"${x.heard}" is "${x.say}"`).join(', ')}`,
+    b.palette?.length && `palette ${b.palette.join(' ')}`,
+    b.logo && 'a saved logo',
+    b.intro && 'a saved intro',
+    b.outro && 'a saved outro (studio__use_brand puts the logo, intro or outro into the video)',
   ].filter(Boolean);
   return parts.join(', ');
 }

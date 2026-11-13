@@ -422,9 +422,11 @@ export class Mp4Writer {
     private readonly file: string,
     private readonly video: WriterVideo,
     private readonly audio: WriterAudio | null,
+    /** A QuickTime .mov (the same tracks, labelled for QuickTime players and editors). */
+    quicktime = false,
   ) {
     this.fd = fs.openSync(file, 'w');
-    this.put(box('ftyp', str('isom'), u32(0x200), str('isom'), str('iso2'), str('avc1'), str('mp41')));
+    this.put(quicktime ? box('ftyp', str('qt  '), u32(0x200), str('qt  ')) : box('ftyp', str('isom'), u32(0x200), str('isom'), str('iso2'), str('avc1'), str('mp41')));
     this.mdatStart = this.at;
     // A 64-bit mdat header; its size is filled in at the end.
     this.put(Buffer.concat([u32(1), str('mdat'), u64(0)]));

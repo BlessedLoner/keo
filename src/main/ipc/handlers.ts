@@ -35,6 +35,10 @@ export interface HostHooks {
   pickFiles?(): Promise<string[]>;
   /** Windows' file picker for Keo Studio: videos, pictures and sound (several files). */
   pickMedia?(): Promise<string[]>;
+  /** Windows' file picker for a colour LUT (.cube). */
+  pickLut?(): Promise<string | null>;
+  /** Windows' file picker for an Edit DNA file (.keodna). */
+  pickDna?(): Promise<string | null>;
   /** A picture of the screen with Keo's own window out of the way. */
   screenshotBehindKeo?(): Promise<Buffer | null>;
   /** Sends to Keo's presence windows only (the bar, Keo mode). */
@@ -958,6 +962,81 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
 
     'projects:list': () => s.projects.list(),
     'projects:work': ({ projectId }) => s.projectWork(projectId),
+    'studio:luts': () => s.studio.luts(),
+    'studio:importLut': async () => {
+      const file = (await host.pickLut?.()) ?? null;
+      return file ? studioCall(() => s.studio.importLut(file)) : null;
+    },
+    'studio:lut': ({ name }) => studioCall(() => ({ text: s.studio.lutText(name) })),
+    'studio:brandFile': async ({ kind, remove }) => {
+      if (remove) return studioCall(() => s.studio.setBrand({ [kind]: null }));
+      const file = (host.pickMedia ? await host.pickMedia() : [])[0];
+      return file ? studioCall(() => s.studio.setBrandFile(kind, file)) : s.studio.brand();
+    },
+    'studio:useBrand': async ({ id, kind }) => (await s.studio.useBrand(id, kind).catch(studioErr)).project,
+    'dna:list': () => s.editDna.list(),
+    'dna:jobs': () => s.editDna.jobs(),
+    'dna:analyze': async ({ id, assetId, name, visionModel }) => {
+      let asset = assetId;
+      if (!asset) {
+        // A reference from the PC: kept as media of the project (the file itself is never changed).
+        const file = (host.pickMedia ? await host.pickMedia() : [])[0];
+        if (!file) return null;
+        const r = await s.studio.importFiles(id, [file]).catch(studioErr);
+        const a = r.added[0] ?? r.project.assets.find((x) => x.path.toLowerCase() === file.toLowerCase());
+        if (!a || a.kind !== 'video') throw new KeoError('bad_input', 'Choose a video as the reference.');
+        asset = a.id;
+      }
+      return studioCall(() => s.editDna.analyze(id, asset!, { ...(name ? { name } : {}), ...(visionModel !== undefined ? { visionModel } : {}) }));
+    },
+    'dna:cancel': ({ jobId }) => studioCall(() => ({ cancelled: s.editDna.cancel(jobId) })),
+    'dna:resume': ({ jobId, visionModel }) => studioCall(() => s.editDna.resume(jobId, visionModel !== undefined ? { visionModel } : {})),
+    // The user's own click: Apply in the Edit DNA library. It plays on the timeline step by step, like Keo's edits.
+    'dna:apply': async ({ id, dnaId, assets, roles, at, length, replace }) => s.studio.asKeo(() => s.editDna.apply(id, dnaId, { assets, ...(roles ? { roles } : {}), ...(at !== undefined ? { at } : {}), ...(length ? { length } : {}), ...(replace !== undefined ? { replace } : {}) }), id).catch(studioErr),
+    'dna:models': () => s.dnaVisionModels(),
+    'dna:reread': ({ dnaId, visionModel }) => studioCall(() => s.editDna.reread(dnaId, visionModel)),
+    'dna:url': async ({ id, url, visionModel }) => {
+      const a = await s.editDna.importUrl(id, url, new AbortController().signal).catch(studioErr);
+      return studioCall(() => s.editDna.analyze(id, a.id, visionModel !== undefined ? { visionModel } : {}));
+    },
+    'dna:shared': ({ query, category }) => s.editDna.sharedList({ query, category }, AbortSignal.timeout(20_000)).catch(studioErr),
+    'dna:publish': ({ dnaId }) => s.editDna.publish(dnaId, AbortSignal.timeout(30_000)).catch(studioErr),
+    'dna:unpublish': ({ dnaId }) => s.editDna.unpublish(dnaId, AbortSignal.timeout(30_000)).catch(studioErr),
+    'dna:saveShared': ({ sharedId }) => s.editDna.saveShared(sharedId, AbortSignal.timeout(30_000)).catch(studioErr),
+    'dna:reportShared': async ({ sharedId, reason }) => {
+      await s.editDna.reportShared(sharedId, reason, AbortSignal.timeout(20_000)).catch(studioErr);
+      return { sent: true };
+    },
+    'dna:update': ({ dnaId, ...patch }) => studioCall(() => s.editDna.update(dnaId, patch)),
+    'dna:delete': ({ dnaId }) => studioCall(() => {
+      s.editDna.delete(dnaId);
+      return { deleted: true };
+    }),
+    'dna:export': ({ dnaId }) =>
+      studioCall(() => {
+        const b = s.editDna.get(dnaId);
+        const dir = path.join(s.videoOutputRoot(), 'Edit DNA');
+        fs.mkdirSync(dir, { recursive: true });
+        const base = b.name.replace(/[<>:"/\\|?*]+/g, ' ').trim().slice(0, 60) || 'Edit DNA';
+        let file = path.join(dir, `${base}.keodna`);
+        for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).keodna`);
+        fs.writeFileSync(file, s.editDna.exportFile(dnaId));
+        host.showInFolder?.(file);
+        return { file };
+      }),
+    'dna:import': async () => {
+      const file = (await host.pickDna?.()) ?? null;
+      if (!file) return null;
+      if (fs.statSync(file).size > 20 * 1024 * 1024) throw new KeoError('too_large', 'That Edit DNA file is too large.');
+      return studioCall(() => s.editDna.importFile(fs.readFileSync(file, 'utf8')));
+    },
+    'dna:find': ({ query }) => s.editDna.find(query),
+    'studio:brandLogo': () => {
+      const f = s.studio.brandFile('logo');
+      if (!f || fs.statSync(f).size > 8 * 1024 * 1024) return null;
+      const ext = path.extname(f).slice(1).toLowerCase();
+      return { dataBase64: fs.readFileSync(f).toString('base64'), mimeType: ext === 'jpg' || ext === 'jpeg' || ext === 'jfif' ? 'image/jpeg' : `image/${ext}` };
+    },
     'projects:create': ({ name, description }) => {
       const p = s.projects.create(name, description);
       changed('projects:changed', { projectId: p.id });

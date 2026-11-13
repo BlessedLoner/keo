@@ -1,5 +1,6 @@
+import { ProColor } from '../studio/ColorPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FORMATS, SPEED_PRESETS, clipEnd, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx, KEO_FONTS, SYSTEM_FONTS } from '@shared/studio';
+import { FORMATS, SPEED_PRESETS, clipEnd, proGrade, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke, subscribe } from '../lib/api';
@@ -17,7 +18,7 @@ import { CloneVideo } from '../studio/CloneVideo';
 import { TalkingCharacter } from '../studio/TalkingCharacter';
 import { ShotAgain } from '../studio/ShotAgain';
 import { AiVideoCreator } from '../studio/AiVideoCreator';
-import { Color, Num, Section } from '../studio/fields';
+import { Color, FontPicker, Num, Section, Seg, Swatch } from '../studio/fields';
 import { ChromaFields, CounterFields, EffectsFields, FrameFields, MotionFields, PositionFields, ShapeFields, TransitionFields, VolumeField } from '../studio/MotionFields';
 import { MotionClipFields } from '../studio/MotionClipFields';
 import { PlannedShots } from '../studio/PlannedShots';
@@ -204,6 +205,35 @@ export function StudioView() {
       /* a per-viewer convenience only */
     }
   }, [tlHeight]);
+  // The workspace: column widths, Keo in its own column, snapping (kept per viewer).
+  const [snapping, setSnapping] = useState(() => readPref('keo.studio.snap') !== '0');
+  const [keoDock, setKeoDock] = useState(() => readPref('keo.studio.keoDock') !== '0');
+  const [cols, setCols] = useState(() => ({ left: Number(readPref('keo.studio.leftW')) || 340, right: Number(readPref('keo.studio.rightW')) || 320, keo: Number(readPref('keo.studio.keoW')) || 340 }));
+  useEffect(() => writePref('keo.studio.snap', snapping ? '1' : '0'), [snapping]);
+  useEffect(() => writePref('keo.studio.keoDock', keoDock ? '1' : '0'), [keoDock]);
+  useEffect(() => {
+    writePref('keo.studio.leftW', String(Math.round(cols.left)));
+    writePref('keo.studio.rightW', String(Math.round(cols.right)));
+    writePref('keo.studio.keoW', String(Math.round(cols.keo)));
+  }, [cols]);
+  /** Drags a column edge: the column grows or shrinks (within limits) as the mouse moves. */
+  const resizeCol = (which: 'left' | 'right' | 'keo', e: React.PointerEvent) => {
+    e.preventDefault();
+    const x0 = e.clientX;
+    const w0 = cols[which];
+    const limits = which === 'left' ? [240, 560] : [260, 620];
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const w = Math.max(limits[0]!, Math.min(limits[1]!, which === 'left' ? w0 + dx : w0 - dx));
+      setCols((c) => ({ ...c, [which]: w }));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
   const clipboard = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selected;
@@ -493,9 +523,18 @@ export function StudioView() {
       } else if (e.ctrlKey && (e.key === 'y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))) {
         e.preventDefault();
         void redo();
-      } else if (!e.ctrlKey && (e.key === 's' || e.key === 'S')) {
+      } else if ((!e.ctrlKey && (e.key === 's' || e.key === 'S')) || (e.ctrlKey && (e.key === 'b' || e.key === 'B'))) {
         e.preventDefault();
         splitAtPlayhead();
+      } else if (!e.ctrlKey && (e.key === 'q' || e.key === 'Q' || e.key === 'w' || e.key === 'W')) {
+        // Trim to the playhead: Q cuts the part before it, W the part after it (the selected clip).
+        const c = selectedRef.current ? findClip(p, selectedRef.current)?.clip : undefined;
+        const t = timeRef.current;
+        if (!c || t <= c.start + 0.04 || t >= clipEnd(c) - 0.04) return;
+        e.preventDefault();
+        void edit([e.key === 'q' || e.key === 'Q' ? { op: 'trim', clip: c.id, trimStart: t - c.start } : { op: 'trim', clip: c.id, duration: t - c.start }]);
+      } else if (!e.ctrlKey && (e.key === 'n' || e.key === 'N')) {
+        setSnapping((v) => !v);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteSelected(e.shiftKey);
@@ -756,6 +795,9 @@ export function StudioView() {
           {project.width}×{project.height} · {project.fps} fps · {fmtDur(duration)}
         </span>
         <div className="spacer" />
+        <button className={`btn sm ghost ${keoDock ? 'on' : ''}`} onClick={() => setKeoDock((v) => !v)} title={keoDock ? 'Put Keo back in a tab beside the clip settings' : 'Keo in its own column: chat with Keo while you change clip settings'}>
+          <span className="keo-dot" /> Keo panel
+        </button>
         <button className="btn icon sm ghost" onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">
           ?
         </button>
@@ -818,7 +860,7 @@ export function StudioView() {
           <Icon name="download" size={14} /> Export
         </button>
       </header>
-      <div className="studio-main">
+      <div className="studio-main" style={{ gridTemplateColumns: `${cols.left}px 5px minmax(0, 1fr) 5px ${cols.right}px${keoDock ? ` 5px ${cols.keo}px` : ''}` }}>
         <Library
           project={project}
           time={time}
@@ -828,12 +870,18 @@ export function StudioView() {
           onEdit={edit}
           onCaptions={() => void autoCaptions()}
           captioning={captioning}
+          onDnaApplied={({ clipIds, start }) => {
+            setPlaying(false);
+            setTime(start);
+            setSelection(clipIds);
+          }}
           onAskKeo={(text) => {
             setSideTab('keo');
             // The Keo panel sends it once it is on screen.
             setTimeout(() => window.dispatchEvent(new CustomEvent('keo:ask', { detail: text })), 50);
           }}
         />
+        <div className="col-resize" title="Drag to make the library wider or narrower" onPointerDown={(e) => resizeCol('left', e)} />
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
           <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} flagged={check.open ? checkRows.map((r) => r.clip).filter(Boolean) : []} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
           {check.open && (
@@ -899,7 +947,13 @@ export function StudioView() {
             </div>
           </div>
         </section>
-        <aside className={`studio-side tab-${sideTab}`}>
+        <div className="col-resize" title="Drag to make the settings wider or narrower" onPointerDown={(e) => resizeCol('right', e)} />
+        <aside className={`studio-side tab-${keoDock ? 'inspect' : sideTab}`}>
+          {keoDock ? (
+            <div className="side-tabs single">
+              <span className="on">{sel ? 'Edit' : 'Details'}</span>
+            </div>
+          ) : (
           <div className="side-tabs" role="tablist" aria-label="Side panel">
             {(
               [
@@ -913,16 +967,31 @@ export function StudioView() {
               </button>
             ))}
           </div>
-          {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
+          )}
+          {steps && !keoDock && <Checklist steps={steps} onClose={() => setSteps(null)} />}
           {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} onPost={() => progress.file && setPosting(progress.file)} />}
           {posting && <PostDialog projectId={project.id} file={posting} aiMade={project.assets.some((a) => a.aiMade)} onClose={() => setPosting(null)} />}
-          {sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} />}
-          {sideTab === 'inspect' && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
+          {!keoDock && sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} selected={selected} />}
+          {(keoDock || sideTab === 'inspect') && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
                 setPlaying(false);
                 setFollow(sel.clip.id);
                 ui.toast('Drag a box on the preview around what this clip should follow.', 'info');
               }} /> : <ProjectSettings project={project} onEdit={edit} />)}
         </aside>
+        {keoDock && (
+          <>
+            <div className="col-resize" title="Drag to make Keo's column wider or narrower" onPointerDown={(e) => resizeCol('keo', e)} />
+            <aside className="studio-side studio-keo-col tab-keo">
+              <div className="side-tabs single">
+                <span className="on">
+                  <span className="keo-dot" /> Keo · Creative director
+                </span>
+              </div>
+              {steps && <Checklist steps={steps} onClose={() => setSteps(null)} />}
+              <StudioKeo project={project} conversation={keoChat} selected={selected} />
+            </aside>
+          </>
+        )}
       </div>
       <div
         className="tl-resize"
@@ -992,6 +1061,9 @@ export function StudioView() {
         </button>
         {selection.length > 1 && <span className="chip">{selection.length} selected</span>}
         <div className="spacer" />
+        <button className={`btn sm ghost ${snapping ? 'on' : ''}`} onClick={() => setSnapping((v) => !v)} title={snapping ? 'Snapping on: clips stick to edges, the playhead, markers and music beats (N)' : 'Snapping off (N)'}>
+          <Icon name="magnet" size={14} /> Snap
+        </button>
         <span className="small muted">Zoom</span>
         <input type="range" min={4} max={240} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" />
         <button
@@ -1060,11 +1132,28 @@ export function StudioView() {
         zoom={zoom}
         onZoom={setZoom}
         height={tlHeight}
+        snapping={snapping}
       />
       {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
       {exporting && <ExportDialog project={project} onClose={() => setExporting(false)} onExport={(o) => void exportVideo(o)} />}
     </div>
   );
+}
+
+/** A per-viewer layout preference (column widths, toggles); never needed for the edit itself. */
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* a convenience only */
+  }
 }
 
 function listProjects() {
@@ -1275,25 +1364,50 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
       )}
       {at('speed') && (
       <Section title="Speed">
-        <div className="insp-grid">
-          {clip.type === 'media' && asset?.kind === 'video' && !clip.speedCurve && <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />}
-          {clip.type === 'media' && asset?.kind === 'video' && (
-            <label className="insp-num">
-              <span>Speed curve</span>
-              <select className="select" value={clip.speedCurve ? (Object.entries(SPEED_PRESETS).find(([, pts]) => JSON.stringify(pts) === JSON.stringify(clip.speedCurve))?.[0] ?? 'custom') : 'none'} onChange={(e) => set({ speedCurve: e.target.value === 'none' ? null : (e.target.value as keyof typeof SPEED_PRESETS) })}>
-                <option value="none">None (steady)</option>
-                <option value="montage">Montage</option>
-                <option value="hero">Hero (slow moment)</option>
-                <option value="bullet">Bullet time</option>
-                <option value="flash-in">Flash in</option>
-                <option value="flash-out">Flash out</option>
-                <option value="jump-cut">Jump cut</option>
-                {clip.speedCurve && !Object.values(SPEED_PRESETS).some((pts) => JSON.stringify(pts) === JSON.stringify(clip.speedCurve)) && <option value="custom">Custom</option>}
-              </select>
-            </label>
-          )}
-          {clip.type === 'media' && clip.speedCurve && <CurveGraph points={clip.speedCurve} />}
-        </div>
+        {clip.type === 'media' && asset?.kind === 'video' ? (
+          <>
+            {!clip.speedCurve && (
+              <>
+                <Num label="Speed" value={clip.speed} min={0.1} max={8} step={0.05} suffix="×" onCommit={(v) => set({ speed: v })} />
+                <div className="chip-row">
+                  {[0.25, 0.5, 1, 1.5, 2, 4].map((v) => (
+                    <button key={v} className={`chip-btn ${Math.abs(clip.speed - v) < 1e-6 ? 'on' : ''}`} onClick={() => set({ speed: v })}>
+                      {v}×
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <h5 className="insp-sub">Speed curve</h5>
+            <div className="curve-chips">
+              {(
+                [
+                  ['none', 'Steady'],
+                  ['montage', 'Montage'],
+                  ['hero', 'Hero'],
+                  ['bullet', 'Bullet time'],
+                  ['flash-in', 'Flash in'],
+                  ['flash-out', 'Flash out'],
+                  ['jump-cut', 'Jump cut'],
+                ] as const
+              ).map(([k, label]) => {
+                const pts = k === 'none' ? null : SPEED_PRESETS[k];
+                const on = k === 'none' ? !clip.speedCurve : JSON.stringify(pts) === JSON.stringify(clip.speedCurve);
+                return (
+                  <button key={k} className={`curve-chip ${on ? 'on' : ''}`} onClick={() => set({ speedCurve: k === 'none' ? null : k })} title={label}>
+                    <svg viewBox="0 0 48 24" aria-hidden>
+                      <polyline points={pts ? pts.map((p) => `${p.x * 48},${(1 - (Math.log2(Math.max(0.1, p.speed)) + 3.4) / 6.8) * 22 + 1}`).join(' ') : '0,12 48,12'} />
+                    </svg>
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {clip.speedCurve && <CurveGraph points={clip.speedCurve} />}
+          </>
+        ) : (
+          <p className="small muted">Speed changes apply to videos.</p>
+        )}
       </Section>
       )}
       {at('audio') && (clip.type === 'audio' || (clip.type === 'media' && asset?.hasAudio)) && (
@@ -1303,35 +1417,43 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
           <label className="insp-check">
             <input type="checkbox" checked={clip.voice} onChange={(e) => set({ voice: e.target.checked })} /> Enhance voice
           </label>
-          <label className="insp-row">
-            <span>Equalizer</span>
-            <select className="select" value={clip.eq ? (Object.entries(EQ_PRESETS).find(([, v]) => v.low === clip.eq!.low && v.mid === clip.eq!.mid && v.high === clip.eq!.high)?.[0] ?? 'custom') : ''} onChange={(e) => e.target.value !== 'custom' && set({ eq: (e.target.value || null) as keyof typeof EQ_PRESETS | null })}>
-              <option value="">Flat</option>
-              <option value="voice">Clear voice</option>
-              <option value="warm">Warm</option>
-              <option value="bass">Bass boost</option>
-              <option value="bright">Bright</option>
-              <option value="phone">Phone call</option>
-              {clip.eq && !Object.values(EQ_PRESETS).some((v) => v.low === clip.eq!.low && v.mid === clip.eq!.mid && v.high === clip.eq!.high) && <option value="custom">Custom</option>}
-            </select>
-          </label>
+          <h5 className="insp-sub">Equalizer</h5>
+          <div className="chip-row">
+            {(
+              [
+                ['', 'Flat'],
+                ['voice', 'Clear voice'],
+                ['warm', 'Warm'],
+                ['bass', 'Bass boost'],
+                ['bright', 'Bright'],
+                ['phone', 'Phone call'],
+              ] as const
+            ).map(([k, label]) => {
+              const cur = clip.eq ? (Object.entries(EQ_PRESETS).find(([, v]) => v.low === clip.eq!.low && v.mid === clip.eq!.mid && v.high === clip.eq!.high)?.[0] ?? 'custom') : '';
+              return (
+                <button key={k} className={`chip-btn ${cur === k ? 'on' : ''}`} onClick={() => set({ eq: (k || null) as keyof typeof EQ_PRESETS | null })}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
           <div className="insp-grid" style={{ marginTop: 6 }}>
             <Num label="Bass" value={clip.eq?.low ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { low: v } })} />
             <Num label="Mids" value={clip.eq?.mid ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { mid: v } })} />
             <Num label="Treble" value={clip.eq?.high ?? 0} min={-12} max={12} step={1} suffix="dB" onCommit={(v) => set({ eq: { high: v } })} />
           </div>
           {!asset?.cleanOf && <CleanSoundButton projectId={project.id} clip={clip} />}
-          <label className="insp-row">
-            <span>Voice changer</span>
-            <select className="select" value={clip.voiceFx ?? ''} onChange={(e) => set({ voiceFx: (e.target.value || null) as VoiceFx | null })}>
-              <option value="">None</option>
-              {VOICE_FX.map((v) => (
-                <option key={v} value={v}>
-                  {VOICE_FX_LABEL[v]}
-                </option>
-              ))}
-            </select>
-          </label>
+          <h5 className="insp-sub">Voice changer</h5>
+          <div className="chip-row">
+            <button className={`chip-btn ${!clip.voiceFx ? 'on' : ''}`} onClick={() => set({ voiceFx: null })}>
+              None
+            </button>
+            {VOICE_FX.map((v) => (
+              <button key={v} className={`chip-btn ${clip.voiceFx === v ? 'on' : ''}`} onClick={() => set({ voiceFx: v as VoiceFx })}>
+                {VOICE_FX_LABEL[v].replace(/ \(.*\)$/, '')}
+              </button>
+            ))}
+          </div>
           {clip.type === 'audio' && (
             <label className="insp-check">
               <input type="checkbox" checked={clip.duck !== null} onChange={(e) => set({ duck: e.target.checked ? -14 : null })} /> Quieter while someone speaks (music)
@@ -1386,16 +1508,19 @@ function Inspector({ project, clip, time, onEdit, onFollow }: { project: Project
             </div>
           )}
           {clip.type === 'media' && (
-            <label className="insp-row">
-              <span>Blend</span>
-              <select className="select" value={clip.blend ?? 'normal'} onChange={(e) => set({ blend: e.target.value as Blend })} title="How this layer mixes with the ones under it (Screen for light leaks and smoke, Multiply for paper and shadows)">
+            <>
+              <h5 className="insp-sub" title="How this layer mixes with the ones under it (Screen for light leaks and smoke, Multiply for paper and shadows)">
+                Blend
+              </h5>
+              <div className="blend-grid">
                 {BLENDS.map((b) => (
-                  <option key={b} value={b}>
+                  <button key={b} className={`blend-chip b-${b} ${(clip.blend ?? 'normal') === b ? 'on' : ''}`} onClick={() => set({ blend: b as Blend })}>
+                    <i />
                     {b[0]!.toUpperCase() + b.slice(1)}
-                  </option>
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+            </>
           )}
           <PositionFields clip={clip} time={time} fps={project.fps} set={set} />
           <p className="small muted insp-tip-inline">◆ animates a value: move the playhead, change the value, and Keo makes the in-between.</p>
@@ -1496,19 +1621,9 @@ function CleanSoundButton({ projectId, clip }: { projectId: string; clip: MediaC
 
 function ColorFields({ clip, set }: { clip: MediaClip | AdjustClip; set: (patch: Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>) => void }) {
   const g = clip.color ?? { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
-  const field = (k: keyof typeof g, label: string, min = -1) => (
-    <label className="insp-range" key={`${clip.id}-${k}-${g[k]}`}>
-      <span>{label}</span>
-      <input
-        type="range"
-        min={min * 100}
-        max={100}
-        defaultValue={Math.round(g[k] * 100)}
-        onPointerUp={(e) => set({ color: { [k]: Number((e.target as HTMLInputElement).value) / 100 } })}
-        onKeyUp={(e) => set({ color: { [k]: Number((e.target as HTMLInputElement).value) / 100 } })}
-      />
-      <em>{Math.round(g[k] * 100)}</em>
-    </label>
+  const [pro, setPro] = useState(() => proGrade(clip.color));
+  const field = (k: 'exposure' | 'contrast' | 'saturation' | 'temperature' | 'vignette', label: string, min = -1) => (
+    <Num key={k} label={label} value={Math.round(g[k] * 100)} min={min * 100} max={100} step={1} onCommit={(v) => set({ color: { [k]: v / 100 } })} />
   );
   return (
     <Section title="Colour">
@@ -1517,6 +1632,10 @@ function ColorFields({ clip, set }: { clip: MediaClip | AdjustClip; set: (patch:
       {field('saturation', 'Saturation')}
       {field('temperature', 'Warmth')}
       {field('vignette', 'Vignette', 0)}
+      <button className="btn sm ghost" onClick={() => setPro((v) => !v)} aria-expanded={pro}>
+        {pro ? 'Fewer colour tools' : 'Pro colour: light, HSL, curve, LUT…'}
+      </button>
+      {pro && <ProColor clipId={clip.id} grade={clip.color} set={(p) => set(p)} />}
       {clip.color && (
         <button className="btn sm ghost" onClick={() => set({ color: null })}>
           Reset colour
@@ -1542,32 +1661,12 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
         <div className="insp-grid">
           <label className="insp-num wide">
             <span>Font</span>
-            <select className="select" value={st.font} onChange={(e) => set({ style: { font: e.target.value } })}>
-              <optgroup label="Keo fonts">
-                {KEO_FONTS.map((f) => (
-                  <option key={f} style={{ fontFamily: `"${f}"` }}>
-                    {f}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Windows fonts">
-                {SYSTEM_FONTS.map((f) => (
-                  <option key={f}>{f}</option>
-                ))}
-              </optgroup>
-              {![...KEO_FONTS, ...SYSTEM_FONTS].includes(st.font as never) && <option>{st.font}</option>}
-            </select>
+            <FontPicker value={st.font} label="" onPick={(f) => f && set({ style: { font: f } })} />
           </label>
           <Num label="Size" value={st.sizePct} min={1} max={40} step={0.5} suffix="%" onCommit={(v) => set({ style: { sizePct: v } })} />
-          <label className="insp-num">
-            <span>Weight</span>
-            <select className="select" value={st.weight} onChange={(e) => set({ style: { weight: e.target.value as TextClip['style']['weight'] } })}>
-              <option value="normal">Regular</option>
-              <option value="bold">Bold</option>
-              <option value="black">Black</option>
-            </select>
-          </label>
+          <Seg label="Weight" value={st.weight} options={[['normal', 'Regular'], ['bold', 'Bold'], ['black', 'Black']]} onPick={(w) => set({ style: { weight: w } })} />
           <Num label="Spacing" value={st.letterSpacing} min={-5} max={40} step={0.5} onCommit={(v) => set({ style: { letterSpacing: v } })} />
+          <Num label="Line height" value={st.lineHeight} min={0.6} max={3} step={0.05} onCommit={(v) => set({ style: { lineHeight: v } })} />
           <Num label="Curve" value={st.curve} min={-200} max={200} step={5} onCommit={(v) => set({ style: { curve: v } })} />
         </div>
         <div className="insp-seg" role="radiogroup" aria-label="Align">
@@ -1580,6 +1679,9 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
         <label className="insp-check">
           <input type="checkbox" checked={st.uppercase} onChange={(e) => set({ style: { uppercase: e.target.checked } })} /> Capitals
         </label>
+        <label className="insp-check">
+          <input type="checkbox" checked={st.italic} onChange={(e) => set({ style: { italic: e.target.checked } })} /> Italic
+        </label>
       </Section>
       <Section title="Look">
         <div className="insp-grid">
@@ -1587,7 +1689,7 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
           <label className="insp-color">
             <span>Gradient</span>
             <input type="checkbox" checked={!!st.color2} onChange={(e) => set({ style: { color2: e.target.checked ? '#8B6BFF' : null } })} />
-            {st.color2 && <input type="color" value={st.color2.slice(0, 7)} onChange={(e) => set({ style: { color2: e.target.value.toUpperCase() } })} />}
+            {st.color2 && <Swatch value={st.color2} onCommit={(c) => set({ style: { color2: c } })} />}
           </label>
           <Num label="Outline" value={st.outline} min={0} max={20} step={1} onCommit={(v) => set({ style: { outline: v } })} />
           <Color label="Outline colour" value={st.outlineColor} onCommit={(v) => set({ style: { outlineColor: v } })} />
@@ -1597,12 +1699,23 @@ function TextFields({ clip, set }: { clip: TextClip; set: (patch: Omit<Extract<E
           <label className="insp-color">
             <span>Box</span>
             <input type="checkbox" checked={st.box} onChange={(e) => set({ style: { box: e.target.checked } })} />
-            {st.box && <input type="color" value={st.boxColor.slice(0, 7)} onChange={(e) => set({ style: { boxColor: `${e.target.value.toUpperCase()}B3` } })} />}
+            {st.box && <Swatch value={st.boxColor} onCommit={(c) => set({ style: { boxColor: `${c}${st.boxColor.slice(7, 9) || 'B3'}` } })} />}
           </label>
+          {st.box && (
+            <Num
+              label="Box opacity"
+              value={Math.round((parseInt(st.boxColor.slice(7, 9) || 'FF', 16) / 255) * 100)}
+              min={0}
+              max={100}
+              step={5}
+              suffix="%"
+              onCommit={(v) => set({ style: { boxColor: `${st.boxColor.slice(0, 7)}${Math.round((Math.max(0, Math.min(100, v)) / 100) * 255).toString(16).padStart(2, '0').toUpperCase()}` } })}
+            />
+          )}
           <label className="insp-color">
             <span>Highlight</span>
             <input type="checkbox" checked={!!clip.highlight} onChange={(e) => set({ highlight: e.target.checked ? '#FFD400' : null })} />
-            {clip.highlight && <input type="color" value={clip.highlight.slice(0, 7)} onChange={(e) => set({ highlight: e.target.value.toUpperCase() })} />}
+            {clip.highlight && <Swatch value={clip.highlight} onCommit={(c) => set({ highlight: c })} />}
           </label>
         </div>
       </Section>

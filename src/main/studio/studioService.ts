@@ -1,16 +1,17 @@
+import { LUT_NAME, lutNameOf, parseCube } from '../../shared/studioLut';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, replaceWords, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, replaceWords, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion, type Span } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
 import { SoundLibrary } from './soundLibrary';
-import { Brand, patchBrand, respell, type BrandPatch } from '../../shared/studioBrand';
+import { Brand, patchBrand, respell, type BrandFileKind, type BrandPatch } from '../../shared/studioBrand';
 import { Character, type CharacterPatch } from '../../shared/studioCharacters';
-import { fixIssues, issueKey, reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
+import { faceOf, fixIssues, issueKey, reviewEdit, reviewTimes, type ReviewIssue, type ReviewSample } from '../../shared/studioReview';
 import { MomentNeeds, momentOps, placeMoments, type MomentId, type MomentOptions } from '../../shared/studioMoments';
 import { guessEmphasis, StyleError, styleOps, type StyleId, type StyleOptions } from '../../shared/studioStyles';
 import { viralPlan, type ViralId } from '../../shared/studioViral';
@@ -125,9 +126,26 @@ export function showcaseFromTimeline(p: Project): ShowcaseRecord | null {
   return { title: p.name, scenes, voice: voiced ? 'female' : 'none', look: light ? 'light' : 'dark', captions: captions.length > 0 };
 }
 
+/** A map whose entry for a project is read from disk the first time it is asked for. */
+class LazyMap<V> extends Map<string, V> {
+  constructor(private readonly load: (id: string) => void) {
+    super();
+  }
+  override get(id: string): V | undefined {
+    this.load(id);
+    return super.get(id);
+  }
+}
+
+/** The most undo history kept on disk per project (newest kept first). */
+const HISTORY_BYTES = 24 * 1024 * 1024;
+
 export class StudioService {
-  private readonly undo = new Map<string, Project[]>();
-  private readonly redo = new Map<string, Project[]>();
+  // Undo and redo survive a restart: kept beside the project (history/<id>.json), read when first needed.
+  private readonly undo = new LazyMap<Project[]>((id) => this.loadHistory(id));
+  private readonly redo = new LazyMap<Project[]>((id) => this.loadHistory(id));
+  private readonly historyLoaded = new Set<string>();
+  private readonly historyTimers = new Map<string, NodeJS.Timeout>();
   private readonly readers = new Map<string, Mp4Reader | null>();
   private readonly jobs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly exports = new Map<string, { writer: Mp4Writer; file: string; projectId: string }>();
@@ -264,7 +282,81 @@ export class StudioService {
     const tmp = `${f}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(p));
     fs.renameSync(tmp, f);
+    this.keepHistory(p.id);
     if (notify) this.d.changed?.(p);
+  }
+
+  private historyFile(id: string): string {
+    this.file(id);
+    return path.join(this.d.dir, 'history', `${id}.json`);
+  }
+
+  /** Reads a project's undo and redo from disk once (a damaged file is ignored: the edit itself is safe). */
+  private loadHistory(id: string): void {
+    if (this.historyLoaded.has(id)) return;
+    this.historyLoaded.add(id);
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.historyFile(id), 'utf8')) as { undo?: unknown[]; redo?: unknown[]; undoLabels?: string[]; redoLabels?: string[] };
+      const read = (list: unknown[] | undefined) => (list ?? []).flatMap((x) => {
+        const r = Project.safeParse(x);
+        return r.success ? [r.data] : [];
+      });
+      const undo = read(raw.undo);
+      const redo = read(raw.redo);
+      if (undo.length) Map.prototype.set.call(this.undo, id, undo);
+      if (redo.length) Map.prototype.set.call(this.redo, id, redo);
+      if (raw.undoLabels?.length) this.undoLabels.set(id, raw.undoLabels.slice(-undo.length));
+      if (raw.redoLabels?.length) this.redoLabels.set(id, raw.redoLabels.slice(-redo.length));
+    } catch {
+      /* no history yet */
+    }
+  }
+
+  /** Writes the undo and redo a moment after the last change. */
+  private keepHistory(id: string): void {
+    clearTimeout(this.historyTimers.get(id));
+    const timer = setTimeout(() => {
+      this.historyTimers.delete(id);
+      this.writeHistory(id);
+    }, 1500);
+    timer.unref?.();
+    this.historyTimers.set(id, timer);
+  }
+
+  /** Writes any undo history still waiting (on close, and in tests). */
+  flushHistory(): void {
+    for (const [id, t] of [...this.historyTimers]) {
+      clearTimeout(t);
+      this.historyTimers.delete(id);
+      this.writeHistory(id);
+    }
+  }
+
+  /** The undo and redo on disk: newest first, within a size limit. */
+  private writeHistory(id: string): void {
+    try {
+      const take = (list: Project[], budget: number) => {
+        const out: string[] = [];
+        let used = 0;
+        for (let i = list.length - 1; i >= 0; i--) {
+          const s = JSON.stringify(list[i]);
+          if (used + s.length > budget) break;
+          used += s.length;
+          out.unshift(s);
+        }
+        return { out, used };
+      };
+      const u = take((Map.prototype.get.call(this.undo, id) as Project[] | undefined) ?? [], HISTORY_BYTES);
+      const r = take((Map.prototype.get.call(this.redo, id) as Project[] | undefined) ?? [], Math.max(0, HISTORY_BYTES - u.used));
+      const ul = u.out.length ? (this.undoLabels.get(id) ?? []).slice(-u.out.length) : [];
+      const rl = r.out.length ? (this.redoLabels.get(id) ?? []).slice(-r.out.length) : [];
+      const f = this.historyFile(id);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(`${f}.tmp`, `{"undo":[${u.out.join(',')}],"redo":[${r.out.join(',')}],"undoLabels":${JSON.stringify(ul)},"redoLabels":${JSON.stringify(rl)}}`);
+      fs.renameSync(`${f}.tmp`, f);
+    } catch (e) {
+      this.d.log.warn('studio.history_not_saved', { error: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   // ---------------------------------------------------------------- watching Keo edit
@@ -516,6 +608,9 @@ export class StudioService {
     fs.rmSync(this.file(id), { force: true });
     fs.rmSync(path.join(this.d.dir, 'backups', id), { recursive: true, force: true });
     fs.rmSync(path.join(this.d.dir, 'versions', id), { recursive: true, force: true });
+    clearTimeout(this.historyTimers.get(id));
+    this.historyTimers.delete(id);
+    fs.rmSync(this.historyFile(id), { force: true });
     this.undo.delete(id);
     this.redo.delete(id);
     if (this.current === id) this.current = null;
@@ -621,6 +716,22 @@ export class StudioService {
   }
 
   /** One more edit that undoes together with the edit just before it (one step in the undo list). */
+  /** More edits that belong to the last step (one undo takes both back). */
+  followUp(id: string, ops: EditOp[]): { project: Project; changes: string[] } {
+    if (!ops.length) return { project: this.get(id), changes: [] };
+    const r = this.edit(id, ops);
+    this.undo.get(id)?.pop();
+    this.undoLabels.get(id)?.pop();
+    return r;
+  }
+
+  /** The last edit becomes part of the one before it (one undo takes both back). */
+  joinLastStep(id: string): void {
+    if ((this.undo.get(id)?.length ?? 0) < 2) return;
+    this.undo.get(id)?.pop();
+    this.undoLabels.get(id)?.pop();
+  }
+
   private mergeLast(id: string, op: EditOp): { project: Project; changes: string[] } {
     const r = this.edit(id, [op]);
     this.undo.get(id)?.pop();
@@ -865,6 +976,17 @@ export class StudioService {
     }
   }
 
+  /** Runs `fn` with a project that exists only for it (saved where the render window can read it, removed after). */
+  async withTempProject<T>(p: Project, fn: (id: string) => Promise<T>): Promise<T> {
+    const file = this.file(p.id);
+    fs.writeFileSync(file, JSON.stringify(Project.parse(p)));
+    try {
+      return await fn(p.id);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  }
+
   frames(id: string, times: number[], width = 540): Promise<Array<{ time: number; png: Buffer }>> {
     const p = this.get(id);
     const dur = projectDuration(p);
@@ -897,6 +1019,23 @@ export class StudioService {
     const next = Project.parse(fix(this.get(id)));
     this.save(next);
     return next;
+  }
+
+  /** Where people speak in these media files (measured on this PC once, then remembered; nothing is sent anywhere). */
+  async speechOf(id: string, assetIds: string[], signal?: AbortSignal): Promise<Record<string, Span[]>> {
+    const out: Record<string, Span[]> = {};
+    for (const aid of assetIds) {
+      if (signal?.aborted) throw new StudioError('Stopped.');
+      const a = this.get(id).assets.find((x) => x.id === aid);
+      if (!a || a.kind === 'image' || !a.hasAudio) continue;
+      if (a.speech) {
+        out[aid] = a.speech;
+        continue;
+      }
+      const s = await this.assetSound(id, aid);
+      out[aid] = this.learn(id, aid, { speech: s ? voicedSpans(s.samples, s.rate) : [] }).assets.find((x) => x.id === aid)?.speech ?? [];
+    }
+    return out;
   }
 
   /**
@@ -1044,14 +1183,14 @@ export class StudioService {
   async captions(
     id: string,
     t: { words?: (wav: Buffer, signal: AbortSignal) => Promise<Word[]>; text?: (wav: Buffer, signal: AbortSignal) => Promise<string> },
-    o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; signal: AbortSignal; progress?: (done: number, total: number) => void },
+    o: { maxWords?: number; style?: Partial<TextStyle>; highlight?: string | null; animIn?: Extract<EditOp, { op: 'add_captions' }>['animIn']; transform?: { x?: number; y?: number }; signal: AbortSignal; progress?: (done: number, total: number) => void },
   ): Promise<{ project: Project; lines: CaptionLine[]; words: number; exact: boolean; skipped: number; fixed: WordFix[] }> {
     if (projectDuration(this.get(id)) === 0) throw new StudioError('The timeline is empty: add a video with speech first.');
     const heard = await this.transcribe(id, t, { signal: o.signal, ...(o.progress ? { progress: o.progress } : {}) });
     const words = this.spokenWords(this.get(id));
     if (!words.length) throw new StudioError('No spoken words were found in the timeline’s sound.');
     const lines = captionLines(words, { maxWords: o.maxWords ?? 3 });
-    const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}) }]);
+    const r = this.edit(id, [{ op: 'add_captions', lines, replace: true, ...(o.style ? { style: o.style } : {}), ...(o.highlight !== undefined ? { highlight: o.highlight } : {}), ...(o.animIn ? { animIn: o.animIn } : {}), ...(o.transform ? { transform: o.transform } : {}) }]);
     this.d.log.info('studio.captions', { lines: lines.length, words: words.length });
     return { project: r.project, lines, words: words.length, exact: words.every((w) => w.exact), skipped: heard.skipped, fixed: heard.fixed };
   }
@@ -1178,6 +1317,57 @@ export class StudioService {
     if (seconds > 0 && p.duration < Math.max(0.5, seconds * 0.5)) return `it lasts ${p.duration.toFixed(1)} s instead of about ${Math.round(seconds)} s`;
     if (Math.min(p.width, p.height) < 240) return `it is only ${p.width}×${p.height} pixels`;
     return null;
+  }
+
+  // ---------------------------------------------------------------- colour LUTs
+
+  private lutDir(): string {
+    return path.join(this.d.dir, 'luts');
+  }
+
+  /** The LUTs the user imported (their names), A to Z. */
+  luts(): string[] {
+    const dir = this.lutDir();
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.cube'))
+      .map((f) => f.slice(0, -5))
+      .filter((n) => LUT_NAME.test(n))
+      .sort();
+  }
+
+  /** Keeps a .cube LUT for all projects (checked first; a LUT of the same name is replaced). */
+  importLut(file: string): { name: string; size: number } {
+    if (!/\.cube$/i.test(file)) throw new StudioError('Choose a .cube file (the LUT format editors and cameras use).');
+    let text: string;
+    try {
+      const st = fs.statSync(file);
+      if (st.size > 40 * 1024 * 1024) throw new StudioError('That LUT file is too large (over 40 MB).');
+      text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      if (e instanceof StudioError) throw e;
+      throw new StudioError('Keo could not read that file.');
+    }
+    let size: number;
+    try {
+      size = parseCube(text).size;
+    } catch (e) {
+      throw new StudioError(`That LUT cannot be used: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const name = lutNameOf(path.basename(file));
+    fs.mkdirSync(this.lutDir(), { recursive: true });
+    fs.writeFileSync(path.join(this.lutDir(), `${name}.cube`), text);
+    this.d.log.info('studio.lut_imported', { size });
+    return { name, size };
+  }
+
+  /** A LUT's text, by name (never a path from outside). */
+  lutText(name: string): string {
+    if (!LUT_NAME.test(name)) throw new StudioError('That is not a LUT name.');
+    const f = path.join(this.lutDir(), `${name}.cube`);
+    if (!fs.existsSync(f)) throw new StudioError(`There is no LUT called "${name}". Import it again in the Adjust tab.`);
+    return fs.readFileSync(f, 'utf8');
   }
 
   /** What Keo saw in a media file, kept with it. */
@@ -1332,6 +1522,48 @@ export class StudioService {
     this.saveCharacters(this.characters().map((x) => (x.id === id ? next : x)));
     if (voiceSample && path.resolve(voiceSample).startsWith(path.resolve(this.charactersDir) + path.sep)) fs.rmSync(voiceSample, { force: true });
     return next;
+  }
+
+  /** Keeps a logo, intro or outro in the brand kit (a copy in Studio's library; the old one is replaced). */
+  setBrandFile(kind: BrandFileKind, file: string): Brand {
+    const k = kindOfFile(file);
+    if (kind === 'logo' ? k !== 'image' : k !== 'video' && k !== 'image') throw new StudioError(kind === 'logo' ? 'A logo is a picture: choose a PNG (best with a clear background), JPG or WebP.' : `An ${kind} is a short video or a picture.`);
+    const lib = path.join(this.d.dir, 'library');
+    fs.mkdirSync(lib, { recursive: true });
+    for (const f of fs.readdirSync(lib)) if (f.startsWith(`brand-${kind}.`)) fs.rmSync(path.join(lib, f), { force: true });
+    const name = `brand-${kind}${path.extname(file).toLowerCase()}`;
+    fs.copyFileSync(file, path.join(lib, name));
+    return this.setBrand({ [kind]: name });
+  }
+
+  /** Where a brand kit file is on this PC (null when none is saved). */
+  brandFile(kind: BrandFileKind): string | null {
+    const name = this.brand()[kind];
+    const f = name ? path.join(this.d.dir, 'library', name) : null;
+    return f && fs.existsSync(f) ? f : null;
+  }
+
+  /**
+   * Puts the brand's logo, intro or outro into a project: the logo small in the top corner for the
+   * whole video, the intro at the start (everything else moves later), the outro after the end.
+   */
+  async useBrand(id: string, kind: BrandFileKind): Promise<{ project: Project; changes: string[] }> {
+    const file = this.brandFile(kind);
+    if (!file) throw new StudioError(`There is no ${kind} in your brand kit yet: add one in Details → Brand kit.`);
+    const imported = await this.importFiles(id, [file]);
+    const asset = imported.added[0] ?? imported.project.assets.find((a) => path.resolve(a.path).toLowerCase() === path.resolve(file).toLowerCase());
+    if (!asset) throw new StudioError(`Keo could not read the ${kind} file.`);
+    const p = this.get(id);
+    const length = asset.kind === 'image' ? (kind === 'logo' ? 0 : 2.5) : Math.max(0.5, asset.duration);
+    if (kind === 'logo') {
+      const total = Math.max(1, projectDuration(p));
+      return this.edit(id, [{ op: 'add_media', assetId: asset.id, start: 0, duration: total, trackName: 'Logo', fit: 'contain', transform: { x: 0.88, y: 0.09, scale: 0.16, rotation: 0, opacity: 0.95 } }]);
+    }
+    if (kind === 'outro') return this.edit(id, [{ op: 'add_media', assetId: asset.id, start: projectDuration(p), duration: length }]);
+    // The intro: every clip moves later by its length, then it goes first on the bottom video track.
+    const later: EditOp[] = p.tracks.flatMap((t) => [...t.clips].sort((a, b) => b.start - a.start).map((c) => ({ op: 'move' as const, clip: c.id, start: c.start + length })));
+    const base = p.tracks.find((t) => t.kind === 'video');
+    return this.edit(id, [...later, { op: 'add_media', assetId: asset.id, start: 0, duration: length, ...(base ? { track: base.id } : {}) }]);
   }
 
   /** The user's brand kit (for every project). */
@@ -1492,6 +1724,35 @@ export class StudioService {
     const r = this.edit(id, built.ops);
     this.d.log.info('studio.motion_edit', { beats: beats.length, placed: built.placed.length, missed: built.missed.length, people: people.filter((x) => x.box).length });
     return { project: r.project, placed: built.placed, missed: built.missed };
+  }
+
+  /** Black bars baked into a video's picture (shares of each edge), measured on this PC; none when it cannot be measured. */
+  async videoBars(id: string, assetId: string): Promise<{ left: number; top: number; right: number; bottom: number }> {
+    const a = this.get(id).assets.find((x) => x.id === assetId);
+    const none = { left: 0, top: 0, right: 0, bottom: 0 };
+    if (!a || a.kind !== 'video' || a.duration <= 0) return none;
+    try {
+      const times = [0.15, 0.35, 0.55, 0.75, 0.9].map((f) => Math.round(a.duration * f * 100) / 100);
+      return await this.runJob<typeof none>({ kind: 'bars', projectId: id, assetId, times }, 60_000);
+    } catch {
+      return none;
+    }
+  }
+
+  /**
+   * Where the speaker's face is (top and bottom, fractions of the frame) across a few moments of
+   * the timeline, measured on this PC; null when no one was found.
+   */
+  async faceBand(id: string, times: number[]): Promise<{ y0: number; y1: number } | null> {
+    try {
+      const samples = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times }, 2 * 60_000);
+      const faces = samples.map((s) => (s.person ? faceOf(s.person) : null)).filter((f): f is NonNullable<typeof f> => !!f);
+      if (!faces.length) return null;
+      const mid = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+      return { y0: Math.round(mid(faces.map((f) => f.y0)) * 1000) / 1000, y1: Math.round(mid(faces.map((f) => f.y1)) * 1000) / 1000 };
+    } catch {
+      return null;
+    }
   }
 
   /** Where the speaker is in the talking video at time t (null: no one found, or it could not be measured). */
@@ -2140,13 +2401,15 @@ export class StudioService {
     const o = ExportOptions.parse(opts);
     const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
     if (o.name) this.exportNames.set(exportId, o.name);
+    if (o.format === 'mov') this.exportMov.add(exportId);
     this.running.set(id, exportId);
-    if (o.format !== 'mp4') return await this.exportFileAs(id, exportId, o.format, o.name).finally(() => {
+    if (o.format === 'gif' || o.format === 'wav') return await this.exportFileAs(id, exportId, o.format, o.name).finally(() => {
       if (this.running.get(id) === exportId) this.running.delete(id);
     });
     const size = { ...exportSize(p, o), quality: o.quality };
     const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId, size }, 6 * 60 * 60 * 1000).finally(() => {
       this.exportNames.delete(exportId);
+      this.exportMov.delete(exportId);
       if (this.running.get(id) === exportId) this.running.delete(id);
     });
     this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames });
@@ -2227,6 +2490,9 @@ export class StudioService {
     return { file, durationSec: r.durationSec, frames: r.frames, bytes: data.length };
   }
 
+  /** Exports to be written as QuickTime .mov. */
+  private readonly exportMov = new Set<string>();
+
   /** The render window starts writing the export (its encoder told it the video's avcC). */
   beginExport(exportId: string, projectId: string, video: WriterVideo, audio: WriterAudio | null): void {
     const p = this.get(projectId);
@@ -2235,9 +2501,11 @@ export class StudioService {
     fs.mkdirSync(dir, { recursive: true });
     // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
     const base = (this.exportNames.get(exportId) ?? p.name).replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
-    let file = target ?? path.join(dir, `${base}.mp4`);
-    for (let n = 2; !target && fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).mp4`);
-    this.exports.set(exportId, { writer: new Mp4Writer(file, video, audio), file, projectId });
+    const mov = this.exportMov.has(exportId);
+    const ext = mov ? 'mov' : 'mp4';
+    let file = target ?? path.join(dir, `${base}.${ext}`);
+    for (let n = 2; !target && fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).${ext}`);
+    this.exports.set(exportId, { writer: new Mp4Writer(file, video, audio, mov), file, projectId });
   }
 
   exportChunk(exportId: string, kind: 'video' | 'audio', data: Uint8Array, timeUs: number, durationUs: number, key: boolean): void {

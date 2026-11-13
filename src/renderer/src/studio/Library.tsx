@@ -1,5 +1,7 @@
+import { EditDnaPanel } from './EditDna';
+import { EffectGallery, FontGallery, GALLERY_GROUPS, LookGallery, ShapeGallery, TemplateGallery, TextStyleGallery, TransitionGallery } from './LiveGallery';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CAPTIONS_TRACK, CAPTION_STYLE, findClip, LOOKS, TRANSITIONS, type Asset, type Clip, type EditOp, type LookId, type Project, type TextStyle } from '@shared/studio';
+import { CAPTIONS_TRACK, CAPTION_STYLE, findClip, LOOKS, TRANSITIONS, type Asset, type Clip, type EditOp, type Project, type TextStyle } from '@shared/studio';
 import { EFFECT_KINDS, GENRE_LABEL, MUSIC_GENRES, type Sound } from '@shared/studioSounds';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -10,9 +12,7 @@ import { ViralTemplates } from './ViralTemplates';
 import { CharacterPictures } from './CharacterPictures';
 import { Templates } from './Templates';
 import { Looks } from './Looks';
-import { EMOJI, TEXT_STYLES, Tile } from './Bin';
-import { ElementsPanel } from './MotionFields';
-import { TRANSITION_LABEL } from './Timeline';
+import { EMOJI, Tile } from './Bin';
 import { VoiceRecorder } from './VoiceTools';
 import { AiAudio } from './AiAudio';
 
@@ -23,9 +23,11 @@ import { AiAudio } from './AiAudio';
  * timeline or added with +.
  */
 
-type Tab = 'media' | 'audio' | 'text' | 'stickers' | 'effects' | 'transitions' | 'captions' | 'filters' | 'smart';
+type Tab = 'media' | 'dna' | 'templates' | 'audio' | 'text' | 'stickers' | 'effects' | 'transitions' | 'captions' | 'filters' | 'smart';
 const TABS: Array<[Tab, string, string]> = [
   ['media', 'Media', 'film'],
+  ['dna', 'Edit DNA', 'pulse'],
+  ['templates', 'Templates', 'sparkle'],
   ['audio', 'Audio', 'music'],
   ['text', 'Text', 'text'],
   ['stickers', 'Stickers', 'sticker'],
@@ -41,6 +43,8 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
     ['video', 'Videos'],
     ['image', 'Pictures'],
   ],
+  dna: [['all', 'Library']],
+  templates: [['all', 'All'], ...GALLERY_GROUPS.map((c) => [c, c] as [string, string])],
   audio: [
     ['music', 'Music'],
     ['effect', 'Sound effects'],
@@ -50,8 +54,8 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
   ],
   text: [
     ['add', 'Add text'],
-    ['styles', 'Text styles'],
-    ['titles', 'Motion titles'],
+    ['styles', 'Styles'],
+    ['fonts', 'Fonts'],
   ],
   stickers: [
     ['emoji', 'Emoji'],
@@ -72,22 +76,6 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
   ],
 };
 
-const EFFECTS: Array<['grain' | 'vhs' | 'glow' | 'rgbSplit' | 'lightLeak', string, string]> = [
-  ['grain', 'Film grain', 'linear-gradient(135deg,#6b5b4a,#3a322a)'],
-  ['vhs', 'VHS', 'repeating-linear-gradient(0deg,#2a3b5c 0 3px,#3d5786 3px 6px)'],
-  ['glow', 'Glow', 'radial-gradient(circle,#fff6c9,#d08b2c 70%)'],
-  ['rgbSplit', 'RGB split', 'linear-gradient(90deg,#ff2a55,#2ae5ff)'],
-  ['lightLeak', 'Light leak', 'linear-gradient(120deg,#ff7a18,#ffd200 40%,#2b1055)'],
-];
-const LOOK_SWATCH: Record<LookId, string> = {
-  natural: 'linear-gradient(135deg,#7fa7c9,#c9b68f)',
-  warm: 'linear-gradient(135deg,#e8a15a,#7a4320)',
-  cool: 'linear-gradient(135deg,#5ab3e8,#20437a)',
-  punchy: 'linear-gradient(135deg,#ff3d7f,#ffd400)',
-  cinematic: 'linear-gradient(135deg,#1f6f78,#e39b55)',
-  'black-white': 'linear-gradient(135deg,#eee,#222)',
-};
-const LOOK_LABEL: Record<LookId, string> = { natural: 'Natural', warm: 'Warm', cool: 'Cool', punchy: 'Punchy', cinematic: 'Cinematic', 'black-white': 'Black & white' };
 /** Caption looks applied to every line on the Captions track. */
 const CAPTION_LOOKS: Array<{ id: string; label: string; style: Partial<TextStyle>; highlight?: string | null; y?: number; css: React.CSSProperties }> = [
   { id: 'bold', label: 'Bold pop', style: { ...CAPTION_STYLE }, highlight: '#FFD400', css: { fontWeight: 900, textTransform: 'uppercase', WebkitTextStroke: '1px #000', color: '#fff' } },
@@ -109,6 +97,7 @@ export function Library({
   onCaptions,
   captioning,
   onAskKeo,
+  onDnaApplied,
 }: {
   project: Project;
   time: number;
@@ -119,10 +108,12 @@ export function Library({
   onCaptions: () => void;
   captioning: boolean;
   onAskKeo: (text: string) => void;
+  /** An Edit DNA was applied: its new clips (selected) and where they start (the playhead goes there). */
+  onDnaApplied?: (r: { clipIds: string[]; start: number }) => void;
 }) {
   const ui = useUi();
   const [tab, setTab] = useState<Tab>('media');
-  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'viral' });
+  const [cat, setCat] = useState<Record<Tab, string>>({ media: 'all', dna: 'all', templates: 'all', audio: 'music', text: 'add', stickers: 'emoji', effects: 'video', transitions: 'all', captions: 'auto', filters: 'looks', smart: 'viral' });
   const sel = selected ? (findClip(project, selected)?.clip ?? null) : null;
   const now = cat[tab];
   const run = (ops: EditOp[]) => void onEdit(ops).catch((e: unknown) => ui.error(errText(e)));
@@ -137,15 +128,19 @@ export function Library({
         ))}
       </div>
       <div className="lib-body">
-        <nav className="lib-cats" aria-label="Categories">
-          {CATEGORIES[tab].map(([id, label]) => (
-            <button key={id} className={now === id ? 'on' : ''} onClick={() => setCat((c) => ({ ...c, [tab]: id }))}>
-              {label}
-            </button>
-          ))}
-        </nav>
+        {CATEGORIES[tab].length > 1 && (
+          <nav className="lib-chiprow" aria-label="Categories">
+            {CATEGORIES[tab].map(([id, label]) => (
+              <button key={id} className={now === id ? 'on' : ''} onClick={() => setCat((c) => ({ ...c, [tab]: id }))}>
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
         <div className="lib-items">
           {tab === 'media' && <MediaItems project={project} time={time} kind={now as 'all' | 'video' | 'image'} onImport={onImport} onAddAsset={onAddAsset} onEdit={onEdit} />}
+          {tab === 'dna' && <EditDnaPanel project={project} onAskKeo={onAskKeo} onImport={onImport} {...(onDnaApplied ? { onApplied: onDnaApplied } : {})} />}
+          {tab === 'templates' && <TemplateGallery project={project} time={time} group={now} onEdit={onEdit} />}
           {tab === 'audio' && (now === 'music' || now === 'effect') && <SoundItems key={now} project={project} kind={now} time={time} />}
           {tab === 'audio' && now === 'project' && <ProjectSounds project={project} onAddAsset={onAddAsset} sel={sel} onEdit={run} />}
           {tab === 'audio' && now === 'ai' && <AiAudio project={project} time={time} />}
@@ -156,33 +151,27 @@ export function Library({
             </div>
           )}
           {tab === 'text' && now === 'add' && (
-            <div className="lib-grid">
-              <button className="lib-card text-default" onClick={() => run([{ op: 'add_text', text: 'Your text', start: time, duration: 3 }])} title="Add plain text at the playhead">
-                <span className="lib-card-art">Aa</span>
-                <span>Default text</span>
+            <div className="text-add">
+              <button className="text-add-main" onClick={() => run([{ op: 'add_text', text: 'Your text', start: time, duration: 3 }])} title="Add text at the playhead">
+                <span>+</span> Add text
               </button>
-            </div>
-          )}
-          {tab === 'text' && now === 'styles' && (
-            <div className="style-grid">
-              {TEXT_STYLES.map((s) => (
-                <button
-                  key={s.id}
-                  className="style-tile"
-                  title={`Add “${s.label}” at the playhead`}
-                  draggable
-                  onDragStart={(e) => e.dataTransfer.setData('application/x-keo-text', s.id)}
-                  onClick={() => run([{ op: 'add_text', text: s.id === 'quote' ? '“Your words here”' : s.id === 'caption' ? 'SAY IT LOUD' : s.label === 'Title' ? 'YOUR TITLE' : 'Your text', start: time, duration: s.duration ?? 3, style: s.style, animIn: s.animIn, animOut: s.animOut ?? 'fade', transform: s.y ? { y: s.y } : {} }])}
-                >
-                  <span className="style-sample" style={s.css}>
-                    {s.sample}
-                  </span>
-                  <span className="style-label">{s.label}</span>
+              <div className="text-add-kinds">
+                <button className="text-kind h" onClick={() => run([{ op: 'add_text', text: 'Heading', start: time, duration: 3, style: { sizePct: 8, weight: 'black' }, animIn: 'pop' }])}>
+                  Heading
                 </button>
-              ))}
+                <button className="text-kind s" onClick={() => run([{ op: 'add_text', text: 'Subheading', start: time, duration: 3, style: { sizePct: 5, weight: 'bold' }, animIn: 'fade' }])}>
+                  Subheading
+                </button>
+                <button className="text-kind b" onClick={() => run([{ op: 'add_text', text: 'Body text', start: time, duration: 3, style: { sizePct: 3.6, weight: 'normal', shadow: 6 }, animIn: 'fade' }])}>
+                  Body text
+                </button>
+              </div>
+              <p className="lib-note small muted">Styles: ready-made looks, drawn live. Fonts: every font in its own lettering.</p>
+              <TextStyleGallery project={project} time={time} onEdit={onEdit} />
             </div>
           )}
-          {tab === 'text' && now === 'titles' && <ElementsPanel project={project} time={time} onEdit={onEdit} />}
+          {tab === 'text' && now === 'styles' && <TextStyleGallery project={project} time={time} onEdit={onEdit} />}
+          {tab === 'text' && now === 'fonts' && <FontGallery selected={sel} time={time} onEdit={onEdit} />}
           {tab === 'stickers' && now === 'emoji' && (
             <div className="emoji-grid">
               {EMOJI.map((e) => (
@@ -212,29 +201,17 @@ export function Library({
               ))}
             </div>
           )}
-          {tab === 'stickers' && now === 'shapes' && <ElementsPanel project={project} time={time} onEdit={onEdit} />}
+          {tab === 'stickers' && now === 'shapes' && <ShapeGallery project={project} time={time} onEdit={onEdit} />}
           {tab === 'effects' && (
-            <>
-              <p className="small muted lib-note">{sel?.type === 'media' || sel?.type === 'adjust' ? 'Click to put it on the selected clip (click again to take it off).' : 'Click to add it over everything at the playhead (an adjustment layer), or select a clip first.'}</p>
-              <div className="lib-grid">
-                {EFFECTS.map(([k, label, art]) => {
-                  const on = (sel?.type === 'media' || sel?.type === 'adjust') && !!sel.effects?.[k];
-                  return (
-                    <button
-                      key={k}
-                      className={`lib-card ${on ? 'on' : ''}`}
-                      onClick={() => {
-                        if (sel?.type === 'media' || sel?.type === 'adjust') run([{ op: 'set', clip: sel.id, effects: { [k]: on ? null : 0.6 } }]);
-                        else run([{ op: 'add_adjust', start: time, duration: 3, effects: { [k]: 0.6 } }]);
-                      }}
-                    >
-                      <span className="lib-card-art" style={{ background: art }} />
-                      <span>{label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
+            <EffectGallery
+              note={sel?.type === 'media' || sel?.type === 'adjust' ? 'Click to put it on the selected clip (click again to take it off).' : 'Click to add it over everything at the playhead, or select a clip first.'}
+              active={(k) => (sel?.type === 'media' || sel?.type === 'adjust') && !!sel.effects?.[k]}
+              onPick={(k) => {
+                const on = (sel?.type === 'media' || sel?.type === 'adjust') && !!sel.effects?.[k];
+                if (sel?.type === 'media' || sel?.type === 'adjust') run([{ op: 'set', clip: sel.id, effects: { [k]: on ? null : 0.6 } }]);
+                else run([{ op: 'add_adjust', start: time, duration: 3, effects: { [k]: 0.6 } }]);
+              }}
+            />
           )}
           {tab === 'transitions' && <TransitionItems project={project} sel={sel} time={time} onEdit={run} />}
           {tab === 'captions' && now === 'auto' && (
@@ -250,25 +227,14 @@ export function Library({
           )}
           {tab === 'captions' && now === 'styles' && <CaptionLooks project={project} onEdit={run} />}
           {tab === 'filters' && (
-            <>
-              <p className="small muted lib-note">{sel?.type === 'media' ? 'Click to colour the selected clip.' : 'Click to colour every video and picture (or select one clip first).'}</p>
-              <div className="lib-grid">
-                {(Object.keys(LOOKS) as LookId[]).map((k) => (
-                  <button
-                    key={k}
-                    className="lib-card"
-                    onClick={() => {
-                      const clips = sel?.type === 'media' ? [sel] : project.tracks.flatMap((t) => t.clips).filter((c): c is Extract<Clip, { type: 'media' }> => c.type === 'media');
-                      if (!clips.length) return ui.error('Add a video or picture first.');
-                      run(clips.map((c) => ({ op: 'set', clip: c.id, color: { ...LOOKS[k] } })));
-                    }}
-                  >
-                    <span className="lib-card-art" style={{ background: LOOK_SWATCH[k] }} />
-                    <span>{LOOK_LABEL[k]}</span>
-                  </button>
-                ))}
-              </div>
-            </>
+            <LookGallery
+              note={sel?.type === 'media' ? 'Click to colour the selected clip.' : 'Click to colour every video and picture (or select one clip first).'}
+              onPick={(k) => {
+                const clips = sel?.type === 'media' ? [sel] : project.tracks.flatMap((t) => t.clips).filter((c): c is Extract<Clip, { type: 'media' }> => c.type === 'media');
+                if (!clips.length) return ui.error('Add a video or picture first.');
+                run(clips.map((c) => ({ op: 'set', clip: c.id, color: { ...LOOKS[k] } })));
+              }}
+            />
           )}
           {tab === 'smart' && now === 'viral' && <ViralTemplates project={project} />}
           {tab === 'smart' && now === 'viral' && (
@@ -501,24 +467,12 @@ function TransitionItems({ project, sel, time, onEdit }: { project: Project; sel
   const target = sel?.type === 'media' && cuts.includes(sel.id) ? sel : ([...cutClips].sort((a, b) => Math.abs(a.start - time) - Math.abs(b.start - time))[0] ?? null);
   const secondsOf = (k: (typeof TRANSITIONS)[number]) => (k === 'whip' || k === 'flash' ? 0.35 : 0.6);
   return (
-    <>
-      <p className="small muted lib-note">{!target ? 'Put two clips one after the other first.' : sel?.id === target.id ? 'Click to change into the selected clip with it.' : `Click to put it on the cut at ${target.start.toFixed(1)} s (nearest the playhead), or select the clip after another cut.`}</p>
-      <div className="lib-grid">
-        {TRANSITIONS.map((k) => (
-          <button
-            key={k}
-            className={`lib-card ${target?.type === 'media' && target.transition?.kind === k ? 'on' : ''}`}
-            onClick={() => (target ? onEdit([{ op: 'set', clip: target.id, transition: { kind: k, seconds: secondsOf(k) } }]) : ui.error(cuts.length ? 'Select the clip right after a cut first.' : 'There are no cuts yet.'))}
-            onDoubleClick={() => cuts.length && onEdit(cuts.map((clip) => ({ op: 'set', clip, transition: { kind: k, seconds: secondsOf(k) } })))}
-            title={`${TRANSITION_LABEL[k]} — double-click to put it on every cut`}
-          >
-            <span className={`lib-card-art tr-${k}`} />
-            <span>{TRANSITION_LABEL[k]}</span>
-          </button>
-        ))}
-      </div>
-      {cuts.length > 0 && <p className="small muted lib-note">Double-click a transition to put it on all {cuts.length} cuts.</p>}
-    </>
+    <TransitionGallery
+      note={!target ? 'Put two clips one after the other, then click a transition.' : sel?.id === target.id ? 'Click to change into the selected clip with it. Double-click: every cut.' : `Click to put it on the cut at ${target.start.toFixed(1)} s (nearest the playhead). Double-click: every cut.`}
+      current={target?.type === 'media' ? (target.transition?.kind ?? null) : null}
+      onPick={(k) => (target ? onEdit([{ op: 'set', clip: target.id, transition: { kind: k, seconds: secondsOf(k) } }]) : ui.error(cuts.length ? 'Select the clip right after a cut first.' : 'There are no cuts yet.'))}
+      onPickAll={(k) => cuts.length && onEdit(cuts.map((clip) => ({ op: 'set', clip, transition: { kind: k, seconds: secondsOf(k) } })))}
+    />
   );
 }
 

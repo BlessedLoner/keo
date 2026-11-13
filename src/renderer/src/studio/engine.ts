@@ -1,4 +1,5 @@
-import { clipEnd, EASES, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
+import { gradePicture } from './grade';
+import { clipEnd, EASES, proGrade, type Cut, sourceSpan, trackTransition, zoomAt, type AdjustClip, type Asset, type Blend, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip, type Transition } from '@shared/studio';
 import { drawTilted, glassSheen } from './perspective';
 import { counterText, motionAt, type MotionState } from '@shared/studioMotion';
 import { clipReveal, placeLayer } from './motion';
@@ -180,6 +181,58 @@ function croppedBox(c: MediaClip, fw: number, fh: number, W: number, H: number):
 /** A flat card drawn before it is turned in 3D (reused between frames). */
 let cardCanvas: OffscreenCanvas | null = null;
 
+/** A layer drawn on its own before its cut-out mask is applied (reused between frames). */
+let cutCanvas: OffscreenCanvas | null = null;
+
+/**
+ * Fills a cut-out mask's shape, in the layer's own coordinates (its middle at 0, 0; vw×vh its
+ * size). far: a length beyond the layer, for the shapes that run off it (linear, mirror).
+ */
+function cutPath(cx: OffscreenCanvasRenderingContext2D, cut: Cut, vw: number, vh: number, far: number): void {
+  cx.save();
+  cx.translate(cut.x * vw, cut.y * vh);
+  cx.rotate((cut.angle * Math.PI) / 180);
+  const w = cut.w * vw;
+  const h = cut.h * vh;
+  cx.beginPath();
+  switch (cut.shape) {
+    case 'linear':
+      // Everything above the line through the middle (turn it with the angle).
+      cx.rect(-far, -far, far * 2, far);
+      break;
+    case 'mirror':
+      cx.rect(-far, -h / 2, far * 2, h);
+      break;
+    case 'circle':
+      cx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);
+      break;
+    case 'rect':
+      cx.roundRect(-w / 2, -h / 2, w, h, Math.min(w, h) * 0.04);
+      break;
+    case 'star': {
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 ? 0.4 : 1;
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const px = Math.cos(a) * (w / 2) * r;
+        const py = Math.sin(a) * (h / 2) * r;
+        if (i) cx.lineTo(px, py);
+        else cx.moveTo(px, py);
+      }
+      cx.closePath();
+      break;
+    }
+    case 'heart': {
+      cx.moveTo(0, h * 0.35);
+      cx.bezierCurveTo(-w * 0.55, -h * 0.05, -w * 0.4, -h * 0.55, 0, -h * 0.22);
+      cx.bezierCurveTo(w * 0.4, -h * 0.55, w * 0.55, -h * 0.05, 0, h * 0.35);
+      cx.closePath();
+      break;
+    }
+  }
+  cx.fill();
+  cx.restore();
+}
+
 /** A copy of what is drawn so far (an adjustment layer changes it). */
 let under: OffscreenCanvas | null = null;
 
@@ -188,7 +241,8 @@ function drawAdjust(ctx: CanvasRenderingContext2D, c: AdjustClip, t: number, W: 
   const amount = clamp(c.strength * fadeAt(c, t));
   const g = c.color;
   const graded = !!(g && (g.exposure || g.contrast || g.saturation));
-  if (amount <= 0 || !(graded || c.blur > 0 || g?.temperature || g?.vignette || c.effects)) return;
+  const pro = proGrade(g);
+  if (amount <= 0 || !(graded || pro || c.blur > 0 || g?.temperature || g?.vignette || c.effects)) return;
   if (!under || under.width !== W || under.height !== H) under = new OffscreenCanvas(W, H);
   const u = under.getContext('2d')!;
   u.clearRect(0, 0, W, H);
@@ -200,8 +254,11 @@ function drawAdjust(ctx: CanvasRenderingContext2D, c: AdjustClip, t: number, W: 
   const filters: string[] = [];
   if (graded) filters.push(`brightness(${(1 + g!.exposure * 0.6).toFixed(3)}) contrast(${(1 + g!.contrast * 0.5).toFixed(3)}) saturate(${(1 + g!.saturation).toFixed(3)})`);
   if (c.blur > 0) filters.push(`blur(${((c.blur / 100) * H).toFixed(1)}px)`);
-  const paint = (cx: CanvasRenderingContext2D) => cx.drawImage(under!, 0, 0, W, H);
-  if (filters.length) {
+  // Pro grading (tint, curves, HSL, LUT…) on the graphics card, then the plain filters over it.
+  const proPicture = pro ? gradePicture(under as unknown as Drawable, W, H, g) : null;
+  const base: CanvasImageSource = proPicture ?? under;
+  const paint = (cx: CanvasRenderingContext2D) => cx.drawImage(base, 0, 0, W, H);
+  if (filters.length || proPicture) {
     ctx.filter = filters.join(' ');
     paint(ctx);
     ctx.filter = 'none';
@@ -234,8 +291,14 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
   // Green screen: the keyed picture (same size) is drawn instead of the original.
   // AI background removal: the same, with only the people kept.
   const keyed = c.chroma ? chromaKey(original, full.w, full.h, c.chroma) : c.cutout ? cutout(original, full.w, full.h) : null;
-  const src: Drawable = keyed ? (keyed as unknown as Drawable) : original;
-  const kx = keyed ? keyed.width / full.w : 1;
+  let src: Drawable = keyed ? (keyed as unknown as Drawable) : original;
+  let kx = keyed ? keyed.width / full.w : 1;
+  // Pro grading on the graphics card (the copy is drawn right away, before the next clip is graded).
+  const proPicture = gradePicture(src, keyed ? keyed.width : full.w, keyed ? keyed.height : full.h, c.color);
+  if (proPicture) {
+    src = proPicture as unknown as Drawable;
+    kx = proPicture.width / full.w;
+  }
   // Cropped: only the part inside the crop is drawn (and sized).
   const cr = c.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
   const sx = full.w * cr.left;
@@ -279,6 +342,84 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
       case 'blur':
         m.blur += (out ? e : 1 - e) * H * 0.04;
         if (!out) m.opacity *= e;
+        break;
+      case 'iris':
+        if (!out) m.reveal = { kind: 'iris', p: e };
+        break;
+      case 'slide-up':
+        if (!out) m.y += 1 - e;
+        break;
+      case 'wipe-down':
+        if (!out) m.reveal = { kind: 'wipe-down', p: e };
+        break;
+      case 'spin':
+        // The old shot spins away small, the new one spins in from small.
+        if (out) {
+          m.rotation += e * 180;
+          m.scaleX *= 1 - e * 0.85;
+          m.scaleY *= 1 - e * 0.85;
+          m.opacity *= 1 - e;
+        } else {
+          m.rotation -= (1 - e) * 180;
+          m.scaleX *= 0.15 + 0.85 * e;
+          m.scaleY *= 0.15 + 0.85 * e;
+          m.opacity *= e;
+        }
+        break;
+      case 'flip':
+        // A card turning over: the old shot narrows to an edge, the new one opens from it.
+        if (out) m.scaleX *= Math.max(0.001, 1 - Math.min(1, role.p * 2));
+        else m.scaleX *= Math.max(0.001, Math.min(1, (role.p - 0.5) * 2));
+        if ((out && role.p >= 0.5) || (!out && role.p < 0.5)) m.opacity = 0;
+        break;
+      case 'glitch': {
+        // Jumpy offsets and a flicker, strongest in the middle of the change.
+        const hit = Math.sin(Math.PI * role.p);
+        const jit = Math.sin(role.p * 97.3) * Math.cos(role.p * 41.7);
+        m.x += jit * 0.06 * hit;
+        m.scaleX *= 1 + Math.abs(jit) * 0.08 * hit;
+        if (out) m.opacity *= role.p < 0.5 ? 1 : jit > 0 ? 0.25 : 0;
+        else m.opacity *= role.p > 0.5 ? 1 : jit > 0.2 ? 0.7 : 0;
+        break;
+      }
+      case 'stretch':
+        // The old shot stretches out sideways and away; the new one snaps back from stretched.
+        if (out) {
+          m.scaleX *= 1 + e * 2.2;
+          m.scaleY *= 1 - e * 0.15;
+          m.opacity *= 1 - e;
+        } else {
+          m.scaleX *= 1 + (1 - e) * 1.6;
+          m.opacity *= e;
+        }
+        break;
+      case 'push-up':
+        m.y += out ? -e : 1 - e;
+        break;
+      case 'slide-down':
+        if (!out) m.y -= 1 - e;
+        break;
+      case 'shrink':
+        // The old shot shrinks into the middle and fades, showing the new one under it.
+        if (out) {
+          m.scaleX *= 1 - e * 0.9;
+          m.scaleY *= 1 - e * 0.9;
+          m.opacity *= 1 - e * e;
+        }
+        break;
+      case 'wipe-left':
+        if (!out) m.reveal = { kind: 'wipe-left', p: e };
+        break;
+      case 'wipe-up':
+        if (!out) m.reveal = { kind: 'wipe-up', p: e };
+        break;
+      case 'zoom-out':
+        // The new shot starts close and pulls back into place.
+        if (!out) {
+          m.scaleX *= 1.6 - 0.6 * e;
+          m.scaleY *= 1.6 - 0.6 * e;
+          m.opacity *= e;
+        } else m.opacity *= 1 - e * 0.5;
         break;
       default:
         break;
@@ -381,7 +522,31 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
     if (shaped) cx.restore();
     if (c.frame === 'phone') drawNotch(cx, vw, vh);
   };
-  if (!tilted) drawCard(ctx, true);
+  // A cut-out mask: the layer is drawn on its own, then only the part inside (or outside) the shape is kept.
+  const drawCut = (cx: CanvasRenderingContext2D, withShadow: boolean) => {
+    const cut = c.cut;
+    if (!cut) return drawCard(cx, withShadow);
+    const bw = Math.max(vw, dw);
+    const bh = Math.max(vh, dh);
+    const cw = Math.ceil(bw) + 2;
+    const ch = Math.ceil(bh) + 2;
+    if (!cutCanvas || cutCanvas.width < cw || cutCanvas.height < ch) cutCanvas = new OffscreenCanvas(Math.max(cw, cutCanvas?.width ?? 0), Math.max(ch, cutCanvas?.height ?? 0));
+    const cc = cutCanvas.getContext('2d')!;
+    cc.setTransform(1, 0, 0, 1, 0, 0);
+    cc.clearRect(0, 0, cutCanvas.width, cutCanvas.height);
+    cc.globalAlpha = 1;
+    cc.translate(cw / 2, ch / 2);
+    drawCard(cc as unknown as CanvasRenderingContext2D, false);
+    cc.globalCompositeOperation = cut.invert ? 'destination-out' : 'destination-in';
+    const feather = cut.feather * Math.min(vw, vh) * 0.12;
+    if (feather > 0.5) cc.filter = `blur(${feather.toFixed(1)}px)`;
+    cc.fillStyle = '#000';
+    cutPath(cc, cut, vw, vh, Math.hypot(cw, ch) * 2);
+    cc.filter = 'none';
+    cc.globalCompositeOperation = 'source-over';
+    cx.drawImage(cutCanvas, 0, 0, cw, ch, -cw / 2, -ch / 2, cw, ch);
+  };
+  if (!tilted) drawCut(ctx, true);
   else {
     const cw = Math.ceil(vw) + 2;
     const ch = Math.ceil(vh) + 2;
@@ -391,7 +556,7 @@ function drawMedia(ctx: CanvasRenderingContext2D, c: MediaClip, original: Drawab
     cc.clearRect(0, 0, cardCanvas.width, cardCanvas.height);
     cc.globalAlpha = 1;
     cc.translate(cw / 2, ch / 2);
-    drawCard(cc as unknown as CanvasRenderingContext2D, false);
+    drawCut(cc as unknown as CanvasRenderingContext2D, false);
     // A soft shadow and glow under the floating panel.
     // Glass: a coloured light behind the panel, as if it glowed onto the backdrop.
     if (c.glass) {
@@ -556,7 +721,7 @@ export function layerBoxes(ctx: CanvasRenderingContext2D, p: Project, t: number,
       const st = c.style;
       const px = (st.sizePct / 100) * H;
       ctx.save();
-      ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
+      ctx.font = `${st.italic ? 'italic ' : ''}${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
       (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(st.letterSpacing * px) / 100}px`;
       const raw = c.counter ? counterText(c.counter, c.duration, c.duration) : c.text;
       const laid = layout(ctx, raw, st, c.marks, px, st.maxWidth * W);
@@ -576,7 +741,7 @@ export function drawText(ctx: CanvasRenderingContext2D, c: TextClip, t: number, 
   const text = st.uppercase ? raw.toUpperCase() : raw;
   const m: MotionState = motionAt(c, t, H);
   ctx.save();
-  ctx.font = `${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
+  ctx.font = `${st.italic ? 'italic ' : ''}${FONT_WEIGHT[st.weight]} ${px}px "${st.font}", "Segoe UI", sans-serif`;
   ctx.textBaseline = 'alphabetic';
   (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(st.letterSpacing * px) / 100}px`;
   const baseFont = ctx.font;

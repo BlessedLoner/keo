@@ -103,6 +103,43 @@ export const invokeSchemas = {
   'visual:file': z.object({ kind: z.enum(['model', 'shot']), name: z.string().trim().min(1).max(60) }).strict(),
   'visual:renderInfo': empty,
   'projects:work': z.object({ projectId: z.string().min(1).max(80) }).strict(),
+  'studio:luts': empty,
+  'studio:importLut': empty,
+  'studio:lut': z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9 _-]{0,47}$/) }).strict(),
+  'studio:brandFile': z.object({ kind: z.enum(['logo', 'intro', 'outro']), remove: z.boolean().optional() }).strict(),
+  'studio:useBrand': z.object({ id: studioProjectId, kind: z.enum(['logo', 'intro', 'outro']) }).strict(),
+  'studio:brandLogo': empty,
+  'dna:list': empty,
+  'dna:jobs': empty,
+  /** A reference: a video already in the project (assetId), or picked from the PC (neither given). */
+  'dna:analyze': z.object({ id: studioProjectId, assetId: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(), name: z.string().trim().min(1).max(80).optional(), visionModel: z.object({ provider: z.string().min(1).max(40), model: z.string().min(1).max(200), label: z.string().max(200).optional() }).strict().nullable().optional() }).strict(),
+  'dna:cancel': z.object({ jobId: z.string().regex(/^dj_[A-Za-z0-9]{6,24}$/) }).strict(),
+  'dna:resume': z.object({ jobId: z.string().regex(/^dj_[A-Za-z0-9]{6,24}$/), visionModel: z.object({ provider: z.string().min(1).max(40), model: z.string().min(1).max(200), label: z.string().max(200).optional() }).strict().nullable().optional() }).strict(),
+  'dna:apply': z.object({ id: studioProjectId, dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/), assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200), roles: z.record(z.string().max(8), z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).optional(), at: z.number().min(0).max(86400).optional(), length: z.enum(['reference', 'footage']).optional(), replace: z.boolean().optional() }).strict(),
+  'dna:update': z
+    .object({
+      dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/),
+      name: z.string().trim().min(1).max(80).optional(),
+      category: z.string().trim().min(1).max(40).optional(),
+      tags: z.array(z.string().trim().min(1).max(30)).max(16).optional(),
+      description: z.string().max(400).optional(),
+      favorite: z.boolean().optional(),
+      sharing: z.object({ state: z.enum(['private', 'shareable']), rights: z.enum(['own', 'licensed', 'technique-only']).nullable() }).strict().optional(),
+    })
+    .strict(),
+  'dna:delete': z.object({ dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/) }).strict(),
+  'dna:export': z.object({ dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/) }).strict(),
+  'dna:import': empty,
+  'dna:find': z.object({ query: z.string().trim().min(1).max(400) }).strict(),
+  'dna:models': empty,
+  'dna:reread': z.object({ dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/), visionModel: z.object({ provider: z.string().min(1).max(40), model: z.string().min(1).max(200), label: z.string().max(200).optional() }).strict().nullable() }).strict(),
+  /** A reference from a web link: the user confirms they may use the video (rights: true). */
+  'dna:url': z.object({ id: studioProjectId, url: z.string().trim().min(8).max(2000), rights: z.literal(true), visionModel: z.object({ provider: z.string().min(1).max(40), model: z.string().min(1).max(200), label: z.string().max(200).optional() }).strict().nullable().optional() }).strict(),
+  'dna:shared': z.object({ query: z.string().trim().max(200).default(''), category: z.string().trim().max(40).default('') }).strict(),
+  'dna:publish': z.object({ dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/) }).strict(),
+  'dna:unpublish': z.object({ dnaId: z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/) }).strict(),
+  'dna:saveShared': z.object({ sharedId: z.string().regex(/^[A-Za-z0-9_-]{6,40}$/) }).strict(),
+  'dna:reportShared': z.object({ sharedId: z.string().regex(/^[A-Za-z0-9_-]{6,40}$/), reason: z.string().trim().min(3).max(500) }).strict(),
   'visual:render': z
     .object({
       /** The finished scene as Keo's viewer drew it (JPEG, base64). */
@@ -553,6 +590,37 @@ export interface InvokeOutputs {
   'visual:file': { mimeType: string; dataBase64: string };
   /** Whether a photoreal picture of an explanation can be made here, and what it costs. */
   'visual:renderInfo': { available: boolean; why: string | null; price: string };
+  /** Colour LUTs the user imported into Studio (names). */
+  'studio:luts': string[];
+  /** Picks a .cube file and keeps it (null when the picker was closed). */
+  'studio:importLut': { name: string; size: number } | null;
+  'studio:lut': { text: string };
+  /** Picks (or removes) the brand kit's logo, intro or outro; the kit as it is now. */
+  'studio:brandFile': Brand;
+  'studio:useBrand': StudioProject;
+  /** The brand kit's logo as a picture to show (null when there is none). */
+  'studio:brandLogo': { dataBase64: string; mimeType: string } | null;
+  /** Edit DNA: the user's library and analysis jobs. */
+  'dna:list': import('./editDna').Blueprint[];
+  'dna:jobs': import('./editDna').DnaJob[];
+  'dna:analyze': import('./editDna').DnaJob | null;
+  'dna:cancel': { cancelled: boolean };
+  'dna:resume': import('./editDna').DnaJob;
+  'dna:apply': { changes: string[]; notes: string[]; seconds: number; clips: number; clipIds: string[]; track: string; start: number; mode: 'talk' | 'montage'; captions: number };
+  'dna:update': import('./editDna').Blueprint;
+  'dna:delete': { deleted: boolean };
+  /** Saved as a .keodna file next to the user's documents (the editing only). */
+  'dna:export': { file: string };
+  'dna:import': import('./editDna').Blueprint | null;
+  'dna:find': Array<{ id: string; name: string; score: number; why: string }>;
+  'dna:models': Array<import('./editDna').DnaVisionModel & { current: boolean }>;
+  'dna:reread': import('./editDna').DnaJob;
+  'dna:url': import('./editDna').DnaJob;
+  'dna:shared': import('./editDna').SharedDna[];
+  'dna:publish': import('./editDna').Blueprint;
+  'dna:unpublish': import('./editDna').Blueprint;
+  'dna:saveShared': import('./editDna').Blueprint;
+  'dna:reportShared': { sent: boolean };
   /** What was made in a Keo project (builds and Studio videos from its chats). */
   'projects:work': { builds: Array<{ id: string; title: string; kind: string; updatedAt: string }>; videos: Array<{ id: string; name: string; updatedAt: string }> };
   /** The photoreal picture (PNG) and where it was saved. */

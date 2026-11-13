@@ -1251,6 +1251,459 @@ function backdrop(k: Ctx): void {
   ctx.restore();
 }
 
+
+// ---------------------------------------------------------------- newer pieces (2026 set)
+
+/** News ticker: a label block and a band of text scrolling past. */
+function ticker(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const w = Math.min(k.room, 92 * U);
+  const h = 7.2 * U;
+  const p = expoOut((t - 0.05) / 0.5);
+  if (p <= 0) return;
+  ctx.save();
+  ctx.translate(0, bob(k, 0.15, 1));
+  ctx.beginPath();
+  ctx.rect(-w / 2, -h, w * p, h * 2);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(10,10,16,0.88)';
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  ctx.font = font(800, 3.2 * U, c.font);
+  const label = (c.sub ?? 'LIVE').toUpperCase();
+  const lw = ctx.measureText(label).width + 5 * U;
+  ctx.fillStyle = c.accent;
+  ctx.fillRect(-w / 2, -h / 2, lw, h);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, -w / 2 + 2.5 * U, 0.2 * U);
+  // The scrolling words, looping, clipped to the band.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-w / 2 + lw, -h / 2, w - lw, h);
+  ctx.clip();
+  ctx.font = font(600, 3.1 * U, BODY);
+  const line = `${[c.text, ...(c.items ?? [])].join('   •   ')}   •   `;
+  const lineW = ctx.measureText(line).width;
+  const off = ((t * 9 * U) % lineW) || 0;
+  ctx.fillStyle = c.color;
+  for (let x = -w / 2 + lw + 2 * U - off; x < w / 2; x += lineW) ctx.fillText(line, x, 0.2 * U);
+  ctx.restore();
+  ctx.fillStyle = c.accent2;
+  ctx.fillRect(-w / 2, h / 2 - 0.5 * U, w, 0.5 * U);
+  ctx.restore();
+}
+
+/** Countdown: a big number counting down from value (default 3) inside a ring that empties. */
+function countdown(k: Ctx): void {
+  const { ctx, c, U, t, d } = k;
+  const from = Math.max(1, Math.round(c.value ?? 3));
+  const per = Math.max(0.3, (d - 0.4) / from);
+  const i = Math.min(from - 1, Math.floor(t / per));
+  const local = (t - i * per) / per;
+  const n = from - i;
+  const r = 15 * U;
+  ctx.save();
+  ctx.lineWidth = 1.6 * U;
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = c.accent;
+  ctx.shadowColor = c.accent;
+  ctx.shadowBlur = 3 * U;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, 0, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - local));
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  const pop = backOut(Math.min(1, local / 0.3));
+  ctx.scale(pop, pop);
+  ctx.font = font(900, 16 * U, c.font);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = c.color;
+  fillText(k, String(n), 0, 1 * U, true);
+  ctx.restore();
+  if (c.text && c.text !== String(from)) kicker(k, c.text, 0, r + 6 * U, cubicOut(t / 0.4));
+}
+
+/** Location: a map pin drops in, a ring ripples, and the place name slides out beside it. */
+function location(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const drop = backOut(Math.min(1, t / 0.5), 2.2);
+  const pinY = (1 - drop) * -18 * U;
+  ctx.save();
+  ctx.translate(-12 * U, bob(k, 0.3, 1.2));
+  // Ripple on the ground.
+  const rp = ((t - 0.4) % 1.6) / 1.6;
+  if (t > 0.4) {
+    ctx.strokeStyle = rgba(c.accent, 0.6 * (1 - rp));
+    ctx.lineWidth = 0.5 * U;
+    ctx.beginPath();
+    ctx.ellipse(0, 6 * U, 3 * U + rp * 8 * U, (3 * U + rp * 8 * U) * 0.35, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // The pin.
+  ctx.translate(0, pinY);
+  ctx.fillStyle = c.accent;
+  ctx.shadowColor = rgba(c.accent, 0.8);
+  ctx.shadowBlur = 3 * U;
+  ctx.beginPath();
+  ctx.arc(0, -4 * U, 4 * U, Math.PI * 0.85, Math.PI * 0.15);
+  ctx.lineTo(0, 6 * U);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(0, -4 * U, 1.6 * U, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // The label.
+  const lp = expoOut((t - 0.45) / 0.6);
+  if (lp <= 0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-6 * U, -10 * U, 80 * U, 20 * U);
+  ctx.clip();
+  ctx.translate(-6 * U + (lp - 1) * 40 * U, 0);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = font(800, 5 * U, c.font);
+  ctx.fillStyle = c.color;
+  fillText(k, c.text, 0, 0);
+  if (c.sub) {
+    ctx.font = font(600, 2.8 * U, BODY);
+    ctx.fillStyle = rgba(c.color, 0.7);
+    setLetterSpacing(ctx, 0.4 * U);
+    ctx.fillText(c.sub.toUpperCase(), 0, 4.6 * U);
+  }
+  ctx.restore();
+}
+
+/** Subscribe: a pill button pops in, a pointer taps it, it turns to "Subscribed" with a bell ring. */
+function subscribe(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const label = c.text || 'Subscribe';
+  const pressed = t > 1.1;
+  ctx.font = font(800, 4.2 * U, c.font);
+  const tw = ctx.measureText(pressed ? (c.sub ?? 'Subscribed') : label).width;
+  const w = tw + 16 * U;
+  const h = 10 * U;
+  const pop = backOut(Math.min(1, t / 0.45));
+  const press = t > 0.95 && t < 1.15 ? 0.92 : 1;
+  ctx.save();
+  ctx.scale(pop * press, pop * press);
+  ctx.shadowColor = rgba(pressed ? '#444444' : c.accent, 0.6);
+  ctx.shadowBlur = 3 * U;
+  ctx.fillStyle = pressed ? '#2A2A33' : c.accent;
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, h / 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(pressed ? (c.sub ?? 'Subscribed') : label, 3 * U, 0.3 * U);
+  // The bell, ringing once pressed.
+  const ring = pressed ? Math.sin((t - 1.1) * 30) * Math.max(0, 1 - (t - 1.1) * 1.5) * 0.4 : 0;
+  ctx.save();
+  ctx.translate(-w / 2 + 5.5 * U, 0);
+  ctx.rotate(ring);
+  const p = iconPath('bell') ?? iconPath('speaker');
+  if (p) {
+    const s = (4.4 * U) / 24;
+    ctx.translate(-12 * s, -12 * s);
+    ctx.scale(s, s);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.stroke(p);
+  }
+  ctx.restore();
+  ctx.restore();
+  // The pointer that taps it.
+  const cp = cubicInOut((t - 0.4) / 0.55);
+  if (t > 0.4 && t < 1.8) {
+    const px = lerp(w * 0.9, w * 0.15, cp);
+    const py = lerp(h * 1.6, h * 0.15, cp);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.globalAlpha *= t > 1.5 ? Math.max(0, 1 - (t - 1.5) / 0.3) : 1;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#111111';
+    ctx.lineWidth = 0.35 * U;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, 6 * U);
+    ctx.lineTo(1.6 * U, 4.6 * U);
+    ctx.lineTo(3 * U, 7.4 * U);
+    ctx.lineTo(4 * U, 6.9 * U);
+    ctx.lineTo(2.6 * U, 4.2 * U);
+    ctx.lineTo(4.6 * U, 4.2 * U);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    if (t > 0.95 && t < 1.35) {
+      ctx.strokeStyle = rgba('#FFFFFF', 1 - (t - 0.95) / 0.4);
+      ctx.beginPath();
+      ctx.arc(0, 0, (t - 0.95) * 14 * U, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/** Chapters: the steps of the video as a row, the current one lit, a bar filling across. */
+function progress(k: Ctx): void {
+  const { ctx, c, U, t, d } = k;
+  const items = c.items?.length ? c.items : ['Intro', 'Part 1', 'Part 2', 'End'];
+  const cur = Math.max(0, Math.min(items.length - 1, Math.round(c.value ?? 1) - 1));
+  const w = Math.min(k.room, 86 * U);
+  const seg = w / items.length;
+  const p = expoOut(t / 0.6);
+  ctx.save();
+  ctx.translate(0, bob(k, 0.2, 1));
+  ctx.globalAlpha *= p;
+  for (let i = 0; i < items.length; i++) {
+    const x = -w / 2 + i * seg;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.beginPath();
+    ctx.roundRect(x + 0.6 * U, -0.8 * U, seg - 1.2 * U, 1.6 * U, 0.8 * U);
+    ctx.fill();
+    const fill = i < cur ? 1 : i === cur ? cubicInOut((t - 0.3) / Math.max(0.5, d - 0.9)) : 0;
+    if (fill > 0) {
+      ctx.fillStyle = c.accent;
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = 2 * U;
+      ctx.beginPath();
+      ctx.roundRect(x + 0.6 * U, -0.8 * U, (seg - 1.2 * U) * fill, 1.6 * U, 0.8 * U);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    ctx.font = font(i === cur ? 800 : 600, 2.8 * U, i === cur ? c.font : BODY);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = i === cur ? c.color : rgba(c.color, 0.55);
+    ctx.fillText(items[i]!, x + 0.8 * U, -3 * U);
+  }
+  ctx.restore();
+}
+
+/** Split title: the top line slides in from the left, the bottom from the right, a bar between. */
+function splitTitle(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const top = c.text;
+  const bottom = c.sub ?? '';
+  const size = fitSize(ctx, top.length > bottom.length ? top : bottom, 900, c.font, 9 * U, Math.min(k.room, 90 * U), 1);
+  const a = expoOut((t - 0.05) / 0.6);
+  const b = expoOut((t - 0.2) / 0.6);
+  const bar = cubicInOut((t - 0.1) / 0.5);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = font(900, size, c.font);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-60 * U, -size * 1.1, 120 * U, size * 1.1);
+  ctx.clip();
+  ctx.fillStyle = c.color;
+  ctx.fillText(top.toUpperCase(), (a - 1) * 50 * U, -1.2 * U);
+  ctx.restore();
+  ctx.fillStyle = c.accent;
+  ctx.shadowColor = c.accent;
+  ctx.shadowBlur = 2 * U;
+  const bw = Math.min(k.room, 70 * U) * bar;
+  ctx.fillRect(-bw / 2, -0.4 * U, bw, 0.8 * U);
+  ctx.shadowBlur = 0;
+  if (bottom) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-60 * U, 0, 120 * U, size * 1.2);
+    ctx.clip();
+    ctx.font = font(400, size * 0.82, 'Instrument Serif');
+    ctx.fillStyle = c.accent2;
+    ctx.fillText(bottom, (1 - b) * 50 * U, size * 0.95);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/** Price tag: a starburst badge pops in with the price; the old price (sub) is struck through. */
+function priceTag(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const pop = backOut(Math.min(1, t / 0.5), 2);
+  const r = 16 * U;
+  ctx.save();
+  ctx.rotate(-0.12 + Math.sin(t * 1.4) * 0.03);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = c.accent;
+  ctx.shadowColor = rgba(c.accent, 0.7);
+  ctx.shadowBlur = 4 * U;
+  ctx.beginPath();
+  for (let i = 0; i < 32; i++) {
+    const rr = i % 2 ? r * 0.86 : r;
+    const a = (i / 32) * Math.PI * 2 + t * 0.4;
+    if (i) ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    else ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = c.color;
+  ctx.font = font(900, 8 * U, c.font);
+  const price = c.value !== undefined ? `${c.unit ?? '$'}${c.value}` : c.text;
+  ctx.fillText(price, 0, c.sub ? 1 * U : 0.5 * U);
+  if (c.sub) {
+    ctx.font = font(700, 3 * U, BODY);
+    ctx.fillStyle = rgba(c.color, 0.75);
+    const ow = ctx.measureText(c.sub).width;
+    ctx.fillText(c.sub, 0, -6.5 * U);
+    ctx.strokeStyle = rgba(c.color, 0.9);
+    ctx.lineWidth = 0.4 * U;
+    ctx.beginPath();
+    ctx.moveTo(-ow / 2, -6.5 * U);
+    ctx.lineTo(ow / 2, -6.5 * U);
+    ctx.stroke();
+  }
+  if (c.value !== undefined && c.text) {
+    ctx.font = font(700, 2.6 * U, BODY);
+    ctx.fillStyle = c.color;
+    ctx.fillText(c.text.toUpperCase(), 0, 7.6 * U);
+  }
+  ctx.restore();
+}
+
+/** Social post: a glass card with an avatar, the handle, the post and a like count ticking up. */
+function socialCard(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const w = Math.min(k.room, 64 * U);
+  ctx.font = font(500, 3.4 * U, BODY);
+  const lines = wrap(ctx, c.text.split(/\s+/), w - 10 * U).slice(0, 4);
+  const h = 21 * U + lines.length * 4.6 * U;
+  const p = backOut(Math.min(1, t / 0.55), 1.4);
+  ctx.save();
+  ctx.translate(0, (1 - p) * 10 * U + bob(k, 0.4, 1.1));
+  ctx.globalAlpha *= Math.min(1, t / 0.3);
+  glass(k, -w / 2, -h / 2, w, h, 3 * U);
+  const ax = -w / 2 + 7 * U;
+  const ay = -h / 2 + 7 * U;
+  const g = ctx.createLinearGradient(ax - 3 * U, ay - 3 * U, ax + 3 * U, ay + 3 * U);
+  g.addColorStop(0, c.accent2);
+  g.addColorStop(1, c.accent);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(ax, ay, 3.4 * U, 0, Math.PI * 2);
+  ctx.fill();
+  const handle = c.sub ?? '@you';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = font(800, 2.6 * U, BODY);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(handle.replace(/^@/, '').slice(0, 1).toUpperCase(), ax, ay + 0.2 * U);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = font(800, 3.2 * U, c.font);
+  ctx.fillText(handle, ax + 5 * U, ay + 1 * U);
+  ctx.font = font(500, 3.4 * U, BODY);
+  ctx.fillStyle = rgba(c.color, 0.92);
+  lines.forEach((l, i) => ctx.fillText(l.join(' '), -w / 2 + 5 * U, ay + 9 * U + i * 4.6 * U));
+  // Likes counting up.
+  const likes = Math.round((c.value ?? 1200) * cubicOut((t - 0.5) / 1.4));
+  ctx.font = font(700, 3 * U, BODY);
+  ctx.fillStyle = '#FF4D8D';
+  ctx.fillText(`♥ ${likes.toLocaleString('en-US')}`, -w / 2 + 5 * U, h / 2 - 3.4 * U);
+  ctx.restore();
+}
+
+/** Camera viewfinder: corner brackets, a blinking REC dot and a running timecode over the shot. */
+function viewfinder(k: Ctx, frame: { W: number; H: number }): void {
+  const { ctx, c, U, t } = k;
+  const w = frame.W * 0.86;
+  const h = frame.H * 0.82;
+  const a = Math.min(1, t / 0.4);
+  const L = 6 * U;
+  ctx.save();
+  ctx.globalAlpha *= a;
+  ctx.strokeStyle = c.color;
+  ctx.lineWidth = 0.5 * U;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    ctx.beginPath();
+    ctx.moveTo((sx * w) / 2, (sy * h) / 2 - sy * L);
+    ctx.lineTo((sx * w) / 2, (sy * h) / 2);
+    ctx.lineTo((sx * w) / 2 - sx * L, (sy * h) / 2);
+    ctx.stroke();
+  }
+  ctx.font = font(700, 3 * U, 'JetBrains Mono');
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  if (Math.floor(t * 2) % 2 === 0) {
+    ctx.fillStyle = '#FF3B30';
+    ctx.beginPath();
+    ctx.arc(-w / 2 + 4 * U, -h / 2 + 4 * U, 1.1 * U, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = c.color;
+  ctx.fillText(c.text || 'REC', -w / 2 + 6.5 * U, -h / 2 + 4.2 * U);
+  const s = Math.floor(t);
+  const tc = `00:${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}:${String(Math.floor((t % 1) * 30)).padStart(2, '0')}`;
+  ctx.textAlign = 'right';
+  ctx.fillText(tc, w / 2 - 3 * U, -h / 2 + 4.2 * U);
+  if (c.sub) {
+    ctx.textAlign = 'left';
+    ctx.fillText(c.sub, -w / 2 + 3 * U, h / 2 - 4 * U);
+  }
+  // A small centre cross.
+  ctx.globalAlpha *= 0.6;
+  ctx.beginPath();
+  ctx.moveTo(-2 * U, 0);
+  ctx.lineTo(2 * U, 0);
+  ctx.moveTo(0, -2 * U);
+  ctx.lineTo(0, 2 * U);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Glitch title: big words that arrive in digital slices with red and cyan fringes, then settle. */
+function glitchTitle(k: Ctx): void {
+  const { ctx, c, U, t } = k;
+  const size = fitSize(ctx, c.text, 900, c.font, 11 * U, Math.min(k.room, 92 * U), 2);
+  ctx.font = font(900, size, c.font);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const settle = Math.min(1, t / 0.7);
+  const burst = t < 0.7 || (t % 2.2 > 2.0 && t < k.d - 0.4);
+  const text = c.text.toUpperCase();
+  ctx.save();
+  if (burst) {
+    const off = (1 - settle * 0.7) * 1.4 * U;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,40,90,0.85)';
+    ctx.fillText(text, -off, 0);
+    ctx.fillStyle = 'rgba(40,230,255,0.85)';
+    ctx.fillText(text, off, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    for (let i = 0; i < 4; i++) {
+      const sy = (k.rand() - 0.5) * size;
+      const sh = size * (0.06 + k.rand() * 0.12);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-80 * U, sy, 160 * U, sh);
+      ctx.clip();
+      ctx.fillStyle = c.color;
+      ctx.fillText(text, (k.rand() - 0.5) * 6 * U, 0);
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha *= settle;
+  ctx.fillStyle = c.color;
+  ctx.fillText(text, 0, 0);
+  if (c.sub) kicker(k, c.sub, 0, size * 0.85, cubicOut((t - 0.4) / 0.4));
+  ctx.restore();
+}
+
 const PIECES: Record<MotionClip['piece'], (k: Ctx, frame: { W: number; H: number }) => void> = {
   headline,
   word_pop: wordPop,
@@ -1266,6 +1719,16 @@ const PIECES: Record<MotionClip['piece'], (k: Ctx, frame: { W: number; H: number
   light_sweep: lightSweep,
   scene,
   backdrop,
+  ticker,
+  countdown,
+  location,
+  subscribe,
+  progress,
+  split_title: splitTitle,
+  price_tag: priceTag,
+  social_card: socialCard,
+  viewfinder,
+  glitch_title: glitchTitle,
   // A 3D explanation: Keo's scene viewer draws it; here it is copied onto the frame.
   scene3d: (k, frame) => drawScene3d(k.ctx, k.c, k.t, frame.W, frame.H),
 };
@@ -1305,7 +1768,16 @@ export function motionBox(c: MotionClip, W: number, H: number): { w: number; h: 
     case 'scene':
     case 'backdrop':
     case 'scene3d':
+    case 'viewfinder':
       return { w: W / Math.max(0.01, c.transform.scale), h: H / Math.max(0.01, c.transform.scale) };
+    case 'ticker':
+    case 'progress':
+      return { w: Math.min(W * 0.92, 92 * U), h: 12 * U };
+    case 'countdown':
+    case 'price_tag':
+      return { w: 36 * U, h: 40 * U };
+    case 'social_card':
+      return { w: 66 * U, h: 36 * U };
     case 'word_pop':
       return { w: Math.min(W * 0.9, len * 9 * U + 10 * U), h: 26 * U };
     case 'icon_burst':

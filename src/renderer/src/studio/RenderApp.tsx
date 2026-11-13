@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import type { Project } from '@shared/studio';
 import { invoke, subscribe } from '../lib/api';
-import { assetSheet, assetSignatures, assetWav, denoiseAsset, exportFile, trackMotion, probe, renderFrames, reviewSamples, runExport, speechWav } from './exporter';
+import { assetSheet, assetMotion, assetSignatures, compareTimeline, timelineMotion, videoBars, assetWav, denoiseAsset, exportFile, trackMotion, probe, renderFrames, reviewSamples, runExport, speechWav } from './exporter';
 
 /**
  * Keo's hidden render window: it does the Studio's heavy work (exports, frames for Keo to look at,
@@ -38,6 +38,10 @@ export function RenderApp() {
             } else if (msg.job.kind === 'track') result = await trackMotion(p, msg.job.assetId, msg.job.times, msg.job.box);
             else if (msg.job.kind === 'denoise') result = await denoiseAsset(p, msg.job.assetId, msg.job.strength);
             else if (msg.job.kind === 'signatures') result = await assetSignatures(p, msg.job.assetId, msg.job.times);
+            else if (msg.job.kind === 'motion') result = await assetMotion(p, msg.job.assetId, msg.job.pairs);
+            else if (msg.job.kind === 'compare') result = await compareTimeline(p, msg.job.assetId, msg.job.times, msg.job.source);
+            else if (msg.job.kind === 'bars') result = await videoBars(p, msg.job.assetId, msg.job.times);
+            else if (msg.job.kind === 'timeline_motion') result = await timelineMotion(p, msg.job.pairs);
             else if (msg.job.kind === 'review') result = await reviewSamples(p, msg.job.times);
             else if (msg.job.kind === 'asset_sheet') result = await assetSheet(p, msg.job.assetId);
             else if (msg.job.kind === 'export') {

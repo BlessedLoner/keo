@@ -36,6 +36,7 @@ export interface PushPayloads {
   'studio:ask': import('../shared/studio').StudioAsk;
   /** An AI shot fal.ai finished (or failed) after Keo stopped waiting for it. */
   'studio:aiShot': { projectId: string; state: 'waiting' | 'ready' | 'failed'; message: string };
+  'studio:dna': { job: import('../shared/editDna').DnaJob | null; library: boolean; download?: { name: string; bytes: number; total: number | null; done: boolean } | null };
   'studio:keoAction': { projectId: string; kind: 'cut' | 'split' | 'trim' | 'move' | 'delete' | 'add' | 'captions' | 'change' | 'project' | 'done'; label?: string; at?: number; end?: number; clips?: string[]; index: number; total: number };
   'studio:progress': { projectId: string; stage: 'sound' | 'video' | 'saving' | 'done' | 'failed' | 'checklist'; done?: number; total?: number; file?: string; error?: string; steps?: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; note?: string }> };
 }

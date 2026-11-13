@@ -73,7 +73,7 @@ const PENCIL: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['pencil:conte
 const KEOMODE: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['presence:get', 'voice:modeStart', 'voice:modeStop', 'keomode:close', 'settings:get', 'wake:status']);
 
 /** Keo's hidden render window: read projects and their media frames, write exports, report back. Nothing else. */
-const RENDER: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['studio:get', 'studio:videoTrack', 'studio:videoSamples', 'studio:exportBegin', 'studio:exportChunk', 'studio:exportEnd', 'studio:exportAbort', 'studio:exportProgress', 'studio:jobDone', 'studio:renderReady', 'settings:get', 'visual:file']);
+const RENDER: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(['studio:get', 'studio:videoTrack', 'studio:videoSamples', 'studio:exportBegin', 'studio:exportChunk', 'studio:exportEnd', 'studio:exportAbort', 'studio:exportProgress', 'studio:jobDone', 'studio:renderReady', 'settings:get', 'visual:file', 'studio:lut']);
 
 export function channelAllowed(role: WindowRole, channel: InvokeChannel): boolean {
   if (role === 'main') return true;

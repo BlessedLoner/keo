@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { isAV, LOOKS, needsAnalysis, TRANSITIONS, type EditOp, type LookId, type Project } from '@shared/studio';
+import { isAV, LOOK_LABEL, LOOKS, needsAnalysis, TRANSITIONS, type EditOp, type LookId, type Project } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
@@ -10,7 +10,6 @@ import { errText, invoke } from '../lib/api';
  */
 
 const SFX_KINDS = ['whoosh', 'swipe', 'pop', 'click', 'ding', 'riser', 'boom'] as const;
-const LOOK_LABEL: Record<LookId, string> = { natural: 'Natural', warm: 'Warm', cool: 'Cool', punchy: 'Punchy', cinematic: 'Cinematic', 'black-white': 'Black & white' };
 
 /** Sound clips that are music: on an audio track named Music, or already set to duck. */
 function musicClips(p: Project): string[] {
@@ -52,7 +51,7 @@ export function Autopilot({ project, time, onEdit, onBusy }: { project: Project;
   const look = (() => {
     const first = media.find((c) => c.type === 'media')?.color;
     if (!first) return 'off';
-    return (Object.keys(LOOKS) as LookId[]).find((k) => Object.entries(LOOKS[k]).every(([f, v]) => Math.abs((first as Record<string, number>)[f]! - v) < 1e-6)) ?? 'custom';
+    return (Object.keys(LOOKS) as LookId[]).find((k) => JSON.stringify(Object.entries(LOOKS[k]).sort()) === JSON.stringify(Object.entries(first).filter(([f]) => f in LOOKS[k]).sort())) ?? 'custom';
   })();
 
   const run = async (label: string, f: () => Promise<void>) => {

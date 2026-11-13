@@ -1,12 +1,12 @@
 import { SAMPLE_SCENE } from '@shared/scene';
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
-import { keyValue, MOTION_PIECE_INFO, MOTION_PIECES, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
+import { CUT_SHAPES, keyValue, MOTION_PIECE_INFO, MOTION_PIECES, MOTIONS, TRANSITIONS, volumeAt, type AdjustClip, type AudioClip, type EditOp, type Key, type KeyProp, type MediaClip, type MotionClip, type Project, type ShapeClip, type TextClip } from '@shared/studio';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
-import { Color, Num, Section } from './fields';
+import { Color, Num, Section, Swatch } from './fields';
 import { MotionEdit } from './MotionEdit';
 
 /**
@@ -35,6 +35,18 @@ const MOTION_LABEL: Record<(typeof MOTIONS)[number], string> = {
   'wipe-up': 'Wipe ↑',
   'wipe-down': 'Wipe ↓',
   iris: 'Iris (circle)',
+};
+
+
+const CUT_LABEL: Record<'none' | (typeof CUT_SHAPES)[number], string> = { none: 'None', linear: 'Linear', mirror: 'Mirror', circle: 'Circle', rect: 'Rectangle', star: 'Star', heart: 'Heart' };
+const CUT_ICON: Record<'none' | (typeof CUT_SHAPES)[number], string> = {
+  none: 'M5 5L19 19M19 5L5 19',
+  linear: 'M3 13h18M3 3h18v10H3z',
+  mirror: 'M3 8h18v8H3z',
+  circle: 'M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16z',
+  rect: 'M4 6h16v12H4z',
+  star: 'M12 3l2.6 6 6.4.5-4.9 4.2 1.5 6.3L12 16.6 6.4 20l1.5-6.3L3 9.5l6.4-.5z',
+  heart: 'M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z',
 };
 
 /** Position, scale, rotation and opacity — each can be keyframed at the playhead. */
@@ -70,6 +82,10 @@ export function PositionFields({ clip, time, fps, set }: { clip: Visual; time: n
   const rot = prop('rotation', clip.transform.rotation);
   const op = prop('opacity', clip.transform.opacity);
   const blur = prop('blur', 0);
+  const sx = prop('scaleX', 1);
+  const sy = prop('scaleY', 1);
+  const tx = prop('tiltX', 0);
+  const ty = prop('tiltY', 0);
   return (
     <div className="insp-grid">
       <Num label="X" value={x.value * 100} step={1} suffix="%" onCommit={(v) => x.commit(v / 100)} keyframe={x.keyframe} />
@@ -78,6 +94,14 @@ export function PositionFields({ clip, time, fps, set }: { clip: Visual; time: n
       <Num label="Rotate" value={rot.value} step={1} suffix="°" onCommit={(v) => rot.commit(v)} keyframe={rot.keyframe} />
       <Num label="Opacity" value={op.value * 100} min={0} max={100} step={5} suffix="%" onCommit={(v) => op.commit(v / 100)} keyframe={op.keyframe} />
       <Num label="Blur" value={blur.value} min={0} max={20} step={0.5} suffix="%" onCommit={(v) => blur.commit(v)} keyframe={blur.keyframe} />
+      <Num label="Stretch X" value={sx.value * 100} min={1} max={2000} step={5} suffix="%" onCommit={(v) => sx.commit(v / 100)} keyframe={sx.keyframe} />
+      <Num label="Stretch Y" value={sy.value * 100} min={1} max={2000} step={5} suffix="%" onCommit={(v) => sy.commit(v / 100)} keyframe={sy.keyframe} />
+      {clip.type === 'media' && (
+        <>
+          <Num label="3D tilt ↕" value={tx.value} min={-80} max={80} step={1} suffix="°" onCommit={(v) => tx.commit(v)} keyframe={tx.keyframe} />
+          <Num label="3D turn ↔" value={ty.value} min={-80} max={80} step={1} suffix="°" onCommit={(v) => ty.commit(v)} keyframe={ty.keyframe} />
+        </>
+      )}
     </div>
   );
 }
@@ -153,11 +177,7 @@ export function MotionFields({ clip, set }: { clip: Visual; set: (p: SetPatch) =
 export function ChromaFields({ clip, set }: { clip: MediaClip; set: (p: SetPatch) => void }) {
   const k = clip.chroma;
   const slider = (key: 'similarity' | 'smoothness' | 'spill', label: string) => (
-    <label className="insp-range" key={`${clip.id}-${key}-${k?.[key]}`}>
-      <span>{label}</span>
-      <input type="range" min={0} max={100} defaultValue={Math.round((k?.[key] ?? 0) * 100)} onPointerUp={(e) => set({ chroma: { [key]: Number((e.target as HTMLInputElement).value) / 100 } })} onKeyUp={(e) => set({ chroma: { [key]: Number((e.target as HTMLInputElement).value) / 100 } })} />
-      <em>{Math.round((k?.[key] ?? 0) * 100)}</em>
-    </label>
+    <Num key={key} label={label} value={Math.round((k?.[key] ?? 0) * 100)} min={0} max={100} step={1} onCommit={(v) => set({ chroma: { [key]: v / 100 } })} />
   );
   return (
     <Section title="Green screen">
@@ -198,16 +218,23 @@ export function EffectsFields({ clip, set }: { clip: MediaClip | AdjustClip; set
     ['glow', 'Glow'],
     ['rgbSplit', 'RGB split'],
     ['lightLeak', 'Light leak'],
+    ['letterbox', 'Cinema bars'],
+    ['filmBurn', 'Film burn'],
+    ['dream', 'Dreamy'],
+    ['glitch', 'Glitch'],
+    ['crt', 'Old TV'],
+    ['sparkle', 'Sparkles'],
+    ['bokeh', 'Bokeh'],
+    ['prism', 'Prism flare'],
+    ['strobe', 'Strobe'],
   ];
   return (
     <Section title="Effects">
-      {rows.map(([k, label]) => (
-        <label className="insp-range" key={`${clip.id}-${k}-${fx[k] ?? 0}`}>
-          <span>{label}</span>
-          <input type="range" min={0} max={100} defaultValue={Math.round((fx[k] ?? 0) * 100)} onPointerUp={(e) => set({ effects: { [k]: Number((e.target as HTMLInputElement).value) / 100 || null } })} onKeyUp={(e) => set({ effects: { [k]: Number((e.target as HTMLInputElement).value) / 100 || null } })} />
-          <em>{Math.round((fx[k] ?? 0) * 100)}</em>
-        </label>
-      ))}
+      <div className="insp-grid">
+        {rows.map(([k, label]) => (
+          <Num key={k} label={label} value={Math.round((fx[k] ?? 0) * 100)} min={0} max={100} step={1} onCommit={(v) => set({ effects: { [k]: v / 100 || null } })} />
+        ))}
+      </div>
       {clip.effects && (
         <button className="btn sm ghost" onClick={() => set({ effects: null })}>
           Remove effects
@@ -282,6 +309,37 @@ export function FrameFields({ clip, projectId, set }: { clip: MediaClip; project
       <button className="btn sm" style={{ marginTop: 10 }} disabled={reframing} onClick={() => void reframe()} title="Keo looks at the clip and pans it to keep the main subject in the middle (for a wide video in a tall frame)">
         {reframing ? <span className="spinner tiny" /> : <Icon name="vision" size={13} />} {reframing ? 'Finding the subject…' : 'Auto-reframe (follow the subject)'}
       </button>
+      <h4 style={{ margin: '12px 0 8px' }}>Mask</h4>
+      <div className="mask-chips" role="radiogroup" aria-label="Mask shape">
+        {(['none', ...CUT_SHAPES] as const).map((k) => (
+          <button
+            key={k}
+            role="radio"
+            aria-checked={(clip.cut?.shape ?? 'none') === k}
+            className={(clip.cut?.shape ?? 'none') === k ? 'on' : ''}
+            title={CUT_LABEL[k]}
+            onClick={() => set({ cut: k === 'none' ? null : { ...(clip.cut ?? { x: 0, y: 0, w: 0.6, h: k === 'mirror' ? 0.35 : 0.6, angle: 0, feather: 0, invert: false }), shape: k } })}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+              <path d={CUT_ICON[k]} />
+            </svg>
+            <span>{CUT_LABEL[k]}</span>
+          </button>
+        ))}
+      </div>
+      {clip.cut && (
+        <div className="insp-grid">
+          <Num label="X" value={Math.round(clip.cut.x * 100)} min={-100} max={100} step={1} suffix="%" onCommit={(v) => set({ cut: { ...clip.cut!, x: v / 100 } })} />
+          <Num label="Y" value={Math.round(clip.cut.y * 100)} min={-100} max={100} step={1} suffix="%" onCommit={(v) => set({ cut: { ...clip.cut!, y: v / 100 } })} />
+          {clip.cut.shape !== 'linear' && clip.cut.shape !== 'mirror' && <Num label="Width" value={Math.round(clip.cut.w * 100)} min={2} max={300} step={1} suffix="%" onCommit={(v) => set({ cut: { ...clip.cut!, w: v / 100 } })} />}
+          {clip.cut.shape !== 'linear' && <Num label={clip.cut.shape === 'mirror' ? 'Band' : 'Height'} value={Math.round(clip.cut.h * 100)} min={2} max={300} step={1} suffix="%" onCommit={(v) => set({ cut: { ...clip.cut!, h: v / 100 } })} />}
+          <Num label="Angle" value={clip.cut.angle} min={-360} max={360} step={1} suffix="°" onCommit={(v) => set({ cut: { ...clip.cut!, angle: v } })} />
+          <Num label="Feather" value={Math.round(clip.cut.feather * 100)} min={0} max={100} step={1} suffix="%" onCommit={(v) => set({ cut: { ...clip.cut!, feather: v / 100 } })} />
+          <label className="insp-check">
+            <input type="checkbox" checked={clip.cut.invert} onChange={(e) => set({ cut: { ...clip.cut!, invert: e.target.checked } })} /> Invert
+          </label>
+        </div>
+      )}
       <h4 style={{ margin: '12px 0 8px' }}>Crop</h4>
       <div className="insp-grid">
         {(['left', 'right', 'top', 'bottom'] as const).map((k) => (
@@ -320,17 +378,17 @@ export function ShapeFields({ clip, set }: { clip: ShapeClip; set: (p: SetPatch)
         <label className="insp-color">
           <span>Fill</span>
           <input type="checkbox" checked={!!st.fill} onChange={(e) => s({ fill: e.target.checked ? '#FFFFFF' : null })} />
-          {st.fill && <input type="color" value={st.fill.slice(0, 7)} onChange={(e) => s({ fill: e.target.value.toUpperCase() })} />}
+          {st.fill && <Swatch value={st.fill} onCommit={(c) => s({ fill: c })} />}
         </label>
         <label className="insp-color">
           <span>Gradient</span>
           <input type="checkbox" checked={!!st.fill2} onChange={(e) => s({ fill2: e.target.checked ? '#8B6BFF' : null })} />
-          {st.fill2 && <input type="color" value={st.fill2.slice(0, 7)} onChange={(e) => s({ fill2: e.target.value.toUpperCase() })} />}
+          {st.fill2 && <Swatch value={st.fill2} onCommit={(c) => s({ fill2: c })} />}
         </label>
         <label className="insp-color">
           <span>Outline</span>
           <input type="checkbox" checked={!!st.stroke} onChange={(e) => s({ stroke: e.target.checked ? '#FFFFFF' : null })} />
-          {st.stroke && <input type="color" value={st.stroke.slice(0, 7)} onChange={(e) => s({ stroke: e.target.value.toUpperCase() })} />}
+          {st.stroke && <Swatch value={st.stroke} onCommit={(c) => s({ stroke: c })} />}
         </label>
         <Num label="Thickness" value={st.strokeWidth} min={0} max={100} step={1} onCommit={(v) => s({ strokeWidth: v })} />
         <Num label="Glow" value={st.glow} min={0} max={80} step={2} onCommit={(v) => s({ glow: v })} />
@@ -380,8 +438,8 @@ export function CounterFields({ clip, set }: { clip: TextClip; set: (p: SetPatch
 }
 
 const NEEDS_TEXT: PresetId[] = ['title', 'kinetic-words', 'lower-third', 'counter'];
-const NEEDS_MEDIA: PresetId[] = ['logo-reveal', 'phone', 'avatar'];
-const PRESET_LABEL: Record<PresetId, string> = {
+export const NEEDS_MEDIA: PresetId[] = ['logo-reveal', 'phone', 'avatar'];
+export const PRESET_LABEL: Record<PresetId, string> = {
   title: 'Kinetic title',
   'kinetic-words': 'Word by word',
   'lower-third': 'Lower third',
@@ -481,7 +539,7 @@ export function ElementsPanel({ project, time, onEdit }: { project: Project; tim
 }
 
 /** Starting words for each motion piece (changed in the Motion tab after). */
-const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp, { op: 'add_motion' }>, 'op' | 'piece' | 'place'>> = {
+export const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp, { op: 'add_motion' }>, 'op' | 'piece' | 'place'>> = {
   headline: { text: 'Your big idea here', sub: 'Chapter one' },
   word_pop: { text: 'Wow', icon: 'fire' },
   icon_burst: { text: 'Grow faster', items: ['rocket', 'chart', 'users', 'heart'] },
@@ -497,6 +555,16 @@ const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<EditOp,
   scene: { text: 'This changes everything', items: ['everything'], sub: 'The big idea', background: '#F4F1EA', color: '#111111' },
   backdrop: { text: 'Keo', background: '#0D0C12' },
   scene3d: { text: SAMPLE_SCENE.title, visual: SAMPLE_SCENE },
+  ticker: { text: 'New collection out now', sub: 'Breaking', items: ['Free shipping this week'] },
+  countdown: { text: 'Launch', value: 3 },
+  location: { text: 'Lagos', sub: 'Nigeria · Golden hour' },
+  subscribe: { text: 'Subscribe', sub: 'Subscribed' },
+  progress: { text: 'Chapters', items: ['Intro', 'Setup', 'Result', 'Outro'], value: 2 },
+  split_title: { text: 'Summer', sub: 'collection' },
+  price_tag: { text: 'Today only', value: 49, unit: '$', sub: '$89' },
+  social_card: { text: 'This is the best thing I bought all year. Totally worth it!', sub: '@happycustomer', value: 1280 },
+  viewfinder: { text: 'REC', sub: '4K · 60 FPS' },
+  glitch_title: { text: 'Level up', sub: 'New update' },
 };
 
 /** Motion graphics: ready-made animated pieces added at the playhead (Keo can sync them to the speech). */

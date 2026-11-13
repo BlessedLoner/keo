@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Task, ToolActivity } from '@shared/domain';
-import type { Project, StudioAsk } from '@shared/studio';
+import { findClip, type Project, type StudioAsk, type StudioDirection } from '@shared/studio';
+import { useFilmstrip } from './thumbs';
 import { Icon } from '../components/Icon';
 import { Markdown } from '../components/Markdown';
 import { ApprovalCard } from '../components/TaskWidgets';
@@ -39,8 +40,30 @@ const OUTCOME_ICON: Record<ToolActivity['outcome'], string> = {
 /** Keo's open question per project (kept while the user looks elsewhere in Studio). */
 const asks = new Map<string, StudioAsk>();
 
+/** What the user can ask about the clip they selected (sent with the clip's id). */
+const CLIP_ACTIONS: Array<{ label: string; text: string; kinds: Array<'media' | 'text' | 'audio' | 'other'> }> = [
+  { label: 'Trim tighter', text: 'Trim this clip tighter: cut the slow start and end so it gets to the point.', kinds: ['media', 'audio'] },
+  { label: 'Add motion', text: 'Give this clip motion that fits it: a slow push, a punch-in on the key moment, or a gentle pan.', kinds: ['media'] },
+  { label: 'Speed ramp', text: 'Give this clip a cinematic speed ramp (fast, then slow on the key moment).', kinds: ['media'] },
+  { label: 'Cover with B-roll', text: 'Cover part of this clip with B-roll that matches what is said or shown here (from my media, or ask me).', kinds: ['media'] },
+  { label: 'Colour it', text: 'Grade this clip so it looks cinematic and matches the rest of the video (use the pro colour tools).', kinds: ['media'] },
+  { label: 'Remove background', text: 'Remove the background of this clip so only the person shows, and put a clean background behind it.', kinds: ['media'] },
+  { label: 'Animate it', text: 'Make this text come in and go out with an animation that fits the video.', kinds: ['text', 'other'] },
+  { label: 'Restyle', text: 'Restyle this text so it looks like a premium title for this video.', kinds: ['text'] },
+  { label: 'Clean the sound', text: 'Clean the sound of this clip: remove the noise and make the voice clear.', kinds: ['audio'] },
+];
+
+/** A creative director's first move: the kind of video, as a brief Keo turns into directions. */
+const STARTERS: Array<{ label: string; text: string }> = [
+  { label: 'Luxury promo', text: 'Turn my clips into a luxury promotional video for my brand: cinematic, elegant transitions, suitable music and animated captions.' },
+  { label: 'Cinematic travel', text: 'Make a cinematic travel film from my clips: beautiful colour, music-led pacing and smooth transitions.' },
+  { label: 'Product showcase', text: 'Make a product showcase ad: hook in the first 2 seconds, clear benefits, close-ups, and a strong end card.' },
+  { label: 'YouTube intro', text: 'Make a 6–10 second YouTube intro with my name, bold motion titles and a punchy sound.' },
+  { label: 'Social reel', text: 'Make a fast, engaging vertical reel for TikTok and Instagram: cut on the beat, captions and a strong hook.' },
+];
+
 /** Keo's chat for this project (or, while Keo carries a task across projects, the chat it started in). */
-export function StudioKeo({ project, conversation }: { project: Project; conversation?: string | null }) {
+export function StudioKeo({ project, conversation, selected = null }: { project: Project; conversation?: string | null; selected?: string | null }) {
   const ui = useUi();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -154,6 +177,8 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
   const hasMedia = project.assets.some((a) => a.kind !== 'audio') || project.tracks.some((t) => t.clips.length);
   const hasSpeech = project.assets.some((a) => a.hasAudio);
   const chips = CHIPS.filter((c) => !c.needs || (c.needs === 'media' ? hasMedia : hasSpeech));
+  const selClip = selected ? findClip(project, selected)?.clip : undefined;
+  const selKind: 'media' | 'text' | 'audio' | 'other' = !selClip ? 'other' : selClip.type === 'media' ? 'media' : selClip.type === 'text' ? 'text' : selClip.type === 'audio' ? 'audio' : 'other';
   const toggleWatch = async (on: boolean) => {
     setWatchEdits(on);
     setWatchEdits((await invoke('studio:liveEdits', { on }).catch(() => ({ on }))).on);
@@ -168,8 +193,15 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
         {messages.length === 0 && !live && (
           <div className="keo-hello">
             <p>
-              <strong>Tell Keo what you want.</strong> Keo edits this video while you watch — every change can be undone.
+              <strong>Describe your vision.</strong> Keo is your creative director: it reads your clips, offers directions to choose from, shows the storyboard, then builds an edit you can change piece by piece.
             </p>
+            <div className="keo-starters">
+              {STARTERS.map((s) => (
+                <button key={s.label} className="keo-starter" onClick={() => setDraft(s.text)} title={s.text}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
             <p className="small muted">Keo knows where your playhead is and what you selected: “make this part faster”, “put a title here”, “use a warmer look on the selected clips”.</p>
           </div>
         )}
@@ -188,7 +220,9 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
         {question && (
           <div className="keo-ask">
             <p className="keo-ask-q">{question.question}</p>
-            {!!question.plan?.length && (
+            {!!question.directions?.length && <Directions list={question.directions} disabled={!conversationId || busy} onPick={(d) => void send(`Use the direction “${d.name}”.`)} />}
+            {!!question.plan?.length && question.plan.some((x) => x.asset) && <Storyboard project={project} plan={question.plan} />}
+            {!!question.plan?.length && !question.plan.some((x) => x.asset) && (
               <ol className="keo-plan">
                 {question.plan.map((s, i) => (
                   <li key={i}>
@@ -218,7 +252,17 @@ export function StudioKeo({ project, conversation }: { project: Project; convers
             )),
         )}
       </div>
-      {!busy && !question && chips.length > 0 && (
+      {!busy && !question && selClip && (
+        <div className="keo-clip-actions">
+          <span className="small muted">This clip:</span>
+          {CLIP_ACTIONS.filter((a) => a.kinds.includes(selKind)).map((a) => (
+            <button key={a.label} className="btn sm" onClick={() => void send(`${a.text} (the selected clip ${selClip.id})`)} disabled={!conversationId}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {!busy && !question && chips.length > 0 && !selClip && (
         <div className="keo-chips">
           {chips.map((c) => (
             <button key={c.label} className="btn sm" onClick={() => void send(c.text)} disabled={!conversationId}>
@@ -274,4 +318,64 @@ function ToolLines({ tools }: { tools: ToolActivity[] }) {
       ))}
     </ul>
   );
+}
+
+/** Directions for a whole edit, as cards: how much it moves, how fast it is cut, how hard it hits. */
+export function Directions({ list, disabled, onPick }: { list: StudioDirection[]; disabled: boolean; onPick: (d: StudioDirection) => void }) {
+  const meter = (label: string, v: number) => (
+    <div className="dir-meter">
+      <span>{label}</span>
+      <i>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <b key={n} className={n <= v ? 'on' : ''} />
+        ))}
+      </i>
+    </div>
+  );
+  return (
+    <div className="dir-cards">
+      {list.map((d, i) => (
+        <button key={d.name} className={`dir-card${i === 0 ? ' pick' : ''}`} style={{ ['--dir' as string]: d.accent ?? '#7a8cff' }} disabled={disabled} onClick={() => onPick(d)}>
+          {i === 0 && <span className="dir-badge">Keo’s pick</span>}
+          <strong>{d.name}</strong>
+          <span className="dir-about">{d.about}</span>
+          {(d.look || d.music) && (
+            <span className="dir-tags">
+              {d.look && <em>{d.look}</em>}
+              {d.music && <em>♪ {d.music}</em>}
+            </span>
+          )}
+          {meter('Motion', d.motion)}
+          {meter('Pace', d.pace)}
+          {meter('Impact', d.impact)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Keo's plan as a storyboard: a real frame of the media each moment shows, its time and what happens. */
+function Storyboard({ project, plan }: { project: Project; plan: NonNullable<StudioAsk['plan']> }) {
+  return (
+    <div className="storyboard">
+      {plan.map((s, i) => (
+        <figure key={i} className="sb-shot">
+          <ShotFrame project={project} assetId={s.asset} from={s.from ?? 0} />
+          <figcaption>
+            <span className="keo-plan-at">
+              {i + 1} · {s.at}
+            </span>
+            <span>{s.what}</span>
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function ShotFrame({ project, assetId, from }: { project: Project; assetId: string | undefined; from: number }) {
+  const asset = assetId ? project.assets.find((a) => a.id === assetId) : undefined;
+  const strip = useFilmstrip(project.id, asset);
+  const src = strip?.frames.length ? strip.frames[strip.step === Infinity ? 0 : Math.min(strip.frames.length - 1, Math.max(0, Math.floor(from / strip.step)))] : undefined;
+  return <div className="sb-frame">{src ? <img src={src} alt="" /> : <span className="muted small">{asset ? '…' : 'Title / graphic'}</span>}</div>;
 }

@@ -1,3 +1,4 @@
+import type { EditDnaService } from '../studio/editDna';
 import fs from 'node:fs';
 import { CHARACTER_PICTURE_USD, REAL_PICTURE_USD, motionCloneCost, MUSIC_SECONDS, musicCost, SFX_MAX_SECONDS, sfxCost, studioPrice, TALK_MAX_SECONDS, type TalkQuality } from '../../shared/aiPrices';
 import path from 'node:path';
@@ -65,6 +66,8 @@ export interface StudioToolDeps {
   /** Shows Keo's step list in the Studio page. */
   checklist: (projectId: string, steps: Step[]) => void;
   ask: (a: StudioAsk) => void;
+  /** Edit DNA: reference videos measured into reusable editing blueprints. */
+  editDna?: EditDnaService;
   aiShot: (projectId: string, o: { assetId: string; prompt: string; model: AiVideoModelId; seconds: number; audio: boolean; at: number }, signal: AbortSignal) => Promise<{ clip: string | null; asset: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
   /** One shot made again (a new take) or made longer (from its last frame). */
   shotAgain?: (projectId: string, o: { clip: string; mode: 'redo' | 'extend'; prompt?: string; model?: AiVideoModelId; seconds?: number }, signal: AbortSignal) => Promise<{ clip: string | null; seconds: number; cached: boolean; costUsd: number; pending: boolean }>;
@@ -126,9 +129,9 @@ const MOTION_HELP =
   `. Icons: ${MOTION_ICONS.join(', ')} (or an emoji). place: ${MOTION_PLACES.join('|')} — auto keeps it off the speaker (above the head on tall videos, beside it on wide ones). Sync to the speech with say: the words exactly as they are said (from studio__transcript); the clip then starts on them, its words come in as they are said, and it stays a moment after (start and duration are then optional). For pills, lists and icons give sayItems (the words said for each item) so each item comes in on its own words. Change one later with set {clip, text, motion: {piece, sub, items, icon, value, unit, accent, accent2, color, font, beats}} or set {clip, transform}. Motion for a talking video or podcast: transcribe first (studio__transcript), then put one motion clip on each key moment (about one every 6–12 seconds, never two at once, none in the first second): a headline when a topic starts, a counter when a number is said, a list or pills when steps or points are listed, a word pop on a punchline, a quote card on a strong line, a lower third with the speaker's name near the start, a light sweep between parts. Keep each text short (what is said, not the whole sentence) and use the brand colours when there is a brand kit. Then look at a few frames (studio__look) to check nothing covers the face.`;
 
 const OPS_HELP =
-  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip, seconds} (into this clip from the clip that ends where it starts; use them between different shots, never on the jump cuts inside one talking clip, and not on every cut), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), cutout true (AI background removal: only the people show, no green screen needed; put it on a track above a new background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), eq {low, mid, high: -12..12 dB} or voice|warm|bass|bright|phone (equalizer; null flat), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; text style.curve -100..100 (text along an arc, like a badge or a rainbow); group {clips} / ungroup {clip} (grouped clips move and are deleted together: move or delete one of them); keyframes also take curve [x1, y1, x2, y2] (a custom cubic-bezier ease into that keyframe); add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; replace_words {find, replace} (a word or phrase, any case, in every text and caption, e.g. a name speech-to-text misheard); set_project {name, width, height, fps, background, loudness}; set_all {trackName (or track, or several names), only text|motion|media|audio|shape, then any set fields except clip and text} (the same change to EVERY clip on those tracks in one op: all captions bigger, yellow or higher up — set_all {trackName "Captions", style {sizePct 5.5, color "#FFD400"}, transform {y 0.8}}; every headline another colour — set_all {trackName "Showcase titles", motion {accent "#FF4D8D"}}; all screens flat — set_all {trackName "Screens", glass false, keys {tiltX null, tiltY null}}). Never send one set per caption line to restyle captions, and never run studio__captions again just to change how captions look: it re-transcribes and replaces them. To change the words of one caption line use set {clip, text}: its word-by-word highlight is kept. ' +
+  'Operations (all apply or none do): add_media {assetId, start (seconds or "end"), in, duration, track or trackName (e.g. "B-roll": made above the other videos), fit, transform, zooms}; add_text {text, start, duration, style, transform, animIn, animOut}; add_audio {assetId, start, in, duration, volume, track or trackName (e.g. "Music", "Effects"), duck}; move {clip, start, track}; trim {clip, trimStart (seconds cut from its start, the end stays), duration}; split {clip, at}; duplicate {clip, start, track}; replace_media {clip, assetId, in} (another video, picture or sound in its place, keeping its timing, motion and look); marker {at, label, remove} (the user’s markers are listed in the timeline: "marker 2" means the second); detach_audio {clip} (a video’s sound on its own track); freeze {clip, at, duration} (hold a frame; later clips move); delete {clip, ripple}; cut_range {from, to} and cut_ranges {ranges: [{from, to}]} (remove that time from every track and close the gap; times as before the cut); set {clip, text, style, transform, volume, volumeKeys [{at (seconds into the clip), value 0..4, ease}] (the sound rises and dips over the clip: music down under a line, up for the drop), speed, fadeIn, fadeOut, fit, animIn, animOut, animSeconds, highlight, color, zooms, voice, duck, transition {kind crossfade|slide|push|zoom|whip|wipe|blur|flash|dip|iris|slide-up|wipe-down|spin|zoom-out|flip|glitch|stretch|push-up|shrink|slide-down|wipe-left|wipe-up, seconds} (into this clip from the clip that ends where it starts; use them between different shots, never on the jump cuts inside one talking clip, and not on every cut), crop {left, top, right, bottom} (fractions cut off, up to 0.45), speedCurve (montage|hero|bullet|flash-in|flash-out|jump-cut, or points [{x 0..1, speed}], null for steady), backdrop blur (with fit contain: a blurred copy fills the frame — for a landscape video in a vertical project), effects {grain, vhs, glow, rgbSplit, lightLeak, letterbox (cinema bars), filmBurn, dream, glitch, crt (old TV), sparkle, bokeh, prism (rainbow flare), strobe: 0..1}, chroma {color #00FF00, similarity, smoothness, spill: 0..1} (green screen: put the keyed clip on a track above the background), cutout true (AI background removal: only the people show, no green screen needed; put it on a track above a new background), flipX, flipY (mirror), blend normal|screen|multiply|overlay|lighten|darken|add|difference (screen for light leaks, smoke and fire overlays), voiceFx chipmunk|deep|robot|radio|megaphone|echo|hall|underwater (voice changer, null for none), eq {low, mid, high: -12..12 dB} or voice|warm|bass|bright|phone (equalizer; null flat), null removes it}; add_adjust {start, duration, color, effects, blur 0..20, strength 0..1} (an adjustment layer: one grade, blur or effect over every video, picture and element under it for that time, e.g. a black-and-white flashback or a blurred background behind a title; titles and captions stay sharp); set also takes blur and strength for it; text style.curve -100..100 (text along an arc, like a badge or a rainbow); group {clips} / ungroup {clip} (grouped clips move and are deleted together: move or delete one of them); keyframes also take curve [x1, y1, x2, y2] (a custom cubic-bezier ease into that keyframe); add_track {kind, name}; set_track {track, hidden, muted, locked (a locked track’s clips cannot be edited: ask before unlocking a track the user locked), name}; delete_track {track}; replace_words {find, replace} (a word or phrase, any case, in every text and caption, e.g. a name speech-to-text misheard); set_project {name, width, height, fps, background, loudness}; set_all {trackName (or track, or several names), only text|motion|media|audio|shape, then any set fields except clip and text} (the same change to EVERY clip on those tracks in one op: all captions bigger, yellow or higher up — set_all {trackName "Captions", style {sizePct 5.5, color "#FFD400"}, transform {y 0.8}}; every headline another colour — set_all {trackName "Showcase titles", motion {accent "#FF4D8D"}}; all screens flat — set_all {trackName "Screens", glass false, keys {tiltX null, tiltY null}}). Never send one set per caption line to restyle captions, and never run studio__captions again just to change how captions look: it re-transcribes and replaces them. To change the words of one caption line use set {clip, text}: its word-by-word highlight is kept. ' +
   'Positions are fractions of the frame (x 0.5, y 0.5 = centre; captions sit near y 0.75); text size is a percentage of the frame height (captions 5–7, titles 8–12); colours are #RRGGBB. Text animations in: fade, pop, slide-up, slide-down (from above), slide-left (in from the right), slide-right (in from the left), spin, bounce, typewriter, blur-in, zoom, wipe, glitch, letters, drop, wave, words (word by word), words-left / words-right / words-up (each word flies in from that side), words-pop; out: fade, pop, slide-down, slide-up, slide-left, slide-right, blur-out, zoom, wipe. To move text across the screen over time use studio__moment sweep. Style: font, sizePct, weight normal|bold|black, color, color2 (gradient), outline, outlineColor, shadow, glow, glowColor, box, boxColor, uppercase, letterSpacing. Fonts that ship with Keo (look the same everywhere): Inter, Montserrat, Poppins, Bebas Neue, Anton, Archivo Black (bold sans), Instrument Serif, Playfair Display, DM Serif Display (elegant serif, lovely in italic); Windows fonts also work (Segoe UI, Arial, Impact, Georgia…). Rich text: add_text, set and caption lines take marks [{words (the words to style, as written in the text) or from/to (word indexes), font, color, scale (size × the text’s), italic, weight, uppercase}] so one text mixes looks, e.g. "This is how you win" with marks [{words:"win", font:"Instrument Serif", italic:true, color:"#E53935", scale:1.4}]. Later tracks are drawn on top. ' +
-  'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur|tiltX|tiltY: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height; tiltX/tiltY turn a video or picture in 3D, in degrees: tiltY 30 turns its right side away, tiltX 20 tips its top away). Videos and pictures: mask {shape rounded|circle, radius}, frame phone|browser|card (a device mock-up), shadow, glass true (a glass panel: sheen, bright edge and a coloured glow behind it). Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
+  'zooms: keyframes [{at (seconds into the clip), scale (1 = normal), x, y (the centre, fractions), ease cut|smooth|ramp}]: cut jumps, smooth eases in half a second, ramp moves steadily from the keyframe before — a slow push over a 3 s picture: [{at 0, scale 1}, {at 3, scale 1.12, ease ramp}]. color: {exposure, contrast, saturation, temperature, vignette, and pro grading: tint, highlights, shadows, whites, blacks (-1..1), sharpen, fade (0..1), hsl {red|orange|yellow|green|aqua|blue|purple|magenta: {hue, sat, lum -1..1}} (e.g. skies bluer: blue {sat 0.3}; skin warmer: orange {sat 0.15, lum 0.05}), curve [[in, out] 0..1 points] (an S-curve adds contrast), lut {name, amount} (only a LUT the user imported)}. Elements: add_shape {shape rect|circle|ring|line|arrow|star|triangle, start, duration, style {width, height (fractions of the frame), radius, fill, fill2 (gradient), angle, stroke, strokeWidth, glow, glowColor, shadow, draw (outline draws on)}, transform, keys, enter, exit, loop} on the Graphics track. Motion for videos, pictures and shapes: enter/exit {kind fade|slide-left|slide-right|slide-up|slide-down|zoom-in|zoom-out|pop|spin|blur|whip|flash|wipe-left|wipe-right|wipe-up|wipe-down|iris, seconds}; for all of them (text too) loop {kind float|pulse|shake|spin|sway|flicker, amount 0..1, period s} and keys {x|y|scale|scaleX|scaleY|rotation|opacity|blur|tiltX|tiltY: [{at (s into the clip), value, ease linear|in|out|in-out|back|elastic|bounce|hold}]} (a keyed property replaces the clip’s own value; blur in % of the frame height; tiltX/tiltY turn a video or picture in 3D, in degrees: tiltY 30 turns its right side away, tiltX 20 tips its top away). Videos and pictures: mask {shape rounded|circle, radius} (the card’s shape), cut {shape linear|mirror|circle|rect|star|heart, x, y (its middle from the layer’s middle, fractions), w, h (fractions of the layer), angle, feather 0..1, invert} (a cut-out mask: a split-screen line, a band, a spotlight circle, a heart), frame phone|browser|card (a device mock-up), shadow, glass true (a glass panel: sheen, bright edge and a coloured glow behind it). Text: counter {from, to, decimals, prefix, suffix} counts while it is on; animIn also letters|drop|wave (letter by letter), zoom, wipe, glitch; animOut also zoom, wipe. B-roll over a talking head: add_media on trackName "B-roll" at the moment the words mention it, 1.5–4 s long, with a gentle zoom; music: add_audio on trackName "Music" with volume 0.2–0.4 and duck -14.';
 
 export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   const s = d.studio;
@@ -401,13 +404,45 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Ask the user in Studio',
     description:
-      'Ask the user something in Studio with answers to click (2–6 short options; they can also type their own). Use it: to show your edit plan before a whole edit (plan: the moments in order, each with when and what, e.g. {at:"0:00–0:03", what:"Hook headline: What nobody tells you"}; options like "Go ahead", "Make it calmer", "Change the style"), when a clip a moment needs is missing (options: what they could give, "Skip this moment"), and for choices that are the user’s (style, end card name, music mood). Suggest, do not interrogate: one question at a time, with your recommendation as the first option. After asking, end your turn and wait for the answer.',
+      'Ask the user something in Studio with answers to click (2–6 short options; they can also type their own). Use it: to show your edit plan before a whole edit (plan: the moments in order, each with when and what, e.g. {at:"0:00–0:03", what:"Hook headline: What nobody tells you"}, and asset + from (the media id and the second in it this moment shows) so the user sees a storyboard of real frames; options like "Go ahead", "Make it calmer", "Change the style"), when a clip a moment needs is missing (options: what they could give, "Skip this moment"), and for choices that are the user’s (style, end card name, music mood). ' +
+        'As a creative director, when the user describes a whole video in their own words ("a luxury promo for my brand", "make this cinematic") and the style is open, FIRST offer 3–4 directions as cards: directions [{name (2–3 words, e.g. "Quiet Luxury"), about (one line of what it feels like), motion, pace, impact (1–5), look (colour look in a few words), music (mood), accent (#hex for the card)}], options = the direction names (your pick first, then "Mix them"). After they pick, show the plan as a storyboard, then build it as an editable edit. Suggest, do not interrogate: one question at a time, with your recommendation as the first option. After asking, end your turn and wait for the answer.',
     input: z
       .object({
         projectId: ProjectId.optional(),
         question: z.string().trim().min(3).max(300),
         options: z.array(z.string().trim().min(1).max(80)).min(2).max(6),
-        plan: z.array(z.object({ at: z.string().trim().min(1).max(30), what: z.string().trim().min(1).max(160) }).strict()).max(30).optional(),
+        plan: z
+          .array(
+            z
+              .object({
+                at: z.string().trim().min(1).max(30),
+                what: z.string().trim().min(1).max(160),
+                asset: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/).optional(),
+                from: z.number().min(0).max(24 * 3600).optional(),
+              })
+              .strict(),
+          )
+          .max(30)
+          .optional(),
+        directions: z
+          .array(
+            z
+              .object({
+                name: z.string().trim().min(1).max(60),
+                about: z.string().trim().min(1).max(300),
+                // Rounded: a 3.5 from the model is a fine answer, not a reason to refuse the cards.
+                motion: z.number().min(0).max(10).transform((n) => Math.max(1, Math.min(5, Math.round(n)))),
+                pace: z.number().min(0).max(10).transform((n) => Math.max(1, Math.min(5, Math.round(n)))),
+                impact: z.number().min(0).max(10).transform((n) => Math.max(1, Math.min(5, Math.round(n)))),
+                look: z.string().trim().max(60).optional(),
+                music: z.string().trim().max(60).optional(),
+                accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(5)
+          .optional(),
       })
       .strict(),
     output: z.object({ shown: z.boolean(), next: z.string() }),
@@ -422,10 +457,12 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     verificationPolicy: 'Only shows a question in Keo’s window.',
     autonomy: () => ({ tier: 'routine' }),
     preview: () => ({ summary: 'Ask the user', target: null, consequences: [], dataExport: null }),
-    auditView: (i) => ({ options: i.options.length, plan: i.plan?.length ?? 0 }),
+    auditView: (i) => ({ options: i.options.length, plan: i.plan?.length ?? 0, directions: i.directions?.length ?? 0 }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
-      d.ask({ projectId: p.id, question: i.question, options: i.options, ...(i.plan?.length ? { plan: i.plan } : {}) });
+      // A storyboard frame may only name media of this project.
+      const plan = i.plan?.map((x) => (x.asset && !p.assets.some((a) => a.id === x.asset) ? { at: x.at, what: x.what } : x));
+      d.ask({ projectId: p.id, question: i.question, options: i.options, ...(plan?.length ? { plan } : {}), ...(i.directions?.length ? { directions: i.directions } : {}) });
       return { shown: true, next: 'Shown. End your turn now and wait for the user’s answer.' };
     },
   });
@@ -1778,6 +1815,129 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  const useBrand = defineCapability({
+    ...simple({
+      id: 'studio.use_brand',
+      title: 'Put the brand’s logo, intro or outro into the video',
+      description: 'Uses the logo, intro or outro saved in the user’s brand kit: logo = small in the top corner for the whole video (on a Logo track), intro = at the very start (everything else moves later), outro = after the end. One undo step. If none is saved, tell the user to add it in Details → Brand kit.',
+      summary: 'Use the brand kit',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), kind: z.enum(['logo', 'intro', 'outro']) }).strict(),
+    output: z.object({ changes: z.array(z.string()) }),
+    timeoutMs: 60_000,
+    auditView: (i) => ({ kind: i.kind }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const r = await s.useBrand(p.id, i.kind).catch((e: unknown) => {
+        throw new CapabilityError('brand', e instanceof Error ? e.message : String(e), { dispatched: 'no' });
+      });
+      return { changes: r.changes };
+    },
+  });
+
+  // ---------------------------------------------------------------- Edit DNA
+  const dnaId = z.string().regex(/^dna_[A-Za-z0-9]{6,24}$/);
+  const dna = () => {
+    if (!d.editDna) throw fail('unavailable', 'Edit DNA is not available here.');
+    return d.editDna;
+  };
+  const dnaAnalyze = defineCapability({
+    ...simple({
+      id: 'studio.dna_analyze',
+      title: 'Learn a reference video’s editing (Edit DNA)',
+      description:
+        'Measure how a reference video is EDITED and save it as a reusable Edit DNA blueprint in the user’s private library: every shot and its timing, the transitions, camera moves, cuts on the beat, the text on screen, motion graphics, effects and colour (read on this PC, plus frames shown to your AI model). Same edit already saved: it becomes a new version (no duplicate). The reference must be a video of the project (add it with studio__add_media without placing it). It runs in the background (stages show in the Edit DNA tab); with wait true you get the result (a few minutes for long videos). Then tell the user what was rebuilt and what was approximated (the report), and offer to apply it to their clips (studio__dna_apply).',
+      summary: 'Learn the editing of a reference video',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), assetId: z.string().regex(/^as_[A-Za-z0-9]{4,24}$/), name: z.string().trim().min(1).max(80).optional(), wait: z.boolean().default(true) }).strict(),
+    output: z.object({ job: z.string(), status: z.string(), blueprint: z.unknown().nullable(), stages: z.array(z.string()), matched: z.unknown().nullable() }),
+    timeoutMs: 40 * 60_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const job = run(() => dna().analyze(p.id, i.assetId, i.name ? { name: i.name } : {}));
+      const done = i.wait ? await dna().wait(job.id) : job;
+      const b = done.blueprintId ? dna().get(done.blueprintId) : null;
+      return {
+        job: done.id,
+        status: done.status,
+        stages: done.stages.map((x) => `${x.label}: ${x.state}${x.detail ? ` — ${x.detail}` : ''}`),
+        matched: done.matched,
+        blueprint: b ? { id: b.id, name: b.name, category: b.category, status: b.status, shots: b.shots.length, texts: b.texts.length, graphics: b.graphics.length, effects: b.effects.length, seconds: b.seconds, report: b.report } : null,
+      };
+    },
+  });
+  const dnaFind = defineCapability({
+    ...simple({
+      id: 'studio.dna_find',
+      title: 'Find an Edit DNA for what the user wants',
+      description:
+        'Search the user’s Edit DNA library with the user’s own description of the video ("a luxury cinematic promo with fast transitions and elegant typography"): blueprints ranked by how well they fit, with why, considering the project’s shape and how many clips there are. No query: the whole library (name, category, shots, length). Pick the best, say why in one sentence, and apply it with studio__dna_apply.',
+      summary: 'Search Edit DNA',
+    }),
+    input: z.object({ projectId: ProjectId.optional(), query: z.string().trim().max(400).optional() }).strict(),
+    output: z.object({ results: z.array(z.unknown()) }),
+    timeoutMs: 10_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const aspect = p.width > p.height * 1.15 ? 'landscape' : p.height > p.width * 1.15 ? 'vertical' : 'square';
+      const clips = p.assets.filter((a) => a.kind !== 'audio').length;
+      if (!i.query) return { results: dna().list().slice(0, 40).map((b) => ({ id: b.id, name: b.name, category: b.category, tags: b.tags, shots: b.shots.length, seconds: b.seconds, aspect: b.aspect, status: b.status, favorite: b.favorite })) };
+      return { results: dna().find(i.query, { aspect, clips }) };
+    },
+  });
+  const dnaApply = defineCapability({
+    ...simple({
+      id: 'studio.dna_apply',
+      title: 'Apply an Edit DNA to the user’s clips',
+      description:
+        'Rebuild an Edit DNA blueprint with the user’s own videos and pictures (the reference’s footage is never used). A blueprint with a style (most talking edits): the user’s speech is placed whole from 0:00, transcribed, and dressed in the reference’s style — its layout (full, rounded card, raw-beside-edited phones), the user’s own words on screen phrase by phrase the way the reference shows words (stressed word bigger in its typeface and colours), text cards and punch-ins at its pace, black and white, the brand mark and ending with the user’s handle from the Brand kit. Otherwise talking clips keep their speech whole, in order (dead air and long pauses cut as the reference’s pace does) with the reference’s shot rhythm repeated over it: framing punch-ins, camera moves, transitions, look, effects, and captions of the user’s own words in the reference’s caption style. Other clips fill the shots with different moments of each clip. length: reference (as long as the reference) or footage (all the user’s footage: the reference’s middle shots repeat; the default for talking clips). By default the chosen clips and earlier Edit DNA tracks leave the timeline (they stay in Media) and the edit starts at 0:00; at: add it at that time instead, keeping everything. All editable clips, one undo step. assets: the user’s media to use, in order (default: every video and picture except the reference); roles: {shotId: assetId}; only: rebuild just some parts (e.g. ["texts"]). Afterwards tell the user the notes.',
+      summary: 'Apply Edit DNA',
+    }),
+    input: z
+      .object({
+        projectId: ProjectId.optional(),
+        dnaId,
+        assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200).optional(),
+        roles: z.record(z.string().max(8), z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).optional(),
+        at: z.number().min(0).max(86400).optional(),
+        only: z.array(z.enum(['shots', 'texts', 'graphics', 'effects'])).max(4).optional(),
+        length: z.enum(['reference', 'footage']).optional(),
+      })
+      .strict(),
+    output: z.object({ changes: z.array(z.string()), notes: z.array(z.string()), seconds: z.number(), clips: z.number(), mode: z.enum(['talk', 'montage']), captions: z.number() }),
+    timeoutMs: 10 * 60_000,
+    auditView: (i) => ({ dna: i.dnaId }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      const assets = i.assets ?? p.assets.filter((a) => a.kind !== 'audio').map((a) => a.id);
+      try {
+        const r = await dna().apply(p.id, i.dnaId, { assets, ...(i.roles ? { roles: i.roles } : {}), ...(i.at !== undefined ? { at: i.at } : {}), ...(i.only ? { only: i.only } : {}), ...(i.length ? { length: i.length } : {}) });
+        return { changes: r.changes, notes: r.notes, seconds: r.seconds, clips: r.clips, mode: r.mode, captions: r.captions };
+      } catch (e) {
+        if (e instanceof StudioError) throw fail('studio', e.message);
+        throw e;
+      }
+    },
+  });
+  const dnaCombine = defineCapability({
+    ...simple({
+      id: 'studio.dna_combine',
+      title: 'Combine Edit DNA blueprints',
+      description: 'Make a new blueprint from parts of others: the shots (timing, transitions, camera) of one, the text of another, the graphics and effects of others, fitted to the first one’s length. Saved in the library; apply it with studio__dna_apply.',
+      summary: 'Combine Edit DNA',
+    }),
+    input: z.object({ shots: dnaId, texts: dnaId.optional(), graphics: dnaId.optional(), effects: dnaId.optional(), name: z.string().trim().min(1).max(80) }).strict(),
+    output: z.object({ id: z.string(), name: z.string() }),
+    timeoutMs: 10_000,
+    auditView: () => ({}),
+    async execute(i) {
+      const b = run(() => dna().combine({ shots: i.shots, ...(i.texts ? { texts: i.texts } : {}), ...(i.graphics ? { graphics: i.graphics } : {}), ...(i.effects ? { effects: i.effects } : {}) }, i.name));
+      return { id: b.id, name: b.name };
+    },
+  });
+
   const sounds = defineCapability({
     ...simple({
       id: 'studio.sounds',
@@ -2041,7 +2201,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project').describe('The shorter side in pixels; project: the project size (1080 for most)'),
         fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
         quality: z.enum(['standard', 'high', 'best']).default('high'),
-        format: z.enum(['mp4', 'gif', 'wav']).default('mp4').describe('mp4: the video; gif: an animated GIF (up to 480 px wide, 15 fps, at most 60 s) for chats and sites; wav: the sound alone (a voice-over or podcast)'),
+        format: z.enum(['mp4', 'mov', 'gif', 'wav']).default('mp4').describe('mp4: the video; mov: the same as a QuickTime .mov (when the user asks for MOV, or for Final Cut / Premiere); gif: an animated GIF (up to 480 px wide, 15 fps, at most 60 s) for chats and sites; wav: the sound alone (a voice-over or podcast)'),
         name: z.string().trim().min(1).max(80).optional().describe('File name without the extension; default: the project name'),
       })
       .strict(),
@@ -2081,7 +2241,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, motionEdit, moment, brand, characters, review, proofread, showcase, viral, series, writePost, postYouTube, versions, aiShot, shotAgain, swapCharacter, characterPictures, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, motionEdit, moment, brand, useBrand, dnaAnalyze, dnaFind, dnaApply, dnaCombine, characters, review, proofread, showcase, viral, series, writePost, postYouTube, versions, aiShot, shotAgain, swapCharacter, characterPictures, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

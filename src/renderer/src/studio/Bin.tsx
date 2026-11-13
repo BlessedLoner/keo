@@ -27,6 +27,25 @@ export const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css
   { id: 'wave', label: 'Wave', sample: 'wave~', css: { fontWeight: 800, fontSize: 18, color: '#8bf' }, style: { sizePct: 7, weight: 'black', color: '#88BBFF', shadow: 8 }, animIn: 'wave', duration: 4 },
   { id: 'subtitle', label: 'Subtitle', sample: 'Subtitle', css: { fontSize: 14, color: '#fff', textShadow: '0 1px 3px #000' }, style: { sizePct: 3.6, weight: 'normal', shadow: 14 }, animIn: 'fade', y: 0.86 },
   { id: 'outline', label: 'Outline', sample: 'Outline', css: { fontWeight: 900, fontSize: 19, color: 'transparent', WebkitTextStroke: '1.5px #fff' }, style: { sizePct: 8, weight: 'black', color: '#00000000', outline: 4, outlineColor: '#FFFFFF', shadow: 0 }, animIn: 'drop' },
+  // Modern looks built on Keo's own fonts.
+  { id: 'chrome', label: 'Chrome', sample: 'CHROME', css: {}, style: { font: 'Unbounded', sizePct: 7, weight: 'black', uppercase: true, color: '#F4F6FA', color2: '#7C8696', outline: 2, outlineColor: '#1B1F27', shadow: 18 }, animIn: 'zoom' },
+  { id: 'luxury', label: 'Luxury serif', sample: 'Maison', css: {}, style: { font: 'Cormorant Garamond', sizePct: 7.5, weight: 'normal', italic: true, color: '#F3E7C9', letterSpacing: 2, shadow: 12 }, animIn: 'blur-in' },
+  { id: 'editorial', label: 'Editorial', sample: 'The Edit', css: {}, style: { font: 'Fraunces', sizePct: 8, weight: 'bold', color: '#FFFFFF', shadow: 10 }, animIn: 'words-up' },
+  { id: 'poster', label: 'Poster', sample: 'NOW', css: {}, style: { font: 'Anton', sizePct: 14, weight: 'normal', uppercase: true, color: '#FFFFFF', letterSpacing: -1, shadow: 20 }, animIn: 'drop' },
+  { id: 'sport', label: 'Sport', sample: 'GAME DAY', css: {}, style: { font: 'Big Shoulders Display', sizePct: 10, weight: 'black', uppercase: true, italic: true, color: '#FFD400', outline: 3, outlineColor: '#111111', shadow: 12 }, animIn: 'slide-left' },
+  { id: 'neon-sign', label: 'Neon sign', sample: 'Open', css: {}, style: { font: 'Monoton', sizePct: 9, weight: 'normal', color: '#FFFFFF', glow: 46, glowColor: '#36E2FF', shadow: 0 }, animIn: 'glitch' },
+  { id: 'script', label: 'Signature', sample: 'with love', css: {}, style: { font: 'Great Vibes', sizePct: 9, weight: 'normal', color: '#FFFFFF', shadow: 14 }, animIn: 'wipe' },
+  { id: 'handwritten', label: 'Handwritten', sample: 'note to self', css: {}, style: { font: 'Caveat', sizePct: 7, weight: 'bold', color: '#FFE45E', shadow: 8, curve: -12 }, animIn: 'typewriter' },
+  { id: 'marker', label: 'Marker', sample: 'DON’T SKIP', css: {}, style: { font: 'Permanent Marker', sizePct: 7, weight: 'normal', color: '#FFFFFF', box: true, boxColor: '#E53935E6', shadow: 0 }, animIn: 'pop' },
+  { id: 'comic', label: 'Comic', sample: 'BOOM!', css: {}, style: { font: 'Bangers', sizePct: 12, weight: 'normal', uppercase: true, color: '#FFD400', outline: 7, outlineColor: '#111111', shadow: 0, curve: 18, letterSpacing: 2 }, animIn: 'bounce' },
+  { id: 'tech', label: 'Tech', sample: 'SYSTEM ONLINE', css: {}, style: { font: 'Orbitron', sizePct: 5, weight: 'bold', uppercase: true, color: '#9AF7FF', letterSpacing: 8, glow: 18, glowColor: '#36E2FF', shadow: 0 }, animIn: 'letters' },
+  { id: 'retro', label: 'Retro game', sample: 'LEVEL UP', css: {}, style: { font: 'Press Start 2P', sizePct: 4.5, weight: 'normal', color: '#FFFFFF', outline: 4, outlineColor: '#7A2BFF', shadow: 0 }, animIn: 'typewriter' },
+  { id: 'minimal', label: 'Minimal', sample: 'less is more', css: {}, style: { font: 'Manrope', sizePct: 4.5, weight: 'normal', color: '#FFFFFF', letterSpacing: 6, shadow: 6 }, animIn: 'fade' },
+  { id: 'stacked', label: 'Bold stack', sample: 'MAKE IT COUNT', css: {}, style: { font: 'Archivo Black', sizePct: 9, weight: 'black', uppercase: true, color: '#FFFFFF', maxWidth: 0.6, lineHeight: 0.95, shadow: 16 }, animIn: 'words-pop' },
+  { id: 'sunset', label: 'Sunset gradient', sample: 'Golden', css: {}, style: { font: 'Shrikhand', sizePct: 10, weight: 'normal', color: '#FFD36B', color2: '#FF4D8D', shadow: 14 }, animIn: 'wave' },
+  { id: 'label', label: 'Label tag', sample: 'NEW DROP', css: {}, style: { font: 'Space Grotesk', sizePct: 3.6, weight: 'bold', uppercase: true, color: '#111111', box: true, boxColor: '#FFFFFFF0', letterSpacing: 4, shadow: 0 }, animIn: 'slide-up' },
+  { id: 'cinema', label: 'Cinema credit', sample: 'A FILM BY', css: {}, style: { font: 'Instrument Serif', sizePct: 4, weight: 'normal', uppercase: true, color: '#E9E4D8', letterSpacing: 14, shadow: 8 }, animIn: 'blur-in', duration: 4 },
+  { id: 'brush', label: 'Brush script', sample: 'Adventure', css: {}, style: { font: 'Kaushan Script', sizePct: 10, weight: 'normal', color: '#FFFFFF', shadow: 18, curve: -8 }, animIn: 'letters' },
 ];
 
 /** Stickers: emoji drawn big, popping in and floating. */

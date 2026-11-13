@@ -13,6 +13,7 @@ import { accountPage } from './pages';
 import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
 import { creditsLeft, handleStudio, payWithCredits } from './studio';
+import { handleDna } from './dna';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -470,6 +471,10 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     // Keo Studio's AI (fal.ai with Keo's key), paid with Studio credits.
     const studio = await handleStudio(req, route, env, { fetch: deps.fetch, now, db, waitUntil: deps.waitUntil, account: () => account(req, db, now) });
     if (studio) return studio;
+
+    // The shared Edit DNA library (blueprints users chose to publish; the editing only).
+    const dna = await handleDna(req, route, { db, now, waitUntil: deps.waitUntil, account: () => account(req, db, now) });
+    if (dna) return dna;
 
     // Report a problem: what the user wrote and saw (their recent log with personal details out).
     if (req.method === 'POST' && route === '/v1/report') {

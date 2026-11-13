@@ -1,7 +1,7 @@
 import type { VisualScene } from '@shared/scene';
 import { useEffect, useState } from 'react';
 import { MOTION_ICONS, MOTION_PIECE_INFO, MOTION_PIECES, type EditOp, type MotionClip } from '@shared/studio';
-import { Color, Num, Section } from './fields';
+import { Color, Num, Section, Swatch } from './fields';
 
 type SetPatch = Omit<Extract<EditOp, { op: 'set' }>, 'op' | 'clip'>;
 
@@ -22,6 +22,16 @@ const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: b
   scene: { sub: 'Kicker (small line above)', items: 'Words in the accent italic (one per line; default the last word)', icon: true, value: true, background: true },
   backdrop: { background: true },
   scene3d: {},
+  ticker: { sub: 'Label (LIVE, BREAKING…)', items: 'More lines to scroll (one per line)' },
+  countdown: { value: true },
+  location: { sub: 'Smaller line (city, date…)' },
+  subscribe: { sub: 'After the tap (Subscribed)' },
+  progress: { items: 'Chapters (one per line)', value: true },
+  split_title: { sub: 'Second line (serif)' },
+  price_tag: { sub: 'Old price (struck through)', value: true },
+  social_card: { sub: '@handle', value: true },
+  viewfinder: { sub: 'Bottom line (4K · 60 FPS)' },
+  glitch_title: { sub: 'Kicker' },
 };
 
 const SETTINGS: Array<[VisualScene['background'], string]> = [['sky', 'Daylight'], ['sunset', 'Sunset'], ['night', 'Night'], ['light', 'Light studio'], ['dark', 'Dark studio']];
@@ -70,7 +80,7 @@ function SceneFields({ clip, set }: { clip: MotionClip; set: (p: SetPatch) => vo
       {named.map((o) => (
         <label key={o.id} className="insp-num wide">
           <span>{o.label}</span>
-          <input type="color" value={o.color} onChange={(e) => change({ ...scene, objects: scene.objects.map((x) => (x.id === o.id ? { ...x, color: e.target.value } : x)) })} />
+          <Swatch value={o.color} onCommit={(c) => change({ ...scene, objects: scene.objects.map((x) => (x.id === o.id ? { ...x, color: c } : x)) })} />
         </label>
       ))}
       <p className="small muted insp-tip-inline">

@@ -1,0 +1,50 @@
+/*
+ * More Keo Studio fonts (SIL Open Font License 1.1, from Google Fonts via Fontsource; licence beside each
+ * font in public/fonts). Latin letters only, to keep Keo small.
+ */
+@font-face { font-family: 'Abril Fatface'; src: url('/fonts/abrilfatface/abril-fatface-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Bangers'; src: url('/fonts/bangers/bangers-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Black Ops One'; src: url('/fonts/blackopsone/black-ops-one-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Bungee'; src: url('/fonts/bungee/bungee-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Great Vibes'; src: url('/fonts/greatvibes/great-vibes-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Kaushan Script'; src: url('/fonts/kaushanscript/kaushan-script-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Lobster'; src: url('/fonts/lobster/lobster-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Luckiest Guy'; src: url('/fonts/luckiestguy/luckiest-guy-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Monoton'; src: url('/fonts/monoton/monoton-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Pacifico'; src: url('/fonts/pacifico/pacifico-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Permanent Marker'; src: url('/fonts/permanentmarker/permanent-marker-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Righteous'; src: url('/fonts/righteous/righteous-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Rubik Mono One'; src: url('/fonts/rubikmonoone/rubik-mono-one-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Shrikhand'; src: url('/fonts/shrikhand/shrikhand-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Space Mono'; src: url('/fonts/spacemono/space-mono-latin-400-italic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: block; }
+@font-face { font-family: 'Space Mono'; src: url('/fonts/spacemono/space-mono-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Space Mono'; src: url('/fonts/spacemono/space-mono-latin-700-italic.woff2') format('woff2'); font-weight: 700; font-style: italic; font-display: block; }
+@font-face { font-family: 'Space Mono'; src: url('/fonts/spacemono/space-mono-latin-700-normal.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'Big Shoulders Display'; src: url('/fonts/bigshouldersdisplay/big-shoulders-display-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Bricolage Grotesque'; src: url('/fonts/bricolagegrotesque/bricolage-grotesque-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Caveat'; src: url('/fonts/caveat/caveat-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Dancing Script'; src: url('/fonts/dancingscript/dancing-script-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Oswald'; src: url('/fonts/oswald/oswald-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Raleway'; src: url('/fonts/raleway/raleway-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'Raleway'; src: url('/fonts/raleway/raleway-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Syne'; src: url('/fonts/syne/syne-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Teko'; src: url('/fonts/teko/teko-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Unbounded'; src: url('/fonts/unbounded/unbounded-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Manrope'; src: url('/fonts/manrope/manrope-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'DM Sans'; src: url('/fonts/dmsans/dm-sans-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'DM Sans'; src: url('/fonts/dmsans/dm-sans-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Plus Jakarta Sans'; src: url('/fonts/plusjakartasans/plus-jakarta-sans-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'Plus Jakarta Sans'; src: url('/fonts/plusjakartasans/plus-jakarta-sans-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Outfit'; src: url('/fonts/outfit/outfit-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Sora'; src: url('/fonts/sora/sora-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Space Grotesk'; src: url('/fonts/spacegrotesk/space-grotesk-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Fraunces'; src: url('/fonts/fraunces/fraunces-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'Fraunces'; src: url('/fonts/fraunces/fraunces-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Lora'; src: url('/fonts/lora/lora-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'Lora'; src: url('/fonts/lora/lora-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Cormorant Garamond'; src: url('/fonts/cormorantgaramond/cormorant-garamond-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'Cormorant Garamond'; src: url('/fonts/cormorantgaramond/cormorant-garamond-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Orbitron'; src: url('/fonts/orbitron/orbitron-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrainsmono/jetbrains-mono-latin-wght-italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrainsmono/jetbrains-mono-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Press Start 2P'; src: url('/fonts/pressstart2p/press-start-2p-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: block; }
