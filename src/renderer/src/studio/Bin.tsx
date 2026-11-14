@@ -50,6 +50,15 @@ export const TEXT_STYLES: Array<{ id: string; label: string; sample: string; css
 
 /** Stickers: emoji drawn big, popping in and floating. */
 export const EMOJI = ['🔥', '😂', '😍', '🤯', '👀', '💯', '✨', '🎉', '👍', '❤️', '😱', '🤔', '🙌', '💡', '⚡', '🚀', '⭐', '✅', '❌', '👇', '👉', '💰', '📈', '🎯'];
+/** Emoji stickers by kind (Windows draws them with its own colour emoji font). */
+export const EMOJI_GROUPS: Array<[string, string[]]> = [
+  ['Reactions', ['🔥', '😂', '🤣', '😍', '🥹', '😭', '🤯', '😱', '😳', '🥳', '😎', '🤩', '🙃', '😏', '😤', '🤔', '🫡', '🤫', '😴', '🤡']],
+  ['Hands', ['👍', '👎', '👏', '🙌', '🙏', '💪', '✌️', '🤞', '👌', '🤝', '👋', '🫶', '☝️', '👇', '👉', '👈', '👆', '✍️']],
+  ['Hearts', ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💖', '💔', '💯', '💥']],
+  ['Symbols', ['✨', '⭐', '🌟', '⚡', '💡', '✅', '❌', '⚠️', '❗', '❓', '🔴', '🟢', '➡️', '⬅️', '⬆️', '⬇️', '🔁', '🆕', '🆓', '🔝']],
+  ['Things', ['🚀', '🎯', '🎉', '🎁', '🏆', '🥇', '💰', '💸', '💎', '📈', '📉', '📌', '📣', '🔔', '⏰', '📱', '💻', '🎬', '🎧', '📸', '🛒', '🔑', '🧠', '⚙️']],
+  ['Nature & food', ['🌞', '🌙', '🌈', '🌊', '🌸', '🍀', '🌍', '☕', '🍕', '🍔', '🍿', '🍩', '🥂', '🍾']],
+];
 
 /** A media tile: its first frame, its length, and the video playing while the mouse is over it. */
 /** Why this PC cannot play a video (its format), or null when it can. Checked once per file. */

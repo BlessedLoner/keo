@@ -2,6 +2,7 @@ import { ProColor } from '../studio/ColorPanel';
 import { playhead } from '../studio/playhead';
 import { allOnMain } from '@shared/studioTimeline';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { reuseProject } from '@shared/studioReuse';
 import { FORMATS, SPEED_PRESETS, clipEnd, proGrade, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
@@ -265,7 +266,8 @@ export function StudioView() {
   const refreshHistory = useCallback((id: string) => void invoke('studio:history', { id }).then(setHistory).catch(() => undefined), []);
   const show = useCallback(
     (p: Project) => {
-      setProject(p);
+      // Unchanged tracks and clips keep their objects, so only what changed redraws.
+      setProject((prev) => reuseProject(prev, p));
       refreshHistory(p.id);
     },
     [refreshHistory],
@@ -388,6 +390,20 @@ export function StudioView() {
       }),
     [ui, loadAiJobs],
   );
+  // A project whose export stopped part way (the renderer failed, or Keo closed): offer to carry on.
+  const openId = project?.id;
+  useEffect(() => {
+    if (!openId) return;
+    let live = true;
+    void invoke('studio:exportResumable', { id: openId })
+      .then((r) => {
+        if (live && r.resumable) setProgress((cur) => cur ?? { stage: 'failed', error: 'An export of this video stopped before it finished.' });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [openId]);
   useEffect(
     () =>
       subscribe('studio:progress', (m) => {
@@ -978,7 +994,20 @@ export function StudioView() {
           </div>
           )}
           {steps && !keoDock && <Checklist steps={steps} onClose={() => setSteps(null)} />}
-          {progress && <ExportCard progress={progress} onClose={() => setProgress(null)} onStop={() => project && void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)} onPost={() => progress.file && setPosting(progress.file)} />}
+          {progress && (
+            <ExportCard
+              progress={progress}
+              projectId={project.id}
+              onClose={() => setProgress(null)}
+              onStop={() => void invoke('studio:exportCancel', { id: project.id }).catch(() => undefined)}
+              onPost={() => progress.file && setPosting(progress.file)}
+              onResume={() => {
+                setPlaying(false);
+                setProgress({ stage: 'video' });
+                void invoke('studio:exportResume', { id: project.id }).catch((e) => setProgress({ stage: 'failed', error: errText(e) }));
+              }}
+            />
+          )}
           {posting && <PostDialog projectId={project.id} file={posting} aiMade={project.assets.some((a) => a.aiMade)} onClose={() => setPosting(null)} />}
           {!keoDock && sideTab === 'keo' && <StudioKeo project={project} conversation={keoChat} selected={selected} />}
           {(keoDock || sideTab === 'inspect') && (sel ? <Inspector key={sel.clip.id} project={project} clip={sel.clip} time={time} onEdit={edit} onFollow={() => {
@@ -1237,9 +1266,21 @@ function NewProject({ onCreate, onFaceless, onClone, onTalk, onAiVideo, onCancel
   );
 }
 
-function ExportCard({ progress, onClose, onStop, onPost }: { progress: Progress; onClose: () => void; onStop: () => void; onPost: () => void }) {
+function ExportCard({ progress, projectId, onClose, onStop, onPost, onResume }: { progress: Progress; projectId: string; onClose: () => void; onStop: () => void; onPost: () => void; onResume: () => void }) {
   const running = progress.stage === 'sound' || progress.stage === 'video' || progress.stage === 'saving';
   const pct = progress.total ? Math.round(((progress.done ?? 0) / progress.total) * 100) : 0;
+  // An export that stopped part way: what was made is kept, and it can carry on from there.
+  const [kept, setKept] = useState<{ done: number; total: number; name: string; changed: boolean } | null>(null);
+  useEffect(() => {
+    if (progress.stage !== 'failed') return setKept(null);
+    let live = true;
+    void invoke('studio:exportResumable', { id: projectId })
+      .then((r) => live && setKept(r.resumable))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [progress.stage, projectId]);
   return (
     <div className={`studio-card ${progress.stage === 'failed' ? 'bad' : progress.stage === 'done' ? 'good' : ''}`}>
       <div className="studio-pane-head">
@@ -1275,6 +1316,32 @@ function ExportCard({ progress, onClose, onStop, onPost }: { progress: Progress;
         </>
       )}
       {progress.stage === 'failed' && <p className="small">{progress.error ?? 'The export failed.'}</p>}
+      {progress.stage === 'failed' && kept && (
+        <div className="export-resume">
+          <p className="small">
+            {kept.name}: {Math.round((kept.done / Math.max(1, kept.total)) * 100)}% made and kept.
+            {kept.changed ? ' The video was changed since, so it cannot carry on: export it again.' : ''}
+          </p>
+          <div className="row" style={{ gap: 6 }}>
+            {!kept.changed && (
+              <button className="btn sm primary" onClick={onResume}>
+                <Icon name="play" size={12} /> Resume
+              </button>
+            )}
+            <button
+              className="btn sm ghost"
+              onClick={() =>
+                void invoke('studio:exportDiscard', { id: projectId }).then(() => {
+                  setKept(null);
+                  onClose();
+                })
+              }
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

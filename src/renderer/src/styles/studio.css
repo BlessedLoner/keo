@@ -396,7 +396,7 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 
 /* Export window */
 .modal-back { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.modal.export-dialog { width: min(520px, 100%); background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 14px; padding: 18px 20px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
+.modal.export-dialog { width: min(520px, 100%); background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 14px; padding: 18px 20px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); max-height: calc(100vh - 32px); overflow-y: auto; }
 .export-dialog h3 { margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
 .export-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 10px; }
 .studio-card > .btn.ghost { margin-top: 8px; }
@@ -1009,3 +1009,7 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .dna-fixes li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dna-correct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .dna-correct .input { flex: 1 1 110px; min-width: 0; }
+.emoji-grid .emoji-group { grid-column: 1 / -1; margin: 8px 0 2px; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+/* Export: a stopped export that can carry on */
+.export-resume { margin: 8px 12px 0; display: grid; gap: 6px; }
+.export-resume p { margin: 0; color: var(--text); }

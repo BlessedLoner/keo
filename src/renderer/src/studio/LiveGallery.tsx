@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { applyEdits, FONT_KIND, KEO_FONTS, LOOK_LABEL, LOOKS, MOTION_PIECE_INFO, MOTION_PIECES, newProject, SYSTEM_FONTS, TRANSITIONS, type Clip, type EditOp, type Effects, type LookId, type Project, type Transition } from '@shared/studio';
+import { applyEdits, FONT_KIND, GRAPHICS, KEO_FONTS, LOOK_LABEL, LOOKS, MOTION_PIECE_INFO, MOTION_PIECES, newProject, SYSTEM_FONTS, TRANSITIONS, type Clip, type EditOp, type Effects, type LookId, type Project, type Transition } from '@shared/studio';
 import type { Brand } from '@shared/studioBrand';
 import { PRESETS, presetOps, type PresetId } from '@shared/studioPresets';
 import { STARTER_TEMPLATES } from '@shared/studioTemplates';
@@ -484,6 +484,60 @@ export function ShapeGallery({ project, time, onEdit }: { project: Project; time
         <ItemCard key={i.id} item={{ ...i, ops: (at, b, p) => i.ops(at, b, p) }} project={project} brand={brand} time={time} onEdit={onEdit} />
       ))}
     </div>
+  );
+}
+
+/**
+ * Hand-drawn graphics creators use to point things out (circle scribbles, underlines, arrows, a
+ * marker swipe, ticks…) and filled stickers (sparkle, comic burst, speech bubble, heart, badge):
+ * live cards, drawn by Keo (no artwork to license), in the brand's colour.
+ */
+export function GraphicGallery({ project, time, onEdit }: { project: Project; time: number; onEdit: (ops: EditOp[]) => Promise<void> }) {
+  const brand = useBrand();
+  const items: Item[] = GRAPHICS.map(({ kind, name, outline }) => ({
+    id: `graphic-${kind}`,
+    name,
+    sub: outline ? 'Draws itself on' : 'Sticker',
+    group: 'Graphics',
+    seconds: 2.4,
+    hero: 1,
+    ops: (at, b, p) => {
+      const side = Math.min(p.width, p.height);
+      const size: Record<string, [number, number]> = {
+        scribble: [0.42, 0.18],
+        underline: [0.46, 0.05],
+        'curved-arrow': [0.3, 0.14],
+        marker: [0.5, 0.05],
+        check: [0.18, 0.1],
+        cross: [0.16, 0.09],
+        zigzag: [0.42, 0.04],
+        bubble: [0.5, 0.16],
+      };
+      const [w, h] = size[kind] ?? [(0.26 * side) / p.width, (0.26 * side) / p.height];
+      const colour = kind === 'marker' ? '#FFE14D' : kind === 'heart' ? '#FF4D6D' : kind === 'check' ? '#2BD67B' : kind === 'cross' ? '#FF4D5E' : kind === 'bubble' ? '#FFFFFF' : (b.accent ?? '#FFD23F');
+      return [
+        {
+          op: 'add_shape',
+          shape: kind,
+          start: at,
+          duration: 3,
+          style: { width: w, height: h, fill: colour, strokeWidth: kind === 'marker' ? 8 : 9, draw: outline, shadow: outline ? 0 : 12 },
+          enter: { kind: outline ? 'fade' : 'pop', seconds: outline ? 0.6 : 0.4 },
+          exit: { kind: 'fade', seconds: 0.3 },
+          ...(kind === 'sparkle' || kind === 'heart' ? { loop: { kind: 'pulse', amount: 0.3, period: 1.4 } } : {}),
+        },
+      ];
+    },
+  }));
+  return (
+    <>
+      <p className="lib-note small muted">Point things out like a creator: lines draw themselves on, stickers pop in. Click to add at the playhead; change the colour, size and timing like any element.</p>
+      <div className="live-grid">
+        {items.map((i) => (
+          <ItemCard key={i.id} item={i} project={project} brand={brand} time={time} onEdit={onEdit} />
+        ))}
+      </div>
+    </>
   );
 }
 

@@ -60,6 +60,9 @@ const E2E_DESKTOP = process.env.KEO_E2E_DESKTOP === '1';
 // corsEnabled: Studio's media is read by Keo's own pages, which in development come from the dev server's origin.
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }, ...BUILD_SCHEMES.map((s) => ({ scheme: s.scheme, privileges: { ...s.privileges } }))]);
 
+// Studio's H.265 export: the PC's own HEVC encoder (its graphics card), which Chromium leaves off unless asked.
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCEncoderSupport');
+
 /** Keo's builder previews (websites, apps and games Keo builds), in their own sandboxed sessions. */
 let buildHost: BuildHost | null = null;
 

@@ -2,7 +2,8 @@ import { estimateMotion, type MotionEstimate } from '@shared/editDnaMotion';
 import { prepareLuts } from './grade';
 import { prepareScenes } from './scene3d';
 import type { MotionClip } from '@shared/studio';
-import { bridged, clipEnd, findClip, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
+import { CODEC_NAMES, CODECS, encoderConfig } from './codecs';
+import { bridged, clipEnd, findClip, clipSpeech, curveArea, curveAt, duckGain, gateGain, isAV, type Span, type SpeedPoint, projectDuration, QUALITY_BPP, CODEC_BITS, type ExportVideoCodec, timelineSpeech, volumeAt, type ExportQuality, type Key, type MediaClip, type Project, type VoiceFx, type Eq } from '@shared/studio';
 import { denoise } from '@shared/denoise';
 import { boxTracker, frameShift, type Gray } from '@shared/studioTrack';
 import { buildPalette, GIF_END, gifFrame, gifHead, join, paletteMapper, wavStereo } from '@shared/gif';
@@ -145,9 +146,10 @@ interface AudioOut {
   chunks: Array<{ data: Uint8Array<ArrayBuffer>; timeUs: number; durationUs: number }>;
 }
 
-async function encodeAudio(buf: AudioBuffer): Promise<AudioOut | null> {
+async function encodeAudio(buf: AudioBuffer, opusOnly = false): Promise<AudioOut | null> {
   if (typeof AudioEncoder === 'undefined') return null;
-  for (const codec of ['aac', 'opus'] as const) {
+  // WebM carries Opus only.
+  for (const codec of opusOnly ? (['opus'] as const) : (['aac', 'opus'] as const)) {
     const config: AudioEncoderConfig = { codec: codec === 'aac' ? 'mp4a.40.2' : 'opus', sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: codec === 'aac' ? 192_000 : 160_000 };
     const ok = await AudioEncoder.isConfigSupported(config).catch(() => ({ supported: false }));
     if (!ok.supported) continue;
@@ -219,15 +221,15 @@ async function encoderWorks(config: VideoEncoderConfig, w: number, h: number): P
   });
 }
 
-async function videoEncoderConfig(w: number, h: number, fps: number, bpp = 0.16): Promise<VideoEncoderConfig> {
-  // Constrained Baseline first (no B-frames). The software encoder first: hardware encoders can
-  // stop answering in Keo's hidden render window (seen on Intel/Windows), the software one does not.
-  const bitrate = Math.round(w * h * fps * bpp);
+async function videoEncoderConfig(w: number, h: number, fps: number, bpp = 0.16, family: ExportVideoCodec = 'h264'): Promise<VideoEncoderConfig> {
+  // The software encoder first: hardware encoders can stop answering in Keo's hidden render window
+  // (seen on Intel/Windows), the software one does not. H.265 usually has only a hardware encoder.
+  const bitrate = Math.round(w * h * fps * bpp * CODEC_BITS[family]);
   const tried: string[] = [];
   for (const hardwareAcceleration of ['prefer-software', 'prefer-hardware'] as const) {
-    for (const codec of ['avc1.42e033', 'avc1.42e02a', 'avc1.4d0033', 'avc1.640033']) {
+    for (const codec of CODECS[family]) {
       for (const latencyMode of ['realtime', 'quality'] as const) {
-        const config: VideoEncoderConfig = { codec, width: w, height: h, bitrate, framerate: fps, hardwareAcceleration, avc: { format: 'avc' }, latencyMode };
+        const config = encoderConfig(family, codec, w, h, fps, bitrate, hardwareAcceleration, latencyMode);
         const ok = await VideoEncoder.isConfigSupported(config).catch(() => ({ supported: false }));
         if (!ok.supported) continue;
         if (await encoderWorks(config, w, h)) return config;
@@ -235,7 +237,8 @@ async function videoEncoderConfig(w: number, h: number, fps: number, bpp = 0.16)
       }
     }
   }
-  throw new Error(`This PC’s H.264 encoder did not produce video (tried ${tried.join(', ') || 'none'}).`);
+  if (!tried.length && family !== 'h264') throw new Error(`This PC cannot encode ${CODEC_NAMES[family]} at ${w}×${h}. Export as MP4 (H.264) instead.`);
+  throw new Error(`This PC’s ${CODEC_NAMES[family]} encoder did not produce video (tried ${tried.join(', ') || 'none'}).`);
 }
 
 export type Progress = (p: { stage: 'sound' | 'video' | 'saving'; done: number; total: number }) => void;
@@ -252,24 +255,28 @@ export async function runExport(
   exportId: string,
   progress: Progress,
   cancelled: () => boolean,
-  size?: { width: number; height: number; fps: number; quality: ExportQuality },
+  size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; from?: number },
 ): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+  const family = size?.video ?? 'h264';
+  // Carrying on a stopped export: its first frames (and all its sound) are in the file already.
+  const from = Math.max(0, Math.floor(size?.from ?? 0));
   const W = even(size?.width ?? p.width);
   const H = even(size?.height ?? p.height);
   const fps = size?.fps ?? p.fps;
   const bpp = QUALITY_BPP[size?.quality ?? 'high'];
   const total = Math.max(1, Math.ceil(projectDuration(p) * fps - 1e-6));
   await prepareCutout(p);
-  progress({ stage: 'sound', done: 0, total });
-  const mixed = await mixAudio(p, { loudness: true });
+  progress({ stage: from ? 'video' : 'sound', done: from, total });
+  const mixed = from ? null : await mixAudio(p, { loudness: true });
   console.info(`export: sound mixed (${mixed ? mixed.duration.toFixed(2) + 's' : 'silent'})`);
-  const audio = mixed ? await encodeAudio(mixed) : null;
+  const audio = mixed ? await encodeAudio(mixed, family === 'vp9') : null;
+  if (mixed && !audio && family === 'vp9') throw new Error('This PC cannot encode Opus sound for a WebM. Export as MP4 instead.');
   console.info(`export: sound encoded (${audio ? audio.codec + ' ' + audio.chunks.length + ' packets' : 'none'})`);
 
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext('2d', { alpha: false }) as unknown as CanvasRenderingContext2D;
   const sources = new ExactSources(p.id);
-  const config = await videoEncoderConfig(W, H, fps, bpp);
+  const config = await videoEncoderConfig(W, H, fps, bpp, family);
   console.info(`export: video encoder ${config.codec} ${config.hardwareAcceleration} ${config.latencyMode} ${W}x${H}@${fps}`);
   let begun: Promise<unknown> | null = null;
   let failed: Error | null = null;
@@ -280,12 +287,13 @@ export async function runExport(
       chunk.copyTo(data);
       if (!begun) {
         const desc = meta?.decoderConfig?.description as ArrayBuffer | ArrayBufferView | undefined;
-        const avcC = desc ? bytes(desc) : null;
+        // VP9 needs no description; H.264 and H.265 do.
+        const avcC = desc ? bytes(desc) : family === 'vp9' ? new Uint8Array() : null;
         if (!avcC) {
           failed = new Error('The video encoder did not describe its stream.');
           return;
         }
-        begun = invoke('studio:exportBegin', { exportId, projectId: p.id, video: { width: W, height: H, avcC }, audio: audio ? { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 2, config: audio.config } : null }).then(async () => {
+        begun = invoke('studio:exportBegin', { exportId, projectId: p.id, video: { width: W, height: H, codec: family, avcC }, audio: audio ? { codec: audio.codec, sampleRate: SAMPLE_RATE, channels: 2, config: audio.config } : null }).then(async () => {
           for (const a of audio?.chunks ?? []) await invoke('studio:exportChunk', { exportId, kind: 'audio', data: a.data, timeUs: a.timeUs, durationUs: a.durationUs, key: true });
         });
       }
@@ -302,7 +310,7 @@ export async function runExport(
     await prepareScenes(p.tracks.flatMap((tr) => tr.clips).filter((c): c is MotionClip => c.type === 'motion'));
     // Imported LUTs are read before the first frame, so every frame has its look.
     await prepareLuts(p.tracks.flatMap((tr) => tr.clips).map((c) => (c.type === 'media' || c.type === 'adjust' ? c.color : undefined)));
-    for (let i = 0; i < total; i++) {
+    for (let i = from; i < total; i++) {
       if (cancelled()) throw new Error('The export was cancelled.');
       if (failed) throw failed;
       const t = i / fps;
@@ -310,7 +318,7 @@ export async function runExport(
       await sources.prepare(p, media, t);
       drawFrame(ctx, p, t, sources);
       const frame = new VideoFrame(canvas, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
-      encoder.encode(frame, { keyFrame: i % (fps * 2) === 0 });
+      encoder.encode(frame, { keyFrame: i === from || i % (fps * 2) === 0 });
       frame.close();
       // Clips that have ended are not needed again.
       sources.release(new Set(p.tracks.flatMap((tr) => tr.clips.filter((c) => clipEnd(c) > t).map((c) => c.id))));

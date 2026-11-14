@@ -1,5 +1,5 @@
 import { EditDnaPanel } from './EditDna';
-import { EffectGallery, FontGallery, GALLERY_GROUPS, LookGallery, ShapeGallery, TemplateGallery, TextStyleGallery, TransitionGallery } from './LiveGallery';
+import { EffectGallery, FontGallery, GALLERY_GROUPS, LookGallery, GraphicGallery, ShapeGallery, TemplateGallery, TextStyleGallery, TransitionGallery } from './LiveGallery';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CAPTIONS_TRACK, CAPTION_STYLE, findClip, LOOKS, TRANSITIONS, type Asset, type Clip, type EditOp, type Project, type TextStyle } from '@shared/studio';
 import { EFFECT_KINDS, GENRE_LABEL, MUSIC_GENRES, type Sound } from '@shared/studioSounds';
@@ -12,7 +12,7 @@ import { ViralTemplates } from './ViralTemplates';
 import { CharacterPictures } from './CharacterPictures';
 import { Templates } from './Templates';
 import { Looks } from './Looks';
-import { EMOJI, Tile } from './Bin';
+import { EMOJI_GROUPS, Tile } from './Bin';
 import { VoiceRecorder } from './VoiceTools';
 import { AiAudio } from './AiAudio';
 
@@ -59,6 +59,7 @@ const CATEGORIES: Record<Tab, Array<[string, string]>> = {
   ],
   stickers: [
     ['emoji', 'Emoji'],
+    ['graphics', 'Graphics'],
     ['shapes', 'Shapes'],
   ],
   effects: [['video', 'Video effects']],
@@ -174,7 +175,7 @@ export function Library({
           {tab === 'text' && now === 'fonts' && <FontGallery selected={sel} time={time} onEdit={onEdit} />}
           {tab === 'stickers' && now === 'emoji' && (
             <div className="emoji-grid">
-              {EMOJI.map((e) => (
+              {EMOJI_GROUPS.flatMap(([group, list]) => [<span key={group} className="emoji-group small muted">{group}</span>, ...list.map((e) => (
                 <button
                   key={e}
                   className="emoji"
@@ -198,9 +199,10 @@ export function Library({
                 >
                   {e}
                 </button>
-              ))}
+              ))])}
             </div>
           )}
+          {tab === 'stickers' && now === 'graphics' && <GraphicGallery project={project} time={time} onEdit={onEdit} />}
           {tab === 'stickers' && now === 'shapes' && <ShapeGallery project={project} time={time} onEdit={onEdit} />}
           {tab === 'effects' && (
             <EffectGallery

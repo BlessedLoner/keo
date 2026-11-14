@@ -245,6 +245,9 @@ export const invokeSchemas = {
   'studio:import': z.object({ id: studioProjectId, paths: z.array(z.string().trim().min(3).max(1000)).max(200).optional() }).strict(),
   'studio:export': z.object({ id: studioProjectId, options: ExportOptions.partial().optional() }).strict(),
   'studio:exportCancel': z.object({ id: studioProjectId }).strict(),
+  'studio:exportResumable': z.object({ id: studioProjectId }).strict(),
+  'studio:exportResume': z.object({ id: studioProjectId }).strict(),
+  'studio:exportDiscard': z.object({ id: studioProjectId }).strict(),
   'studio:readAloud': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), voice: z.string().regex(/^[a-z]{2,20}$/).default('female') }).strict(),
   /** A voice-over recorded in Studio (16-bit WAV), put on the Voice track at `at`. */
   'studio:saveRecording': z.object({ id: studioProjectId, wavBase64: z.string().min(100).max(64_000_000), at: z.number().min(0).max(86400) }).strict(),
@@ -341,7 +344,7 @@ export const invokeSchemas = {
     .object({
       exportId: z.string().regex(/^ex_[0-9a-f]{12}$/),
       projectId: studioProjectId,
-      video: z.object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), avcC: z.instanceof(Uint8Array) }).strict(),
+      video: z.object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), codec: z.enum(['h264', 'h265', 'vp9']).default('h264'), avcC: z.instanceof(Uint8Array) }).strict(),
       audio: z.object({ codec: z.enum(['aac', 'opus']), sampleRate: z.number().int().min(8000).max(192000), channels: z.number().int().min(1).max(8), config: z.instanceof(Uint8Array) }).strict().nullable(),
     })
     .strict(),
@@ -707,6 +710,9 @@ export interface InvokeOutputs {
   'studio:import': { project: StudioProject; added: StudioAsset[]; skipped: string[] };
   'studio:export': { started: true };
   'studio:exportCancel': { cancelled: boolean };
+  'studio:exportResumable': { resumable: { done: number; total: number; name: string; changed: boolean } | null };
+  'studio:exportResume': { started: true };
+  'studio:exportDiscard': { ok: true };
   'studio:beatSync': { placed: number; bpm: number | null };
   'studio:splitScenes': { splits: number; clips: number };
   'studio:reverse': { seconds: number };

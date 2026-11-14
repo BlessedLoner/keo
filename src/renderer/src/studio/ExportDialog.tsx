@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { EXPORT_PRESETS, exportSize, projectDuration, QUALITY_BPP, type ExportOptions, type Project } from '@shared/studio';
+import { useEffect, useState } from 'react';
+import { CODEC_BITS, EXPORT_PRESETS, exportSize, exportVideoCodec, projectDuration, QUALITY_BPP, type ExportOptions, type Project } from '@shared/studio';
 import { Icon } from '../components/Icon';
+import { canEncode } from './codecs';
 
 /** The Export window: size, frame rate, quality and file name, with the file size to expect. */
 export function ExportDialog({ project, onExport, onClose }: { project: Project; onExport: (o: Partial<ExportOptions>) => void; onClose: () => void }) {
@@ -10,7 +11,8 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
   const [name, setName] = useState(project.name);
   const [format, setFormat] = useState<ExportOptions['format']>('mp4');
   const [preset, setPreset] = useState<string | null>(null);
-  const video = format === 'mp4' || format === 'mov';
+  const [codec, setCodec] = useState<ExportOptions['codec']>('h264');
+  const video = format === 'mp4' || format === 'mov' || format === 'webm';
   const shape = project.width > project.height * 1.15 ? 'wide' : project.height > project.width * 1.15 ? (project.height / project.width > 1.5 ? 'tall' : 'portrait') : 'square';
   const applyPreset = (id: string) => {
     const p = EXPORT_PRESETS.find((x) => x.id === id)!;
@@ -19,13 +21,26 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
     setFps(p.options.fps);
     setQuality(p.options.quality);
     setFormat(p.options.format);
+    setCodec('h264');
   };
   const chosen = EXPORT_PRESETS.find((x) => x.id === preset);
   const mismatch = chosen && chosen.shape !== 'any' && !(chosen.shape === shape || (chosen.shape === 'portrait' && shape === 'square'));
   const size = exportSize(project, { resolution, fps });
+  const family = exportVideoCodec({ format, codec });
+  // Whether this PC has an encoder for the chosen codec at this size (null: still asking).
+  const [encodable, setEncodable] = useState<boolean | null>(true);
+  useEffect(() => {
+    if (!video || family === 'h264') return setEncodable(true);
+    let live = true;
+    setEncodable(null);
+    void canEncode(family, size.width, size.height, size.fps).then((ok) => live && setEncodable(ok));
+    return () => {
+      live = false;
+    };
+  }, [video, family, size.width, size.height, size.fps]);
   const seconds = projectDuration(project);
   // Video at the chosen quality plus sound (192 kb/s).
-  const bytes = ((size.width * size.height * size.fps * QUALITY_BPP[quality] + 192_000) * seconds) / 8;
+  const bytes = ((size.width * size.height * size.fps * QUALITY_BPP[quality] * CODEC_BITS[family] + (family === 'vp9' ? 160_000 : 192_000)) * seconds) / 8;
   const mb = bytes / 1_000_000;
   const short = Math.min(project.width, project.height);
   // AI-made clips on the timeline: the apps ask for an AI label on realistic AI video.
@@ -63,10 +78,20 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
           <select id="ex-format" className="select" value={format} onChange={(e) => setFormat(e.target.value as ExportOptions['format'])}>
             <option value="mp4">Video (MP4)</option>
             <option value="mov">Video (MOV, for editors and Macs)</option>
+            <option value="webm">Video (WebM, for websites)</option>
             <option value="gif">Animated GIF (for chats and sites)</option>
             <option value="wav">Sound only (WAV)</option>
           </select>
         </div>
+        {(format === 'mp4' || format === 'mov') && (
+          <div className="field">
+            <label htmlFor="ex-codec">Video codec</label>
+            <select id="ex-codec" className="select" value={codec} onChange={(e) => setCodec(e.target.value as ExportOptions['codec'])}>
+              <option value="h264">H.264 (plays everywhere)</option>
+              <option value="h265">H.265 / HEVC (smaller file, newer phones and players)</option>
+            </select>
+          </div>
+        )}
         {video && (
         <div className="export-grid">
           <div className="field">
@@ -103,14 +128,16 @@ export function ExportDialog({ project, onExport, onClose }: { project: Project;
         {format === 'gif' && <p className="small muted">{Math.min(480, project.width)} px wide · {Math.min(15, project.fps)} fps · no sound · saved in Videos\Keo{seconds > 60 ? ' — a GIF can be at most 60 seconds' : ''}</p>}
         {format === 'wav' && <p className="small muted">The whole mix as heard in the video · stereo, 48 kHz · about {Math.max(0.1, (seconds * 192_000) / 1_000_000).toFixed(1)} MB · saved in Videos\Keo</p>}
         {video && <p className="small muted">
-          {size.width}×{size.height} · {size.fps} fps · {format === 'mov' ? 'MOV' : 'MP4'} (H.264 + AAC) · about {mb < 1 ? `${Math.max(0.1, mb).toFixed(1)}` : Math.round(mb)} MB · saved in Videos\Keo
+          {size.width}×{size.height} · {size.fps} fps · {format === 'webm' ? 'WebM (VP9 + Opus)' : `${format === 'mov' ? 'MOV' : 'MP4'} (${family === 'h265' ? 'H.265' : 'H.264'} + AAC)`} · about {mb < 1 ? `${Math.max(0.1, mb).toFixed(1)}` : Math.round(mb)} MB · saved in Videos\Keo
         </p>}
+        {video && encodable === null && <p className="small muted">Checking this PC can encode {family === 'vp9' ? 'VP9' : 'H.265'}…</p>}
+        {video && encodable === false && <p className="small warn-text">This PC cannot encode {family === 'vp9' ? 'WebM (VP9)' : 'H.265'} at {size.width}×{size.height}. Pick H.264, or a smaller size.</p>}
         {video && Math.max(size.width, size.height) > 2600 && <p className="small warn-text">4K takes much longer to make, and some PCs cannot encode it; 1080p is what most apps show.</p>}
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={!name.trim() || (format === 'gif' && seconds > 60)} onClick={() => onExport({ resolution, fps, quality, format, name: name.trim() })}>
+          <button className="btn primary" disabled={!name.trim() || (format === 'gif' && seconds > 60) || (video && encodable !== true)} onClick={() => onExport({ resolution, fps, quality, format, ...(format === 'mp4' || format === 'mov' ? { codec } : {}), name: name.trim() })}>
             <Icon name="download" size={14} /> Export
           </button>
         </div>

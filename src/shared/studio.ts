@@ -590,7 +590,28 @@ export type MediaClip = z.infer<typeof MediaClip>;
 
 // ---------------------------------------------------------------- elements (shapes)
 
-export const ShapeKind = z.enum(['rect', 'circle', 'ring', 'line', 'arrow', 'star', 'triangle']);
+/**
+ * Elements: plain shapes, and hand-drawn graphics creators use to point things out (they draw
+ * themselves on when their style says draw): a circle scribble, an underline, a curved arrow, a
+ * marker swipe, a tick, a cross, a zigzag; and filled ones: sparkle, comic burst, speech bubble,
+ * heart and badge.
+ */
+export const ShapeKind = z.enum(['rect', 'circle', 'ring', 'line', 'arrow', 'star', 'triangle', 'scribble', 'underline', 'curved-arrow', 'marker', 'check', 'cross', 'zigzag', 'sparkle', 'burst', 'bubble', 'heart', 'badge']);
+/** The hand-drawn graphics (outlines that draw themselves on) and the filled ones, with their names. */
+export const GRAPHICS: Array<{ kind: z.infer<typeof ShapeKind>; name: string; outline: boolean }> = [
+  { kind: 'scribble', name: 'Circle scribble', outline: true },
+  { kind: 'underline', name: 'Underline', outline: true },
+  { kind: 'curved-arrow', name: 'Curved arrow', outline: true },
+  { kind: 'marker', name: 'Marker swipe', outline: true },
+  { kind: 'check', name: 'Tick', outline: true },
+  { kind: 'cross', name: 'Cross', outline: true },
+  { kind: 'zigzag', name: 'Zigzag', outline: true },
+  { kind: 'sparkle', name: 'Sparkle', outline: false },
+  { kind: 'burst', name: 'Comic burst', outline: false },
+  { kind: 'bubble', name: 'Speech bubble', outline: false },
+  { kind: 'heart', name: 'Heart', outline: false },
+  { kind: 'badge', name: 'Badge', outline: false },
+];
 export type ShapeKind = z.infer<typeof ShapeKind>;
 export const ShapeStyle = z
   .object({
@@ -967,7 +988,7 @@ export interface ProjectSummary {
 
 /** A job for Keo's render window: an export, frames for Keo to look at, or measuring a file. */
 export type RenderJob =
-  | { kind: 'export'; projectId: string; exportId: string; size?: { width: number; height: number; fps: number; quality: ExportQuality } }
+  | { kind: 'export'; projectId: string; exportId: string; size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; /** Carrying on a stopped export: the frame to start at (the ones before are in the file). */ from?: number } }
   | { kind: 'frames'; projectId: string; times: number[]; width: number }
   | { kind: 'probe'; url: string }
   | { kind: 'audio'; projectId: string; sampleRate: number }
@@ -996,12 +1017,19 @@ export const ExportOptions = z
     resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project'),
     fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
     quality: ExportQuality.default('high'),
-    /** mp4: the video; mov: the same video as a QuickTime .mov (for Final Cut, Premiere, Macs); gif: an animated GIF (up to 480 px wide, 15 fps); wav: the sound alone. */
-    format: z.enum(['mp4', 'mov', 'gif', 'wav']).default('mp4'),
+    /** mp4: the video; mov: the same video as a QuickTime .mov (for Final Cut, Premiere, Macs); webm: VP9 + Opus (for websites); gif: an animated GIF (up to 480 px wide, 15 fps); wav: the sound alone. */
+    format: z.enum(['mp4', 'mov', 'webm', 'gif', 'wav']).default('mp4'),
+    /** MP4 and MOV: H.264 (plays everywhere) or H.265 (about 40% smaller, newer players only). */
+    codec: z.enum(['h264', 'h265']).default('h264'),
     name: z.string().trim().min(1).max(80).optional(),
   })
   .strict();
 export type ExportOptions = z.infer<typeof ExportOptions>;
+/** The video codec an export is encoded with: H.264 or H.265 in MP4 / MOV, VP9 in WebM. */
+export type ExportVideoCodec = 'h264' | 'h265' | 'vp9';
+export function exportVideoCodec(o: Pick<ExportOptions, 'format' | 'codec'>): ExportVideoCodec {
+  return o.format === 'webm' ? 'vp9' : o.codec;
+}
 
 /** The pixel size and frame rate an export with these options has (even numbers, the project's shape). */
 export function exportSize(p: { width: number; height: number; fps: number }, o: Pick<ExportOptions, 'resolution' | 'fps'>): { width: number; height: number; fps: number } {
@@ -1026,6 +1054,8 @@ export const EXPORT_PRESETS: Array<{ id: string; label: string; for: string; sha
 
 /** Bits per pixel per frame for each quality (H.264). */
 export const QUALITY_BPP: Record<ExportQuality, number> = { standard: 0.09, high: 0.16, best: 0.26 };
+/** The newer codecs look the same with fewer bits. */
+export const CODEC_BITS: Record<ExportVideoCodec, number> = { h264: 1, h265: 0.62, vp9: 0.68 };
 
 export const FORMATS = {
   vertical: { width: 1080, height: 1920, label: 'Vertical 9:16 (TikTok, Reels, Shorts)' },

@@ -2201,7 +2201,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         resolution: z.enum(['project', '720', '1080', '1440', '2160']).default('project').describe('The shorter side in pixels; project: the project size (1080 for most)'),
         fps: z.union([z.literal('project'), z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default('project'),
         quality: z.enum(['standard', 'high', 'best']).default('high'),
-        format: z.enum(['mp4', 'mov', 'gif', 'wav']).default('mp4').describe('mp4: the video; mov: the same as a QuickTime .mov (when the user asks for MOV, or for Final Cut / Premiere); gif: an animated GIF (up to 480 px wide, 15 fps, at most 60 s) for chats and sites; wav: the sound alone (a voice-over or podcast)'),
+        format: z.enum(['mp4', 'mov', 'webm', 'gif', 'wav']).default('mp4').describe('mp4: the video; mov: the same as a QuickTime .mov (when the user asks for MOV, or for Final Cut / Premiere); webm: VP9 + Opus, for websites (when the user asks for WebM); gif: an animated GIF (up to 480 px wide, 15 fps, at most 60 s) for chats and sites; wav: the sound alone (a voice-over or podcast)'),
         name: z.string().trim().min(1).max(80).optional().describe('File name without the extension; default: the project name'),
       })
       .strict(),

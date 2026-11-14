@@ -575,6 +575,19 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return s.studio.importFiles(id, files);
     },
     'studio:exportCancel': ({ id }) => ({ cancelled: s.studio.cancelExport(id) }),
+    'studio:exportResumable': ({ id }) => ({ resumable: s.studio.resumable(id) }),
+    'studio:exportResume': ({ id }) => {
+      // Runs in the background like an export; progress and the result come as studio:progress.
+      void s.studio
+        .resumeExport(id)
+        .then((r) => s.emit('studio:progress', { projectId: id, stage: 'done', file: r.file }))
+        .catch((e: unknown) => s.emit('studio:progress', { projectId: id, stage: 'failed', error: e instanceof Error ? e.message : 'The export failed.' }));
+      return { started: true as const };
+    },
+    'studio:exportDiscard': ({ id }) => {
+      s.studio.discardResume(id);
+      return { ok: true as const };
+    },
     'studio:reframe': async ({ id, clip }) => s.studioReframe(id, clip).catch(studioErr),
     // The user's own click in Studio.
     'studio:readAloud': async ({ id, clip, voice }) => s.studioReadAloud(id, clip, voice).catch(studioErr),
@@ -832,7 +845,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'studio:videoTrack': ({ projectId, assetId }) => s.studio.videoTrack(projectId, assetId),
     'studio:videoSamples': ({ projectId, assetId, time, from, count }) => studioCall(() => s.studio.videoSamples(projectId, assetId, { ...(time !== undefined ? { time } : {}), ...(from !== undefined ? { from } : {}), count })),
     'studio:exportBegin': ({ exportId, projectId, video, audio }) => {
-      s.studio.beginExport(exportId, projectId, { width: video.width, height: video.height, avcC: Buffer.from(video.avcC) }, audio ? { codec: audio.codec, sampleRate: audio.sampleRate, channels: audio.channels, config: Buffer.from(audio.config) } : null);
+      s.studio.beginExport(exportId, projectId, { width: video.width, height: video.height, codec: video.codec, avcC: Buffer.from(video.avcC) }, audio ? { codec: audio.codec, sampleRate: audio.sampleRate, channels: audio.channels, config: Buffer.from(audio.config) } : null);
       return { ok: true as const };
     },
     'studio:exportChunk': ({ exportId, kind, data, timeUs, durationUs, key }) => {

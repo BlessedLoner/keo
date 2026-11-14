@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
 import { detectBeats } from '../video/ffmpeg';
-import { applyEdits, describeProject, EditError, ExportOptions, exportSize, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, replaceWords, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion, type Span } from '../../shared/studio';
+import { applyEdits, describeProject, EditError, ExportOptions, exportSize, exportVideoCodec, type ExportQuality, type ExportVideoCodec, clipEnd, findClip, isAV, keyValue, needsAnalysis, sourceSpan, type Clip, type Key, type AudioClip, type MediaClip, newProject, Project, projectDuration, replaceWords, timelineWords, type Asset, type AssetKind, type EditOp, type FormatId, type ProjectSummary, type RenderJob, type TextStyle, type StudioVersion, type Span } from '../../shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes } from '../../shared/studioScenes';
 import { smooth, videoPlacement } from '../../shared/studioTrack';
 import { actionOf, showSteps, type KeoAction } from '../../shared/studioLive';
@@ -25,6 +25,7 @@ import { captionLines, dropLoops, pieces, readWav, spreadWords, voicedSpans, wav
 import { planCleanup, punchIns, type CleanupPlan } from './cleanup';
 import { SFX, sfxWav, type SfxKind } from './sfx';
 import { keyBefore, Mp4Reader, Mp4Writer, type Mp4Track, type WriterAudio, type WriterVideo } from './mp4';
+import { readWebm, WebmWriter } from './webm';
 
 /**
  * Keo Studio's projects and media, in the account's own folder (studio\<project id>.json). The
@@ -148,7 +149,11 @@ export class StudioService {
   private readonly historyTimers = new Map<string, NodeJS.Timeout>();
   private readonly readers = new Map<string, Mp4Reader | null>();
   private readonly jobs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
-  private readonly exports = new Map<string, { writer: Mp4Writer; file: string; projectId: string }>();
+  private readonly exports = new Map<string, { writer: Mp4Writer | WebmWriter; file: string; projectId: string; webm?: boolean; part?: string }>();
+  /** Exports the user asked to stop (their part file is thrown away, not kept to resume). */
+  private readonly cancelled = new Set<string>();
+  /** The user's own MP4 / MOV exports, which keep a journal so they can carry on if they stop. */
+  private readonly resumablePlans = new Map<string, ResumeRecord>();
   /** The export running for each project (to stop it). */
   private readonly running = new Map<string, string>();
 
@@ -156,6 +161,7 @@ export class StudioService {
   cancelExport(id: string): boolean {
     const exportId = this.running.get(id);
     if (!exportId || !this.d.sendJob) return false;
+    this.cancelled.add(exportId);
     this.d.sendJob(`job_${crypto.randomBytes(6).toString('hex')}`, { kind: 'cancel', exportId });
     return true;
   }
@@ -2401,20 +2407,110 @@ export class StudioService {
     const o = ExportOptions.parse(opts);
     const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
     if (o.name) this.exportNames.set(exportId, o.name);
-    if (o.format === 'mov') this.exportMov.add(exportId);
+    if (o.format === 'mov' || o.format === 'webm') this.exportContainer.set(exportId, o.format);
     this.running.set(id, exportId);
     if (o.format === 'gif' || o.format === 'wav') return await this.exportFileAs(id, exportId, o.format, o.name).finally(() => {
       if (this.running.get(id) === exportId) this.running.delete(id);
     });
-    const size = { ...exportSize(p, o), quality: o.quality };
-    const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId, size }, 6 * 60 * 60 * 1000).finally(() => {
-      this.exportNames.delete(exportId);
-      this.exportMov.delete(exportId);
+    const size = { ...exportSize(p, o), quality: o.quality, video: exportVideoCodec(o) };
+    // A new export replaces one that stopped part way.
+    this.discardResume(id);
+    if (o.format !== 'webm') this.resumablePlans.set(exportId, { exportId, projectId: id, file: '', part: '', journal: path.join(this.resumeDir, `${id}.journal`), size, fingerprint: projectFingerprint(p), stoppedAt: null });
+    return await this.runExportJob(id, exportId, size);
+  }
+
+  /** Runs an export in the render window; if it stops part way (not by the user), what is made is kept to resume. */
+  private async runExportJob(id: string, exportId: string, size: NonNullable<Extract<RenderJob, { kind: 'export' }>['size']>): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+    try {
+      const r = await this.runJob<{ file: string; durationSec: number; frames: number; bytes: number }>({ kind: 'export', projectId: id, exportId, size }, 6 * 60 * 60 * 1000);
+      this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames, resumed: Boolean(size.from) });
+      this.rememberExport(id, r.file);
+      return r;
+    } catch (e) {
+      // The renderer stopped answering or closed: the writer is still open here.
+      if (this.exports.has(exportId)) this.abortExport(exportId);
       if (this.running.get(id) === exportId) this.running.delete(id);
-    });
-    this.d.log.info('studio.exported', { seconds: r.durationSec, frames: r.frames });
-    this.rememberExport(id, r.file);
-    return r;
+      const kept = this.resumable(id);
+      if (kept && !this.cancelled.has(exportId)) throw new StudioError(`${e instanceof Error ? e.message : 'The export stopped.'} What was made so far (${Math.round((kept.done / Math.max(1, kept.total)) * 100)}%) is kept: Resume carries on from there.`);
+      throw e;
+    } finally {
+      this.exportNames.delete(exportId);
+      this.exportContainer.delete(exportId);
+      this.resumablePlans.delete(exportId);
+      this.cancelled.delete(exportId);
+      if (this.running.get(id) === exportId) this.running.delete(id);
+    }
+  }
+
+  // ---------------------------------------------------------------- resuming a stopped export
+
+  private get resumeDir(): string {
+    return path.join(this.d.dir, 'resume');
+  }
+  private resumeFile(id: string): string {
+    return path.join(this.resumeDir, `${id}.json`);
+  }
+  private readResume(id: string): ResumeRecord | null {
+    try {
+      return JSON.parse(fs.readFileSync(this.resumeFile(id), 'utf8')) as ResumeRecord;
+    } catch {
+      return null;
+    }
+  }
+  private writeResume(r: ResumeRecord): void {
+    fs.mkdirSync(this.resumeDir, { recursive: true });
+    fs.writeFileSync(this.resumeFile(r.projectId), JSON.stringify(r));
+  }
+
+  /** An export of this project that stopped part way and can carry on (null: none). */
+  resumable(id: string): { done: number; total: number; name: string; changed: boolean } | null {
+    const r = this.readResume(id);
+    if (!r || this.running.get(id)) return null;
+    if (!fs.existsSync(r.part) || !fs.existsSync(r.journal)) {
+      this.discardResume(id);
+      return null;
+    }
+    const frames = countKept(r.journal);
+    if (!frames) return null;
+    let p: Project;
+    try {
+      p = this.get(id);
+    } catch {
+      this.discardResume(id);
+      return null;
+    }
+    return { done: frames, total: Math.max(frames, Math.ceil(projectDuration(p) * r.size.fps - 1e-6)), name: path.basename(r.file), changed: projectFingerprint(p) !== r.fingerprint };
+  }
+
+  /** Carries on a stopped export from its last key frame (the frames before it are not made again). */
+  async resumeExport(id: string): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
+    const r = this.readResume(id);
+    const p = this.get(id);
+    if (!r || this.running.get(id)) throw new StudioError('There is no stopped export of this video to carry on.');
+    if (projectFingerprint(p) !== r.fingerprint) throw new StudioError('The video was changed after the export stopped, so the part made would not match: export it again.');
+    const w = fs.existsSync(r.part) ? Mp4Writer.resume(r.part, r.journal) : null;
+    if (!w) {
+      this.discardResume(id);
+      throw new StudioError('Too little of the stopped export was kept to carry on: export it again.');
+    }
+    const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
+    const rec: ResumeRecord = { ...r, exportId, stoppedAt: null };
+    this.resumablePlans.set(exportId, rec);
+    this.writeResume(rec);
+    this.exports.set(exportId, { writer: w.writer, file: r.file, part: r.part, projectId: id });
+    this.running.set(id, exportId);
+    this.d.log.info('studio.export_resume', { from: w.point.frames, seconds: w.point.timeUs / 1e6 });
+    return await this.runExportJob(id, exportId, { ...r.size, from: w.point.frames });
+  }
+
+  /** Throws away a stopped export's part file. */
+  discardResume(id: string): void {
+    const r = this.readResume(id);
+    if (!r) return;
+    if (this.running.get(id) === r.exportId) return;
+    fs.rmSync(r.part, { force: true });
+    fs.rmSync(r.journal, { force: true });
+    fs.rmSync(this.resumeFile(id), { force: true });
   }
 
   private get showcasesFile(): string {
@@ -2490,22 +2586,47 @@ export class StudioService {
     return { file, durationSec: r.durationSec, frames: r.frames, bytes: data.length };
   }
 
-  /** Exports to be written as QuickTime .mov. */
-  private readonly exportMov = new Set<string>();
+  /** Exports to be written as QuickTime .mov or WebM (the rest are MP4). */
+  private readonly exportContainer = new Map<string, 'mov' | 'webm'>();
 
   /** The render window starts writing the export (its encoder told it the video's avcC). */
-  beginExport(exportId: string, projectId: string, video: WriterVideo, audio: WriterAudio | null): void {
+  beginExport(exportId: string, projectId: string, video: Omit<WriterVideo, 'codec'> & { codec?: 'h264' | 'h265' | 'vp9' }, audio: WriterAudio | null): void {
+    const resumed = this.exports.get(exportId);
+    if (resumed) {
+      // Carrying on a stopped export: the file is open already; only the encoder's stream description may differ.
+      if (resumed.writer instanceof Mp4Writer) resumed.writer.setVideoDescription(video.avcC);
+      return;
+    }
     const p = this.get(projectId);
     const target = this.exportTargets.get(exportId);
     const dir = target ? path.dirname(target) : this.d.exportsDir();
     fs.mkdirSync(dir, { recursive: true });
     // eslint-disable-next-line no-control-regex -- control characters are not allowed in Windows file names
     const base = (this.exportNames.get(exportId) ?? p.name).replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim().slice(0, 80) || 'Keo video';
-    const mov = this.exportMov.has(exportId);
-    const ext = mov ? 'mov' : 'mp4';
+    const container = this.exportContainer.get(exportId) ?? (video.codec === 'vp9' ? 'webm' : undefined);
+    const ext = container ?? 'mp4';
     let file = target ?? path.join(dir, `${base}.${ext}`);
-    for (let n = 2; !target && fs.existsSync(file); n++) file = path.join(dir, `${base} (${n}).${ext}`);
-    this.exports.set(exportId, { writer: new Mp4Writer(file, video, audio, mov), file, projectId });
+    for (let n = 2; !target && (fs.existsSync(file) || fs.existsSync(`${file}.part`)); n++) file = path.join(dir, `${base} (${n}).${ext}`);
+    if (ext === 'webm') {
+      if (video.codec !== 'vp9') throw new StudioError('A WebM export needs VP9 video.');
+      if (audio && audio.codec !== 'opus') throw new StudioError('A WebM export needs Opus sound.');
+      const writer = new WebmWriter(file, { width: video.width, height: video.height, codecId: 'V_VP9' }, audio ? { sampleRate: audio.sampleRate, channels: audio.channels, config: audio.config } : null);
+      this.exports.set(exportId, { writer, file, projectId, webm: true });
+      return;
+    }
+    if (video.codec === 'vp9') throw new StudioError('VP9 video can only be saved as WebM.');
+    const plan = this.resumablePlans.get(exportId);
+    if (plan) {
+      // Written as "<name>.mp4.part" with a journal, renamed when it is finished: one that stops can carry on.
+      const part = `${file}.part`;
+      fs.mkdirSync(this.resumeDir, { recursive: true });
+      const rec: ResumeRecord = { ...plan, file, part };
+      this.resumablePlans.set(exportId, rec);
+      this.writeResume(rec);
+      this.exports.set(exportId, { writer: new Mp4Writer(part, { ...video, codec: video.codec ?? 'h264' }, audio, ext === 'mov', plan.journal), file, part, projectId });
+      return;
+    }
+    this.exports.set(exportId, { writer: new Mp4Writer(file, { ...video, codec: video.codec ?? 'h264' }, audio, ext === 'mov'), file, projectId });
   }
 
   exportChunk(exportId: string, kind: 'video' | 'audio', data: Uint8Array, timeUs: number, durationUs: number, key: boolean): void {
@@ -2521,22 +2642,39 @@ export class StudioService {
     if (!e) throw new StudioError('That export is not running.');
     this.exports.delete(exportId);
     const r = e.writer.finish();
-    const check = Mp4Reader.open(e.file);
-    const frames = check?.video()?.samples.length ?? 0;
-    check?.close();
+    if (e.part) {
+      let file = e.file;
+      const ext = path.extname(file);
+      for (let n = 2; fs.existsSync(file); n++) file = `${e.file.slice(0, -ext.length)} (${n})${ext}`;
+      fs.renameSync(e.part, file);
+      e.file = file;
+      fs.rmSync(this.resumeFile(e.projectId), { force: true });
+    }
+    const frames = e.webm ? (readWebm(e.file)?.blocks[1] ?? 0) : mp4Frames(e.file);
     if (!frames) throw new StudioError('The exported file could not be read back.');
     return { file: e.file, durationSec: r.durationSec, frames, bytes: r.bytes };
   }
 
+  /** The export stopped: thrown away if the user stopped it, else kept to carry on when it can be (Resume). */
   abortExport(exportId: string): void {
-    this.exports.get(exportId)?.writer.abort();
+    const e = this.exports.get(exportId);
     this.exports.delete(exportId);
+    if (!e) return;
+    if (e.part && e.writer instanceof Mp4Writer && !this.cancelled.has(exportId) && e.writer.resumable) {
+      e.writer.suspend();
+      const rec = this.readResume(e.projectId);
+      if (rec) this.writeResume({ ...rec, stoppedAt: new Date().toISOString() });
+      return;
+    }
+    e.writer.abort();
+    if (e.part) fs.rmSync(this.resumeFile(e.projectId), { force: true });
   }
 
   close(): void {
     for (const r of this.readers.values()) r?.close();
     this.readers.clear();
-    for (const e of this.exports.values()) e.writer.abort();
+    // Exports still running when Keo closes are kept to carry on next time (where they can be).
+    for (const id of [...this.exports.keys()]) this.abortExport(id);
     this.exports.clear();
     for (const j of this.jobs.values()) {
       clearTimeout(j.timer);
@@ -2583,4 +2721,43 @@ export interface AiClipPlace {
 
 export function realCameraOps(clip: string, duration: number): EditOp[] {
   return [{ op: 'set', clip, transform: { scale: 1.035 }, loop: { kind: 'shake', amount: 0.18, period: 2 }, zooms: [{ at: 0, scale: 1, x: 0.5, y: 0.5, ease: 'cut' }, { at: Math.max(0.5, Math.round(duration * 100) / 100), scale: 1.04, x: 0.5, y: 0.48, ease: 'ramp' }] }];
+}
+
+/** A stopped export that can carry on: where its part file and journal are, and what it was making. */
+interface ResumeRecord {
+  exportId: string;
+  projectId: string;
+  /** The finished file's name (the part is renamed to it). */
+  file: string;
+  part: string;
+  journal: string;
+  size: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec };
+  /** The project as it was exported (a changed project cannot carry on). */
+  fingerprint: string;
+  stoppedAt: string | null;
+}
+
+/** What a project's picture and sound depend on (not its name, save time or chat). */
+function projectFingerprint(p: Project): string {
+  const { updatedAt: _u, panelConversationId: _c, name: _n, ...rest } = p as Project & { panelConversationId?: string };
+  return crypto.createHash('sha1').update(JSON.stringify(rest)).digest('hex');
+}
+
+/** Video frames kept up to a journal's last key frame (where an export carries on). */
+function countKept(journal: string): number {
+  let frames = 0;
+  let kept = 0;
+  for (const line of fs.readFileSync(journal, 'utf8').split('\n')) {
+    if (line.startsWith('V ')) frames++;
+    else if (line.startsWith('R ')) kept = frames;
+  }
+  return kept;
+}
+
+/** Video frames in an MP4 / MOV as read back (0: it does not read). */
+function mp4Frames(file: string): number {
+  const check = Mp4Reader.open(file);
+  const n = check?.video()?.samples.length ?? 0;
+  check?.close();
+  return n;
 }

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EaseEditor } from './EaseEditor';
 import { clipEnd, findClip, KEY_PROPS, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Key, type KeyProp, type Project, type Track, type Transition } from '@shared/studio';
 import { closeUp, magneticMove, magneticTrimEnd, magneticTrimStart, mainTrack } from '@shared/studioTimeline';
@@ -452,19 +452,37 @@ export function Timeline({
   /** Clips that overlap on a track go on separate lanes, so each one can be seen and grabbed. */
   const lanes = useMemo(() => {
     const out = new Map<string, { lane: Map<string, number>; count: number }>();
-    for (const t of project.tracks) {
-      const lane = new Map<string, number>();
-      const ends: number[] = [];
-      for (const c of [...t.clips].sort((a, b) => a.start - b.start)) {
-        let i = ends.findIndex((e) => e <= c.start + 1e-6);
-        if (i < 0) i = ends.push(0) - 1;
-        ends[i] = clipEnd(c);
-        lane.set(c.id, i);
-      }
-      out.set(t.id, { lane, count: ends.length });
-    }
+    for (const t of project.tracks) out.set(t.id, lanesOf(t));
     return out;
   }, [project.tracks]);
+
+  // The ruler's handlers stay the same functions (calling the latest code), and its issues the
+  // same list while they read the same, so an edit elsewhere does not redraw the ruler.
+  const rulerFns = useRef({
+    down: (_e: React.PointerEvent) => undefined as void,
+    go: (_t: number) => undefined as void,
+    remove: (_t: number) => undefined as void,
+  });
+  rulerFns.current = {
+    down: (e) => {
+      const t = timeAt(e.clientX);
+      playhead.set(t, false);
+      onTime(t);
+      pointer.current = { x: e.clientX, y: e.clientY };
+      setDrag({ kind: 'scrub' });
+    },
+    go: (t) => {
+      playhead.set(t, false);
+      onTime(t);
+    },
+    remove: (t) => onEdit([{ op: 'marker', at: t, remove: true }]),
+  };
+  const rulerDown = useCallback((e: React.PointerEvent) => rulerFns.current.down(e), []);
+  const rulerGo = useCallback((t: number) => rulerFns.current.go(t), []);
+  const rulerRemove = useCallback((t: number) => rulerFns.current.remove(t), []);
+  const issuesKey = JSON.stringify(issues);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the same issues (by content) keep the same list
+  const stableIssues = useMemo(() => issues, [issuesKey]);
 
   // Tracks top to bottom: the highest layer first.
   const rows = [...project.tracks].reverse();
@@ -502,25 +520,7 @@ export function Timeline({
       }}
     >
       <div className="tl-inner" style={{ width: width + LABEL_W }}>
-        <Ruler
-          pps={pps}
-          duration={duration}
-          view={view}
-          markers={project.markers}
-          issues={issues}
-          onDown={(e) => {
-            const t = timeAt(e.clientX);
-            playhead.set(t, false);
-            onTime(t);
-            pointer.current = { x: e.clientX, y: e.clientY };
-            setDrag({ kind: 'scrub' });
-          }}
-          onGo={(t) => {
-            playhead.set(t, false);
-            onTime(t);
-          }}
-          onRemoveMarker={(t) => onEdit([{ op: 'marker', at: t, remove: true }])}
-        />
+        <Ruler pps={pps} duration={duration} view={view} markers={project.markers} issues={stableIssues} onDown={rulerDown} onGo={rulerGo} onRemoveMarker={rulerRemove} />
         {clipDrag?.kind === 'move' && (
           <div className={`tl-newtrack ${clipDrag.targetTrack === NEW_TRACK ? 'on' : ''}`} data-track={NEW_TRACK}>
             <span>+ Drop here for a new {clipDrag.track.kind === 'audio' ? 'audio' : clipDrag.track.kind === 'text' ? 'text' : 'video'} track</span>
@@ -656,6 +656,27 @@ function Playhead({ area, pps, time, playing, onGrab }: { area: React.RefObject<
       }} />
     </div>
   );
+}
+
+/**
+ * Which lane each clip of a track sits in (overlapping clips stack). Kept per track object: an
+ * unchanged track keeps its lanes, so its row is not redrawn when another track changes.
+ */
+const laneCache = new WeakMap<Track, { lane: Map<string, number>; count: number }>();
+function lanesOf(t: Track): { lane: Map<string, number>; count: number } {
+  const hit = laneCache.get(t);
+  if (hit) return hit;
+  const lane = new Map<string, number>();
+  const ends: number[] = [];
+  for (const c of [...t.clips].sort((a, b) => a.start - b.start)) {
+    let i = ends.findIndex((e) => e <= c.start + 1e-6);
+    if (i < 0) i = ends.push(0) - 1;
+    ends[i] = clipEnd(c);
+    lane.set(c.id, i);
+  }
+  const out = { lane, count: ends.length };
+  laneCache.set(t, out);
+  return out;
 }
 
 /** The ruler: only the ticks on screen, spaced to stay readable at any zoom. */

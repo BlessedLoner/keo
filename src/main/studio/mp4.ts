@@ -389,7 +389,9 @@ const MATRIX = Buffer.concat([u32(0x00010000), u32(0), u32(0), u32(0), u32(0x000
 export interface WriterVideo {
   width: number;
   height: number;
-  /** The avcC record (WebCodecs' decoderConfig.description). */
+  /** H.264 (the default) or H.265 / HEVC. */
+  codec?: 'h264' | 'h265';
+  /** The avcC record — or the hvcC record for H.265 (WebCodecs' decoderConfig.description). */
   avcC: Buffer;
 }
 export interface WriterAudio {
@@ -406,9 +408,23 @@ interface Written {
   /** Presentation time in microseconds. */
   time: number;
   key: boolean;
+  /** Which video description (stream settings) the frame uses: a resumed export may have a second. */
+  desc?: number;
 }
 
-/** Writes an MP4: media data as it arrives, the index (moov) when it is finished. */
+/** Where a stopped export can carry on: its video frames so far end just before a key frame. */
+export interface ResumePoint {
+  /** Video frames already in the file (the next frame to encode). */
+  frames: number;
+  /** That next frame's time in microseconds. */
+  timeUs: number;
+}
+
+/**
+ * Writes an MP4: media data as it arrives, the index (moov) when it is finished. With a journal,
+ * the frames written so far are noted beside the file at each key frame, so a long export that
+ * stops (the renderer failed, Keo closed or crashed) can carry on from there: Mp4Writer.resume.
+ */
 export class Mp4Writer {
   private readonly fd: number;
   private at = 0;
@@ -417,6 +433,11 @@ export class Mp4Writer {
   private readonly a: Written[] = [];
   private lastVideoEnd = 0;
   private lastAudioEnd = 0;
+  /** The stream descriptions (avcC / hvcC), the first from the start. */
+  private readonly descs: Buffer[];
+  /** Journal lines not saved yet (saved at the next key frame, once their frames are whole). */
+  private pending: string[] = [];
+  private suspended = false;
 
   constructor(
     private readonly file: string,
@@ -424,12 +445,94 @@ export class Mp4Writer {
     private readonly audio: WriterAudio | null,
     /** A QuickTime .mov (the same tracks, labelled for QuickTime players and editors). */
     quicktime = false,
+    /** Where the journal goes (none: the export cannot be resumed). */
+    private readonly journal?: string,
+    resume?: { at: number; mdatStart: number; v: Written[]; a: Written[]; descs: Buffer[]; lastVideoEnd: number; lastAudioEnd: number },
   ) {
+    this.descs = resume ? [...resume.descs] : [video.avcC];
+    if (resume) {
+      // Carry on: the file is cut back to the key frame, the frames before it are kept.
+      fs.truncateSync(file, resume.at);
+      this.fd = fs.openSync(file, 'r+');
+      this.at = resume.at;
+      this.mdatStart = resume.mdatStart;
+      this.v.push(...resume.v);
+      this.a.push(...resume.a);
+      this.lastVideoEnd = resume.lastVideoEnd;
+      this.lastAudioEnd = resume.lastAudioEnd;
+      return;
+    }
     this.fd = fs.openSync(file, 'w');
-    this.put(quicktime ? box('ftyp', str('qt  '), u32(0x200), str('qt  ')) : box('ftyp', str('isom'), u32(0x200), str('isom'), str('iso2'), str('avc1'), str('mp41')));
+    this.put(quicktime ? box('ftyp', str('qt  '), u32(0x200), str('qt  ')) : box('ftyp', str('isom'), u32(0x200), str('isom'), str('iso2'), str(video.codec === 'h265' ? 'hvc1' : 'avc1'), str('mp41')));
     this.mdatStart = this.at;
     // A 64-bit mdat header; its size is filled in at the end.
     this.put(Buffer.concat([u32(1), str('mdat'), u64(0)]));
+    if (journal) {
+      const head = { keo: 1, video: { width: video.width, height: video.height, codec: video.codec ?? 'h264' }, audio: audio ? { codec: audio.codec, sampleRate: audio.sampleRate, channels: audio.channels, config: audio.config.toString('base64') } : null, quicktime, mdatStart: this.mdatStart };
+      fs.writeFileSync(journal, `${JSON.stringify(head)}\nD ${video.avcC.toString('base64')}\n`);
+    }
+  }
+
+  /** Carries on writing a stopped export from its last key frame (null: nothing to carry on from). */
+  static resume(file: string, journal: string): { writer: Mp4Writer; point: ResumePoint } | null {
+    let lines: string[];
+    try {
+      lines = fs.readFileSync(journal, 'utf8').split('\n');
+    } catch {
+      return null;
+    }
+    let head: { keo: number; video: { width: number; height: number; codec: 'h264' | 'h265' }; audio: { codec: 'aac' | 'opus'; sampleRate: number; channels: number; config: string } | null; quicktime: boolean; mdatStart: number };
+    try {
+      head = JSON.parse(lines[0] ?? '');
+    } catch {
+      return null;
+    }
+    if (head?.keo !== 1 || !fs.existsSync(file)) return null;
+    const descs: Buffer[] = [];
+    const v: Written[] = [];
+    const a: Written[] = [];
+    let good: { at: number; v: number; a: number; descs: number; time: number } | null = null;
+    for (const line of lines.slice(1)) {
+      const [k, ...f] = line.split(' ');
+      if (k === 'D' && f[0]) descs.push(Buffer.from(f[0], 'base64'));
+      else if ((k === 'V' || k === 'A') && f.length >= 4) {
+        const w: Written = { offset: Number(f[0]), size: Number(f[1]), time: Number(f[2]), key: f[3] === '1', ...(k === 'V' ? { desc: Number(f[4] ?? 0) } : {}) };
+        if (![w.offset, w.size, w.time].every(Number.isFinite)) break;
+        (k === 'V' ? v : a).push(w);
+      } else if (k === 'R' && f.length >= 2) good = { at: Number(f[0]), v: v.length, a: a.length, descs: descs.length, time: Number(f[1]) };
+      else if (line.trim()) break;
+    }
+    // Only what was noted up to the last key frame is sure to be whole in the file.
+    if (!good || !good.v || !descs.length) return null;
+    if (fs.statSync(file).size < good.at) return null;
+    const keptV = v.slice(0, good.v);
+    const keptA = a.slice(0, good.a);
+    const keptD = descs.slice(0, good.descs);
+    const lastAudio = keptA[keptA.length - 1];
+    const audioStep = keptA.length > 1 ? lastAudio!.time - keptA[keptA.length - 2]!.time : 21_333;
+    const video: WriterVideo = { width: head.video.width, height: head.video.height, codec: head.video.codec, avcC: keptD[keptD.length - 1]! };
+    const audio: WriterAudio | null = head.audio ? { codec: head.audio.codec, sampleRate: head.audio.sampleRate, channels: head.audio.channels, config: Buffer.from(head.audio.config, 'base64') } : null;
+    const writer = new Mp4Writer(file, video, audio, head.quicktime, journal, {
+      at: good.at,
+      mdatStart: head.mdatStart,
+      v: keptV,
+      a: keptA,
+      descs: keptD,
+      lastVideoEnd: good.time,
+      lastAudioEnd: lastAudio ? lastAudio.time + audioStep : 0,
+    });
+    // The journal is written again with only what is kept (a half-written end is dropped).
+    const out = [lines[0]!, ...keptD.map((d) => `D ${d.toString('base64')}`), ...keptA.map((w) => `A ${w.offset} ${w.size} ${w.time} 1`), ...keptV.map((w) => `V ${w.offset} ${w.size} ${w.time} ${w.key ? 1 : 0} ${w.desc ?? 0}`), `R ${good.at} ${good.time}`];
+    fs.writeFileSync(`${journal}.tmp`, `${out.join('\n')}\n`);
+    fs.renameSync(`${journal}.tmp`, journal);
+    return { writer, point: { frames: keptV.length, timeUs: good.time } };
+  }
+
+  /** The stream description of the frames from here on (a resumed export's encoder may describe its stream differently). */
+  setVideoDescription(desc: Buffer): void {
+    if (this.descs[this.descs.length - 1]!.equals(desc)) return;
+    this.descs.push(desc);
+    if (this.journal) this.pending.push(`D ${desc.toString('base64')}`);
   }
 
   private put(b: Buffer): void {
@@ -439,15 +542,49 @@ export class Mp4Writer {
 
   /** One encoded video frame (presentation time and length in microseconds). */
   writeVideo(data: Buffer, timeUs: number, durationUs: number, key: boolean): void {
-    this.v.push({ offset: this.at, size: data.length, time: timeUs, key });
+    // At a key frame everything before it is whole: noted in the journal as a place to carry on from.
+    if (key && this.journal && this.v.length) this.saveJournal(timeUs);
+    const w: Written = { offset: this.at, size: data.length, time: timeUs, key, desc: this.descs.length - 1 };
+    this.v.push(w);
     this.lastVideoEnd = Math.max(this.lastVideoEnd, timeUs + durationUs);
     this.put(data);
+    if (this.journal) this.pending.push(`V ${w.offset} ${w.size} ${w.time} ${key ? 1 : 0} ${w.desc}`);
   }
 
   writeAudio(data: Buffer, timeUs: number, durationUs: number): void {
-    this.a.push({ offset: this.at, size: data.length, time: timeUs, key: true });
+    const w: Written = { offset: this.at, size: data.length, time: timeUs, key: true };
+    this.a.push(w);
     this.lastAudioEnd = Math.max(this.lastAudioEnd, timeUs + durationUs);
     this.put(data);
+    if (this.journal) this.pending.push(`A ${w.offset} ${w.size} ${w.time} 1`);
+  }
+
+  private saveJournal(keyTimeUs: number): void {
+    if (!this.journal) return;
+    this.pending.push(`R ${this.at} ${keyTimeUs}`);
+    fs.appendFileSync(this.journal, `${this.pending.join('\n')}\n`);
+    this.pending = [];
+  }
+
+  /** Whether the journal has a place to carry on from. */
+  get resumable(): boolean {
+    if (!this.journal) return false;
+    try {
+      return /\nR \d+ \d+/.test(fs.readFileSync(this.journal, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Stops writing but keeps the file and its journal, to carry on later (Mp4Writer.resume). */
+  suspend(): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    try {
+      fs.closeSync(this.fd);
+    } catch {
+      /* closed */
+    }
   }
 
   /** Writes the index and closes the file. */
@@ -462,6 +599,7 @@ export class Mp4Writer {
     this.put(box('moov', mvhd, ...traks));
     const bytes = this.at;
     fs.closeSync(this.fd);
+    if (this.journal) fs.rmSync(this.journal, { force: true });
     return { videoFrames: this.v.length, audioPackets: this.a.length, durationSec: durationMs / 1000, bytes };
   }
 
@@ -473,6 +611,7 @@ export class Mp4Writer {
       /* closed */
     }
     fs.rmSync(this.file, { force: true });
+    if (this.journal) fs.rmSync(this.journal, { force: true });
   }
 
   private trak(id: number, kind: 'video' | 'audio', samples: Written[], timescale: number, endUs: number): Buffer {
@@ -498,10 +637,10 @@ export class Mp4Writer {
     const keys = samples.map((s, i) => (s.key ? i + 1 : 0)).filter(Boolean);
     const stbl = box(
       'stbl',
-      full('stsd', 0, 0, u32(1), kind === 'video' ? this.avc1() : this.audioEntry()),
+      kind === 'video' ? full('stsd', 0, 0, u32(this.descs.length), ...this.descs.map((d) => this.avc1(d))) : full('stsd', 0, 0, u32(1), this.audioEntry()),
       full('stts', 0, 0, u32(runs), ...stts),
       ...(kind === 'video' ? [full('stss', 0, 0, u32(keys.length), ...keys.map(u32))] : []),
-      full('stsc', 0, 0, u32(1), u32(1), u32(1), u32(1)),
+      this.stsc(kind === 'video' ? samples : []),
       full('stsz', 0, 0, u32(0), u32(samples.length), ...samples.map((s) => u32(s.size))),
       full('co64', 0, 0, u32(samples.length), ...samples.map((s) => u64(s.offset))),
     );
@@ -518,12 +657,26 @@ export class Mp4Writer {
     return box('trak', tkhd, mdia);
   }
 
-  private avc1(): Buffer {
+  /** One sample per chunk; a new run wherever the frames change to another stream description. */
+  private stsc(samples: Written[]): Buffer {
+    const runs: Buffer[] = [];
+    let last = -1;
+    samples.forEach((s, i) => {
+      const d = s.desc ?? 0;
+      if (d !== last) runs.push(u32(i + 1), u32(1), u32(d + 1));
+      last = d;
+    });
+    if (!runs.length) runs.push(u32(1), u32(1), u32(1));
+    return full('stsc', 0, 0, u32(runs.length / 3), ...runs);
+  }
+
+  private avc1(desc: Buffer = this.video.avcC): Buffer {
     const name = Buffer.alloc(32);
     name[0] = 3;
     name.write('Keo', 1, 'latin1');
+    const hevc = this.video.codec === 'h265';
     return box(
-      'avc1',
+      hevc ? 'hvc1' : 'avc1',
       Buffer.alloc(6),
       u16(1),
       u16(0),
@@ -538,7 +691,7 @@ export class Mp4Writer {
       name,
       u16(0x0018),
       u16(0xffff),
-      box('avcC', this.video.avcC),
+      box(hevc ? 'hvcC' : 'avcC', desc),
     );
   }
 
