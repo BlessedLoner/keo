@@ -1,4 +1,6 @@
 import { ProColor } from '../studio/ColorPanel';
+import { playhead } from '../studio/playhead';
+import { allOnMain } from '@shared/studioTimeline';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FORMATS, SPEED_PRESETS, clipEnd, proGrade, curveAt, findClip, isAV, projectDuration, type SpeedPoint, type ExportOptions, type Asset, type Clip, type EditOp, type FormatId, type MediaClip, type Project, type TextClip, type AdjustClip, BLENDS, EQ_PRESETS, VOICE_FX, VOICE_FX_LABEL, type AudioClip, type Blend, type VoiceFx } from '@shared/studio';
 import { Icon } from '../components/Icon';
@@ -210,6 +212,11 @@ export function StudioView() {
   const [keoDock, setKeoDock] = useState(() => readPref('keo.studio.keoDock') !== '0');
   const [cols, setCols] = useState(() => ({ left: Number(readPref('keo.studio.leftW')) || 340, right: Number(readPref('keo.studio.rightW')) || 320, keo: Number(readPref('keo.studio.keoW')) || 340 }));
   useEffect(() => writePref('keo.studio.snap', snapping ? '1' : '0'), [snapping]);
+  // The magnetic main track (like CapCut): on unless the user turned it off.
+  const [magnetic, setMagnetic] = useState(() => readPref('keo.studio.magnetic') !== '0');
+  useEffect(() => writePref('keo.studio.magnetic', magnetic ? '1' : '0'), [magnetic]);
+  const magneticRef = useRef(magnetic);
+  magneticRef.current = magnetic;
   useEffect(() => writePref('keo.studio.keoDock', keoDock ? '1' : '0'), [keoDock]);
   useEffect(() => {
     writePref('keo.studio.leftW', String(Math.round(cols.left)));
@@ -501,7 +508,9 @@ export function StudioView() {
       });
       if (!ids.length) return;
       setSelected(null);
-      void edit(ids.map((clip) => ({ op: 'delete' as const, clip, ripple })));
+      // On the magnetic main track a delete always closes the gap.
+      const close = ripple || (magneticRef.current && !!p && allOnMain(p, ids));
+      void edit(ids.map((clip) => ({ op: 'delete' as const, clip, ripple: close })));
     },
     [edit, setSelected],
   );
@@ -906,7 +915,7 @@ export function StudioView() {
           )}
           <div className="studio-transport">
             <span className="studio-time tp-left">
-              {fmtTime(time, project.fps)} <span className="muted">/ {fmtTime(duration, project.fps)}</span>
+              <TimeReadout time={time} fps={project.fps} /> <span className="muted">/ {fmtTime(duration, project.fps)}</span>
             </span>
             <div className="tp-center">
             <button className="btn icon sm ghost" onClick={() => setTime(0)} title="To the start (Home)">
@@ -1061,6 +1070,9 @@ export function StudioView() {
         </button>
         {selection.length > 1 && <span className="chip">{selection.length} selected</span>}
         <div className="spacer" />
+        <button className={`btn sm ghost ${magnetic ? 'on' : ''}`} onClick={() => setMagnetic((v) => !v)} title={magnetic ? 'Magnetic main track on: the main video track stays end to end — moving a clip reorders it, trims and deletes close the gaps' : 'Magnetic main track off: clips stay exactly where you put them'}>
+          <Icon name="link" size={14} /> Magnetic
+        </button>
         <button className={`btn sm ghost ${snapping ? 'on' : ''}`} onClick={() => setSnapping((v) => !v)} title={snapping ? 'Snapping on: clips stick to edges, the playhead, markers and music beats (N)' : 'Snapping off (N)'}>
           <Icon name="magnet" size={14} /> Snap
         </button>
@@ -1133,11 +1145,22 @@ export function StudioView() {
         onZoom={setZoom}
         height={tlHeight}
         snapping={snapping}
+        magnetic={magnetic}
+        playing={playing}
       />
       {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
       {exporting && <ExportDialog project={project} onClose={() => setExporting(false)} onExport={(o) => void exportVideo(o)} />}
     </div>
   );
+}
+
+/** The playhead's time, every frame while playing (from the preview's clock, without re-rendering Studio). */
+function TimeReadout({ time, fps }: { time: number; fps: number }) {
+  const el = useRef<HTMLSpanElement>(null);
+  useEffect(() => playhead.subscribe((t) => {
+    if (el.current) el.current.textContent = fmtTime(t, fps);
+  }), [fps]);
+  return <span ref={el}>{fmtTime(time, fps)}</span>;
 }
 
 /** A per-viewer layout preference (column widths, toggles); never needed for the edit itself. */

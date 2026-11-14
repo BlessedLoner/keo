@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { playhead } from './playhead';
 import { findClip, projectDuration, type Clip, type EditOp, type Key, type KeyProp, type Project } from '@shared/studio';
 import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
@@ -272,13 +273,18 @@ export function Preview({
   useEffect(() => {
     if (!playing) {
       sources.current?.pauseAll();
+      playhead.set(live.current.time, false);
       return;
     }
     const startAt = performance.now();
     const from = live.current.time;
     const end = projectDuration(live.current.project);
     let raf = 0;
-    let lastReport = 0;
+    let lastReport = performance.now();
+    // The last time told to Studio, and the clock's own time (Studio is told only a few times a
+    // second while playing: the playhead and readout follow the clock itself).
+    let told = from;
+    let clock = from;
     const tick = () => {
       const t = from + (performance.now() - startAt) / 1000;
       if (t >= end) {
@@ -287,16 +293,27 @@ export function Preview({
         return;
       }
       live.current.time = t;
+      clock = t;
+      // The timeline's playhead and the time readout follow every frame.
+      playhead.set(t, true);
       sources.current?.sync(live.current.project, t, true);
       redraw.current();
-      if (performance.now() - lastReport > 66) {
+      if (performance.now() - lastReport > 400) {
         lastReport = performance.now();
+        told = t;
         onTime(t);
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      // Stopped: Studio gets the exact time — unless something else (a click on the timeline) has
+      // just set a new one.
+      if (Math.abs(live.current.time - told) < 1e-6 || live.current.time === clock) {
+        if (Math.abs(clock - told) > 1e-6) onTime(clock);
+      }
+    };
     // Restart the clock only when play starts or stops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
