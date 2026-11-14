@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { playhead } from './playhead';
-import { findClip, projectDuration, type EditOp, type Project } from '@shared/studio';
+import { CUT_SHAPES, findClip, projectDuration, type Crop, type Cut, type EditOp, type Project } from '@shared/studio';
+import { dragCrop, featherCut, moveCut, newCut, sizeCut, toLayer, turnCut } from '@shared/studioMaskCrop';
 import { baseOf, placeOps, type Base } from '@shared/studioPlacing';
 import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
@@ -96,8 +97,20 @@ function SafeZones({ kind, vertical }: { kind: Exclude<Guides, 'none'>; vertical
 const stats = { drawn: 0, held: 0, longestHoldMs: 0, elements: 0 };
 (window as unknown as { __keoPreview?: typeof stats }).__keoPreview = stats;
 
-type Gesture = { id: string; kind: 'move' | 'scale' | 'rotate' | 'width'; startX: number; startY: number; box: LayerBox; base: Base };
-type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number; maxWidth?: number };
+type Gesture = {
+  id: string;
+  kind: 'move' | 'scale' | 'rotate' | 'width' | 'mask-move' | 'mask-size' | 'mask-turn' | 'mask-feather' | 'crop';
+  startX: number;
+  startY: number;
+  box: LayerBox;
+  base: Base;
+  /** Crop: the edges being dragged (l, r, t, b, or a corner's two). */
+  edges?: string;
+  cut0?: Cut;
+  crop0?: Crop;
+};
+type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number; maxWidth?: number; cut?: Cut | null; crop?: Crop };
+const CUT_NAME: Record<Cut['shape'], string> = { circle: 'Circle', rect: 'Rectangle', heart: 'Heart', star: 'Star', linear: 'Line', mirror: 'Band' };
 
 function inside(b: LayerBox, x: number, y: number): boolean {
   const a = (-b.rotation * Math.PI) / 180;
@@ -178,6 +191,11 @@ export function Preview({
         if (c.keys?.[k]) delete c.keys[k];
       }
       if (patch.maxWidth !== undefined && c.type === 'text') c.style.maxWidth = patch.maxWidth;
+      if (c.type === 'media') {
+        if (patch.cut === null) delete c.cut;
+        else if (patch.cut) c.cut = patch.cut;
+        if (patch.crop) c.crop = patch.crop;
+      }
     }
     return p;
   })();
@@ -373,6 +391,23 @@ export function Preview({
         const d0 = Math.hypot(g.startX - g.box.cx, g.startY - g.box.cy);
         const d1 = Math.hypot(p.x - g.box.cx, p.y - g.box.cy);
         setPatch({ id: g.id, scale: Math.round(Math.max(0.02, Math.min(20, g.base.scale * (d1 / Math.max(1, d0)))) * 1000) / 1000 });
+      } else if (g.kind.startsWith('mask-') && g.cut0) {
+        // The mask, in the layer's own frame (it turns and scales with the layer).
+        const lp = toLayer(g.box, p.x, p.y);
+        const l0 = toLayer(g.box, g.startX, g.startY);
+        const cut =
+          g.kind === 'mask-move'
+            ? moveCut(g.cut0, lp.u - l0.u, lp.v - l0.v)
+            : g.kind === 'mask-size'
+              ? sizeCut(g.cut0, g.box, lp.u, lp.v, e.shiftKey)
+              : g.kind === 'mask-turn'
+                ? turnCut(g.cut0, g.box, lp.u, lp.v, e.shiftKey)
+                : featherCut(g.cut0, g.cut0.feather, (p.y - g.startY) / k);
+        setPatch({ id: g.id, cut });
+      } else if (g.kind === 'crop' && g.crop0) {
+        const lp = toLayer(g.box, p.x, p.y);
+        const l0 = toLayer(g.box, g.startX, g.startY);
+        setPatch({ id: g.id, crop: dragCrop(g.crop0, g.edges ?? '', lp.u - l0.u, lp.v - l0.v) });
       } else if (g.kind === 'width') {
         // How wide a line of text may be: the pointer's distance from the middle, along the text.
         const a = (-g.box.rotation * Math.PI) / 180;
@@ -398,8 +433,11 @@ export function Preview({
         if (pt && onEdit) {
           const f = findClip(project, pt.id);
           if (f) {
-            const { id: _id, maxWidth, ...v } = pt;
-            const ops = placeOps(f.clip, time - f.clip.start, project.fps, v, gesture.base, maxWidth);
+            const { id: _id, maxWidth, cut, crop, ...v } = pt;
+            const ops =
+              cut !== undefined || crop
+                ? [{ op: 'set' as const, clip: f.clip.id, ...(cut !== undefined ? { cut } : {}), ...(crop ? { crop } : {}) }]
+                : placeOps(f.clip, time - f.clip.start, project.fps, v, gesture.base, maxWidth);
             if (ops.length) {
               onEdit(ops);
               holding.current = window.setTimeout(() => setPatch(null), 2500);
@@ -419,7 +457,7 @@ export function Preview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gesture]);
 
-  const start = (kind: Gesture['kind'], b: LayerBox, e: React.PointerEvent) => {
+  const start = (kind: Gesture['kind'], b: LayerBox, e: React.PointerEvent, edges?: string) => {
     e.stopPropagation();
     e.preventDefault();
     const f = findClip(project, b.id);
@@ -427,8 +465,25 @@ export function Preview({
     if (holding.current) window.clearTimeout(holding.current);
     setPatch(null);
     const p = toCanvas(e);
-    setGesture({ id: b.id, kind, startX: p.x, startY: p.y, box: b, base: baseOf(f.clip, time - f.clip.start) });
+    const media = f.clip.type === 'media' ? f.clip : null;
+    setGesture({
+      id: b.id,
+      kind,
+      startX: p.x,
+      startY: p.y,
+      box: b,
+      base: baseOf(f.clip, time - f.clip.start),
+      ...(edges ? { edges } : {}),
+      ...(media?.cut ? { cut0: media.cut } : {}),
+      crop0: media?.crop ?? { left: 0, top: 0, right: 0, bottom: 0 },
+    });
   };
+  // Editing a video or picture: moving it (as other layers), its cut-out mask, or its crop.
+  const [mode, setMode] = useState<'move' | 'mask' | 'crop'>('move');
+  useEffect(() => setMode('move'), [selected]);
+  const selClip = sel ? findClip(shown, sel.id)?.clip : undefined;
+  const selMedia = selClip?.type === 'media' ? selClip : null;
+  const setCut = (cut: Cut | null) => selMedia && onEdit?.([{ op: 'set', clip: selMedia.id, cut }]);
 
   return (
     <div className="studio-preview" ref={box}>
@@ -452,10 +507,64 @@ export function Preview({
           >
             {snap.v !== null && <div className="guide v" style={{ left: snap.v / k }} />}
             {snap.h !== null && <div className="guide h" style={{ top: snap.h / k }} />}
+            {sel && selMedia && (
+              <div className="sel-tools" style={{ left: Math.max(4, (sel.cx - sel.w / 2) / k), top: Math.max(4, (sel.cy - sel.h / 2) / k - 36) }} onPointerDown={(e) => e.stopPropagation()}>
+                {(['move', 'mask', 'crop'] as const).map((m) => (
+                  <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)} title={m === 'move' ? 'Move, resize and turn it' : m === 'mask' ? 'Cut it into a shape: drag the shape, its corners, its turn and its soft edge' : 'Drag its edges or corners to cut them off'}>
+                    {m === 'move' ? 'Move' : m === 'mask' ? 'Mask' : 'Crop'}
+                  </button>
+                ))}
+                {mode === 'mask' && (
+                  <>
+                    <span className="sep" />
+                    {CUT_SHAPES.map((sh) => (
+                      <button key={sh} className={selMedia.cut?.shape === sh ? 'on' : ''} onClick={() => setCut(selMedia.cut ? { ...selMedia.cut, shape: sh } : newCut(sh))}>
+                        {CUT_NAME[sh]}
+                      </button>
+                    ))}
+                    {selMedia.cut && (
+                      <>
+                        <button className={selMedia.cut.invert ? 'on' : ''} onClick={() => setCut({ ...selMedia.cut!, invert: !selMedia.cut!.invert })} title="Keep the outside of the shape instead">
+                          Invert
+                        </button>
+                        <button onClick={() => setCut(null)} title="No mask">
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+                {mode === 'crop' && selMedia.crop && (
+                  <>
+                    <span className="sep" />
+                    <button onClick={() => onEdit?.([{ op: 'set', clip: selMedia.id, crop: null }])}>Reset crop</button>
+                  </>
+                )}
+              </div>
+            )}
             {sel && (
-              <div className="sel-box" style={{ left: sel.cx / k, top: sel.cy / k, width: sel.w / k, height: sel.h / k, transform: `translate(-50%, -50%) rotate(${sel.rotation}deg)` }}>
-                <span className="handle rotate" title="Drag to rotate (Shift: 15° steps)" onPointerDown={(e) => start('rotate', sel, e)} />
-                {(['tl', 'tr', 'bl', 'br'] as const).map((corner) => (
+              <div className={`sel-box ${mode !== 'move' && selMedia ? `editing ${mode}` : ''}`} style={{ left: sel.cx / k, top: sel.cy / k, width: sel.w / k, height: sel.h / k, transform: `translate(-50%, -50%) rotate(${sel.rotation}deg)` }}>
+                {selMedia && mode === 'mask' && selMedia.cut && (() => {
+                  const c = selMedia.cut;
+                  const line = c.shape === 'linear' || c.shape === 'mirror';
+                  return (
+                    <div
+                      className={`mask-shape ${c.shape}`}
+                      style={{ left: `${50 + c.x * 100}%`, top: `${50 + c.y * 100}%`, width: line ? '400%' : `${c.w * 100}%`, height: c.shape === 'linear' ? 0 : `${c.h * 100}%`, transform: `translate(-50%, -50%) rotate(${c.angle}deg)` }}
+                    >
+                      <span className="mask-body" title="Drag to move the mask" onPointerDown={(e) => start('mask-move', sel, e)} />
+                      {!line && (['tl', 'tr', 'bl', 'br'] as const).map((corner) => <span key={corner} className={`handle mask-size ${corner}`} title="Drag to resize the mask (Shift: keep its shape)" onPointerDown={(e) => start('mask-size', sel, e)} />)}
+                      {c.shape === 'mirror' && <span className="handle mask-size edge" title="Drag to make the band wider or narrower" onPointerDown={(e) => start('mask-size', sel, e)} />}
+                      <span className="handle mask-turn" title="Drag to turn the mask (Shift: 15° steps)" onPointerDown={(e) => start('mask-turn', sel, e)} />
+                      <span className="handle mask-feather" title={`Drag down for a softer edge (now ${Math.round(c.feather * 100)}%)`} onPointerDown={(e) => start('mask-feather', sel, e)} />
+                    </div>
+                  );
+                })()}
+                {selMedia && mode === 'mask' && !selMedia.cut && <span className="sel-hint">Choose a shape above</span>}
+                {selMedia && mode === 'crop' &&
+                  (['l', 'r', 't', 'b', 'tl', 'tr', 'bl', 'br'] as const).map((edge) => <span key={edge} className={`handle crop ${edge}`} title="Drag to crop" onPointerDown={(e) => start('crop', sel, e, edge)} />)}
+                {(mode === 'move' || !selMedia) && <span className="handle rotate" title="Drag to rotate (Shift: 15° steps)" onPointerDown={(e) => start('rotate', sel, e)} />}
+                {(mode === 'move' || !selMedia) && (['tl', 'tr', 'bl', 'br'] as const).map((corner) => (
                   <span key={corner} className={`handle scale ${corner}`} title="Drag to resize" onPointerDown={(e) => start('scale', sel, e)} />
                 ))}
                 {findClip(project, sel.id)?.clip.type === 'text' &&
@@ -470,7 +579,15 @@ export function Preview({
                           ? `${patch.rotation}°`
                           : gesture.kind === 'width' && patch.maxWidth !== undefined
                             ? `Line width ${Math.round(patch.maxWidth * 100)}%`
-                            : ''}
+                            : gesture.kind === 'mask-feather' && patch.cut
+                              ? `Soft edge ${Math.round(patch.cut.feather * 100)}%`
+                              : gesture.kind === 'mask-turn' && patch.cut
+                                ? `${patch.cut.angle}°`
+                                : gesture.kind === 'mask-size' && patch.cut
+                                  ? `${Math.round(patch.cut.w * 100)} × ${Math.round(patch.cut.h * 100)}%`
+                                  : gesture.kind === 'crop' && patch.crop
+                                    ? `L ${Math.round(patch.crop.left * 100)} R ${Math.round(patch.crop.right * 100)} T ${Math.round(patch.crop.top * 100)} B ${Math.round(patch.crop.bottom * 100)}`
+                                    : ''}
                   </span>
                 )}
               </div>
