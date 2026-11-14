@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EaseEditor } from './EaseEditor';
-import { clipEnd, findClip, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Project, type Track, type Transition } from '@shared/studio';
-import { magneticMove, magneticTrimEnd, magneticTrimStart, mainTrack } from '@shared/studioTimeline';
+import { clipEnd, findClip, KEY_PROPS, projectDuration, TRANSITIONS, volumeAt, type Asset, type Clip, type EditOp, type Key, type KeyProp, type Project, type Track, type Transition } from '@shared/studio';
+import { closeUp, magneticMove, magneticTrimEnd, magneticTrimStart, mainTrack } from '@shared/studioTimeline';
 import { Icon } from '../components/Icon';
 import { playhead } from './playhead';
 import { useFilmstrip, useWaveform } from './thumbs';
@@ -71,6 +71,9 @@ type Drag =
   /** A box dragged over empty space selects every clip it touches. */
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; add: boolean };
 
+/** The drop zone above the tracks: a clip dropped there gets a new track of its own. */
+const NEW_TRACK = '__new__';
+
 /** A right-click menu: on a clip, on a track's name, or on empty space of a track. */
 type Menu = { x: number; y: number; at: number; clip?: string; track?: string };
 type View = { x0: number; x1: number };
@@ -93,6 +96,7 @@ interface RowApi {
   setEaseMenu: (m: { clip: string; at: number; x: number; y: number } | null) => void;
   setRenaming: (id: string | null) => void;
   magnetic: boolean;
+  resize: (id: string, h: number | null) => void;
 }
 
 const fmtClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}.${String(Math.floor((s % 1) * 100)).padStart(2, '0')}`;
@@ -266,7 +270,7 @@ export function Timeline({
       const b = snapWith(raw + c.duration, c.id);
       const useEnd = b.at !== null && (a.at === null || Math.abs(b.t - c.duration - raw) < Math.abs(a.t - raw));
       const over = trackAt(clientY);
-      const target = over && project.tracks.find((t) => t.id === over)?.kind === d.track.kind ? over : d.targetTrack;
+      const target = over === NEW_TRACK ? NEW_TRACK : over && project.tracks.find((t) => t.id === over)?.kind === d.track.kind ? over : d.targetTrack;
       return { ...d, dx, targetTrack: target, value: Math.max(0, useEnd ? b.t - c.duration : a.t), snapAt: useEnd ? b.at : a.at, px: clientX, py: clientY };
     }
     if (d.kind === 'trim-start') {
@@ -360,6 +364,11 @@ export function Timeline({
           onEdit(all.filter((c) => selectedIds.includes(c.id)).map((c) => ({ op: 'move' as const, clip: c.id, start: Math.max(0, c.start + shift) })));
           return;
         }
+        // Onto a new track of its own (the magnetic main track closes up behind it).
+        if (d.targetTrack === NEW_TRACK) {
+          onEdit([{ op: 'move', clip: d.clip.id, start, newTrack: true }, ...(main && d.track.id === main.id ? closeUp(project, d.clip.id) : [])]);
+          return;
+        }
         // The magnetic main track: dropped on it (or taken off it), it reorders and closes up.
         if (main && (d.targetTrack === main.id || d.track.id === main.id)) {
           const ops = magneticMove(project, d.clip.id, start, d.targetTrack, timeAt(d.px));
@@ -390,6 +399,28 @@ export function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.kind, project, pps, magnetic, snapping]);
 
+  // Track heights the user dragged (per viewer, by track).
+  const [heights, setHeights] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('keo.studio.trackHeights') ?? '{}') as Record<string, number>;
+    } catch {
+      return {};
+    }
+  });
+  const resize = (id: string, h: number | null) => {
+    setHeights((x) => {
+      const next = { ...x };
+      if (h === null) delete next[id];
+      else next[id] = h;
+      try {
+        localStorage.setItem('keo.studio.trackHeights', JSON.stringify(next));
+      } catch {
+        /* kept for this session only */
+      }
+      return next;
+    });
+  };
+
   // One stable object for the tracks (its fields are refreshed every render).
   const api = useRef<RowApi>(null as unknown as RowApi);
   api.current = {
@@ -415,6 +446,7 @@ export function Timeline({
     setEaseMenu,
     setRenaming,
     magnetic,
+    resize,
   };
 
   /** Clips that overlap on a track go on separate lanes, so each one can be seen and grabbed. */
@@ -489,6 +521,11 @@ export function Timeline({
           }}
           onRemoveMarker={(t) => onEdit([{ op: 'marker', at: t, remove: true }])}
         />
+        {clipDrag?.kind === 'move' && (
+          <div className={`tl-newtrack ${clipDrag.targetTrack === NEW_TRACK ? 'on' : ''}`} data-track={NEW_TRACK}>
+            <span>+ Drop here for a new {clipDrag.track.kind === 'audio' ? 'audio' : clipDrag.track.kind === 'text' ? 'text' : 'video'} track</span>
+          </div>
+        )}
         {rows.map((t) => (
           <TrackRow
             key={t.id}
@@ -503,6 +540,7 @@ export function Timeline({
             drag={clipDrag && (clipDrag.track.id === t.id || (clipDrag.kind === 'move' && clipDrag.targetTrack === t.id)) ? clipDrag : null}
             renaming={renaming === t.id}
             main={mainId === t.id}
+            height={heights[t.id] ?? ROW_H[t.kind]}
           />
         ))}
         <Playhead area={area} pps={pps} time={time} playing={playing} onGrab={(e) => {
@@ -701,6 +739,7 @@ const TrackRow = memo(function TrackRow({
   drag,
   renaming,
   main,
+  height,
 }: {
   track: Track;
   api: React.RefObject<RowApi>;
@@ -713,10 +752,12 @@ const TrackRow = memo(function TrackRow({
   drag: Extract<Drag, { clip: Clip }> | null;
   renaming: boolean;
   main: boolean;
+  /** One lane's height (the default for its kind, or what the user dragged it to). */
+  height: number;
 }) {
   const a = () => api.current!;
   const sel = new Set(selectedKey ? selectedKey.split(',') : []);
-  const rowH = ROW_H[t.kind];
+  const rowH = height;
   // The magnetic main track while a clip is dragged over it: the others slide aside live, leaving a
   // slot exactly where it will land (as it will be once dropped).
   const slide = useMemo(() => {
@@ -766,10 +807,13 @@ const TrackRow = memo(function TrackRow({
     return assets.find((x) => x.id === c.assetId)?.name ?? 'Media';
   };
   const target = drag?.kind === 'move' && drag.targetTrack === t.id && drag.track.id !== t.id;
+  // The selected clip's keyframes, one lane per property (under the track).
+  const keyed = primary ? t.clips.find((c) => c.id === primary) : undefined;
+  const keyLanes = keyed && keyed.type !== 'audio' && keyed.type !== 'adjust' && keyed.keys ? KEY_PROPS.filter((k) => (keyed.keys?.[k]?.length ?? 0) > 0) : [];
   return (
     <div
       className={`tl-row ${t.kind} ${target ? 'drop' : ''} ${main ? 'main' : ''} ${slide || close ? 'sliding' : ''}`}
-      style={{ height: rowH * Math.max(1, lanes.count) }}
+      style={{ height: rowH * Math.max(1, lanes.count) + (keyLanes.length ? keyLanes.length * KEY_LANE_H + 4 : 0) }}
       data-track={t.id}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes('application/x-keo-asset') || e.dataTransfer.types.includes('application/x-keo-text')) e.preventDefault();
@@ -860,6 +904,27 @@ const TrackRow = memo(function TrackRow({
         <button className={`tl-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Unlock this track' : 'Lock this track (its clips cannot be moved or changed)'} onClick={() => a().onEdit([{ op: 'set_track', track: t.id, locked: !t.locked }])}>
           <Icon name={t.locked ? 'lock' : 'unlock'} size={13} />
         </button>
+        <span
+          className="tl-resize"
+          title="Drag to make this track taller or shorter (double-click: back to normal)"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const y0 = e.clientY;
+            const h0 = rowH;
+            const move = (ev: PointerEvent) => a().resize(t.id, Math.round(Math.max(26, Math.min(180, h0 + ev.clientY - y0))));
+            const up = () => {
+              window.removeEventListener('pointermove', move);
+              window.removeEventListener('pointerup', up);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            a().resize(t.id, null);
+          }}
+        />
       </div>
       {slide && drag && <div className="tl-slot" style={{ left: LABEL_W + slide.slot * pps, width: Math.max(4, drag.clip.duration * pps), top: 4, height: rowH - 8 }} />}
       {t.kind === 'video' &&
@@ -957,9 +1022,81 @@ const TrackRow = memo(function TrackRow({
           </div>
         );
       })}
+      {keyed && keyLanes.length > 0 && keyed.type !== 'audio' && keyed.type !== 'adjust' && (
+        <KeyLanes clip={keyed} props={keyLanes} top={rowH * Math.max(1, lanes.count)} pps={pps} api={api} />
+      )}
     </div>
   );
 });
+
+const KEY_LANE_H = 20;
+const KEY_NAME: Record<KeyProp, string> = { x: 'Position X', y: 'Position Y', scale: 'Scale', scaleX: 'Stretch X', scaleY: 'Stretch Y', rotation: 'Rotation', opacity: 'Opacity', blur: 'Blur', tiltX: 'Tilt X', tiltY: 'Tilt Y' };
+
+/**
+ * The selected clip's keyframes, a lane per property: drag a diamond to move it in time, click it
+ * to go there, double-click to change how it eases in, right-click to remove it.
+ */
+function KeyLanes({ clip, props, top, pps, api }: { clip: Exclude<Clip, { type: 'audio' | 'adjust' }>; props: KeyProp[]; top: number; pps: number; api: React.RefObject<RowApi> }) {
+  const [live, setLive] = useState<{ prop: KeyProp; index: number; at: number } | null>(null);
+  const setKeys = (prop: KeyProp, list: Key[]) => api.current!.onEdit([{ op: 'set', clip: clip.id, keys: { [prop]: list } }]);
+  return (
+    <div className="tl-keylanes" style={{ top }}>
+      {props.map((prop) => {
+        const list = clip.keys?.[prop] ?? [];
+        return (
+          <div key={prop} className="tl-keylane" style={{ height: KEY_LANE_H }}>
+            <span className="tl-keylane-name">◆ {KEY_NAME[prop]}</span>
+            {list.map((k, index) => {
+              const at = live && live.prop === prop && live.index === index ? live.at : k.at;
+              return (
+                <span
+                  key={index}
+                  className={`tl-keydot ${live && live.prop === prop && live.index === index ? 'on' : ''}`}
+                  style={{ left: LABEL_W + (clip.start + at) * pps }}
+                  title={`${KEY_NAME[prop]}: ${Math.round(k.value * 100) / 100} at ${(clip.start + k.at).toFixed(2)} s — drag to move, double-click for its ease, right-click to remove`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (e.button !== 0) return;
+                    const x0 = e.clientX;
+                    let next = k.at;
+                    const move = (ev: PointerEvent) => {
+                      next = Math.round(Math.max(0, Math.min(clip.duration, k.at + (ev.clientX - x0) / pps)) * 100) / 100;
+                      setLive({ prop, index, at: next });
+                    };
+                    const up = () => {
+                      window.removeEventListener('pointermove', move);
+                      window.removeEventListener('pointerup', up);
+                      setLive(null);
+                      if (Math.abs(next - k.at) < 0.005) {
+                        api.current!.onTime(clip.start + k.at);
+                        return;
+                      }
+                      // Moved: the keyframes stay in time order (one at the same moment is replaced).
+                      const moved = list.filter((_, n) => n !== index && Math.abs(list[n]!.at - next) > 0.005).concat({ ...k, at: next }).sort((p, q) => p.at - q.at);
+                      setKeys(prop, moved);
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    api.current!.setEaseMenu({ clip: clip.id, at: k.at, x: e.clientX, y: e.clientY });
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setKeys(prop, list.filter((_, n) => n !== index));
+                  }}
+                />
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /** What a video or sound clip looks like on the timeline: its frames and the shape of its sound, drawn only for the part on screen. */
 const ClipBody = memo(function ClipBody({ projectId, clip, asset, left, width, view, pps, height }: { projectId: string; clip: Extract<Clip, { type: 'media' | 'audio' }>; asset: Asset | undefined; left: number; width: number; view: View; pps: number; height: number }) {

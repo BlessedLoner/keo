@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { playhead } from './playhead';
-import { findClip, projectDuration, type Clip, type EditOp, type Key, type KeyProp, type Project } from '@shared/studio';
+import { findClip, projectDuration, type EditOp, type Project } from '@shared/studio';
+import { baseOf, placeOps, type Base } from '@shared/studioPlacing';
 import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
 
@@ -95,23 +96,8 @@ function SafeZones({ kind, vertical }: { kind: Exclude<Guides, 'none'>; vertical
 const stats = { drawn: 0, held: 0, longestHoldMs: 0, elements: 0 };
 (window as unknown as { __keoPreview?: typeof stats }).__keoPreview = stats;
 
-type Gesture = { id: string; kind: 'move' | 'scale' | 'rotate'; startX: number; startY: number; box: LayerBox; base: { x: number; y: number; scale: number; rotation: number } };
-type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number };
-
-/** The edit that puts a layer's position, scale or rotation at these values at the playhead (a keyframe when that property is animated). */
-function placeOps(clip: Clip, rt: number, fps: number, v: Omit<Patch, 'id'>): EditOp[] {
-  if (clip.type === 'audio' || clip.type === 'adjust') return [];
-  const keys: Partial<Record<KeyProp, Key[]>> = {};
-  const transform: Record<string, number> = {};
-  for (const [k, val] of Object.entries(v) as Array<[KeyProp, number | undefined]>) {
-    if (val === undefined) continue;
-    const list = clip.keys?.[k];
-    if (list?.length) keys[k] = [...list.filter((x) => Math.abs(x.at - rt) >= 0.5 / fps), { at: Math.round(rt * 1000) / 1000, value: val, ease: 'in-out' as const }].sort((a, b) => a.at - b.at);
-    else transform[k] = Math.round(val * 10000) / 10000;
-  }
-  const op: EditOp = { op: 'set', clip: clip.id, ...(Object.keys(transform).length ? { transform } : {}), ...(Object.keys(keys).length ? { keys } : {}) };
-  return Object.keys(op).length > 2 ? [op] : [];
-}
+type Gesture = { id: string; kind: 'move' | 'scale' | 'rotate' | 'width'; startX: number; startY: number; box: LayerBox; base: Base };
+type Patch = { id: string; x?: number; y?: number; scale?: number; rotation?: number; maxWidth?: number };
 
 function inside(b: LayerBox, x: number, y: number): boolean {
   const a = (-b.rotation * Math.PI) / 180;
@@ -164,7 +150,17 @@ export function Preview({
   const waiting = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0, scale: 1 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
+  const gestureRef = useRef<Gesture | null>(null);
+  gestureRef.current = gesture;
   const [patch, setPatch] = useState<Patch | null>(null);
+  // After a drag, the layer is drawn where it was put until the project comes back changed.
+  const holding = useRef<number | null>(null);
+  useEffect(() => {
+    if (gestureRef.current) return;
+    if (holding.current) window.clearTimeout(holding.current);
+    holding.current = null;
+    setPatch(null);
+  }, [project]);
   /** Guide lines shown while dragging (canvas pixels), where the layer snapped. */
   const [snap, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null });
   const guideMode = guides;
@@ -181,6 +177,7 @@ export function Preview({
         c.transform[k] = patch[k]!;
         if (c.keys?.[k]) delete c.keys[k];
       }
+      if (patch.maxWidth !== undefined && c.type === 'text') c.style.maxWidth = patch.maxWidth;
     }
     return p;
   })();
@@ -344,6 +341,11 @@ export function Preview({
       const g = gesture;
       if (g.kind === 'move') {
         const raw = { x: g.box.cx + (p.x - g.startX), y: g.box.cy + (p.y - g.startY) };
+        // Shift: straight along one axis.
+        if (e.shiftKey) {
+          if (Math.abs(p.x - g.startX) > Math.abs(p.y - g.startY)) raw.y = g.box.cy;
+          else raw.x = g.box.cx;
+        }
         // Alt: no snapping. Else the nearest line within reach: the middle, thirds, a safe margin, other layers.
         const others = boxes.filter((b) => b.id !== g.id);
         const lines = (size: number, pick: (b: LayerBox) => number[]) => [size / 2, size / 3, (size * 2) / 3, size * 0.06, size * 0.94, ...others.flatMap(pick)];
@@ -362,11 +364,21 @@ export function Preview({
         const sx = snapAxis(raw.x, hw, lines(W, (b) => [b.cx - b.w / 2, b.cx, b.cx + b.w / 2]));
         const sy = snapAxis(raw.y, hh, lines(H, (b) => [b.cy - b.h / 2, b.cy, b.cy + b.h / 2]));
         setGuides({ v: sx ? sx.line : null, h: sy ? sy.line : null });
-        setPatch({ id: g.id, x: (sx ? sx.c : raw.x) / W, y: (sy ? sy.c : raw.y) / H });
+        // The layer's own position moves by as much as its box did (its box's middle is not always
+        // its anchor: aligned text, captions, a clip mid-animation).
+        const cx = sx ? sx.c : raw.x;
+        const cy = sy ? sy.c : raw.y;
+        setPatch({ id: g.id, x: g.base.x + (cx - g.box.cx) / W, y: g.base.y + (cy - g.box.cy) / H });
       } else if (g.kind === 'scale') {
         const d0 = Math.hypot(g.startX - g.box.cx, g.startY - g.box.cy);
         const d1 = Math.hypot(p.x - g.box.cx, p.y - g.box.cy);
-        setPatch({ id: g.id, scale: Math.max(0.02, Math.min(20, g.base.scale * (d1 / Math.max(1, d0)))) });
+        setPatch({ id: g.id, scale: Math.round(Math.max(0.02, Math.min(20, g.base.scale * (d1 / Math.max(1, d0)))) * 1000) / 1000 });
+      } else if (g.kind === 'width') {
+        // How wide a line of text may be: the pointer's distance from the middle, along the text.
+        const a = (-g.box.rotation * Math.PI) / 180;
+        const along = Math.abs((p.x - g.box.cx) * Math.cos(a) - (p.y - g.box.cy) * Math.sin(a));
+        const startAlong = Math.max(4, Math.abs((g.startX - g.box.cx) * Math.cos(a) - (g.startY - g.box.cy) * Math.sin(a)));
+        setPatch({ id: g.id, maxWidth: Math.round(Math.max(0.1, Math.min(6, g.base.maxWidth * (along / startAlong))) * 1000) / 1000 });
       } else {
         const a0 = Math.atan2(g.startY - g.box.cy, g.startX - g.box.cx);
         const a1 = Math.atan2(p.y - g.box.cy, p.x - g.box.cx);
@@ -381,13 +393,18 @@ export function Preview({
     const up = () => {
       setGuides({ v: null, h: null });
       setGesture(null);
+      // The layer stays where it was put until the edit comes back (no flash of the old place).
       setPatch((pt) => {
         if (pt && onEdit) {
           const f = findClip(project, pt.id);
           if (f) {
-            const { id: _id, ...v } = pt;
-            const ops = placeOps(f.clip, time - f.clip.start, project.fps, v);
-            if (ops.length) onEdit(ops);
+            const { id: _id, maxWidth, ...v } = pt;
+            const ops = placeOps(f.clip, time - f.clip.start, project.fps, v, gesture.base, maxWidth);
+            if (ops.length) {
+              onEdit(ops);
+              holding.current = window.setTimeout(() => setPatch(null), 2500);
+              return pt;
+            }
           }
         }
         return null;
@@ -407,10 +424,10 @@ export function Preview({
     e.preventDefault();
     const f = findClip(project, b.id);
     if (!f || f.clip.type === 'audio' || f.clip.type === 'adjust') return;
+    if (holding.current) window.clearTimeout(holding.current);
+    setPatch(null);
     const p = toCanvas(e);
-    const W = canvas.current!.width;
-    const H = canvas.current!.height;
-    setGesture({ id: b.id, kind, startX: p.x, startY: p.y, box: b, base: { x: b.cx / W, y: b.cy / H, scale: f.clip.transform.scale * (b.w / Math.max(1, b.w)), rotation: b.rotation } });
+    setGesture({ id: b.id, kind, startX: p.x, startY: p.y, box: b, base: baseOf(f.clip, time - f.clip.start) });
   };
 
   return (
@@ -438,7 +455,24 @@ export function Preview({
             {sel && (
               <div className="sel-box" style={{ left: sel.cx / k, top: sel.cy / k, width: sel.w / k, height: sel.h / k, transform: `translate(-50%, -50%) rotate(${sel.rotation}deg)` }}>
                 <span className="handle rotate" title="Drag to rotate (Shift: 15° steps)" onPointerDown={(e) => start('rotate', sel, e)} />
-                <span className="handle scale" title="Drag to resize" onPointerDown={(e) => start('scale', sel, e)} />
+                {(['tl', 'tr', 'bl', 'br'] as const).map((corner) => (
+                  <span key={corner} className={`handle scale ${corner}`} title="Drag to resize" onPointerDown={(e) => start('scale', sel, e)} />
+                ))}
+                {findClip(project, sel.id)?.clip.type === 'text' &&
+                  (['l', 'r'] as const).map((side) => <span key={side} className={`handle side ${side}`} title="Drag to set how wide a line can be before it wraps" onPointerDown={(e) => start('width', sel, e)} />)}
+                {gesture && patch && (
+                  <span className="sel-readout" style={{ transform: `rotate(${-sel.rotation}deg)` }}>
+                    {gesture.kind === 'move' && patch.x !== undefined && patch.y !== undefined
+                      ? `X ${Math.round(patch.x * 100)}%  Y ${Math.round(patch.y * 100)}%`
+                      : gesture.kind === 'scale' && patch.scale !== undefined
+                        ? `${Math.round(patch.scale * 100)}%`
+                        : gesture.kind === 'rotate' && patch.rotation !== undefined
+                          ? `${patch.rotation}°`
+                          : gesture.kind === 'width' && patch.maxWidth !== undefined
+                            ? `Line width ${Math.round(patch.maxWidth * 100)}%`
+                            : ''}
+                  </span>
+                )}
               </div>
             )}
           </div>

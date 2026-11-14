@@ -72,3 +72,10 @@ export function allOnMain(p: Project, ids: string[]): boolean {
   const main = mainTrack(p);
   return !!main && ids.length > 0 && ids.every((id) => main.clips.some((c) => c.id === id));
 }
+
+/** The main track closed up without one of its clips (that clip is leaving it). */
+export function closeUp(p: Project, clipId: string): EditOp[] {
+  const main = mainTrack(p);
+  if (!main || !main.clips.some((c) => c.id === clipId)) return [];
+  return pack(main.clips.filter((c) => c.id !== clipId).sort((a, b) => a.start - b.start));
+}

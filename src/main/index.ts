@@ -298,7 +298,34 @@ function createWindow(show = true): BrowserWindow {
     // The hidden render window must never keep Keo running on its own.
     if (renderWindow && !renderWindow.isDestroyed()) renderWindow.destroy();
   });
-  void win.loadURL(DEV_URL ?? 'app://keo/index.html');
+  // Loading the page: a load that fails (the dev server not answering yet, a load cut short) is
+  // tried again, so the window never stays blank; and a few seconds after start Keo checks it really
+  // has its page.
+  const page = DEV_URL ?? 'app://keo/index.html';
+  let tries = 0;
+  const load = () => {
+    if (win.isDestroyed()) return;
+    void win.loadURL(page).catch(() => undefined);
+  };
+  win.webContents.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    // -3 is a load replaced by another one (not a failure).
+    if (!isMainFrame || code === -3 || win.isDestroyed()) return;
+    tries++;
+    log.warn('app.window_load_failed', { code, description, url: url.slice(0, 80), tries });
+    if (tries <= 20) setTimeout(load, Math.min(4000, 300 * tries));
+  });
+  const blankCheck = (wait: number) =>
+    setTimeout(() => {
+      if (win.isDestroyed()) return;
+      const url = win.webContents.getURL();
+      if (!url || url === 'about:blank') {
+        log.warn('app.window_blank', { after: wait });
+        load();
+        if (wait < 20_000) blankCheck(wait * 2);
+      }
+    }, wait);
+  blankCheck(5000);
+  load();
   return win;
 }
 

@@ -1086,8 +1086,19 @@ const AssetRef = z.string().regex(/^as_[A-Za-z0-9]{4,24}$/);
 /** Where a new clip goes in time: a number, or "end" (after the last clip of its track). */
 const At = z.union([Sec, z.literal('end')]);
 
-const StylePatch = TextStyle.partial();
-const TransformPatch = Transform.partial();
+/**
+ * A patch of an object schema: every field optional and *without* its default, so a field that is
+ * not given stays as it is. (A plain .partial() keeps the defaults: changing only the scale would
+ * also put the position back in the middle, changing one colour of a grade would reset the rest.)
+ */
+function patchOf<S extends z.ZodRawShape>(o: z.ZodObject<S>): ReturnType<z.ZodObject<S>['partial']> {
+  const shape: Record<string, z.ZodType> = {};
+  for (const [k, v] of Object.entries(o.shape) as Array<[string, z.ZodType]>) shape[k] = (v instanceof z.ZodDefault ? (v.unwrap() as z.ZodType) : v).optional();
+  return z.object(shape).strict() as unknown as ReturnType<z.ZodObject<S>['partial']>;
+}
+
+const StylePatch = patchOf(TextStyle);
+const TransformPatch = patchOf(Transform);
 
 const SetOp = z
   .object({
@@ -1109,7 +1120,7 @@ const SetOp = z
     highlight: Hex.nullable().optional(),
     /** A caption's word timings (seconds from the clip's start), for the word-by-word highlight. */
     words: z.array(z.object({ text: z.string().min(1).max(80), start: Sec, end: Sec }).strict()).max(400).optional(),
-    color: ColorGrade.partial().nullable().optional(),
+    color: patchOf(ColorGrade).nullable().optional(),
     zooms: z.array(Zoom).max(400).nullable().optional(),
     voice: z.boolean().optional(),
     gate: z.number().min(-40).max(0).nullable().optional(),
@@ -1125,7 +1136,7 @@ const SetOp = z
     shadow: z.number().min(0).max(60).optional(),
     glass: z.boolean().optional(),
     counter: Counter.nullable().optional(),
-    shapeStyle: ShapeStyle.partial().optional(),
+    shapeStyle: patchOf(ShapeStyle).optional(),
     shape: ShapeKind.optional(),
     /** Motion clips: the piece and its words, items, icon, number, colours and beats (null removes a field that can be left out). */
     motion: z
@@ -1148,7 +1159,7 @@ const SetOp = z
       .strict()
       .optional(),
     transition: Transition.nullable().optional(),
-    crop: Crop.partial().nullable().optional(),
+    crop: patchOf(Crop).nullable().optional(),
     backdrop: z.enum(['blur']).nullable().optional(),
     cutout: z.boolean().optional(),
     flipX: z.boolean().optional(),
@@ -1158,8 +1169,8 @@ const SetOp = z
     /** Rich text marks (replace the text's marks; null or [] removes them). */
     marks: z.array(TextMarkInput).max(100).nullable().optional(),
     /** Equalizer bands to change (dB), or a preset's name; null: flat again. */
-    eq: z.union([Eq.partial(), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
-    chroma: Chroma.partial().nullable().optional(),
+    eq: z.union([patchOf(Eq), z.enum(['voice', 'warm', 'bass', 'bright', 'phone'])]).nullable().optional(),
+    chroma: patchOf(Chroma).nullable().optional(),
     /** Effects: each strength replaces that effect's (0 or null removes it); null removes them all. */
     effects: z.partialRecord(z.enum(EFFECT_KEYS), z.number().min(0).max(1).nullable()).nullable().optional(),
     /** Adjustment layers: blur of everything under it, and how much of it shows. */
@@ -1210,7 +1221,7 @@ export const EditOp = z.discriminatedUnion('op', [
       /** Only the people in the picture (AI background removal), mirrored, colour graded. */
       cutout: z.boolean().optional(),
       flipX: z.boolean().optional(),
-      color: ColorGrade.partial().optional(),
+      color: patchOf(ColorGrade).optional(),
       /** A new track named trackName goes above everything, text too (a person in front of text behind them). */
       top: z.boolean().optional(),
     })
@@ -1250,7 +1261,8 @@ export const EditOp = z.discriminatedUnion('op', [
       duck: z.number().min(-40).max(0).nullable().optional(),
     })
     .strict(),
-  z.object({ op: z.literal('move'), clip: ClipRef, start: Sec, track: TrackRef.optional() }).strict(),
+  /** newTrack: onto a new track of the clip's kind, made above the others (instead of track). */
+  z.object({ op: z.literal('move'), clip: ClipRef, start: Sec, track: TrackRef.optional(), newTrack: z.boolean().optional() }).strict(),
   /** Trim a clip's start (keeps its end where it is) and/or its length. */
   z.object({ op: z.literal('trim'), clip: ClipRef, trimStart: z.number().min(-3600).max(3600).optional(), duration: z.number().min(0.04).optional() }).strict(),
   z.object({ op: z.literal('split'), clip: ClipRef, at: Sec }).strict(),
@@ -1281,7 +1293,7 @@ export const EditOp = z.discriminatedUnion('op', [
       op: z.literal('add_adjust'),
       start: Sec,
       duration: z.number().min(0.04).max(24 * 3600),
-      color: ColorGrade.partial().optional(),
+      color: patchOf(ColorGrade).optional(),
       effects: z.partialRecord(z.enum(EFFECT_KEYS), z.number().min(0).max(1)).optional(),
       blur: z.number().min(0).max(20).optional(),
       strength: z.number().min(0).max(1).optional(),
@@ -1296,7 +1308,7 @@ export const EditOp = z.discriminatedUnion('op', [
       duration: z.number().min(0.04).max(3600),
       track: TrackRef.optional(),
       trackName: z.string().trim().min(1).max(60).optional(),
-      style: ShapeStyle.partial().optional(),
+      style: patchOf(ShapeStyle).optional(),
       transform: TransformPatch.optional(),
       keys: Keys.optional(),
       enter: Entrance.optional(),
@@ -1841,7 +1853,13 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
       case 'move': {
         const f = get(op.clip);
         const kind = f.track.kind;
-        const to = op.track ? track(op.track, kind) : f.track;
+        let to = op.track ? track(op.track, kind) : f.track;
+        if (op.newTrack) {
+          // A new track of the clip's kind, named after how many there are, above everything.
+          const n = p.tracks.filter((x) => x.kind === kind).length + 1;
+          to = { id: rid('tr', rand), kind, name: `${kind === 'video' ? 'Video' : kind === 'text' ? 'Text' : 'Audio'} ${n}`, hidden: false, muted: false, clips: [] };
+          p.tracks.push(to);
+        }
         if (f.clip.group) {
           // The rest of its group moves by the same amount (never before 0 s).
           const members = members_(f.clip.group).filter((m) => m.clip !== f.clip);

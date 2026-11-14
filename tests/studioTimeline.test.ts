@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyEdits, newProject, type MediaClip, type Project } from '../src/shared/studio';
-import { allOnMain, magneticMove, magneticTrimEnd, magneticTrimStart, mainTrack } from '../src/shared/studioTimeline';
+import { allOnMain, closeUp, magneticMove, magneticTrimEnd, magneticTrimStart, mainTrack } from '../src/shared/studioTimeline';
 
 /** A main track of three 2-second clips (A B C) and an overlay clip above. */
 function setup(): Project {
@@ -64,6 +64,19 @@ describe('The magnetic main track', () => {
     ]);
     // The overlay is never touched.
     expect(front.tracks.find((t) => t.name === 'Overlay')!.clips[0]!.start).toBe(1);
+  });
+
+  it('moves a clip onto a new track of its own (one edit), and the main track closes up behind it', () => {
+    const p = setup();
+    const b = mainTrack(p)!.clips.find((c) => (c as MediaClip).in === 10)!;
+    const q = applyEdits(p, [{ op: 'move', clip: b.id, start: 5, newTrack: true }, ...closeUp(p, b.id)]).project;
+    const fresh = q.tracks.at(-1)!;
+    expect(fresh).toMatchObject({ kind: 'video', name: 'Video 3' });
+    expect(fresh.clips.map((c) => [c.id, c.start])).toEqual([[b.id, 5]]);
+    expect(main(q)).toEqual([
+      [0, 0, 2],
+      [20, 2, 2],
+    ]);
   });
 
   it('knows when a selection is all on the main track', () => {
