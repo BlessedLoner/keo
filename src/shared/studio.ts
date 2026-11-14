@@ -2721,18 +2721,21 @@ export function replaceWords(text: string, find: string, replace: string): { tex
   const want = find.split(/\s+/).map(plainWord).filter(Boolean);
   if (!want.length) return null;
   const tokens = text.split(/(\s+)/);
-  const words = tokens.filter((t, i) => i % 2 === 0 && t.length);
+  // The words, and where each one is among the tokens (the spaces and line breaks between them are kept).
+  const where = tokens.map((t, i) => (i % 2 === 0 && t.length ? i : -1)).filter((i) => i >= 0);
+  const words = where.map((i) => tokens[i]!);
   const out: string[] = [];
   const at: number[] = [];
   for (let i = 0; i < words.length; ) {
+    const sep = i === 0 ? '' : (tokens[where[i]! - 1] ?? ' ');
     if (want.every((w, k) => plainWord(words[i + k] ?? '') === w)) {
       // Keep what was around the phrase ("KUI," → "Keo,").
       const lead = /^[^\p{L}\p{N}]*/u.exec(words[i]!)![0];
       const trail = /[^\p{L}\p{N}]*$/u.exec(words[i + want.length - 1]!)![0];
       at.push(i);
-      out.push(`${lead}${replace}${trail}`);
+      out.push(`${sep}${lead}${replace}${trail}`);
       i += want.length;
-    } else out.push(words[i++]!);
+    } else out.push(`${sep}${words[i++]!}`);
   }
-  return at.length ? { text: out.join(' '), at } : null;
+  return at.length ? { text: out.join(''), at } : null;
 }

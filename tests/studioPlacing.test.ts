@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEdits, newProject, type Project, type TextClip } from '../src/shared/studio';
+import { applyEdits, newProject, replaceWords, type Project, type TextClip } from '../src/shared/studio';
 import { baseOf, placeOps } from '../src/shared/studioPlacing';
 
 function withText(keys?: TextClip['keys']): { p: Project; c: TextClip } {
@@ -47,5 +47,10 @@ describe('Placing text by hand on the preview', () => {
     const { p, c } = withText();
     const after = applyEdits(p, placeOps(c, 1, 30, {}, baseOf(c, 1), 0.45)).project;
     expect((after.tracks.flatMap((x) => x.clips).find((x) => x.id === c.id) as TextClip).style.maxWidth).toBe(0.45);
+  });
+
+  it('a corrected word keeps the caption’s line breaks (a stressed word on its own line)', () => {
+    expect(replaceWords('the of\nK A I\nnow', 'K A I', 'Keo AI')).toEqual({ text: 'the of\nKeo AI\nnow', at: [2] });
+    expect(replaceWords('Hi KUI, there', 'KUI', 'Keo')!.text).toBe('Hi Keo, there');
   });
 });

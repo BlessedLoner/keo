@@ -1003,3 +1003,9 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 .sel-box .handle.crop.tr { right: -6px; top: -6px; cursor: nesw-resize; }
 .sel-box .handle.crop.bl { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .sel-box .handle.crop.br { right: -6px; bottom: -6px; cursor: nwse-resize; }
+/* Edit DNA: words in the user's captions to put right */
+.dna-words { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.dna-fixes { list-style: none; margin: 4px 0 6px; padding: 0; display: grid; gap: 4px; }
+.dna-fixes li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dna-correct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.dna-correct .input { flex: 1 1 110px; min-width: 0; }

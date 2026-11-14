@@ -140,7 +140,7 @@ export function EditDnaPanel({ project, onAskKeo, onImport, onApplied }: { proje
           Import file
         </button>
       </div>
-      <ApplyStatus building={building} done={done} onClose={() => setDone(null)} />
+      <ApplyStatus building={building} done={done} projectId={project.id} onClose={() => setDone(null)} />
       <VisionPicker models={models} current={current} value={usable} onChange={choose} />
       {pickRef && (
         <div className="dna-pick">
@@ -633,7 +633,7 @@ interface ApplyChoice {
 type ApplyOutcome = { name: string; clips: number; seconds: number; notes: string[]; track: string; mode: 'talk' | 'montage'; captions: number };
 
 /** While Keo builds the edit (the timeline stays in view), then what it made. Never covers the timeline. */
-function ApplyStatus({ building, done, onClose }: { building: string | null; done: ApplyOutcome | null; onClose: () => void }) {
+function ApplyStatus({ building, done, projectId, onClose }: { building: string | null; done: ApplyOutcome | null; projectId: string; onClose: () => void }) {
   if (building)
     return (
       <div className="dna-job dna-building" role="status">
@@ -669,6 +669,104 @@ function ApplyStatus({ building, done, onClose }: { building: string | null; don
           ))}
         </ul>
       )}
+      {done.captions > 0 && <WordFixes projectId={projectId} key={`${done.name}-${done.seconds}`} />}
+    </div>
+  );
+}
+
+/**
+ * Words the speech service may have misheard in the user's captions: Keo's guesses (one click
+ * each, or all), and the user's own correction — put right everywhere and kept in the Brand kit's
+ * spellings so the next transcript gets it right by itself.
+ */
+function WordFixes({ projectId }: { projectId: string }) {
+  const ui = useUi();
+  const [state, setState] = useState<'checking' | 'done' | 'failed'>('checking');
+  const [list, setList] = useState<Array<{ heard: string; meant: string; at: number }>>([]);
+  const [heard, setHeard] = useState('');
+  const [meant, setMeant] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void invoke('studio:wordCheck', { id: projectId })
+      .then((r) => {
+        if (!live) return;
+        setList(r.words.map(({ heard: h, meant: m, at }) => ({ heard: h, meant: m, at })));
+        setState('done');
+      })
+      .catch(() => live && setState('failed'));
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+  const fix = async (fixes: Array<{ heard: string; meant: string }>, remember: boolean) => {
+    if (!fixes.length) return;
+    setBusy(true);
+    try {
+      const r = await invoke('studio:proofread', { id: projectId, fixes: fixes.slice(0, 25) });
+      if (remember) {
+        // Kept for next time: the Brand kit's spellings put it right in every new transcript.
+        const b = await invoke('studio:brand', {});
+        const old = (b.spellings ?? []).filter((x) => !fixes.some((f) => f.heard.toLowerCase() === x.heard.toLowerCase()));
+        await invoke('studio:brand', { patch: { spellings: [...old, ...fixes.map((f) => ({ heard: f.heard, say: f.meant }))].slice(-40) } });
+      }
+      setList((l) => l.filter((w) => !fixes.some((f) => f.heard === w.heard)));
+      ui.toast(r.inText ? `Put right everywhere it shows${remember ? ', and remembered for next time' : ''}.` : `Nothing on screen showed it${remember ? ', but it is remembered for next time' : ''}.`, 'success');
+    } catch (e) {
+      ui.error(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="dna-words">
+      <div className="dna-row">
+        <h5 className="insp-sub">Words in your captions</h5>
+        {state === 'checking' && <span className="small muted">Checking for misheard words…</span>}
+      </div>
+      {state === 'done' && !list.length && <p className="small muted">No misheard words found.</p>}
+      {state === 'failed' && <p className="small muted">The check did not run (your AI model did not answer). You can still correct a word below.</p>}
+      {list.length > 0 && (
+        <>
+          <ul className="dna-fixes">
+            {list.map((w) => (
+              <li key={w.heard}>
+                <span className="small">
+                  “{w.heard}” → <strong>“{w.meant}”</strong>
+                </span>
+                <button className="btn sm" disabled={busy} onClick={() => void fix([{ heard: w.heard, meant: w.meant }], true)}>
+                  Fix
+                </button>
+              </li>
+            ))}
+          </ul>
+          {list.length > 1 && (
+            <button className="btn sm primary" disabled={busy} onClick={() => void fix(list.map(({ heard: h, meant: m }) => ({ heard: h, meant: m })), true)}>
+              Fix all {list.length}
+            </button>
+          )}
+        </>
+      )}
+      <form
+        className="dna-correct"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const h = heard.trim();
+          const m = meant.trim();
+          if (!h || !m || h === m) return;
+          void fix([{ heard: h, meant: m }], true).then(() => {
+            setHeard('');
+            setMeant('');
+          });
+        }}
+      >
+        <span className="small muted">Correct a word:</span>
+        <input className="input sm" placeholder="It shows (e.g. K A I)" value={heard} maxLength={60} onChange={(e) => setHeard(e.target.value)} />
+        <input className="input sm" placeholder="I said (e.g. Keo AI)" value={meant} maxLength={60} onChange={(e) => setMeant(e.target.value)} />
+        <button className="btn sm" type="submit" disabled={busy || !heard.trim() || !meant.trim()}>
+          Fix everywhere
+        </button>
+      </form>
     </div>
   );
 }
