@@ -1,5 +1,6 @@
 import { bridged, clipEnd, clipSpeech, curveAt, duckGain, gateGain, isAV, timelineSpeech, volumeAt, type Asset, type MediaClip, type Project, type Span, type VoiceFx, type Eq } from '@shared/studio';
 import { invoke } from '../lib/api';
+import { keepUp } from '@shared/studioPlayback';
 import { sourceTime, visibleAt, type Drawable, type SourceProvider } from './engine';
 import { cutoutReady, loadCutout } from './cutout';
 import { eqChain, voiceChain, voiceFxChain } from './sound';
@@ -255,11 +256,11 @@ export class PreviewSources implements SourceProvider {
           this.route(el, c.voice, c.voiceFx ?? null, c.eq ?? null).gain.value = Math.min(4, level);
           if (playing && this.audioCtx?.state === 'suspended') void this.audioCtx.resume();
         } else el.volume = Math.min(1, level);
-        el.playbackRate = rate;
         if (playing && !(c.type === 'media' && c.freeze)) {
-          if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
+          el.playbackRate = keepUp(el, target, rate);
           if (el.paused) void el.play().catch(() => undefined);
         } else {
+          el.playbackRate = rate;
           if (!el.paused) el.pause();
           if (Math.abs(el.currentTime - target) > 0.02) el.currentTime = target;
         }
@@ -292,6 +293,31 @@ export class PreviewSources implements SourceProvider {
     }
     this.videos.pauseIdle();
     this.sounds.pauseIdle();
+  }
+
+  /**
+   * The timeline time the main video on screen is really showing while it plays (null: none is
+   * playing steadily). The preview's clock follows it, so a video the PC decodes a little late
+   * slows the clock a little instead of being made to jump (each jump is a visible hitch).
+   */
+  leadTime(p: Project, t: number): number | null {
+    let best: { t: number; layer: number } | null = null;
+    let layer = 0;
+    for (const tr of p.tracks) {
+      layer++;
+      if (tr.hidden || tr.kind !== 'video') continue;
+      for (const c of tr.clips) {
+        if (c.type !== 'media' || c.freeze || c.reversed || c.speedCurve || t < c.start || t >= clipEnd(c)) continue;
+        const el = this.videos.of(c.id);
+        if (!el || el.paused || el.seeking || el.readyState < 3) continue;
+        const shown = c.start + (el.currentTime - c.in) / Math.max(0.01, c.speed);
+        // Only a video close to the clock leads it (one that is far off is about to be sought).
+        if (Math.abs(shown - t) > 0.5) continue;
+        // The bottom video track leads (the main picture); the first one found there.
+        if (!best || layer < best.layer) best = { t: shown, layer };
+      }
+    }
+    return best ? best.t : null;
   }
 
   /** How many media elements the preview holds (it stays small, however many clips there are). */

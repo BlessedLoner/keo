@@ -291,7 +291,7 @@ export function Preview({
       playhead.set(live.current.time, false);
       return;
     }
-    const startAt = performance.now();
+    let startAt = performance.now();
     const from = live.current.time;
     const end = projectDuration(live.current.project);
     let raf = 0;
@@ -312,6 +312,11 @@ export function Preview({
       // The timeline's playhead and the time readout follow every frame.
       playhead.set(t, true);
       sources.current?.sync(live.current.project, t, true);
+      // The clock follows the main video as it is really shown: when the PC decodes it a little
+      // late, the clock waits for it (eased) instead of the video being made to jump.
+      const lead = sources.current?.leadTime(live.current.project, t) ?? null;
+      // At most 8 ms a frame, so the playhead never steps backwards.
+      if (lead !== null && Math.abs(lead - t) > 0.02) startAt += Math.max(-8, Math.min(8, (t - lead) * 1000 * 0.25));
       redraw.current();
       if (performance.now() - lastReport > 400) {
         lastReport = performance.now();
