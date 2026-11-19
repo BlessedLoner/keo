@@ -145,8 +145,17 @@ export class RepeatGuard {
     return reason;
   }
 
-  record(call: ToolCall, round: number, outcome: CallOutcome): void {
+  /** Calls that only look (read a file, list, check): looking again after something changed is not a loop. */
+  private readonly looks = new Set<string>();
+
+  record(call: ToolCall, round: number, outcome: CallOutcome, readOnly = false): void {
     const key = callSignature(call);
+    if (readOnly) this.looks.add(key);
+    else if (outcome === 'executed') {
+      // Something changed (a file written, a click made): what was read before may read differently now.
+      for (const k of this.looks) this.seen.delete(k);
+      this.looks.clear();
+    }
     const s = this.seen.get(key);
     if (!s) {
       this.seen.set(key, { count: 1, lastOutcome: outcome, lastRound: round, streak: 1 });

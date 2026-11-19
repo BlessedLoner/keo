@@ -727,6 +727,9 @@ export class Services {
     this.calendar = new GoogleCalendar(this.googleAuth, () => getSettings().calendar.calendarId, { ...(d.googleFetch ? { fetch: d.googleFetch } : {}), ...(d.calendarApi ? { base: d.calendarApi } : {}) });
     this.builds = new BuildProjects({
       root: () => path.join(this.keoOutputRoot(d), 'Builds'),
+      // Each account's list of builds is its own (a new account does not see another's builds).
+      accountDir: () => d.profile.userData,
+      mayClaim: () => !d.profile.profile.endsWith('/signed-out'),
       modules: () => d.modulesDir ?? path.join(process.cwd(), 'node_modules'),
       log: this.log,
       changed: (id) => {

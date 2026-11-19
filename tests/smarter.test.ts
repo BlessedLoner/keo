@@ -207,11 +207,11 @@ describe('loops of identical calls', () => {
     enableDesktop();
     const c = h.services.conversations.create();
     const msg = await h.services.agent.send(c.id, 'list my windows').done;
-    // Two runs, then two refusals, then Keo stops — well before the 10-round limit.
+    // Two runs, then five refusals (each telling the model to change approach), then Keo pauses — before the 10-round limit.
     expect(h.desktop.calls.filter((x) => x.op === 'list').length).toBe(2);
-    expect(h.provider.calls).toBe(4);
-    expect(msg.meta.tools?.map((t) => t.outcome)).toEqual(['executed', 'executed', 'rejected', 'rejected']);
-    expect(msg.content).toContain('Keo stopped here');
+    expect(h.provider.calls).toBe(7);
+    expect(msg.meta.tools?.map((t) => t.outcome)).toEqual(['executed', 'executed', 'rejected', 'rejected', 'rejected', 'rejected', 'rejected']);
+    expect(msg.content).toContain('Keo paused here');
     expect(msg.content).not.toContain('tool rounds');
   });
 
@@ -326,5 +326,18 @@ describe('round budget for long work', () => {
     expect(msg.content).toContain('Stopped after 5 tool rounds');
     expect(msg.content).toContain('Say “continue”');
     expect(h.provider.calls - before).toBe(5);
+  });
+});
+
+describe('Re-reading after a change is not a loop', () => {
+  it('a file read three times is allowed again once something was written', async () => {
+    const { RepeatGuard } = await import('../src/main/agent/workPlan');
+    const g = new RepeatGuard();
+    const read = { id: 'r', name: 'build__read', input: { id: 'bd_1', path: 'lib/game.js' } };
+    const write = { id: 'w', name: 'build__write', input: { id: 'bd_1', files: [{ path: 'lib/game.js', content: 'x' }] } };
+    for (let i = 1; i <= 3; i++) g.record(read as never, i, 'executed', true);
+    expect(g.check(read as never, 4)).not.toBeNull();
+    g.record(write as never, 4, 'executed', false);
+    expect(g.check(read as never, 5)).toBeNull();
   });
 });

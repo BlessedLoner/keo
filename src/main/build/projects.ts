@@ -72,21 +72,54 @@ export class BuildProjects {
       log: { info: (event: string, data?: Record<string, unknown>) => void };
       /** Told when a project's files change (the preview reloads). */
       changed?: (id: string) => void;
+      /**
+       * The signed-in account's own folder: its list of builds is kept there, so each account on
+       * the PC sees only its own builds (the files stay in Documents\Keo\Builds). Without it
+       * (tests), the list is kept beside the builds.
+       */
+      accountDir?: () => string;
+      /** Whether this account may take the list from before builds were kept per account (not when signed out). */
+      mayClaim?: () => boolean;
     },
   ) {}
 
   private indexFile(): string {
-    return path.join(this.d.root(), 'builds.json');
+    return path.join(this.d.accountDir?.() ?? this.d.root(), 'builds.json');
   }
   private index(): Record<string, string> {
+    this.claimShared();
     try {
       return JSON.parse(fs.readFileSync(this.indexFile(), 'utf8')) as Record<string, string>;
     } catch {
       return {};
     }
   }
+  /**
+   * One-time: the list of builds from before it was kept per account (Documents\Keo\Builds\builds.json)
+   * goes to the first account (or local use) that opens its builds — never to a signed-out Keo —
+   * and is then gone from the shared folder, so no other account sees those builds.
+   */
+  private claimShared(): void {
+    if (!this.d.accountDir) return;
+    const shared = path.join(this.d.root(), 'builds.json');
+    if (!fs.existsSync(shared) || this.d.mayClaim?.() === false) return;
+    const mine = this.indexFile();
+    try {
+      fs.mkdirSync(path.dirname(mine), { recursive: true });
+      if (!fs.existsSync(mine)) fs.renameSync(shared, mine);
+      else {
+        // This account already has its own list: the shared one is added to it.
+        const merged = { ...(JSON.parse(fs.readFileSync(shared, 'utf8')) as Record<string, string>), ...(JSON.parse(fs.readFileSync(mine, 'utf8')) as Record<string, string>) };
+        fs.writeFileSync(mine, JSON.stringify(merged, null, 1));
+        fs.rmSync(shared, { force: true });
+      }
+      this.d.log.info('build.list_claimed', {});
+    } catch {
+      /* tried again next time */
+    }
+  }
   private saveIndex(ix: Record<string, string>): void {
-    fs.mkdirSync(this.d.root(), { recursive: true });
+    fs.mkdirSync(path.dirname(this.indexFile()), { recursive: true });
     fs.writeFileSync(`${this.indexFile()}.tmp`, JSON.stringify(ix, null, 1));
     fs.renameSync(`${this.indexFile()}.tmp`, this.indexFile());
   }

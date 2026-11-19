@@ -56,6 +56,8 @@ export function cleanHeader(name: string): string {
   let t = name.replace(/\s+/g, ' ').trim();
   for (let k = 0; k < 3; k++) {
     t = t
+      // Newer WhatsApp names the header button "Contact info Name" (or "Group info Name").
+      .replace(/^(contact|group|business|profile)\s+(info|details)[\s,.:·-]+/i, '')
       .replace(/[\s,.]*(click|tap) here for (contact|group) info\s*$/i, '')
       .replace(/[\s,.·-]*(official\s+)?business\s+account\s*$/i, '')
       .replace(/[\s,.]*(online|typing(…|\.\.\.)?|recording audio(…|\.\.\.)?|last seen\b.*)\s*$/i, '')

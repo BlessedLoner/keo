@@ -396,6 +396,10 @@ describe('WhatsApp workflows', () => {
   it('matches the header despite WhatsApp’s “click here for contact info” and presence suffixes', () => {
     expect(headerMatches('Ma Glo click here for contact info', 'Ma Glo')).toBe(true);
     expect(headerMatches('Ma Glo, online', 'ma glo')).toBe(true);
+    // Newer WhatsApp: the header button reads "Contact info Name".
+    expect(headerMatches('Contact info Ma Glo', 'Ma Glo')).toBe(true);
+    expect(headerMatches('Group info Family', 'Family')).toBe(true);
+    expect(headerMatches('Contact info Ma Glo', 'Ma Gloria')).toBe(false);
     expect(headerMatches('Ma Glo last seen today at 10:02', 'Ma Glo')).toBe(true);
     expect(headerMatches('Ma Glory click here for contact info', 'Ma Glo')).toBe(false);
     expect(headerMatches('Ma Glo Business Account', 'Ma Glo')).toBe(true);

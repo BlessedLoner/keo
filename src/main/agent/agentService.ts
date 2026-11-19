@@ -839,7 +839,7 @@ export class AgentService {
           toolMs += r.activity.ms;
           upsert(r.activity);
           this.notePending(conversationId, call, r);
-          repeats.record(call, iteration, r.activity.outcome);
+          repeats.record(call, iteration, r.activity.outcome, this.registry.get(this.registry.resolveToolName(call.name) ?? call.name)?.risk === 'read');
           failedNow ||= r.activity.outcome === 'failed' || r.activity.outcome === 'uncertain';
           if (onScreen && breaksChain(r.activity.outcome)) chainBroken = true;
           trackProblems(problems, r.activity, r.verification);
@@ -854,8 +854,9 @@ export class AgentService {
           freeRounds++;
         } else toolRounds++;
         // A loop the model does not leave: stop instead of using up the remaining rounds.
-        if (blockedNow === result.toolCalls.length && repeats.blocked >= 2) {
-          text += `${text ? '\n\n' : ''}_Keo stopped here: the same action kept being requested after it had already run or failed._`;
+        // The model is told each time to change approach; only after several rounds of nothing new does it stop.
+        if (blockedNow === result.toolCalls.length && repeats.blocked >= 5) {
+          text += `${text ? '\n\n' : ''}_Keo paused here: it kept trying the same step without getting further. Say “continue” and it carries on with a different approach, or tell it what to change._`;
           this.log.warn('agent.loop_stopped', { blocked: repeats.blocked }, correlationId);
           cut = 'the rest (the same action kept being asked for)';
           break;
