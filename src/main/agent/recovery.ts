@@ -4,8 +4,13 @@
  * steps once one of them fails (the next ones would act on the wrong window or the wrong text).
  */
 
-/** Said with every failure: one different way, then a plain question — never the same call again. */
-const THEN_ASK = 'Do not repeat this exact call. If a different way also fails, stop and tell the user in plain words what blocked you and ask one clear question.';
+/**
+ * Said with every failure: keep going like a person would — work out why, try another way (up to
+ * three different ones), check by looking — and ask the user only when the task cannot go on
+ * without their answer. Never the same call again.
+ */
+const THEN_ASK =
+  'Do not repeat this exact call. Work out why it failed and try another way — a different tool, different input, or (with Full control) look at the screen and do it as a person would — up to three different ways, checking each by looking. Ask the user only when you truly cannot continue without their answer (two different people match, something only they know), and then say what you tried.';
 
 /** A setting or permission stopped it: working around that is not allowed. */
 const BLOCKED_BY_SETTING = /\b(not allowed|turned off|is off|disabled|permission|not permitted|allow-?list|in settings)\b/i;
@@ -16,7 +21,7 @@ const WAYS: Array<[RegExp, string]> = [
   [/^(computer\.(click|drag|scroll)|desktop\.(click|invoke_element|scroll|draw))$/, 'The control was not where expected. Get its exact position again (desktop__inspect_window for the element, or one screen__look asking for it), then act once.'],
   [/^computer\.fill_form$/, 'Some boxes were not found by their names. Look once to find the missing boxes, click each one and computer__type it with replace: true.'],
   [/^computer\.keys$|^desktop\.press_keys$/, 'Make sure the right window is in front first (apps__open with its name), then press the keys once.'],
-  [/^whatsapp\./, 'Make sure WhatsApp is open (apps__open "WhatsApp"); for a chat that was not found, ask the user for the name exactly as it appears in WhatsApp.'],
+  [/^whatsapp\./, 'Make sure WhatsApp is open and in front (apps__open "WhatsApp"), then try again: WhatsApp may still have been loading. If the chat was not found, read the chat list (desktop__inspect_window, or screen__look) and use the name exactly as it is shown there. Only when two different people match, ask which one.'],
   [/^web\.fetch_page$/, 'Read a different result from your search instead of this page.'],
   [/^web\.search$/, 'Search again with fewer, simpler words.'],
   [/^browser\./, 'Make sure the browser is open (apps__open), then try once more; or read the page with web__fetch_page if you know its address.'],

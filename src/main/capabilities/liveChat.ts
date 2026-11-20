@@ -92,7 +92,8 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
           await bringToFront(d, t, ctx.settings);
           const o = await waOpenChat(d, t, i.contact, ctx.signal);
           if (!o.opened) {
-            throw new CapabilityError('not_opened', `Could not open the chat with “${i.contact}”: ${o.reason ?? 'not found'}.${o.candidates.length ? ` Candidates: ${o.candidates.join(', ')}.` : ''} Ask the user which one they mean.`, {
+            const several = o.candidates.length > 1;
+            throw new CapabilityError(several ? 'ambiguous_contact' : 'not_opened', `Could not open the chat with “${i.contact}”: ${o.reason ?? 'not found'}.${o.candidates.length ? ` Chats found: ${o.candidates.join(', ')}.` : ''} ${several ? 'Ask the user which one they mean.' : 'Try again (WhatsApp may still be loading), or search with the name exactly as the chat list shows it; ask the user only if that also fails.'}`, {
               dispatched: 'no',
             });
           }

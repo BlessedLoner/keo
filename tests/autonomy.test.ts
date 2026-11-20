@@ -183,6 +183,16 @@ describe('WhatsApp workflows', () => {
     expect(ok.step?.verification).toBe('verified');
   });
 
+  it('opens “Ma Glo” when the header reads “Contact info Ma Glo” and a dated entry and a message also match', async () => {
+    const { wa } = setup();
+    wa.chats.push({ title: 'Ma Glo', messages: [{ from: 'them', text: 'You’re welcome, Ma Glo 😋 see you' }] }, { title: 'Ma Glo 17/10/2026', messages: [] });
+    const real = wa.nodes.bind(wa);
+    wa.nodes = () => real().map((n) => (n.rid === 'rid.header' && wa.open ? { ...n, name: `Contact info ${wa.open}` } : n));
+    const r = await runCap('whatsapp.open_chat', { target: WA, contact: 'Ma Glo' });
+    expect(r.step?.result).toMatchObject({ opened: true });
+    expect(wa.open).toBe('Ma Glo');
+  });
+
   it('works with WhatsApp Web in Chrome: refused accessibility focus/value fall back to real clicks and paste', async () => {
     const { wa } = setup();
     const desktop = h.desktop;
@@ -784,5 +794,15 @@ describe('WhatsApp file sending', () => {
     fs.writeFileSync(file, 'x');
     const { wa } = await sendViaAgent(`Send ${file} to Mum`, file, false);
     expect(wa.sentFiles).toEqual([]);
+  });
+});
+
+describe('WhatsApp: telling people apart like a person would', () => {
+  it('a chat date and a message found by the search are not other people', async () => {
+    const { peopleNamed, headerNames } = await import('../src/main/desktop/whatsapp');
+    expect(peopleNamed(['Ma Glo', 'Ma Glo 17/10/2026', 'You’re welcome, Ma Glo 😋 …'], 'Ma Glo')).toEqual(['Ma Glo']);
+    expect(peopleNamed(['Ma Glo', 'Ma Glo Work'], 'Ma Glo')).toEqual(['Ma Glo', 'Ma Glo Work']);
+    expect(headerNames('Contact info Ma Glo', 'Ma Glo')).toBe(true);
+    expect(headerNames('Profile Ma Glorious', 'Ma Glo')).toBe(false);
   });
 });

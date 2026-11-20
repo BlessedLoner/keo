@@ -127,7 +127,7 @@ describe('recovering', () => {
     const c = h.services.conversations.create();
     await h.services.agent.send(c.id, 'which windows are open?').done;
     expect(tries).toBe(1);
-    expect(results(seen[1]!)[0]).toContain('If a different way also fails');
+    expect(results(seen[1]!)[0]).toContain('try another way');
   });
 
   it('gives a concrete second way per kind of step', () => {

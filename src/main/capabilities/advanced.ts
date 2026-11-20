@@ -5,7 +5,7 @@ import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { meaningfulNodes } from '../desktop/backend';
 import { compactNodes, isCriticalControl, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, sameChat, waReadiness, completeMessages, headerMatches, holdsText, draftIs, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeWhatsApp, headerNames, peopleNamed, sameChat, waReadiness, completeMessages, headerMatches, holdsText, draftIs, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -316,16 +316,22 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
   const query = contact.replace(/\s*\(you\)\s*$/i, '').trim() || contact;
   await step('typing the name into the search box', () => enterTextChecked(d, target, searchNode, query, true));
   if (signal.aborted) throw new CapabilityError('cancelled', 'Cancelled.', { dispatched: 'no' });
-  // Wait only until the results show the contact (not a fixed pause).
+  // Wait only until the results show the contact (not a fixed pause); a slow PC gets a second, longer wait.
   view = await viewUntil(d, target, (v) => v.chats.some((c) => sameChat(c.title, contact)), 2500, signal);
-  const want = normName(query);
+  if (!view.chats.some((c) => sameChat(c.title, contact))) view = await viewUntil(d, target, (v) => v.chats.some((c) => sameChat(c.title, contact)), 4000, signal);
   const titles = [...new Set(view.chats.map((c) => c.title))];
-  const candidates = titles.filter((t) => normName(t).includes(want)).slice(0, 10);
+  // The different people the search found (dates and message snippets are not people).
+  const candidates = peopleNamed(titles, query).slice(0, 10);
   // Search results list the same person several times (under Chats, Contacts and Messages);
   // an exact name match is taken from the top of the list. The header is verified afterwards.
-  const exact = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+  let exact = view.chats.filter((c) => sameChat(c.title, contact)).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+  if (!exact.length && candidates.length === 1) {
+    // One person only, whose entry carries a date or label ("Ma Glo 17/10/2026"): that is the chat.
+    const only = normName(candidates[0]!);
+    exact = view.chats.filter((c) => normName(peopleNamed([c.title], query)[0] ?? '') === only).sort((a, b) => (a.node.y ?? 0) - (b.node.y ?? 0));
+  }
   if (!exact.length) {
-    return { opened: false, header: view.header, candidates, reason: candidates.length ? 'no exact match; ask the user which one they mean' : 'no matching chat found' };
+    return { opened: false, header: view.header, candidates, reason: candidates.length > 1 ? `more than one chat matches (${candidates.join(', ')}); ask the user which one they mean` : candidates.length ? 'no exact match' : 'no matching chat found' };
   }
   const chat = exact[0]!;
   await step(`opening the “${chat.title}” entry`, async () => {
@@ -350,6 +356,12 @@ export async function waOpenChat(d: CapabilityDeps, target: TargetT, contact: st
     }
   }
   if (!openChatIs(view, contact)) {
+    // As a person would: Keo opened the only chat of that name, and the header names that person
+    // (with a label around it, such as "Contact info Ma Glo"): it is the chat.
+    const onlyOne = candidates.length <= 1;
+    if (onlyOne && (headerNames(view.header, contact) || (view.headerAlternatives ?? []).some((a) => headerNames(a, contact)))) {
+      return { opened: true, header: contact, candidates, reason: null };
+    }
     // Opening a chat is repeatable and harmless, so this is a plain “not confirmed”, not an uncertain outcome.
     return { opened: false, header: view.header, candidates, reason: `after opening, the conversation header shows “${view.header ?? 'nothing recognisable'}”, so Keo cannot confirm it is “${contact}”` };
   }

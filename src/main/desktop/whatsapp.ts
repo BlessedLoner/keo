@@ -355,3 +355,30 @@ export function waReadiness(nodes: UiaNodeRaw[], v: WaView): WaReadiness {
   if (meaningful.length < 8) return 'no_content';
   return 'unrecognized';
 }
+
+/**
+ * The different people (or groups) among search results whose names contain what the user said:
+ * a chat's date ("Ma Glo 17/10/2026") is not part of its name, and a message found by the search
+ * ("You're welcome, Ma Glo 😋 …") is not a person. "Ma Glo" and "Ma Glo Work" are two people.
+ */
+export function peopleNamed(titles: string[], contact: string): string[] {
+  const want = normName(contact.replace(/\s*\(you\)\s*$/i, ''));
+  const out = new Map<string, string>();
+  for (const raw of titles) {
+    const name = cleanHeader(stripTrailingTime(cleanTitle(raw)));
+    const n = normName(name);
+    if (!n || !n.includes(want)) continue;
+    // A message snippet: punctuation or an ellipsis in it, or far longer than a name.
+    if (/[,!?…]|\.\.\./.test(name) || n.split(' ').length > want.split(' ').length + 3) continue;
+    if (!out.has(n)) out.set(n, name);
+  }
+  return [...out.values()];
+}
+
+/** The open chat's header names this contact, word for word, with something else around it (a label, a status). */
+export function headerNames(header: string | null, contact: string): boolean {
+  if (!header) return false;
+  const h = ` ${normName(cleanHeader(header))} `;
+  const want = normName(contact.replace(/\s*\(you\)\s*$/i, ''));
+  return !!want && h.includes(` ${want} `);
+}
