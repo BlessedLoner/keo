@@ -5,7 +5,7 @@ import type { Settings } from '../../shared/settings';
 import type { UiaAction, UiaNodeRaw } from '../desktop/backend';
 import { meaningfulNodes } from '../desktop/backend';
 import { compactNodes, isCriticalControl, isSensitiveControl, sameElement, type SnapshotStore } from '../desktop/uia';
-import { analyzeWhatsApp, headerNames, peopleNamed, sameChat, waReadiness, completeMessages, headerMatches, holdsText, draftIs, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { analyzeChatArea, analyzeWhatsApp, chatAreaOf, headerNames, peopleNamed, sameChat, waReadiness, type WaChatArea, completeMessages, headerMatches, holdsText, draftIs, openChatIs, lastOutgoing, normName, textMatches, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { allowCheck, bringToFront, FRESH_TARGET_NOTE, Target, targetLabel, type CapabilityDeps, type TargetT } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -88,9 +88,43 @@ export async function stableSnapshot(d: CapabilityDeps, target: TargetT) {
   return raw;
 }
 
-async function freshView(d: CapabilityDeps, target: TargetT): Promise<{ nodes: UiaNodeRaw[]; view: WaView }> {
+/** The open chat's part of each WhatsApp window (by window), from its latest full read. */
+const chatAreas = new Map<string, WaChatArea>();
+
+/**
+ * Reads only the open chat (header, messages, message box) — a few times quicker than the whole
+ * window in the WhatsApp app. Null when that is not possible (no earlier read, the chat changed,
+ * the window was rebuilt): the caller then reads the whole window.
+ */
+async function chatOnlyView(d: CapabilityDeps, target: TargetT): Promise<{ nodes: UiaNodeRaw[]; view: WaView } | null> {
+  const area = chatAreas.get(target.hwnd);
+  const from = d.desktop.backend.uiaSnapshotFrom?.bind(d.desktop.backend);
+  if (!area || !from) return null;
+  const p = await from(target.hwnd, area.root, { maxNodes: 700, maxDepth: 60, budgetMs: 6000, skip: area.skip }).catch(() => null);
+  if (!p?.nodes.length) {
+    chatAreas.delete(target.hwnd);
+    return null;
+  }
+  const r = analyzeChatArea(p.nodes, area);
+  if (!r.view.header || !r.view.compose) {
+    chatAreas.delete(target.hwnd);
+    return null;
+  }
+  return r;
+}
+
+async function freshView(d: CapabilityDeps, target: TargetT, chatOnly = false): Promise<{ nodes: UiaNodeRaw[]; view: WaView }> {
+  const quick = chatOnly ? await chatOnlyView(d, target) : null;
+  if (quick) return withHiddenTexts(d, target, quick.nodes, quick.view);
   const raw = await stableSnapshot(d, target);
   const view = analyzeWhatsApp(raw.nodes, raw.window);
+  const area = chatAreaOf(raw.nodes, raw.window, view);
+  if (area) chatAreas.set(target.hwnd, area);
+  else chatAreas.delete(target.hwnd);
+  return withHiddenTexts(d, target, raw.nodes, view);
+}
+
+async function withHiddenTexts(d: CapabilityDeps, target: TargetT, nodes: UiaNodeRaw[], view: WaView): Promise<{ nodes: UiaNodeRaw[]; view: WaView }> {
   // WhatsApp Web hides message text from the control view; read those rows through the raw view.
   const hidden = view.messages.filter((m) => !m.text && m.row).slice(-40);
   const names = new Map<WaMessage, string[]>();
@@ -98,20 +132,23 @@ async function freshView(d: CapabilityDeps, target: TargetT): Promise<{ nodes: U
     const texts = await d.desktop.backend.uiaTexts(target.hwnd, hidden.map((m) => m.row!.rid)).catch(() => [] as string[][]);
     hidden.forEach((m, k) => names.set(m, texts[k] ?? []));
   }
-  return { nodes: raw.nodes, view: { ...view, messages: completeMessages(view.messages, names, view.header) } };
+  return { nodes, view: { ...view, messages: completeMessages(view.messages, names, view.header) } };
 }
 
 /**
  * Re-reads the window until `ready` holds or the time is up (returns the last view either way):
  * WhatsApp is read again as soon as it has updated instead of after a fixed pause.
  */
-async function viewUntil(d: CapabilityDeps, target: TargetT, ready: (v: WaView) => boolean, maxMs: number, signal: AbortSignal): Promise<WaView> {
+async function viewUntil(d: CapabilityDeps, target: TargetT, ready: (v: WaView) => boolean, maxMs: number, signal: AbortSignal, chatOnly = false): Promise<WaView> {
   const until = Date.now() + (d.focusSettleMs === 0 ? 0 : maxMs);
   await sleep(d.focusSettleMs === 0 ? 0 : 150);
-  let v = (await freshView(d, target)).view;
-  while (!ready(v) && Date.now() < until && !signal.aborted) {
+  let v = (await freshView(d, target, chatOnly)).view;
+  // At least two looks: a slow read can use up the whole wait before the window has updated.
+  let looks = 1;
+  while (!ready(v) && (Date.now() < until || (looks < 2 && d.focusSettleMs !== 0)) && !signal.aborted) {
     await sleep(200);
-    v = (await freshView(d, target)).view;
+    v = (await freshView(d, target, chatOnly)).view;
+    looks++;
   }
   return v;
 }
@@ -673,7 +710,7 @@ export async function waSendFile(d: CapabilityDeps, target: TargetT, contact: st
 }
 
 export async function waSend(d: CapabilityDeps, target: TargetT, contact: string, text: string, allowDuplicate: boolean, signal: AbortSignal): Promise<WaSendResult> {
-  let { view } = await freshView(d, target);
+  let { view } = await freshView(d, target, true);
   if (!openChatIs(view, contact)) {
     throw new CapabilityError('chat_mismatch', `The open chat is “${view.header ?? 'unknown'}”, not “${contact}”. Nothing was sent.`, { dispatched: 'no' });
   }
@@ -704,7 +741,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
   }
   await sleep(d.focusSettleMs === 0 ? 0 : 300);
   // Re-verify recipient and draft immediately before the irreversible step.
-  view = (await freshView(d, target)).view;
+  view = (await freshView(d, target, true)).view;
   if (!openChatIs(view, contact)) throw new CapabilityError('chat_mismatch', 'The open chat changed before sending. Nothing was sent.', { dispatched: 'no' });
   const draft = view.compose ? await d.desktop.backend.uiaDescribe(target.hwnd, view.compose.rid).catch(() => null) : null;
   const draftText = draft?.value ?? draft?.name ?? '';
@@ -730,7 +767,7 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
     const recent = v.messages.filter((m) => m.from === 'me').slice(-(lines.length + 4)).map((m) => m.text).join(' ');
     return textMatches(recent, lines[0]!) && textMatches(recent, lines.at(-1)!);
   };
-  view = await viewUntil(d, target, arrived, 4000, signal);
+  view = await viewUntil(d, target, arrived, 4000, signal, true);
   const now = lastOutgoing(view);
   const appears = arrived(view);
   if (!appears) {
@@ -740,8 +777,9 @@ export async function waSend(d: CapabilityDeps, target: TargetT, contact: string
 }
 
 /** A fresh, completed view of the WhatsApp window (no focus change). */
-export async function waView(d: CapabilityDeps, target: TargetT): Promise<WaView> {
-  return (await freshView(d, target)).view;
+/** chatOnly: read only the open chat when possible (quick; no chat list in the result). */
+export async function waView(d: CapabilityDeps, target: TargetT, chatOnly = false): Promise<WaView> {
+  return (await freshView(d, target, chatOnly)).view;
 }
 
 /** Optional WhatsApp window: when omitted (or invented), Keo finds the WhatsApp window itself. */

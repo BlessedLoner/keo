@@ -36,6 +36,10 @@ export interface WaView {
   headerAlternatives?: string[];
   chats: WaChat[];
   messages: WaMessage[];
+  /** Where the conversation pane starts (page coordinates); used to read only the open chat next time. */
+  paneLeft?: number;
+  /** The element naming the open chat (header). */
+  headerNode?: UiaNodeRaw | null;
 }
 
 export const normName = (s: string): string =>
@@ -162,11 +166,13 @@ export function analyzeWhatsApp(nodes: UiaNodeRaw[], win: { w: number; h: number
     search: back(v.search),
     compose: back(v.compose),
     send: back(v.send),
+    headerNode: back(v.headerNode ?? null),
+    messages: v.messages.map((m) => (m.row ? { ...m, row: back(m.row) ?? m.row } : m)),
     chats: v.chats.map((c) => ({ ...c, index: inPage[c.index]!, node: back(c.node)!, titleNode: back(c.titleNode) })),
   };
 }
 
-function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaView {
+function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }, knownPaneLeft?: number): WaView {
   const kids = children(nodes);
   const W = Math.max(1, win.w);
   const H = Math.max(1, win.h);
@@ -206,7 +212,7 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
   // The conversation pane starts where the chat list ends. The list is narrower than 30% of a wide
   // (maximised) window, so 30% is only the fallback when no list is visible.
   const leftEdges = [search, ...chats.map((c) => c.node)].filter((n): n is UiaNodeRaw => !!n && hasBox(n)).map((n) => (n.x ?? 0) + (n.w ?? 0));
-  const paneLeft = leftEdges.length ? Math.max(...leftEdges) : W * 0.3;
+  const paneLeft = knownPaneLeft ?? (leftEdges.length ? Math.max(...leftEdges) : W * 0.3);
 
   // Header: the contact/group name in the top band of the conversation pane. Several controls live
   // there (profile, call, search, menu); the name is the widest one that is not a known action.
@@ -267,7 +273,88 @@ function analyzeScoped(nodes: UiaNodeRaw[], win: { w: number; h: number }): WaVi
   });
 
   // Rows without readable text are kept so the caller can read them through the raw view (see completeMessages).
-  return { search, compose, send, header, headerAlternatives, chats: innermost, messages };
+  return { search, compose, send, header, headerAlternatives, chats: innermost, messages, paneLeft, headerNode };
+}
+
+/**
+ * The open chat's part of the window (its header, messages and message box, without the chat list),
+ * so that it can be read again on its own: in the WhatsApp app a full read takes many seconds, this
+ * part a fraction of that. Null when it cannot be told apart from the rest.
+ */
+export interface WaChatArea {
+  /** The element to read (with what is inside it)… */
+  root: string;
+  /** …except these parts of it (the chat list, the search box, the side bar). */
+  skip: string[];
+  /** The page's place in the window and its size (positions are taken relative to it, as in a full read). */
+  ox: number;
+  oy: number;
+  w: number;
+  h: number;
+  paneLeft: number;
+}
+
+export function chatAreaOf(nodes: UiaNodeRaw[], win: { w: number; h: number }, view: WaView): WaChatArea | null {
+  const header = view.headerNode;
+  const compose = view.compose;
+  if (!header || !compose || header.i === undefined || compose.i === undefined || view.paneLeft === undefined) return null;
+  const docs = nodes.filter((n) => n.role === 'document' && hasBox(n)).sort((a, b) => (b.w ?? 0) * (b.h ?? 0) - (a.w ?? 0) * (a.h ?? 0));
+  const doc = docs[0];
+  const up = (i: number): number[] => {
+    const out: number[] = [];
+    for (let k = i, guard = 0; k >= 0 && guard < 200; k = nodes[k]?.parent ?? -1, guard++) out.push(k);
+    return out;
+  };
+  const fromHeader = new Set(up(header.i));
+  const lca = up(compose.i).find((k) => fromHeader.has(k));
+  if (lca === undefined) return null;
+  const kids = children(nodes);
+  const inside = (root: number) => new Set([root, ...descendants(root, kids, 5000)]);
+  const wanted = [header.i, compose.i, ...view.messages.map((m) => m.row?.i).filter((i): i is number => i !== undefined)];
+  const leftOut = [...view.chats.map((c) => c.index), ...(view.search?.i !== undefined ? [view.search.i] : [])];
+  const ox = doc?.x ?? 0;
+  // The common part may hold the chat list, the search box and the side bar too: those parts of it
+  // are left out (anything new in the conversation, such as the Send button, is still read).
+  const skip = (kids.get(lca) ?? []).filter((c) => {
+    const set = inside(c);
+    if (wanted.some((i) => set.has(i))) return false;
+    const n = nodes[c]!;
+    const leftOfPane = hasBox(n) && (n.x ?? 0) - ox + (n.w ?? 0) <= view.paneLeft! + 2;
+    return leftOut.some((i) => set.has(i)) || leftOfPane;
+  });
+  const covered = inside(lca);
+  for (const c of skip) for (const i of inside(c)) covered.delete(i);
+  // What is read again must hold no chat entries and be clearly less than everything.
+  if (leftOut.some((i) => covered.has(i)) || covered.size > nodes.length * 0.75) return null;
+  return {
+    root: nodes[lca]!.rid,
+    skip: skip.map((c) => nodes[c]!.rid),
+    ox,
+    oy: doc?.y ?? 0,
+    w: doc?.w ?? win.w,
+    h: doc?.h ?? win.h,
+    paneLeft: view.paneLeft,
+  };
+}
+
+/** Reads the open chat from a fresh read of its part only (see chatAreaOf). */
+export function analyzeChatArea(part: UiaNodeRaw[], area: WaChatArea): { nodes: UiaNodeRaw[]; view: WaView } {
+  const nodes = part;
+  const scoped = nodes.map((n) => ({ ...n, x: n.x === undefined ? undefined : n.x - area.ox, y: n.y === undefined ? undefined : n.y - area.oy }));
+  const back = (n: UiaNodeRaw | null | undefined): UiaNodeRaw | null => (n && n.i !== undefined ? (nodes[n.i] ?? null) : null);
+  const v = analyzeScoped(scoped, { w: area.w, h: area.h }, area.paneLeft);
+  return {
+    nodes,
+    view: {
+      ...v,
+      search: null,
+      chats: [],
+      compose: back(v.compose),
+      send: back(v.send),
+      headerNode: back(v.headerNode),
+      messages: v.messages.map((m) => (m.row ? { ...m, row: back(m.row) ?? m.row } : m)),
+    },
+  };
 }
 
 /** The most recent message sent by the user, if visible. */

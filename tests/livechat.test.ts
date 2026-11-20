@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RawWindow } from '../src/main/desktop/backend';
 import { unsupportedClaims } from '../src/main/agent/claims';
-import { attentionTopic, parseDecision } from '../src/main/livechat/liveChatService';
+import { attentionTopic, parseDecision } from '../src/main/livechat/liveChatService';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import type { LiveChatSession, TaskStep } from '../src/shared/domain';
 import { FakeWhatsApp } from './fakeApps';
@@ -170,6 +170,32 @@ describe('live chat sessions', () => {
     await waitFor(() => session().status === 'waiting_user', 5000);
     expect(session().question).toMatch(/money or prices/);
     expect(wa.sent.map((m) => m.text)).toEqual(['Hi Mum!']);
+  });
+
+  it('a sent reply WhatsApp shows late is confirmed by looking again, not paused (and never sent twice)', async () => {
+    const { wa } = await startWithMum();
+    // The message appears only after the check right after Send (one read of the open chat).
+    wa.lateSends = 1;
+    const log = (h.services.live as unknown as { d: { log: { info: (e: string, d?: unknown) => void } } }).d.log;
+    const events: string[] = [];
+    const info = log.info.bind(log);
+    log.info = (e, d) => (events.push(e), info(e, d));
+    brain.push(decision({ action: 'reply', message: 'All good here, Mum!' }));
+    incoming(wa, 'Mum', 'How are you?');
+    await waitFor(() => session().replies === 1, 5000);
+    expect(events).toContain('livechat.send_confirmed_late');
+    expect(session().status).toBe('active');
+    expect(wa.sent.map((m) => m.text)).toEqual(['All good here, Mum!']);
+    expect(session().question ?? '').not.toMatch(/could not confirm/);
+  });
+
+  it('a send that never shows still pauses and asks the user to check (nothing is sent again)', async () => {
+    const { wa } = await startWithMum();
+    wa.dropSends = true;
+    brain.push(decision({ action: 'reply', message: 'All good here, Mum!' }));
+    incoming(wa, 'Mum', 'How are you?');
+    await waitFor(() => session().status === 'paused', 5000);
+    expect(session().question).toMatch(/could not confirm/);
   });
 
   it('“help me explain …” is answered after the user says to explain it — and the send is reported truthfully', async () => {

@@ -151,6 +151,23 @@ export class FakeDesktop implements DesktopBackend {
     const a = this.app(hwnd);
     return { nodes: a.nodes(), truncated: false, ms: 1, window: a.window };
   }
+  /** Like the real helper: one element and what is inside it (null when it is gone), positions as in a full read. */
+  async uiaSnapshotFrom(hwnd: string, rid: string, opts?: { skip?: string[] }): Promise<UiaSnapshotRaw | null> {
+    this.calls.push({ op: 'uia_snapshot_from', args: [hwnd, rid] });
+    const a = this.app(hwnd);
+    const nodes = a.nodes();
+    const root = nodes.findIndex((n) => n.rid === rid);
+    if (root < 0) return null;
+    const skip = new Set(opts?.skip ?? []);
+    const keep = new Map<number, number>([[root, 0]]);
+    const out: UiaNodeRaw[] = [{ ...nodes[root]!, i: 0, parent: -1 }];
+    nodes.forEach((n, i) => {
+      if (i <= root || !keep.has(n.parent) || (n.parent === root && skip.has(n.rid))) return;
+      keep.set(i, out.length);
+      out.push({ ...n, i: out.length, parent: keep.get(n.parent)! });
+    });
+    return { nodes: out, truncated: false, ms: 1, window: a.window };
+  }
   async uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null> {
     return this.app(hwnd).nodes().find((n) => n.rid === rid) ?? null;
   }

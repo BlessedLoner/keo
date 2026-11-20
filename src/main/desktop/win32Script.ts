@@ -868,6 +868,7 @@ public static class KeoUia {
     var sw = Stopwatch.StartNew();
     var root = AutomationElement.FromHandle(h);
     var win = root.Current.BoundingRectangle;
+    var mem = KnownOf(h, true);
     var list = new List<Dictionary<string, object>>();
     var walker = TreeWalker.ControlViewWalker;
     var stack = new Stack<Tuple<AutomationElement, int, int>>();
@@ -879,6 +880,7 @@ public static class KeoUia {
       Dictionary<string, object> n;
       try { n = Node(t.Item1, win, t.Item2, t.Item3); } catch { continue; }
       int idx = list.Count; n["i"] = idx; list.Add(n);
+      mem[(string)n["rid"]] = t.Item1;
       if (t.Item2 >= maxDepth) continue;
       var kids = new List<AutomationElement>();
       try {
@@ -906,7 +908,7 @@ public static class KeoUia {
         // An element already seen (e.g. the host pane, empty when reached from the frame) is
         // not added again, but its children are read from here.
         int idx;
-        if (seen.Contains(r)) idx = -1; else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); added = true; }
+        if (seen.Contains(r)) idx = -1; else { seen.Add(r); idx = list.Count; n["i"] = idx; list.Add(n); mem[r] = t.Item1; added = true; }
         if (t.Item2 >= maxDepth) continue;
         var kids = new List<AutomationElement>();
         try {
@@ -925,7 +927,74 @@ public static class KeoUia {
     return Json.Serialize(res);
   }
 
+  // Elements seen in the latest reads of each window (by runtime id): acting on or reading an element
+  // Keo has just seen does not search the whole window again (each search can take seconds in web apps).
+  static readonly Dictionary<IntPtr, Dictionary<string, AutomationElement>> known = new Dictionary<IntPtr, Dictionary<string, AutomationElement>>();
+  static Dictionary<string, AutomationElement> KnownOf(IntPtr h, bool fresh) {
+    Dictionary<string, AutomationElement> m;
+    if (!known.TryGetValue(h, out m) || fresh) {
+      if (known.Count > 6) known.Clear();
+      m = new Dictionary<string, AutomationElement>();
+      known[h] = m;
+    }
+    return m;
+  }
+  static AutomationElement Known(IntPtr h, string rid) {
+    Dictionary<string, AutomationElement> m; AutomationElement e;
+    if (known.TryGetValue(h, out m) && m.TryGetValue(rid, out e)) {
+      // Gone elements throw (or report another id): then the window is searched as before.
+      try { if (Rid(e) == rid) return e; } catch { }
+      m.Remove(rid);
+    }
+    return null;
+  }
+
+  // Reads only part of a window: the element rid (seen in an earlier read) and what is inside it,
+  // except the elements listed in skip (ids separated by |). Scrolled-out parts are not opened.
+  // "null" when that element is gone (the caller reads the whole window).
+  public static string SnapshotFrom(IntPtr h, string rid, string skip, int maxNodes, int maxDepth, int budgetMs) {
+    var start = Known(h, rid);
+    if (start == null) return "null";
+    var skipped = new HashSet<string>((skip ?? "").Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries));
+    var sw = Stopwatch.StartNew();
+    var win = AutomationElement.FromHandle(h).Current.BoundingRectangle;
+    var m = KnownOf(h, false);
+    var list = new List<Dictionary<string, object>>();
+    var walker = TreeWalker.ControlViewWalker;
+    var stack = new Stack<Tuple<AutomationElement, int, int>>();
+    stack.Push(Tuple.Create(start, 0, -1));
+    bool truncated = false;
+    while (stack.Count > 0) {
+      if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+      var t = stack.Pop();
+      Dictionary<string, object> n;
+      if (t.Item2 == 1 && skipped.Count > 0) {
+        string r1 = null;
+        try { r1 = Rid(t.Item1); } catch { }
+        if (r1 != null && skipped.Contains(r1)) continue;
+      }
+      try { n = Node(t.Item1, win, t.Item2, t.Item3); } catch { if (t.Item2 == 0) return "null"; continue; }
+      int idx = list.Count; n["i"] = idx; list.Add(n);
+      m[(string)n["rid"]] = t.Item1;
+      if (t.Item2 >= maxDepth) continue;
+      if (n.ContainsKey("offscreen") && t.Item2 > 0) continue;
+      var kids = new List<AutomationElement>();
+      try {
+        var ch = walker.GetFirstChild(t.Item1);
+        while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSibling(ch); }
+      } catch { }
+      for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+    }
+    var res = new Dictionary<string, object>();
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["partial"] = true;
+    var wd = new Dictionary<string, object>(); wd["w"] = (int)win.Width; wd["h"] = (int)win.Height; wd["x"] = (int)win.X; wd["y"] = (int)win.Y;
+    res["window"] = wd;
+    return Json.Serialize(res);
+  }
+
   static AutomationElement Find(IntPtr h, string rid) {
+    var mine = Known(h, rid);
+    if (mine != null) return mine;
     var root = AutomationElement.FromHandle(h);
     if (Rid(root) == rid) return root;
     var cond = new PropertyCondition(AutomationElement.RuntimeIdProperty, ParseRid(rid));
@@ -1175,6 +1244,7 @@ while ($true) {
       }
       'child_classes' { RequireUia; ReplyRaw $req.id ([KeoUia]::ChildClasses($h)) }
       'uia_snapshot' { RequireUia; ReplyRaw $req.id ([KeoUia]::Snapshot($h, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
+      'uia_snapshot_from' { RequireUia; ReplyRaw $req.id ([KeoUia]::SnapshotFrom($h, [string]$req.args.rid, [string]$req.args.skip, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
       'uia_describe' { RequireUia; ReplyRaw $req.id ([KeoUia]::Describe($h, [string]$req.args.rid)) }
       'uia_act'      { RequireUia; ReplyRaw $req.id ([KeoUia]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }
       'uia_center'   { RequireUia; ReplyRaw $req.id ([KeoUia]::Center($h, [string]$req.args.rid)) }
@@ -1619,6 +1689,44 @@ public static class KeoUia3 {
     return Json.Serialize(res);
   }
 
+  // See KeoUia.SnapshotFrom: only the element rid from the latest read and what is inside it.
+  public static string SnapshotFrom(IntPtr h, string rid, string skip, int maxNodes, int maxDepth, int budgetMs) {
+    var skipped = new HashSet<string>((skip ?? "").Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries));
+    IKeoUiaElement start;
+    if (lastWindow != h || !last.TryGetValue(rid, out start)) return "null";
+    try { if (Rid(start) != rid) return "null"; } catch { return "null"; }
+    var sw = Stopwatch.StartNew();
+    var wr = Rect(U().ElementFromHandle(h)) ?? new double[] { 0, 0, 0, 0 };
+    var walker = U().GetControlViewWalker();
+    var list = new List<Dictionary<string, object>>();
+    var stack = new Stack<Tuple<IKeoUiaElement, int, int>>();
+    stack.Push(Tuple.Create(start, 0, -1));
+    bool truncated = false;
+    while (stack.Count > 0) {
+      if (list.Count >= maxNodes || sw.ElapsedMilliseconds > budgetMs) { truncated = true; break; }
+      var t = stack.Pop();
+      Dictionary<string, object> n;
+      if (t.Item2 == 1 && skipped.Count > 0) {
+        string r1 = null;
+        try { r1 = Rid(t.Item1); } catch { }
+        if (r1 != null && skipped.Contains(r1)) continue;
+      }
+      try { n = Node(t.Item1, wr[0], wr[1], t.Item2, t.Item3); } catch { if (t.Item2 == 0) return "null"; continue; }
+      int idx = list.Count; n["i"] = idx; list.Add(n);
+      last[(string)n["rid"]] = t.Item1;
+      if (t.Item2 >= maxDepth) continue;
+      if (n.ContainsKey("offscreen") && t.Item2 > 0) continue;
+      var kids = new List<IKeoUiaElement>();
+      try { var ch = walker.GetFirstChildElement(t.Item1); while (ch != null && kids.Count < 300) { kids.Add(ch); ch = walker.GetNextSiblingElement(ch); } } catch { }
+      for (int k = kids.Count - 1; k >= 0; k--) stack.Push(Tuple.Create(kids[k], t.Item2 + 1, idx));
+    }
+    var res = new Dictionary<string, object>();
+    res["nodes"] = list; res["truncated"] = truncated; res["ms"] = sw.ElapsedMilliseconds; res["engine"] = "uia3"; res["partial"] = true;
+    var wd = new Dictionary<string, object>(); wd["w"] = (int)wr[2]; wd["h"] = (int)wr[3]; wd["x"] = (int)wr[0]; wd["y"] = (int)wr[1];
+    res["window"] = wd;
+    return Json.Serialize(res);
+  }
+
   static IKeoUiaElement Find(IntPtr h, string rid) {
     IKeoUiaElement e;
     if (lastWindow == h && last.TryGetValue(rid, out e)) {
@@ -1766,6 +1874,7 @@ while ($true) {
     if ($req.args -and $req.args.hwnd) { $h = [IntPtr][long]$req.args.hwnd }
     switch ($req.cmd) {
       'uia3_snapshot' { ReplyRaw $req.id ([KeoUia3]::Snapshot($h, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
+      'uia3_snapshot_from' { ReplyRaw $req.id ([KeoUia3]::SnapshotFrom($h, [string]$req.args.rid, [string]$req.args.skip, [int]$req.args.maxNodes, [int]$req.args.maxDepth, [int]$req.args.budgetMs)) }
       'uia3_describe' { ReplyRaw $req.id ([KeoUia3]::Describe($h, [string]$req.args.rid)) }
       'uia3_act'      { ReplyRaw $req.id ([KeoUia3]::Act($h, [string]$req.args.rid, [string]$req.args.action, [string]$req.args.text)) }
       'uia3_center'   { ReplyRaw $req.id ([KeoUia3]::Center($h, [string]$req.args.rid)) }

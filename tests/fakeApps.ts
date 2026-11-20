@@ -116,6 +116,9 @@ export class FakeWhatsApp implements FakeUiaApp {
   extraWindows: Array<{ hwnd: string; title: string }> = [];
   /** Simulate a send that WhatsApp silently drops. */
   dropSends = false;
+  /** A sent message shows in the chat only after this many more reads (a slow WhatsApp). */
+  lateSends = 0;
+  private late: { chat: FakeChat; text: string; reads: number } | null = null;
   /** Switch the open chat right after typing (identity change before send). */
   switchChatAfterCompose: string | null = null;
   /**
@@ -181,6 +184,10 @@ export class FakeWhatsApp implements FakeUiaApp {
           ? ['Use WhatsApp on your computer', 'Steps to log in', 'Scan the QR code', 'Link with phone number instead']
           : ['WhatsApp', 'Loading your chats', 'End-to-end encrypted'];
       return build([root, ...texts.map((t, k): Spec => ({ key: `t${k}`, parentKey: 'root', role: 'text', name: t, x: 400, y: 200 + k * 40, w: 400, h: 30 }))]);
+    }
+    if (this.late && this.late.reads-- <= 0) {
+      this.late.chat.messages.push({ from: 'me', text: this.late.text, status: 'Sent' });
+      this.late = null;
     }
     const ns = this.layout();
     if (this.hiddenReads > 0) {
@@ -349,6 +356,7 @@ export class FakeWhatsApp implements FakeUiaApp {
       const chat = this.chats.find((c) => c.title === this.open)!;
       if (!this.dropSends) {
         if (this.rowPerLine) for (const line of this.compose.split(/\r?\n/).filter((l) => l.trim())) chat.messages.push({ from: 'me', text: line, status: 'Sent' });
+        else if (this.lateSends > 0) this.late = { chat, text: this.compose, reads: this.lateSends };
         else chat.messages.push({ from: 'me', text: this.compose, status: 'Sent' });
         this.sent.push({ to: chat.title, text: this.compose });
       }

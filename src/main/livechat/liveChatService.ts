@@ -7,7 +7,7 @@ import type { Logger } from '../logging/logger';
 import type { ProviderService } from '../providers/providerService';
 import type { AuditRepo } from '../repos/audit';
 import type { ConversationRepo } from '../repos/conversations';
-import { headerMatches, normName, type WaMessage, type WaView } from '../desktop/whatsapp';
+import { headerMatches, holdsText, lastOutgoing, normName, type WaMessage, type WaView } from '../desktop/whatsapp';
 import { errorMessage, KeoError, nowIso } from '../util/errors';
 import { newId } from '../util/ids';
 
@@ -409,7 +409,9 @@ export class LiveChatService {
     // A covered or minimised browser stops updating its page, so a background read can be stale.
     const covered = w.minimized ? 1 : await this.d.cap.desktop.backend.coveredShare(r.s.target.hwnd).catch(() => 0);
     const stale = covered >= 0.6;
-    let view = w.minimized ? null : await waView(this.d.cap, r.s.target).catch(() => null);
+    // Only the open chat is read (quick); the whole window (with the chat list) when another chat is open.
+    let view = w.minimized ? null : await waView(this.d.cap, r.s.target, true).catch(() => null);
+    if (view && !headerMatches(view.header, r.s.contact)) view = await waView(this.d.cap, r.s.target).catch(() => null);
     const open = !!view && headerMatches(view.header, r.s.contact);
     const entry = view?.chats.find((c) => normName(c.title) === normName(r.s.contact));
     const unreadElsewhere = !open && (entry?.unread ?? 0) > 0;
@@ -542,12 +544,28 @@ export class LiveChatService {
     r.s.activity = 'Replying';
     this.changed();
     const result = await this.withFocus(r, async () => {
-      const view = await waView(this.d.cap, r.s.target);
+      const view = await waView(this.d.cap, r.s.target, true);
       if (!headerMatches(view.header, r.s.contact)) {
         const o = await waOpenChat(this.d.cap, r.s.target, r.s.contact, r.abort.signal);
         if (!o.opened) throw new KeoError('not_opened', `Could not open the chat with ${r.s.contact}: ${o.reason ?? 'not found'}.`);
       }
-      return waSend(this.d.cap, r.s.target, r.s.contact, text, false, r.abort.signal);
+      try {
+        return await waSend(this.d.cap, r.s.target, r.s.contact, text, false, r.abort.signal);
+      } catch (e) {
+        // Sent but not seen yet (WhatsApp was slow to show it): look again, as a person would, before
+        // bothering the user. Never sent again — only confirmed by finding it as the newest own message.
+        if ((e as { code?: string }).code !== 'unverified_send') throw e;
+        for (let k = 0; k < 3 && !r.abort.signal.aborted; k++) {
+          await this.sleep(k === 0 ? 800 : 1500);
+          const v = await waView(this.d.cap, r.s.target, true).catch(() => null);
+          const mine = v && headerMatches(v.header, r.s.contact) ? lastOutgoing(v) : null;
+          if (mine && holdsText(mine.text, text)) {
+            this.d.log.info('livechat.send_confirmed_late', { sessionId: r.s.id, look: k + 1 });
+            return { sent: true, alreadyPresent: false, appearsInChat: true, status: mine.status, recipient: r.s.contact };
+          }
+        }
+        throw e;
+      }
     });
     if (!result) return;
     r.lastSend = this.now();
@@ -561,7 +579,7 @@ export class LiveChatService {
       this.d.alert(this.copy(r.s), `Sent to ${r.s.contact}: “${text.length > 300 ? `${text.slice(0, 300)}…` : text}”${result.status ? ` (WhatsApp shows: ${result.status})` : ''}`, 'sent');
     }
     // Handled = everything up to and including Keo's reply; messages that arrived while sending stay new.
-    const after = await waView(this.d.cap, r.s.target).catch(() => null);
+    const after = await waView(this.d.cap, r.s.target, true).catch(() => null);
     if (after && headerMatches(after.header, r.s.contact)) {
       const recent = after.messages.slice(-30);
       const mine = recent.map((m) => m.from).lastIndexOf('me');

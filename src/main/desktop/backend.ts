@@ -104,6 +104,12 @@ export interface DesktopBackend {
   readText(hwnd: string): Promise<string | null>;
   /** Bounded UI Automation tree of one window. */
   uiaSnapshot(hwnd: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number }): Promise<UiaSnapshotRaw>;
+  /**
+   * Reads only one element seen in the latest read of the window, and what is inside it (scrolled-out
+   * parts closed), leaving out its direct children listed in `skip`: far quicker than the whole
+   * window. Null when that element is gone.
+   */
+  uiaSnapshotFrom?(hwnd: string, rid: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number; skip?: string[] }): Promise<UiaSnapshotRaw | null>;
   /** Current properties of one element (null when it no longer exists). */
   uiaDescribe(hwnd: string, rid: string): Promise<UiaNodeRaw | null>;
   uiaAct(hwnd: string, rid: string, action: UiaAction, text?: string): Promise<{ method: string }>;
@@ -408,6 +414,12 @@ export class Win32Backend implements DesktopBackend {
       /* modern client unavailable: keep the classic result */
     }
     return classic;
+  }
+
+  async uiaSnapshotFrom(hwnd: string, rid: string, opts: { maxNodes: number; maxDepth: number; budgetMs: number; skip?: string[] }): Promise<UiaSnapshotRaw | null> {
+    const { skip, ...rest } = opts;
+    const r = await this.uiCall<UiaSnapshotRaw | null>(this.ui(hwnd, 'snapshot_from'), { hwnd, rid, skip: (skip ?? []).join('|'), ...rest }, opts.budgetMs + 15000);
+    return r && Array.isArray(r.nodes) ? r : null;
   }
 
   /** Which reader a window uses (diagnostics). */
