@@ -15,7 +15,7 @@ import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { GROUP_PROMPTS, SYSTEM_PROMPT } from './systemPrompt';
-import { chooseGroups, groupOf, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUPS, type ToolGroup } from './toolGroups';
+import { chooseGroups, fitToolGroups, groupOf, groupScores, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUPS, type ToolGroup } from './toolGroups';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
@@ -486,15 +486,16 @@ export class AgentService {
       const attached = latest?.meta.attachments ?? [];
       const recentGroups = [...this.recentToolGroups(conversationId), ...(this.extraGroups?.(conversationId) ?? [])];
       const turnGroups = this.startToolGroupTurn(conversationId);
+      const requestTexts = this.conversations
+        .recentMessages(conversationId, 8)
+        .filter((m) => m.role === 'user')
+        .slice(-2)
+        .map((m) => `${m.content} ${(m.meta.attachments ?? []).map((a) => a.name).join(' ')}`);
       const groups: Set<ToolGroup> =
         settings.agent.toolSelection === 'all'
           ? new Set<ToolGroup>(['core', ...TOOL_GROUPS])
           : chooseGroups({
-              texts: this.conversations
-                .recentMessages(conversationId, 8)
-                .filter((m) => m.role === 'user')
-                .slice(-2)
-                .map((m) => `${m.content} ${(m.meta.attachments ?? []).map((a) => a.name).join(' ')}`),
+              texts: requestTexts,
               pictures: pics.length > 0 || attached.some((a) => a.kind === 'image'),
               documents: attached.some((a) => a.kind !== 'image'),
               pencil: pencil.length > 0,
@@ -502,6 +503,22 @@ export class AgentService {
               pendingTool: this.pending.get(conversationId)?.toolName ?? null,
             });
       for (const g of this.excludeGroups?.(conversationId) ?? []) groups.delete(g);
+      // Within the most tools a service accepts (a long request that mentions many things would
+      // otherwise load nearly every group and be refused): what it is most about stays, plus what is
+      // in use; the rest can be loaded when needed.
+      const pendingTool = this.pending.get(conversationId)?.toolName ?? null;
+      const pinned = new Set<ToolGroup>(['core', ...recentGroups, ...(pendingTool ? [groupOf(pendingTool)] : [])]);
+      const scores = groupScores(requestTexts);
+      const groupSize = new Map<ToolGroup, number>();
+      for (const t of this.registry.toolSpecs()) groupSize.set(groupOf(t.name), (groupSize.get(groupOf(t.name)) ?? 0) + 1);
+      // "Send every tool" (Settings) is kept as it is, except with services that refuse that many.
+      const capped = settings.agent.toolSelection !== 'all' || (provider.id !== 'anthropic' && provider.id !== 'test');
+      const fit = () => {
+        if (!capped) return;
+        const left = fitToolGroups(groups, pinned, scores, (g) => groupSize.get(g) ?? 0);
+        if (left.length) this.log.info('agent.tool_groups_trimmed', { left, kept: [...groups] }, correlationId);
+      };
+      fit();
       const toolsOn = settings.agent.toolsEnabled && !!info?.capabilities.tools;
       const buildTools = () => {
         if (!toolsOn) return [];
@@ -806,7 +823,12 @@ export class AgentService {
               results.push({ type: 'tool_result', callId: call.id, content: json({ status: 'rejected', error: `Not available here: ${asked.join(', ')}. In Keo Studio, edit with the studio tools you already have (studio__edit, studio__clean_up, studio__captions and the rest).` }), isError: true });
               continue;
             }
-            for (const g of want) groups.add(g);
+            for (const g of want) {
+              groups.add(g);
+              pinned.add(g);
+            }
+            // Loading more may leave out a group the request mentioned less (it can be loaded again).
+            fit();
             tools = buildTools();
             const now = tools.filter((t) => (want as string[]).includes(groupOf(t.name))).map((t) => t.name);
             this.log.info('agent.tools_loaded', { groups: want, tools: now.length }, correlationId);

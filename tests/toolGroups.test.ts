@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseGroups, groupOf } from '../src/main/agent/toolGroups';
+import { chooseGroups, fitToolGroups, groupOf, groupScores, LOAD_TOOLS, TOOL_CAP, type ToolGroup } from '../src/main/agent/toolGroups';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { makeHarness, type Harness } from './helpers';
 
@@ -13,6 +13,35 @@ afterEach(async () => {
 });
 
 describe('tool groups', () => {
+  it('a long request that mentions everything stays within the tools a service accepts (OpenAI: 128), keeping what it is most about', async () => {
+    const reqs: ChatRequest[] = [];
+    h = makeHarness({ script: (req) => (reqs.push(req), reply('ok')) });
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, observationEnabled: true, fullControl: true } });
+    const c = h.services.conversations.create();
+    const long = [
+      'Build a premium website for Keo: a landing page with 3D motion, smooth transitions and storytelling, made in the builder.',
+      'Show Keo Studio: video editing, the timeline, captions, export, graphics and motion; design pictures and images for each section.',
+      'Explain that Keo opens apps, clicks and types on the desktop like a person, reads the screen, answers WhatsApp messages and email,',
+      'adds calendar events, finds files and documents, does web research, connects to Telegram, Notion, Slack and Drive, and keeps projects.',
+      'Ensure excellent performance, responsive design, optimized animations. Inspect the existing Keo branding and project first. '.repeat(3),
+    ].join('\n');
+    await h.services.agent.send(c.id, long).done;
+    const first = reqs[0]!;
+    expect(first.tools!.length).toBeLessThanOrEqual(TOOL_CAP + 2);
+    const sent = names(first);
+    expect(sent.some((n) => n.startsWith('build__') || n.startsWith('create__'))).toBe(true); // the website it is about
+    expect(sent).toContain(LOAD_TOOLS); // what was left out can still be loaded
+  });
+
+  it('leaves out the least-mentioned groups first, never the pinned ones', () => {
+    const groups = new Set<ToolGroup>(['core', 'studio', 'email', 'calendar', 'desktop']);
+    const size: Record<string, number> = { core: 30, studio: 40, email: 20, calendar: 20, desktop: 30 };
+    const scores = groupScores(['edit my video in studio, the timeline and captions; also an email']);
+    const left = fitToolGroups(groups, new Set<ToolGroup>(['core', 'desktop']), scores, (g) => size[g]!, 100);
+    expect(left).toEqual(['calendar', 'email']);
+    expect([...groups].sort()).toEqual(['core', 'desktop', 'studio']);
+  });
+
   it('maps tools to groups (searching and reading pages, finding files are everyday tools)', () => {
     expect(groupOf('desktop__click')).toBe('desktop');
     expect(groupOf('apps__open')).toBe('desktop');

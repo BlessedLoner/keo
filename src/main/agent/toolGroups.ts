@@ -134,6 +134,47 @@ export function chooseGroups(h: GroupHints): Set<ToolGroup> {
   return out;
 }
 
+/**
+ * How strongly a request is about each group. The ask itself usually comes first ("Build a website
+ * for Keo…"), with details after, so words in the first sentence of the newest message count far more than
+ * the same words further on (common words like "type" or "app" in the details must not outweigh it).
+ */
+export function groupScores(texts: string[]): Map<ToolGroup, number> {
+  const all = texts.join('\n').toLowerCase();
+  // The first sentence of the newest message (where the ask is).
+  const opening = ((texts.at(-1) ?? '').toLowerCase().split(/[.!?]\s|\n/).find((x) => x.trim()) ?? '').slice(0, 300);
+  const count = (s: string, g: (typeof TOOL_GROUPS)[number]) => (s.match(new RegExp(TRIGGERS[g].source, 'g')) ?? []).length;
+  const out = new Map<ToolGroup, number>();
+  for (const g of TOOL_GROUPS) out.set(g, count(all, g) + 10 * count(opening, g));
+  return out;
+}
+
+/**
+ * The most tools sent with one request. Services refuse more (OpenAI: 128 tools), and fewer tools
+ * also make the model choose better. Room is kept for the checklist and tools__load.
+ */
+export const TOOL_CAP = 120;
+
+/**
+ * Keeps `groups` within `cap` tools: groups the request needs for sure (`pinned`: core, tools in
+ * use, groups the model loaded) stay; of the others, the ones the request mentions least are left
+ * out first (they stay loadable with tools__load). Returns the groups left out.
+ */
+export function fitToolGroups(groups: Set<ToolGroup>, pinned: Set<ToolGroup>, scores: Map<ToolGroup, number>, countOf: (g: ToolGroup) => number, cap = TOOL_CAP): ToolGroup[] {
+  let total = [...groups].reduce((n, g) => n + countOf(g), 0);
+  if (total <= cap) return [];
+  const dropped: ToolGroup[] = [];
+  // Least mentioned first; among equals, the bigger group first (frees the most room).
+  const order = [...groups].filter((g) => !pinned.has(g)).sort((a, b) => (scores.get(a) ?? 0) - (scores.get(b) ?? 0) || countOf(b) - countOf(a));
+  for (const g of order) {
+    if (total <= cap) break;
+    groups.delete(g);
+    total -= countOf(g);
+    dropped.push(g);
+  }
+  return dropped;
+}
+
 export const LOAD_TOOLS = 'tools__load';
 
 /** The tool that brings in more tool groups for the rest of this turn. */
