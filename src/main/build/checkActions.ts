@@ -22,10 +22,11 @@ export const CheckAction = z.discriminatedUnion('do', [
       y: z.number().min(0).max(4000).optional(),
     })
     .strict(),
-  z.object({ do: z.literal('keys'), keys: z.array(Code).min(1).max(4), holdSeconds: z.number().min(0).max(8).default(0.15) }).strict(),
+  // Long holds let Keo play for a minute or more: some bugs only show after a while (a car that wears out, a score that stops).
+  z.object({ do: z.literal('keys'), keys: z.array(Code).min(1).max(4), holdSeconds: z.number().min(0).max(60).default(0.15) }).strict(),
   z.object({ do: z.literal('type'), text: z.string().max(500), selector: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ do: z.literal('scroll'), y: z.number().min(-20000).max(20000) }).strict(),
-  z.object({ do: z.literal('wait'), seconds: z.number().min(0.1).max(10) }).strict(),
+  z.object({ do: z.literal('wait'), seconds: z.number().min(0.1).max(60) }).strict(),
   /** A JavaScript expression read in the page, e.g. "window.game.player.mph" or "document.querySelectorAll('.card').length". */
   z.object({ do: z.literal('measure'), expression: z.string().trim().min(1).max(400) }).strict(),
 ]);

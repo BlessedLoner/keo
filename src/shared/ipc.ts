@@ -334,6 +334,7 @@ export const invokeSchemas = {
     .strict(),
   'studio:skipShow': z.object({ id: studioProjectId }).strict(),
   'studio:previewCopies': z.object({ id: studioProjectId, assets: z.array(z.string().regex(/^as_[A-Za-z0-9]{4,24}$/)).max(200).optional() }).strict(),
+  'studio:previewCopying': z.object({ id: studioProjectId }).strict(),
   'studio:cleanSound': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/), strength: z.number().min(0.1).max(1).default(0.8) }).strict(),
   'studio:reverse': z.object({ id: studioProjectId, clip: z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/) }).strict(),
   'studio:splitScenes': z.object({ id: studioProjectId, clips: z.array(z.string().regex(/^cl_[A-Za-z0-9]{4,24}$/)).max(500).optional() }).strict(),
@@ -728,6 +729,7 @@ export interface InvokeOutputs {
   'studio:reverse': { seconds: number };
   'studio:cleanSound': { seconds: number };
   'studio:previewCopies': { made: number };
+  'studio:previewCopying': string[];
   'studio:watch': { ok: true };
   'studio:templates': Recipe[];
   'studio:learnTemplate': Recipe;

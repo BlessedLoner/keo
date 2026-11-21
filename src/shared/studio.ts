@@ -988,7 +988,7 @@ export interface ProjectSummary {
 
 /** A job for Keo's render window: an export, frames for Keo to look at, or measuring a file. */
 export type RenderJob =
-  | { kind: 'export'; projectId: string; exportId: string; size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; /** Carrying on a stopped export: the frame to start at (the ones before are in the file). */ from?: number } }
+  | { kind: 'export'; projectId: string; exportId: string; size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; /** Carrying on a stopped export: the frame to start at (the ones before are in the file). */ from?: number; /** A background job on a possibly slow PC (a preview copy): wait minutes, not seconds, for the encoder. */ patient?: boolean } }
   | { kind: 'frames'; projectId: string; times: number[]; width: number }
   | { kind: 'probe'; url: string }
   | { kind: 'audio'; projectId: string; sampleRate: number }

@@ -96,6 +96,13 @@ const MAX_VISION_FRAMES = 84;
 const rid = (prefix: string) => `${prefix}${crypto.randomBytes(8).toString('base64url').replace(/[-_]/g, 'x').slice(0, 12)}`;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
+/** The same video file (a reading again of it), not just a similar edit. */
+export function sameSource(a: { fileName: string; seconds: number } | undefined, b: { fileName: string; seconds: number }): boolean {
+  if (!a) return false;
+  const name = (s: string) => s.toLowerCase().replace(/\.[^.]+$/, '').trim();
+  return name(a.fileName) === name(b.fileName) && Math.abs(a.seconds - b.seconds) <= 0.5;
+}
+
 export class EditDnaService {
   private readonly running = new Map<string, AbortController>();
 
@@ -372,6 +379,18 @@ export class EditDnaService {
    * default it replaces the chosen clips (and earlier Edit DNA tracks) on the timeline and starts at
    * 0:00 — the clips stay in Media. Everything is ordinary, editable clips, one undo step.
    */
+  /** A short description of a blueprint's style, so a person (or Keo) can tell blueprints apart. */
+  describe(b: Blueprint): string {
+    const s = b.style;
+    const parts = [`${b.aspect}`, `${b.shots.length} shots`, `${Math.round(b.seconds)} s`];
+    if (s) {
+      parts.push(s.layout.kind === 'full' ? 'footage fills the frame' : s.layout.kind === 'card' ? 'footage in a rounded card' : 'raw and edited side by side in phone frames');
+      parts.push(s.words.on ? `words on screen ${s.words.mode === 'build' ? 'word by word' : s.words.mode === 'pop' ? 'a word or two at a time' : 'a line at a time'}` : 'no words on screen');
+      if (s.bw >= 0.12) parts.push(`${Math.round(s.bw * 100)}% black and white`);
+    } else if (b.captions) parts.push(`captions in ${b.captions.font}`);
+    return parts.join(', ');
+  }
+
   async apply(
     projectId: string,
     id: string,
@@ -593,7 +612,7 @@ export class EditDnaService {
       .sort((x, y) => x.start - y.start)
       .map((c) => c.id);
     const captionLines = now.tracks.find((x) => x.name === 'Captions')?.clips.filter((c) => !before.has(c.id)).length ?? 0;
-    this.d.log.info('dna.applied', { mode, style: true, layout: style.layout.kind, words: words.length, clips: made.length, ops: place.length + styled.ops.length, seconds: Math.round(styled.seconds - o.at) });
+    this.d.log.info('dna.applied', { id: b.id, name: b.name.slice(0, 60), mode, style: true, layout: style.layout.kind, words: words.length, clips: made.length, ops: place.length + styled.ops.length, seconds: Math.round(styled.seconds - o.at) });
     return { changes: [...r1.changes, ...r2.changes], notes, seconds: Math.round((styled.seconds - o.at) * 1000) / 1000, clips: made.length, clipIds: made, track: o.trackName, start: o.at, mode, captions: captionLines };
   }
 
@@ -800,7 +819,10 @@ export class EditDnaService {
         : { ...built, quality: null };
       const match = (await step('match', async () => {
         const m = findMatches(bp.fingerprint, this.list())[0] ?? null;
-        return { value: m && m.level !== 'new' ? m : null, detail: m && m.level !== 'new' ? `${m.level === 'same' ? 'The same edit as' : m.level === 'similar' ? 'Similar to' : 'Related to'} “${m.name}” (${Math.round(m.score * 100)}% alike by structure)` : 'A new editing structure' };
+        const isSame = m?.level === 'same' && sameSource(this.get(m.id).source, meta);
+        // Alike by structure but another video: kept as its own blueprint, noted as similar.
+        const shown = m && m.level === 'same' && !isSame ? { ...m, level: 'similar' as const } : m;
+        return { value: shown && shown.level !== 'new' ? shown : null, detail: shown && shown.level !== 'new' ? `${shown.level === 'same' ? 'Another reading of' : shown.level === 'similar' ? 'Similar to' : 'Related to'} “${shown.name}” (${Math.round(shown.score * 100)}% alike by structure)${shown.level === 'same' ? '' : '; saved as its own blueprint'}` : 'A new editing structure' };
       })) as { id: string; name: string; level: string; score: number } | null;
       const saved = (await step('save', async () => {
         const now = this.now();
@@ -810,7 +832,11 @@ export class EditDnaService {
           .map((m) => m.id);
         // Read again: the same blueprint gets the new version, whatever it now looks like.
         const own = j.blueprintId && fs.existsSync(path.join(this.libDir(), `${j.blueprintId}.json`)) ? j.blueprintId : null;
-        const target = own ?? (match?.level === 'same' ? match.id : null);
+        // Another reading of the SAME video (same file, same length) updates its blueprint. A different
+        // video is always its own blueprint, however alike the structure looks (talking reels often
+        // look the same by shots and length, yet each has its own style).
+        const sameVideo = match?.level === 'same' && sameSource(this.get(match.id).source, meta) ? match.id : null;
+        const target = own ?? sameVideo;
         if (target) {
           const old = this.get(target);
           const v = old.version + 1;

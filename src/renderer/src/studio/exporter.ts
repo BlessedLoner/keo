@@ -243,10 +243,10 @@ async function videoEncoderConfig(w: number, h: number, fps: number, bpp = 0.16,
 
 export type Progress = (p: { stage: 'sound' | 'video' | 'saving'; done: number; total: number }) => void;
 
-/** Waits for p, but at most 30 s. */
-function stalls<T>(p: Promise<T>, message: string): Promise<T> {
+/** Waits for p, but at most `ms` (30 s by default). */
+function stalls<T>(p: Promise<T>, message: string, ms = 30_000): Promise<T> {
   let timer = 0 as unknown as ReturnType<typeof setTimeout>;
-  return Promise.race([p.finally(() => clearTimeout(timer)), new Promise<T>((_, rej) => (timer = setTimeout(() => rej(new Error(message)), 30_000)))]);
+  return Promise.race([p.finally(() => clearTimeout(timer)), new Promise<T>((_, rej) => (timer = setTimeout(() => rej(new Error(message)), ms)))]);
 }
 
 /** Renders the whole project into an MP4 (the main process writes the file). */
@@ -255,9 +255,11 @@ export async function runExport(
   exportId: string,
   progress: Progress,
   cancelled: () => boolean,
-  size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; from?: number },
+  size?: { width: number; height: number; fps: number; quality: ExportQuality; video?: ExportVideoCodec; from?: number; patient?: boolean },
 ): Promise<{ file: string; durationSec: number; frames: number; bytes: number }> {
   const family = size?.video ?? 'h264';
+  // A slow, busy PC (a 2-core laptop) can take a long while per frame: background copies wait for it.
+  const patience = size?.patient ? 300_000 : 30_000;
   // Carrying on a stopped export: its first frames (and all its sound) are in the file already.
   const from = Math.max(0, Math.floor(size?.from ?? 0));
   const W = even(size?.width ?? p.width);
@@ -324,16 +326,16 @@ export async function runExport(
       sources.release(new Set(p.tracks.flatMap((tr) => tr.clips.filter((c) => clipEnd(c) > t).map((c) => c.id))));
       // Every few seconds of video, take what the encoder has ready (some encoders hold frames
       // back until asked); an encoder that stops answering ends the export with a clear message.
-      if ((i + 1) % (fps * 4) === 0) await stalls(encoder.flush(), 'The video encoder stopped answering.');
+      if ((i + 1) % (fps * 4) === 0) await stalls(encoder.flush(), 'The video encoder stopped answering.', patience);
       const waitFrom = performance.now();
       while (encoder.encodeQueueSize > 48) {
-        if (performance.now() - waitFrom > 20_000) throw new Error('The video encoder stopped answering.');
+        if (performance.now() - waitFrom > patience) throw new Error('The video encoder stopped answering.');
         await new Promise((r) => setTimeout(r, 2));
       }
       if (sends.length > 30) await Promise.all(sends.splice(0, sends.length - 10));
       if (i % 10 === 0) progress({ stage: 'video', done: i, total });
     }
-    await stalls(encoder.flush(), 'The video encoder stopped answering.');
+    await stalls(encoder.flush(), 'The video encoder stopped answering.', patience);
     if (failed) throw failed;
     await Promise.all(sends);
     progress({ stage: 'saving', done: total, total });

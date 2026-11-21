@@ -331,6 +331,8 @@ export class BuildHost {
   /** Opens (or brings back) the build in Keo's preview window; it reloads as Keo changes files. */
   async open(id: string, page = ''): Promise<void> {
     this.d.projects().manifest(id);
+    // Fixes in Keo's own libraries (the driving kit, the scene kit) reach games made before them.
+    this.d.projects().refreshLibraries(id);
     this.preview();
     let win = this.previews.get(id);
     if (!win || win.isDestroyed()) {
@@ -371,6 +373,7 @@ export class BuildHost {
    */
   async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number; actions?: CheckAction[] } = {}): Promise<BuildCheck> {
     this.d.projects().manifest(id);
+    this.d.projects().refreshLibraries(id);
     this.preview();
     this.logs.set(id, { errors: [], warnings: [], missing: new Set() });
     const win = new BrowserWindow({
@@ -392,7 +395,8 @@ export class BuildHost {
         if (script) {
           did = await Promise.race([
             win.webContents.executeJavaScript(script, true).then((v: unknown) => String(v ?? 'done')),
-            new Promise<string>((r) => setTimeout(() => r('no answer from the page (it may be frozen)'), 12_000)),
+            // A long key hold takes as long as it is held.
+            new Promise<string>((r) => setTimeout(() => r('no answer from the page (it may be frozen)'), 12_000 + (a.do === 'keys' ? a.holdSeconds * 1000 : 0))),
           ]).catch((e: unknown) => `error: ${e instanceof Error ? e.message : String(e)}`);
         }
         steps.push(`${actionLabel(a)}${a.do === 'measure' ? ' → ' : ': '}${did}`.slice(0, 700));

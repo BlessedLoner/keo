@@ -193,8 +193,11 @@ export class Vehicle {
       if (inp.handbrake) this.vc.setWheelBrake(i, s.brake * 0.6);
     }
     this.vc.updateVehicle(dt);
-    // Downforce keeps a fast car planted.
+    // Downforce keeps a fast car planted. Forces added to a body stay until cleared, so last step's
+    // is cleared first: without this the downforce piled up every step until, after a minute or so
+    // of driving, the car was pressed into the road, stuck, and wrecked by its own "crashes".
     const down = -absSp * absSp * 0.9;
+    this.body.resetForces(true);
     this.body.addForce({ x: 0, y: down, z: 0 }, true);
     // Stuck on its roof or side: put it back on the road.
     const q = this.body.rotation();

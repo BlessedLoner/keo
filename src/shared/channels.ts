@@ -106,6 +106,7 @@ export const INVOKE_CHANNELS = [
   'studio:reverse',
   'studio:cleanSound',
   'studio:previewCopies',
+  'studio:previewCopying',
   'studio:watch',
   'studio:sounds',
   'studio:templates',

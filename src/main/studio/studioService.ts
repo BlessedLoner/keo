@@ -1,5 +1,6 @@
 import { LUT_NAME, lutNameOf, parseCube } from '../../shared/studioLut';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Logger } from '../logging/logger';
@@ -557,7 +558,122 @@ export class StudioService {
   open(id: string): Project {
     const p = this.get(id);
     this.current = id;
+    this.queuePreviewCopies(id);
     return p;
+  }
+
+  /**
+   * Whether a video is too heavy to play smoothly in the preview on an ordinary PC: bigger than full
+   * HD, more than 30 frames a second, or a very high bitrate (phones often record 1440p at 50–60 fps
+   * and 30–40 Mbit/s). Those get a light preview copy (see makePreviewCopies).
+   */
+  heavyVideo(a: Asset): boolean {
+    if (a.kind !== 'video' || a.duration <= 0) return false;
+    // A strong PC (8+ threads) plays 1440p and 60 fps itself: only very heavy videos need a copy there.
+    const strong = this.strongPc();
+    if (Math.max(a.width, a.height) > (strong ? 2560 : StudioService.BIG)) return true;
+    let mbps: number;
+    let fps = 0;
+    try {
+      mbps = (fs.statSync(a.path).size * 8) / a.duration / 1e6;
+      if (MP4_EXT.has(path.extname(a.path).toLowerCase())) {
+        const r = Mp4Reader.open(a.path);
+        if (r) {
+          try {
+            const v = r.video();
+            if (v && v.duration > 0) fps = v.samples.length / v.duration;
+          } finally {
+            r.close();
+          }
+        }
+      }
+    } catch {
+      return false;
+    }
+    return strong ? mbps > 60 : fps > 32 || mbps > 20;
+  }
+
+  /** A preview copy that is there, readable, and as long as its video (not one cut short). */
+  goodCopy(a: Asset): boolean {
+    if (!a.proxy || !fs.existsSync(a.proxy)) return false;
+    // Checked once per file version (the preview asks on every read of the video).
+    const st = fs.statSync(a.proxy);
+    const key = `${a.proxy}|${st.size}|${st.mtimeMs}|${a.duration}`;
+    const known = this.copyChecked.get(key);
+    if (known !== undefined) return known;
+    const ok = this.readCopy(a);
+    this.copyChecked.set(key, ok);
+    return ok;
+  }
+  private readonly copyChecked = new Map<string, boolean>();
+
+  private readCopy(a: Asset & { proxy?: string }): boolean {
+    try {
+      if (!a.proxy) return false;
+      const r = Mp4Reader.open(a.proxy);
+      if (!r) return false;
+      try {
+        const v = r.video();
+        return !!v && v.samples.length > 0 && v.duration >= a.duration * 0.9 - 0.5;
+      } finally {
+        r.close();
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  /** 8 or more processor threads: plays heavy video itself and makes copies fast. Tests may set it. */
+  strongPc = (): boolean => os.cpus().length >= 8;
+
+  private copyQueue: Promise<void> = Promise.resolve();
+  private readonly copying = new Set<string>();
+
+  /** Videos whose preview copy is being made now (shown in the preview). */
+  previewCopying(id: string): string[] {
+    return [...this.copying].filter((k) => k.startsWith(`${id}:`)).map((k) => k.slice(id.length + 1));
+  }
+
+  /**
+   * In the background, one at a time: a preview copy for each heavy video of the project that has
+   * none. The preview switches to the copy as soon as it is ready; the export keeps the original.
+   */
+  queuePreviewCopies(id: string): void {
+    if (!this.d.sendJob) return;
+    let p: Project;
+    try {
+      p = this.get(id);
+    } catch {
+      return;
+    }
+    for (const a of p.assets) {
+      const key = `${id}:${a.id}`;
+      if (this.copying.has(key) || this.goodCopy(a) || !this.heavyVideo(a)) continue;
+      this.copying.add(key);
+      this.d.changed?.(p);
+      this.copyQueue = this.copyQueue.then(async () => {
+        try {
+          // A busy PC can starve the encoder: one more try after a short pause.
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              await this.makePreviewCopies(id, [a.id]);
+              this.d.log.info('studio.preview_copy_auto', { asset: a.id, attempt });
+              break;
+            } catch (e) {
+              this.d.log.warn('studio.preview_copy_failed', { attempt, error: e instanceof Error ? e.message.slice(0, 160) : String(e) });
+              if (attempt < 2) await new Promise((res) => setTimeout(res, 5000));
+            }
+          }
+        } finally {
+          this.copying.delete(key);
+          try {
+            this.d.changed?.(this.get(id));
+          } catch {
+            /* project gone */
+          }
+        }
+      });
+    }
   }
 
   /** A template's slots: the videos and pictures on its video tracks, in the order they play. */
@@ -820,6 +936,8 @@ export class StudioService {
     const next = Project.parse({ ...p, assets: [...p.assets, ...added], updatedAt: (this.d.now?.() ?? new Date()).toISOString() });
     this.save(next);
     this.d.log.info('studio.imported', { files: added.length, skipped: skipped.length });
+    // Heavy phone videos get a light copy for the preview, in the background.
+    this.queuePreviewCopies(id);
     return { project: next, added, skipped };
   }
 
@@ -867,7 +985,7 @@ export class StudioService {
     try {
       const a = this.get(projectId).assets.find((x) => x.id === assetId);
       // The preview may play the light copy; everything else (export, frames) gets the original.
-      if (a && preview && a.proxy && fs.existsSync(a.proxy)) return a.proxy;
+      if (a && preview && this.goodCopy(a)) return a.proxy!;
       return a && fs.existsSync(a.path) ? a.path : null;
     } catch {
       return null;
@@ -2040,24 +2158,38 @@ export class StudioService {
    */
   async makePreviewCopies(id: string, assetIds?: string[]): Promise<{ project: Project; made: number }> {
     const p = this.get(id);
-    const videos = p.assets.filter((a) => a.kind === 'video' && (assetIds ? assetIds.includes(a.id) : Math.max(a.width, a.height) > StudioService.BIG) && !(a.proxy && fs.existsSync(a.proxy)));
+    const videos = p.assets.filter((a) => a.kind === 'video' && (assetIds ? assetIds.includes(a.id) : Math.max(a.width, a.height) > StudioService.BIG) && !this.goodCopy(a));
     let made = 0;
     for (const a of videos) {
       const file = path.join(this.d.dir, 'made', `preview-${a.id}.mp4`);
+      // A copy cut short (Keo closed or restarted while making it) is made again.
+      if (fs.existsSync(file) && !this.goodCopy({ ...a, proxy: file })) fs.rmSync(file, { force: true });
       if (!fs.existsSync(file)) {
-        const k = 540 / Math.max(1, Math.min(a.width || 1080, a.height || 1920));
+        // 540p at 25 fps: cheap to make and to play even on a 2-core laptop, sharp enough to edit by.
+        // A strong PC gets a sharper copy; a lighter one a copy it can make and play quickly.
+        const short = this.strongPc() ? 720 : 540;
+        const k = short / Math.max(1, Math.min(a.width || 1080, a.height || 1920));
         const width = Math.max(16, Math.round(((a.width || 1080) * Math.min(1, k)) / 2) * 2);
         const height = Math.max(16, Math.round(((a.height || 1920) * Math.min(1, k)) / 2) * 2);
-        const fps = Math.min(30, p.fps);
+        const fps = Math.min(this.strongPc() ? 30 : 25, p.fps);
         const tmp = Project.parse({ ...newProject({ name: `${a.name} preview`, rand: () => crypto.randomBytes(6).toString('hex').slice(0, 10) }), width, height, fps, background: '#000000', assets: [a] });
         const one = applyEdits(tmp, [{ op: 'add_media', assetId: a.id, start: 0, duration: Math.max(0.04, a.duration), fit: 'contain' }]).project;
         fs.writeFileSync(this.file(one.id), JSON.stringify(one));
         const exportId = `ex_${crypto.randomBytes(6).toString('hex')}`;
-        this.exportTargets.set(exportId, file);
+        // Written under another name and renamed only when complete: a half-made copy is never used.
+        const part = `${file}.part.mp4`;
+        fs.mkdirSync(path.dirname(part), { recursive: true });
+        fs.rmSync(part, { force: true });
+        this.exportTargets.set(exportId, part);
         try {
-          await this.runJob({ kind: 'export', projectId: one.id, exportId, size: { width, height, fps, quality: 'standard' } }, 2 * 60 * 60 * 1000);
+          await this.runJob({ kind: 'export', projectId: one.id, exportId, size: { width, height, fps, quality: 'standard', patient: true } }, 2 * 60 * 60 * 1000);
+          if (fs.existsSync(part)) fs.renameSync(part, file);
+          if (!this.goodCopy({ ...a, proxy: file })) {
+            fs.rmSync(file, { force: true });
+            throw new StudioError('The preview copy came out unreadable.');
+          }
         } catch (e) {
-          fs.rmSync(file, { force: true });
+          fs.rmSync(part, { force: true });
           throw e;
         } finally {
           this.exportTargets.delete(exportId);

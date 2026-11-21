@@ -822,6 +822,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.studio.skipShow(id);
       return { ok: true as const };
     },
+    'studio:previewCopying': ({ id }) => s.studio.previewCopying(id),
     'studio:previewCopies': async ({ id, assets }) => ({ made: (await s.studio.makePreviewCopies(id, assets).catch(studioErr)).made }),
     'studio:cleanSound': async ({ id, clip, strength }) => ({ seconds: (await s.studio.cleanSound(id, clip, strength).catch(studioErr)).seconds }),
     'studio:reverse': async ({ id, clip }) => ({ seconds: (await s.studio.reverseClip(id, clip).catch(studioErr)).seconds }),

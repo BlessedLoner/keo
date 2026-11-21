@@ -222,6 +222,21 @@ export class BuildProjects {
     return full;
   }
 
+  /**
+   * Brings the project's copies of Keo's libraries up to date (only files Keo has a newer copy of;
+   * the project's own files are never touched), so a fix in a kit reaches games made before it.
+   */
+  refreshLibraries(id: string): void {
+    const m = this.manifest(id);
+    for (const lib of m.libraries) {
+      try {
+        copyLibrary(lib, this.d.modules(), this.dir(id));
+      } catch (e) {
+        this.d.log.info('build.library_refresh_failed', { lib, error: e instanceof Error ? e.message.slice(0, 120) : String(e) });
+      }
+    }
+  }
+
   /** Writes (creates or replaces) files; pages get the import map their libraries need. */
   write(id: string, files: Array<{ path: string; content: string }>): { written: string[]; bytes: number } {
     const m = this.manifest(id);

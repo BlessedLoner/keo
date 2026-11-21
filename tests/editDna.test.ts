@@ -6,7 +6,7 @@ import { Blueprint, blueprintFollowUps, blueprintOps, findMatches, fingerprintOf
 import { classifyTransition, estimateMotion } from '../src/shared/editDnaMotion';
 import { Mp4Writer } from '../src/main/studio/mp4';
 import { StudioService } from '../src/main/studio/studioService';
-import { EditDnaService, parseVision } from '../src/main/studio/editDna';
+import { EditDnaService, parseVision, sameSource } from '../src/main/studio/editDna';
 import { tempDir } from './helpers';
 
 const log = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
@@ -472,5 +472,15 @@ describe('Edit DNA — a reference from a link, and the shared library', () => {
     // Without a Keo account there is no shared library.
     await expect(setup().dna.sharedList({}, signal)).rejects.toThrow(/Keo account/);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('a new reference video is its own blueprint', () => {
+  it('only another reading of the same video file updates a blueprint; a lookalike video does not', () => {
+    const old = { fileName: 'IMG_4813.MP4', seconds: 38.2 };
+    expect(sameSource(old, { fileName: 'img_4813.mp4', seconds: 38.4 })).toBe(true); // the same video read again
+    expect(sameSource(old, { fileName: 'IMG_4817.MP4', seconds: 38.2 })).toBe(false); // another reel, same length
+    expect(sameSource(old, { fileName: 'IMG_4813.MP4', seconds: 52 })).toBe(false); // same name, different video
+    expect(sameSource(undefined, { fileName: 'a.mp4', seconds: 1 })).toBe(false);
   });
 });

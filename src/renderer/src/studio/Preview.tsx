@@ -5,6 +5,7 @@ import { dragCrop, featherCut, moveCut, newCut, sizeCut, toLayer, turnCut } from
 import { baseOf, placeOps, type Base } from '@shared/studioPlacing';
 import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
+import { useInvoke } from '../lib/hooks';
 
 /**
  * The Studio's live preview: the project drawn by Keo's picture engine at the playhead, with the
@@ -489,11 +490,18 @@ export function Preview({
   const selClip = sel ? findClip(shown, sel.id)?.clip : undefined;
   const selMedia = selClip?.type === 'media' ? selClip : null;
   const setCut = (cut: Cut | null) => selMedia && onEdit?.([{ op: 'set', clip: selMedia.id, cut }]);
+  // Heavy phone videos get a light copy for smooth playback (made in the background).
+  const copying = useInvoke('studio:previewCopying', { id: project.id }, { refreshOn: ['studio:changed'], pollMs: 5000 }).data ?? [];
 
   return (
     <div className="studio-preview" ref={box}>
       <div className="preview-frame" style={{ width: size.w || undefined, height: size.h || undefined }}>
         <canvas ref={canvas} aria-label="Video preview" />
+        {copying.length > 0 && (
+          <div className="preview-copying" role="status">
+            <span className="spinner tiny" /> Making a smooth preview copy of {copying.length === 1 ? 'a big video' : `${copying.length} big videos`}… playback may stutter until it is ready.
+          </div>
+        )}
         {guideMode !== 'none' && <SafeZones kind={guideMode} vertical={project.height > project.width} />}
         {pickBox && <BoxPicker onDone={pickBox} />}
         {!playing &&

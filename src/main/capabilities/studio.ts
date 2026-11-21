@@ -1872,7 +1872,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       id: 'studio.dna_find',
       title: 'Find an Edit DNA for what the user wants',
       description:
-        'Search the user’s Edit DNA library with the user’s own description of the video ("a luxury cinematic promo with fast transitions and elegant typography"): blueprints ranked by how well they fit, with why, considering the project’s shape and how many clips there are. No query: the whole library (name, category, shots, length). Pick the best, say why in one sentence, and apply it with studio__dna_apply.',
+        'Search the user’s Edit DNA library with the user’s own description of the video ("a luxury cinematic promo with fast transitions and elegant typography"): blueprints ranked by how well they fit, with why, considering the project’s shape and how many clips there are. No query: the whole library, newest first, each with the video it was made from, when, and its style. When the user names a blueprint or the video it came from, use exactly that one. When they say "my template", "the new one", "the one I just made", use the newest. When several fit and they did not say which, ask by name (one short question). Then apply it with studio__dna_apply and say which blueprint you used.',
       summary: 'Search Edit DNA',
     }),
     input: z.object({ projectId: ProjectId.optional(), query: z.string().trim().max(400).optional() }).strict(),
@@ -1883,7 +1883,14 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const p = run(() => s.resolve(i.projectId));
       const aspect = p.width > p.height * 1.15 ? 'landscape' : p.height > p.width * 1.15 ? 'vertical' : 'square';
       const clips = p.assets.filter((a) => a.kind !== 'audio').length;
-      if (!i.query) return { results: dna().list().slice(0, 40).map((b) => ({ id: b.id, name: b.name, category: b.category, tags: b.tags, shots: b.shots.length, seconds: b.seconds, aspect: b.aspect, status: b.status, favorite: b.favorite })) };
+      // Newest first, each with its date, source video and style, so the right one can be told apart.
+      if (!i.query)
+        return {
+          results: [...dna().list()]
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .slice(0, 40)
+            .map((b, k) => ({ id: b.id, name: b.name, ...(k === 0 ? { newest: true } : {}), madeFrom: b.source.fileName, created: b.createdAt.slice(0, 16), style: dna().describe(b), category: b.category, tags: b.tags, status: b.status, favorite: b.favorite })),
+        };
       return { results: dna().find(i.query, { aspect, clips }) };
     },
   });
@@ -1906,7 +1913,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         length: z.enum(['reference', 'footage']).optional(),
       })
       .strict(),
-    output: z.object({ changes: z.array(z.string()), notes: z.array(z.string()), seconds: z.number(), clips: z.number(), mode: z.enum(['talk', 'montage']), captions: z.number() }),
+    output: z.object({ blueprint: z.string(), changes: z.array(z.string()), notes: z.array(z.string()), seconds: z.number(), clips: z.number(), mode: z.enum(['talk', 'montage']), captions: z.number() }),
     timeoutMs: 10 * 60_000,
     auditView: (i) => ({ dna: i.dnaId }),
     async execute(i) {
@@ -1914,7 +1921,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const assets = i.assets ?? p.assets.filter((a) => a.kind !== 'audio').map((a) => a.id);
       try {
         const r = await dna().apply(p.id, i.dnaId, { assets, ...(i.roles ? { roles: i.roles } : {}), ...(i.at !== undefined ? { at: i.at } : {}), ...(i.only ? { only: i.only } : {}), ...(i.length ? { length: i.length } : {}) });
-        return { changes: r.changes, notes: r.notes, seconds: r.seconds, clips: r.clips, mode: r.mode, captions: r.captions };
+        return { blueprint: dna().get(i.dnaId).name, changes: r.changes, notes: r.notes, seconds: r.seconds, clips: r.clips, mode: r.mode, captions: r.captions };
       } catch (e) {
         if (e instanceof StudioError) throw fail('studio', e.message);
         throw e;
