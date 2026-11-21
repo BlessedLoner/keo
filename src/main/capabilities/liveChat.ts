@@ -3,6 +3,7 @@ import { resolveWhatsApp, waOpenChat, waTargetLabel } from './advanced';
 import { allowCheck, bringToFront, Target, type CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 import type { LiveChatService } from '../livechat/liveChatService';
+import type { ChatBackground } from '../livechat/webChat';
 
 const Session = z.object({
   id: z.string(),
@@ -29,7 +30,7 @@ const view = (s: { id: string; contact: string; status: string; question: string
  * relayed by the agent (an answer must be traceable to a message the user
  * actually wrote, so text from the contact can never steer a session).
  */
-export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService; userMessage: (id: string | null) => string | null; telegramUnavailable?: () => string | null }): AnyCapability[] {
+export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService; userMessage: (id: string | null) => string | null; telegramUnavailable?: () => string | null; backgrounds?: { whatsapp_bg?: ChatBackground; telegram_bg?: ChatBackground } }): AnyCapability[] {
   const start = defineCapability({
     id: 'whatsapp.live_chat_start',
     version: '1.0.0',
@@ -187,6 +188,204 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
   });
 
+  const App = z.enum(['whatsapp', 'telegram']).describe('"whatsapp" or "telegram": the user’s own account, in the background');
+  const bgOf = (app: 'whatsapp' | 'telegram') => d.backgrounds?.[app === 'telegram' ? 'telegram_bg' : 'whatsapp_bg'];
+  const appLabel = (app: 'whatsapp' | 'telegram') => (app === 'telegram' ? 'Telegram' : 'WhatsApp');
+  const linkSteps = (app: 'whatsapp' | 'telegram') =>
+    app === 'telegram' ? 'Telegram → Settings → Devices → Link Desktop Device' : 'WhatsApp → Settings → Linked devices → Link a device';
+
+  const link = defineCapability({
+    id: 'chat.link_background',
+    version: '1.0.0',
+    title: 'Set up WhatsApp or Telegram in the background',
+    description:
+      'WhatsApp or Telegram in the background lets live chats and "answer everyone" run on the user\'s OWN account without the screen (the user keeps using the computer): Keo uses its own web version of the app, linked once to the user\'s phone. action "status" says whether it is linked; action "link" opens a window with the app\'s QR code — tell the user to scan it with their phone (WhatsApp: Settings → Linked devices → Link a device; Telegram: Settings → Devices → Link Desktop Device). After that it runs without a window.',
+    input: z.object({ app: App, action: z.enum(['status', 'link']).default('status') }).strict(),
+    output: z.object({ app: z.string(), status: z.enum(['not_linked', 'linking', 'loading', 'ready']), note: z.string() }),
+    risk: 'medium',
+    approval: 'always',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 60000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Linked when the app shows the chats.',
+    unavailableReason: () => (d.backgrounds ? null : 'Chats in the background are not available.'),
+    autonomy: (i) => ({ tier: i.action === 'status' ? ('routine' as const) : ('important' as const) }),
+    preview: (i) => ({
+      summary: i.action === 'link' ? `Link ${appLabel(i.app)} in the background (scan a QR code with your phone)` : `Check ${appLabel(i.app)} in the background`,
+      target: `Keo’s own ${appLabel(i.app)} Web`,
+      consequences:
+        i.action === 'link'
+          ? [
+              `A window opens with ${appLabel(i.app)}’s QR code: scan it with your phone (${linkSteps(i.app)}).`,
+              'It becomes one of your linked devices (you can remove it from your phone any time) and then runs without a window.',
+              ...(i.app === 'whatsapp' ? ['WhatsApp does not officially support automatic replies from personal accounts; very heavy automated messaging can get a number restricted.'] : []),
+            ]
+          : [],
+      dataExport: null,
+    }),
+    auditView: (i) => ({ app: i.app, action: i.action }),
+    async execute(i) {
+      const bg = bgOf(i.app);
+      if (!bg) throw new CapabilityError('unavailable', `${appLabel(i.app)} in the background is not available.`, { dispatched: 'no' });
+      const status = i.action === 'link' ? await bg.link() : await bg.status();
+      const note =
+        status === 'linking'
+          ? `A window with ${appLabel(i.app)}’s QR code is open: the user scans it with their phone (${linkSteps(i.app)}). Keo carries on without a window once the chats show.`
+          : status === 'not_linked'
+            ? 'Not linked yet: call again with action "link" when the user wants it.'
+            : status === 'loading'
+              ? 'Linked; it is still loading.'
+              : 'Linked and ready: live chats can run in the background (chat__background_start) and chat__answer_everyone can answer everyone.';
+      return { app: i.app, status, note };
+    },
+  });
+
+  const startBackground = defineCapability({
+    id: 'chat.background_start',
+    version: '1.0.0',
+    title: 'Chat live in the background',
+    description:
+      'Start a LIVE chat with one contact on the user\'s OWN WhatsApp or Telegram account IN THE BACKGROUND (Keo\'s own web version of the app): no screen, mouse or keyboard, so the user keeps using the computer. Same rules as whatsapp__live_chat_start (pauses and asks about money, meetings, personal matters, "are you a bot?"). Needs the app linked once (chat__link_background). For WhatsApp, prefer this over whatsapp__live_chat_start when it is linked or when the user wants to keep using the computer; for the user\'s own Telegram this is the way (telegram__live_chat_start is only for the user\'s bot). Answer, stop and list it with the whatsapp__live_chat_* tools (they cover every live chat).',
+    input: z
+      .object({
+        app: App,
+        contact: z.string().trim().min(1).max(120),
+        goal: z.string().trim().min(1).max(600),
+        instructions: z.array(z.string().trim().min(1).max(400)).max(10).default([]),
+        opening: z.string().trim().min(1).max(1500).optional(),
+        replyToLatest: z.boolean().default(false),
+        maxMinutes: z.number().int().min(5).max(720).optional(),
+        maxReplies: z.number().int().min(1).max(300).optional(),
+      })
+      .strict(),
+    output: Session,
+    risk: 'high',
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 120000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The chat is opened and its name checked before the session starts; every reply is checked in the chat.',
+    unavailableReason: () => (d.backgrounds ? null : 'Chats in the background are not available.'),
+    autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
+    preview: (i, s) => {
+      const minutes = i.maxMinutes ?? s.liveChat.maxMinutes;
+      const replies = i.maxReplies ?? s.liveChat.maxReplies;
+      return {
+        summary: `Chat live with “${i.contact}” on ${appLabel(i.app)} in the background until you say stop`,
+        target: `Your ${appLabel(i.app)} (Keo’s own ${appLabel(i.app)} Web, no screen)`,
+        consequences: [
+          `Goal: ${i.goal}`,
+          ...(i.instructions.length ? [`Your instructions: ${i.instructions.join(' · ')}`] : []),
+          ...(i.opening ? [`First message: “${i.opening}”`] : []),
+          ...(i.replyToLatest ? ['Replies to their latest message right away.'] : []),
+          `Keo reads new messages and replies for you — up to ${replies} replies over ${minutes} minutes, ending earlier after ${s.liveChat.quietMinutes} quiet minutes or when you say stop.`,
+          'It pauses and asks you about money, prices, payments, meetings, personal or urgent matters, “are you a bot?”, and anything it is unsure about.',
+          'It needs no screen: your mouse and keyboard stay yours.',
+        ],
+        dataExport: `Their messages are sent to ${d.activeProviderDestination()} to write replies.`,
+      };
+    },
+    auditView: (i) => ({ app: i.app, contactLength: i.contact.length, instructions: i.instructions.length, opening: !!i.opening, replyToLatest: i.replyToLatest }),
+    async execute(i, ctx) {
+      const s = await d.live.startBackground({
+        channel: i.app === 'telegram' ? 'telegram_bg' : 'whatsapp_bg',
+        contact: i.contact,
+        goal: i.goal,
+        instructions: i.instructions,
+        opening: i.opening ?? null,
+        maxMinutes: i.maxMinutes ?? ctx.settings.liveChat.maxMinutes,
+        maxReplies: i.maxReplies ?? ctx.settings.liveChat.maxReplies,
+        conversationId: ctx.conversationId,
+      });
+      if (i.replyToLatest) d.live.replyToLatest(s.id);
+      return view(s);
+    },
+    async verify(_i, o) {
+      return o.status === 'ended' ? { verified: false, detail: 'The live chat ended immediately.' } : { verified: true, detail: `Live chat with ${o.contact} is running in the background (${o.id}).` };
+    },
+  });
+
+  const WHERE_LABEL = { telegram_bot: 'your Telegram bot', telegram: 'your Telegram', whatsapp: 'your WhatsApp' } as const;
+  const everyone = defineCapability({
+    id: 'chat.answer_everyone',
+    version: '1.0.0',
+    title: 'Answer everyone who messages',
+    description:
+      'Turn on (on: true) or off (on: false) "answer everyone": Keo starts a live chat for each person who messages from now on (private chats only), with the same rules as any live chat — it asks the user about money, meetings, personal matters and "are you a bot?". where: "whatsapp" = the user\'s own WhatsApp, "telegram" = the user\'s own Telegram (both in the background, linked once with chat__link_background), "telegram_bot" = people who message the user\'s Telegram bot. Use for "answer anyone who messages me on Telegram", "reply to everyone on WhatsApp while I work". Put the user\'s purpose in goal and their facts/rules in instructions, in their own words. Each chat shows with its own Stop; turning it off keeps running chats going.',
+    input: z
+      .object({
+        where: z.enum(['whatsapp', 'telegram', 'telegram_bot']),
+        on: z.boolean().default(true),
+        goal: z.string().trim().max(600).default(''),
+        instructions: z.array(z.string().trim().min(1).max(400)).max(10).default([]),
+        maxMinutes: z.number().int().min(5).max(1440).optional(),
+        maxRepliesPerChat: z.number().int().min(1).max(300).optional(),
+      })
+      .strict()
+      .refine((i) => !i.on || i.goal.length > 0, 'Say what Keo should do in these chats (goal).'),
+    output: z.object({ on: z.boolean(), where: z.string(), endsAt: z.string().nullable(), started: z.number() }),
+    risk: 'high',
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Every reply is checked in the chat.',
+    unavailableReason: () => null,
+    // Turning it off is always fine; turning it on answers people for the user.
+    autonomy: (i) => (i.on ? { tier: 'important' as const, reason: `Keo will answer anyone who messages ${WHERE_LABEL[i.where]}.` } : { tier: 'routine' as const }),
+    preview: (i, s) => {
+      if (!i.on) return { summary: 'Stop answering everyone', target: WHERE_LABEL[i.where], consequences: ['Chats already running keep going (each has its own Stop).'], dataExport: null };
+      const minutes = i.maxMinutes ?? s.liveChat.maxMinutes;
+      return {
+        summary: `Answer everyone who messages ${WHERE_LABEL[i.where]}`,
+        target: `${WHERE_LABEL[i.where]} (private chats)`,
+        consequences: [
+          `Goal: ${i.goal}`,
+          ...(i.instructions.length ? [`Your instructions: ${i.instructions.join(' · ')}`] : []),
+          `For ${minutes} minutes, each person who writes gets their own live chat (up to ${i.where === 'telegram_bot' ? 10 : 5} at once), answering their latest message. Messages that were already waiting are left for you.`,
+          'It pauses and asks you about money, prices, payments, meetings, personal or urgent matters, “are you a bot?”, and anything it is unsure about.',
+          'It needs no screen: your mouse and keyboard stay yours.',
+        ],
+        dataExport: `Their messages are sent to ${d.activeProviderDestination()} to write replies.`,
+      };
+    },
+    auditView: (i) => ({ where: i.where, on: i.on, instructions: i.instructions.length }),
+    async execute(i, ctx) {
+      if (!i.on) {
+        const was = d.live.autoStatus();
+        d.live.stopAuto();
+        return { on: false, where: i.where, endsAt: null, started: was?.started ?? 0 };
+      }
+      if (i.where === 'telegram_bot') {
+        const why = d.telegramUnavailable?.();
+        if (why) throw new CapabilityError('unavailable', why, { dispatched: 'no' });
+      } else if ((await bgOf(i.where)?.status()) === 'not_linked') {
+        throw new CapabilityError('not_linked', `${appLabel(i.where)} in the background is not linked yet. Offer to link it (chat__link_background, action "link"): the user scans a QR code with their phone.`, { dispatched: 'no' });
+      }
+      const a = await d.live.startAuto({
+        channel: i.where === 'telegram_bot' ? 'telegram' : i.where === 'telegram' ? 'telegram_bg' : 'whatsapp_bg',
+        goal: i.goal,
+        instructions: i.instructions,
+        maxMinutes: i.maxMinutes ?? ctx.settings.liveChat.maxMinutes,
+        maxReplies: i.maxRepliesPerChat ?? ctx.settings.liveChat.maxReplies,
+        conversationId: ctx.conversationId,
+      });
+      return { on: true, where: i.where, endsAt: a.endsAt, started: a.started };
+    },
+    async verify(i, o) {
+      return { verified: o.on === i.on, detail: o.on ? `Answering everyone on ${WHERE_LABEL[i.where]} until ${new Date(o.endsAt!).toLocaleTimeString()}.` : 'Stopped answering everyone.' };
+    },
+  });
+
   const answer = defineCapability({
     id: 'whatsapp.live_chat_answer',
     version: '1.0.0',
@@ -297,5 +496,5 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
   });
 
-  return [start, startTelegram, answer, stop, sendNow, status] as AnyCapability[];
+  return [start, startTelegram, everyone, link, startBackground, answer, stop, sendNow, status] as AnyCapability[];
 }

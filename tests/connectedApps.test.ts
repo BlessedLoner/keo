@@ -17,6 +17,30 @@ function fake(answer: (c: Call) => { status?: number; json: unknown }) {
   return { calls, f };
 }
 
+describe('Telegram bot reading', () => {
+  it('asks only for new messages each time (offset), keeps what it read, and still sees messages after many', async () => {
+    const offsets: Array<number | undefined> = [];
+    let batch = 0;
+    const msg = (u: number, chat: number, first: string, text: string) => ({ update_id: u, message: { message_id: u, chat: { id: chat, first_name: first }, from: { first_name: first }, text, date: 1_700_000_000 + u } });
+    const f = (async (url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { offset?: number };
+      offsets.push(body.offset);
+      // First read: 100 old messages (Telegram's page size) then 3 more; later: one new one.
+      const result = batch === 0 ? Array.from({ length: 100 }, (_, k) => msg(k + 1, 1, 'Old', `old ${k}`)) : batch === 1 ? [msg(101, 1, 'Old', 'old 100'), msg(102, 1, 'Old', 'old 101'), msg(103, 2, 'Kid', 'hi')] : batch === 2 ? [] : [msg(104, 3, 'New', 'hello')];
+      batch++;
+      return { ok: true, status: 200, json: async () => ({ ok: true, result }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const bot = new TelegramBot(() => '123:abc', f);
+    const first = await bot.recent();
+    expect(first[0]).toMatchObject({ chat: 'Kid', text: 'hi' });
+    expect(offsets).toEqual([undefined, 101]);
+    await bot.recent(); // nothing new
+    const third = await bot.recent();
+    expect(third[0]).toMatchObject({ chat: 'New', text: 'hello' });
+    expect(offsets.slice(2)).toEqual([104, 104]);
+  });
+});
+
 describe('Connected apps (fake services: nothing is sent)', () => {
   it('Telegram: checks the bot, lists chats that wrote to it, sends a message; a bad token is said plainly', async () => {
     const { calls, f } = fake((c) => (c.url.endsWith('/getMe') ? { json: { ok: true, result: { username: 'keo_bot', first_name: 'Keo' } } } : c.url.endsWith('/getUpdates') ? { json: { ok: true, result: [{ message: { chat: { id: 42, first_name: 'Ana' }, from: { first_name: 'Ana' }, text: 'hi', date: 1_700_000_000 } }] } } : { json: { ok: true, result: { message_id: 7 } } }));

@@ -602,6 +602,10 @@ html.marks-root, html.marks-root body { background: transparent !important; over
 /* Connected apps */
 .connected-row { padding: 10px 0; border-top: 1px solid var(--line); }
 .connected-row p { margin: 4px 0 0; }
+.auto-answer { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2, rgba(255, 255, 255, 0.03)); }
+.auto-answer p { margin: 6px 0 0; }
+.auto-setup { display: grid; gap: 6px; margin-top: 8px; }
+.auto-setup textarea { width: 100%; resize: vertical; }
 .connected-setup { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 .connected-setup ol { margin: 0 0 8px; padding-left: 18px; }
 

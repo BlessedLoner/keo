@@ -511,9 +511,27 @@ export interface LiveChatSession {
   /** A reply Keo is ready to send (waiting for the user to pause, or for "Send now"). */
   draft: string | null;
   /** Where the chat happens: WhatsApp on the screen (default), or Telegram through the user's bot (no screen needed). */
-  channel?: 'whatsapp' | 'telegram';
+  channel?: LiveChannel;
   /** The Telegram chat (channel "telegram"). */
   telegramChatId?: string;
+}
+
+/** "Answer everyone who messages my bot": Keo starts a live chat for each new person who writes. */
+/** Where a live chat happens: WhatsApp on the screen, the user's Telegram bot, or WhatsApp / Telegram in the background (Keo's own web app, no screen). */
+export type LiveChannel = 'whatsapp' | 'telegram' | 'whatsapp_bg' | 'telegram_bg';
+
+export interface AutoAnswer {
+  /** "telegram" = the user's bot; "whatsapp_bg" / "telegram_bg" = the user's own account in the background. */
+  channel: 'telegram' | 'whatsapp_bg' | 'telegram_bg';
+  goal: string;
+  instructions: string[];
+  /** Only messages after this count (older ones are not answered). */
+  since: ISODate;
+  endsAt: ISODate;
+  maxReplies: number;
+  conversationId: string | null;
+  /** How many chats it started so far. */
+  started: number;
 }
 
 export interface NavigationGrant {

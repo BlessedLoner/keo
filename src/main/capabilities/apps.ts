@@ -4,6 +4,8 @@ import { normApp } from '../desktop/appDiscovery';
 import { matchProfiles, profileLabel, safeWebUrl, searchUrl, type InstalledBrowser } from '../desktop/browserProfiles';
 import type { CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
+import { elementLines } from './computer';
+import type { Settings } from '../../shared/settings';
 
 const AppOut = z.object({ name: z.string(), appId: z.string(), kind: z.enum(['store', 'desktop']), publisher: z.string().nullable(), openWindow: z.boolean() });
 
@@ -64,6 +66,23 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
     },
   });
 
+  /**
+   * Full control: what is on the opened window, as a person would see it at a glance, so the next
+   * step can be a computer__do run straight away (no separate look). A few seconds at most; skipped
+   * when it cannot be read.
+   */
+  const seen = async (hwnd: string, settings: Settings): Promise<{ elements?: string[] }> => {
+    if (!settings.permissions.fullControl) return {};
+    try {
+      if (d.launchWaitMs !== 0) await new Promise((r) => setTimeout(r, 600)); // the window draws its controls
+      const raw = await d.desktop.backend.uiaSnapshot(hwnd, { maxNodes: 900, maxDepth: 50, budgetMs: 3500 });
+      const { lines } = elementLines(raw.nodes, 70);
+      return lines.length ? { elements: lines } : {};
+    } catch {
+      return {};
+    }
+  };
+
   const open = defineCapability({
     id: 'apps.open',
     version: '1.0.0',
@@ -77,7 +96,15 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       })
       .strict()
       .refine((x) => !!x.query || !!x.appId, 'Give query or appId.'),
-    output: z.object({ name: z.string(), appId: z.string(), kind: z.enum(['store', 'desktop']), action: z.enum(['launched', 'switched']), window: z.object({ hwnd: z.string(), pid: z.number(), processName: z.string(), allowed: z.boolean() }).nullable() }),
+    output: z.object({
+      name: z.string(),
+      appId: z.string(),
+      kind: z.enum(['store', 'desktop']),
+      action: z.enum(['launched', 'switched']),
+      window: z.object({ hwnd: z.string(), pid: z.number(), processName: z.string(), allowed: z.boolean() }).nullable(),
+      /** Full control: what a person can see on the app's window now (plan a computer__do run from it). */
+      elements: z.array(z.string()).optional(),
+    }),
     risk: 'medium',
     approval: 'always',
     permissions: ['desktop.launch'],
@@ -117,7 +144,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       if (before.length) {
         const w = before[0]!;
         const r = await d.desktop.backend.focus(w.hwnd).catch(() => ({ foreground: false }));
-        if (r.foreground) return { name: app.name, appId: app.appId, kind: app.kind, action: 'switched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed } };
+        if (r.foreground) return { name: app.name, appId: app.appId, kind: app.kind, action: 'switched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings)) };
       }
       try {
         await d.launchApp(app.appId);
@@ -129,7 +156,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       while (Date.now() < until) {
         if (ctx.signal.aborted) break;
         const w = (await openWindows(app, ctx.settings)).find((x) => !known.has(x.hwnd));
-        if (w) return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed } };
+        if (w) return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings)) };
         await new Promise((r) => setTimeout(r, 500));
       }
       return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: null };

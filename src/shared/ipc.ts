@@ -46,6 +46,7 @@ import type {
   VideoToolsSetup,
   PhotoIndexState,
   LiveChatSession,
+  AutoAnswer,
   AppInfo,
   AuditRecord,
   CapabilityInfo,
@@ -523,6 +524,14 @@ export const invokeSchemas = {
   'grants:revoke': z.object({ id }).strict(),
   'grants:revokeAll': empty,
   'livechat:list': empty,
+  'livechat:auto': empty,
+  'livechat:autoStop': empty,
+  'livechat:autoStart': z
+    .object({ where: z.enum(['whatsapp', 'telegram', 'telegram_bot']), goal: z.string().trim().min(1).max(600), minutes: z.number().int().min(5).max(1440) })
+    .strict(),
+  'chats:accounts': empty,
+  'chats:link': z.object({ app: z.enum(['whatsapp', 'telegram']) }).strict(),
+  'chats:unlink': z.object({ app: z.enum(['whatsapp', 'telegram']) }).strict(),
   'livechat:answer': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/), text: z.string().trim().min(1).max(1500) }).strict(),
   'livechat:pause': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'livechat:resume': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
@@ -889,6 +898,12 @@ export interface InvokeOutputs {
   'grants:revokeAll': { revoked: number };
   'grants:approveAndGrant': Task;
   'livechat:list': LiveChatSession[];
+  'livechat:auto': AutoAnswer | null;
+  'livechat:autoStop': { stopped: boolean };
+  'livechat:autoStart': AutoAnswer;
+  'chats:accounts': Array<{ app: 'whatsapp' | 'telegram'; status: 'not_linked' | 'linking' | 'loading' | 'ready'; phone: string | null; name: string | null; linkedAt: string | null }>;
+  'chats:link': { status: 'not_linked' | 'linking' | 'loading' | 'ready' };
+  'chats:unlink': { unlinked: boolean };
   'livechat:answer': LiveChatSession;
   'livechat:pause': LiveChatSession;
   'livechat:resume': LiveChatSession;

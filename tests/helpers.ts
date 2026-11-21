@@ -5,6 +5,7 @@ import type { BrowserContextRaw, DesktopBackend, RawWindow, UiaAction, UiaNodeRa
 import type { SpeechEngine, SpeechEvent } from '../src/main/voice/wakeService';
 import type { FakeUiaApp } from './fakeApps';
 import { CapabilityError } from '../src/main/capabilities/types';
+import { KeoError } from '../src/main/util/errors';
 import { resolveProfile } from '../src/main/env/profile';
 import { Logger } from '../src/main/logging/logger';
 import { TestProvider, type Script } from '../src/main/providers/testProvider';
@@ -312,6 +313,22 @@ export interface Harness {
   close(): Promise<void>;
 }
 
+/** Background WhatsApp / Telegram in tests: never linked (tests that need it pass their own fake). */
+const notLinked = (appName: string) => ({
+  appName,
+  status: async () => 'not_linked' as const,
+  link: async () => 'linking' as const,
+  openChat: async () => {
+    throw new KeoError('not_linked', 'WhatsApp in the background is not linked (test).');
+  },
+  read: async () => ({ header: null, messages: [] }),
+  send: async () => ({ appears: false }),
+  unread: async () => [],
+  account: () => null,
+  unlink: async () => undefined,
+  close: async () => undefined,
+});
+
 export function makeHarness(
   opts: { dir?: string; script?: Script | null; delayMs?: number; web?: WebService; speech?: FakeSpeech; liveChatTiming?: ServiceDeps['liveChatTiming']; voiceIo?: ServiceDeps['voiceIo']; deps?: Partial<ServiceDeps> } = {},
 ): Harness {
@@ -344,6 +361,8 @@ export function makeHarness(
     launchApp: async () => undefined,
     browsers: () => [],
     openTab: async () => undefined,
+    // Never the real WhatsApp or Telegram Web: not linked unless a test gives a fake.
+    backgrounds: { whatsapp_bg: notLinked('WhatsApp'), telegram_bg: notLinked('Telegram') },
     // Never the real Windows Search index or the user's own folders.
     fileIndex: null,
     // A slow, busy test machine must not cut a folder scan short.

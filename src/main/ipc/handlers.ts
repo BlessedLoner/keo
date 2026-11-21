@@ -1349,6 +1349,16 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { ok: true as const };
     },
     'livechat:list': () => s.live.list(),
+    'livechat:auto': () => s.live.autoStatus(),
+    'livechat:autoStop': () => ({ stopped: s.live.stopAuto() }),
+    // Turned on by the user in Settings → Connected apps (their own click is the approval).
+    'livechat:autoStart': ({ where, goal, minutes }) => s.startAnswerEveryone(where, goal, minutes),
+    'chats:accounts': () => s.chatAccounts(),
+    'chats:link': async ({ app }) => ({ status: await s.backgrounds[app === 'telegram' ? 'telegram_bg' : 'whatsapp_bg'].link() }),
+    'chats:unlink': async ({ app }) => {
+      await s.backgrounds[app === 'telegram' ? 'telegram_bg' : 'whatsapp_bg'].unlink();
+      return { unlinked: true };
+    },
     // From Keo's own UI, so the text is the user's own answer.
     'livechat:answer': ({ id, text }) => s.live.answer(id, text, true),
     'livechat:pause': ({ id }) => s.live.pause(id),

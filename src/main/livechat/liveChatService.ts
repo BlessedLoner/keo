@@ -1,4 +1,4 @@
-import type { LiveChatLine, LiveChatSession } from '../../shared/domain';
+import type { AutoAnswer, LiveChannel, LiveChatLine, LiveChatSession } from '../../shared/domain';
 import { CapabilityError } from '../capabilities/types';
 import type { Settings } from '../../shared/settings';
 import { bringToFront, type CapabilityDeps, type TargetT } from '../capabilities/builtins';
@@ -8,6 +8,7 @@ import type { ProviderService } from '../providers/providerService';
 import type { AuditRepo } from '../repos/audit';
 import type { ConversationRepo } from '../repos/conversations';
 import { headerMatches, holdsText, lastOutgoing, normName, type WaMessage, type WaView } from '../desktop/whatsapp';
+import type { ChatBackground } from './webChat';
 import { errorMessage, KeoError, nowIso } from '../util/errors';
 import { newId } from '../util/ids';
 
@@ -96,6 +97,10 @@ export interface LiveChatDeps {
     recent(signal?: AbortSignal): Promise<Array<{ id: number; chatId: number; chat: string; from: string; text: string; at: string }>>;
     send(chatId: number | string, text: string, signal?: AbortSignal): Promise<{ messageId: number }>;
   };
+  /** WhatsApp and Telegram in the background (Keo's own web apps): live chats that need no screen. */
+  backgrounds?: { whatsapp_bg?: ChatBackground; telegram_bg?: ChatBackground };
+  /** Where answer-everyone mode is kept across restarts. */
+  autoStore?: { load(): AutoAnswer | null; save(a: AutoAnswer | null): void };
   /** Where running live chats are kept, so they carry on after Keo restarts (tests may omit it). */
   store?: { load(): LiveChatSession[] | null; save(sessions: LiveChatSession[]): void };
   /** Finds the WhatsApp window again after a restart (its handle may have changed). */
@@ -134,6 +139,10 @@ interface Runtime {
 
 const MAX_TRANSCRIPT = 60;
 const MAX_LIVE = 3;
+/** Telegram chats need no screen: more may run at once (answer-everyone mode). */
+const MAX_TELEGRAM = 10;
+/** WhatsApp in the background shares one page: a few at once. */
+const MAX_BACKGROUND = 5;
 
 /**
  * Live WhatsApp chats: after one approval, Keo keeps a conversation going for
@@ -168,11 +177,12 @@ export class LiveChatService {
     }
     let n = 0;
     for (const s of saved) {
-      if (this.live.has(s.id) || this.live.size >= MAX_LIVE) continue;
+      if (this.live.has(s.id) || this.count(s.channel ?? 'whatsapp') >= (s.channel === 'telegram' ? MAX_TELEGRAM : isBackground(s.channel) ? MAX_BACKGROUND : MAX_LIVE)) continue;
       if (Date.parse(s.endsAt) <= this.now()) continue;
       const telegram = s.channel === 'telegram';
       if (telegram && !this.d.telegram) continue;
-      if (!telegram) {
+      if (isBackground(s.channel) && !this.d.backgrounds?.[s.channel]) continue;
+      if (!telegram && !isBackground(s.channel)) {
         const found = await this.d.findWhatsApp?.().catch(() => null);
         if (!found) continue;
         s.target = { hwnd: found.hwnd, pid: found.pid, processName: found.processName };
@@ -200,7 +210,169 @@ export class LiveChatService {
       n++;
     }
     if (n) this.changed();
+    // Answer-everyone mode carries on too (within its time).
+    try {
+      const a = this.d.autoStore?.load() ?? null;
+      if (a && Date.parse(a.endsAt) > this.now() && (a.channel === 'telegram' ? !!this.d.telegram : !!this.d.backgrounds?.[a.channel])) {
+        this.auto = a;
+        this.scheduleAuto(1000);
+        this.d.log.info('livechat.auto_restored', {});
+      }
+    } catch {
+      /* not restored */
+    }
     return n;
+  }
+
+  private count(channel: LiveChannel): number {
+    return [...this.live.values()].filter((r) => (r.s.channel ?? 'whatsapp') === channel).length;
+  }
+
+  // -- answer everyone -------------------------------------------------------
+
+  private auto: AutoAnswer | null = null;
+  private autoTimer: NodeJS.Timeout | null = null;
+  private autoBusy = false;
+  /** Background accounts: unread counts when answer-everyone was turned on (those messages are old). */
+  private autoBaseline = new Map<string, number>();
+
+  /** Answer-everyone on the user's own WhatsApp or Telegram (in the background): chats with new unread messages. */
+  private async autoTickBackground(a: AutoAnswer): Promise<void> {
+    const channel = a.channel as 'whatsapp_bg' | 'telegram_bg';
+    const bg = this.d.backgrounds?.[channel];
+    if (!bg) return;
+    for (const u of await bg.unread()) {
+      if (!this.auto) break;
+      const base = this.autoBaseline.get(u.title) ?? 0;
+      // Fewer than before: the user read them; from now on any unread message is new.
+      if (u.count <= base) {
+        if (u.count < base) this.autoBaseline.set(u.title, u.count);
+        continue;
+      }
+      if ([...this.live.values()].some((r) => r.s.channel === channel && normName(r.s.contact) === normName(u.title))) continue;
+      if (this.count(channel) >= MAX_BACKGROUND) break;
+      this.autoBaseline.delete(u.title);
+      try {
+        const minutes = Math.max(5, Math.round((Date.parse(a.endsAt) - this.now()) / 60_000));
+        const s = await this.startBackground({ channel, contact: u.title, goal: a.goal, instructions: a.instructions, opening: null, maxMinutes: minutes, maxReplies: a.maxReplies, conversationId: a.conversationId });
+        this.replyToLatest(s.id);
+        a.started++;
+        this.saveAuto();
+        this.d.log.info('livechat.auto_chat', { sessionId: s.id, channel });
+      } catch (e) {
+        this.d.log.warn('livechat.auto_chat_failed', { error: errorMessage(e).slice(0, 200) });
+      }
+    }
+  }
+
+  /** Per chat: the newest message already handled (a chat that ended starts again only for a newer one). */
+  private readonly autoSeen = new Map<string, number>();
+
+  autoStatus(): AutoAnswer | null {
+    return this.auto ? { ...this.auto, instructions: [...this.auto.instructions] } : null;
+  }
+
+  /**
+   * Answer everyone who messages the user's Telegram bot: each new private chat gets its own live
+   * chat (same rules: asks the user about money, meetings, personal matters…), answering from its
+   * latest message. Messages from before it was turned on are not answered.
+   */
+  async startAuto(p: { channel?: AutoAnswer['channel']; goal: string; instructions: string[]; maxMinutes: number; maxReplies: number; conversationId: string | null }): Promise<AutoAnswer> {
+    const channel = p.channel ?? 'telegram';
+    const t = this.now();
+    if (channel === 'telegram') {
+      if (!this.d.telegram) throw new KeoError('unavailable', 'Telegram is not connected: add your bot in Settings → Connected apps.');
+      // What is already there is old: remember it so only new messages start chats.
+      for (const m of await this.d.telegram.recent()) this.autoSeen.set(String(m.chatId), Math.max(this.autoSeen.get(String(m.chatId)) ?? 0, m.id));
+    } else {
+      const bg = this.d.backgrounds?.[channel];
+      if (!bg) throw new KeoError('unavailable', `${channelLabel(channel)} is not available.`);
+      // Chats unread right now are old news: only chats that get new messages from now on are answered.
+      this.autoBaseline = new Map((await bg.unread()).map((u) => [u.title, u.count]));
+    }
+    this.auto = { channel, goal: p.goal, instructions: [...p.instructions], since: new Date(t).toISOString(), endsAt: new Date(t + p.maxMinutes * 60_000).toISOString(), maxReplies: p.maxReplies, conversationId: p.conversationId, started: 0 };
+    this.d.audit.record({ kind: 'livechat', decision: 'auto_started', detail: { channel, maxMinutes: p.maxMinutes } });
+    this.saveAuto();
+    this.changed();
+    this.scheduleAuto(200);
+    return this.autoStatus()!;
+  }
+
+  /** Turns answer-everyone off (chats already running keep going, each with its own Stop). */
+  stopAuto(reason = 'Turned off by you'): boolean {
+    if (!this.auto) return false;
+    this.auto = null;
+    if (this.autoTimer) clearTimeout(this.autoTimer);
+    this.autoTimer = null;
+    this.d.audit.record({ kind: 'livechat', decision: 'auto_stopped', detail: { reason } });
+    this.saveAuto();
+    this.changed();
+    return true;
+  }
+
+  private saveAuto(): void {
+    try {
+      this.d.autoStore?.save(this.auto);
+    } catch {
+      /* kept in memory */
+    }
+  }
+
+  private scheduleAuto(ms?: number): void {
+    if (!this.auto) return;
+    if (this.autoTimer) clearTimeout(this.autoTimer);
+    this.autoTimer = setTimeout(() => void this.autoTick(), ms ?? Math.max(1000, (this.d.pollMs ?? 1500) * 2));
+    this.autoTimer.unref?.();
+  }
+
+  private async autoTick(): Promise<void> {
+    this.autoTimer = null;
+    const a = this.auto;
+    if (!a || this.autoBusy) return this.scheduleAuto();
+    if (Date.parse(a.endsAt) <= this.now()) {
+      this.stopAuto('Time limit reached');
+      return;
+    }
+    this.autoBusy = true;
+    if (a.channel !== 'telegram') {
+      try {
+        await this.autoTickBackground(a);
+      } catch (e) {
+        this.d.log.warn('livechat.auto_read_failed', { error: errorMessage(e).slice(0, 200) });
+      } finally {
+        this.autoBusy = false;
+        this.scheduleAuto();
+      }
+      return;
+    }
+    try {
+      const msgs = (await this.d.telegram!.recent()).filter((m) => m.chatId > 0 && Date.parse(m.at) >= Date.parse(a.since) - 1000 && m.text.trim());
+      // Newest message per private chat.
+      const latest = new Map<string, (typeof msgs)[number]>();
+      for (const m of msgs) if (!latest.has(String(m.chatId))) latest.set(String(m.chatId), m);
+      for (const [chatId, m] of latest) {
+        if (!this.auto) break;
+        if (m.id <= (this.autoSeen.get(chatId) ?? 0)) continue;
+        if ([...this.live.values()].some((r) => r.s.channel === 'telegram' && r.s.telegramChatId === chatId)) continue;
+        if (this.count('telegram') >= MAX_TELEGRAM) break;
+        this.autoSeen.set(chatId, m.id);
+        try {
+          const minutes = Math.max(5, Math.round((Date.parse(a.endsAt) - this.now()) / 60_000));
+          const s = await this.startTelegram({ chatId, contact: m.chat, goal: a.goal, instructions: a.instructions, opening: null, maxMinutes: minutes, maxReplies: a.maxReplies, conversationId: a.conversationId });
+          this.replyToLatest(s.id);
+          a.started++;
+          this.saveAuto();
+          this.d.log.info('livechat.auto_chat', { sessionId: s.id });
+        } catch (e) {
+          this.d.log.warn('livechat.auto_chat_failed', { error: errorMessage(e).slice(0, 200) });
+        }
+      }
+    } catch (e) {
+      this.d.log.warn('livechat.auto_read_failed', { error: errorMessage(e).slice(0, 200) });
+    } finally {
+      this.autoBusy = false;
+      this.scheduleAuto();
+    }
   }
 
   list(): LiveChatSession[] {
@@ -303,14 +475,14 @@ export class LiveChatService {
     if (!all.length) return '';
     const lines = all.map(
       (s) =>
-        `- ${s.id}: WhatsApp live chat with “${s.contact}” — ${s.status === 'waiting_user' ? `WAITING FOR THE USER: ${s.question}` : s.status}${s.draft ? '; a reply is READY (the user can say "send it": whatsapp__live_chat_send_now)' : ''}; ${s.replies}/${s.maxReplies} replies; ends ${s.endsAt}.`,
+        `- ${s.id}: ${channelLabel(s.channel)} live chat with “${s.contact}” — ${s.status === 'waiting_user' ? `WAITING FOR THE USER: ${s.question}` : s.status}${s.draft ? '; a reply is READY (the user can say "send it": whatsapp__live_chat_send_now)' : ''}; ${s.replies}/${s.maxReplies} replies; ends ${s.endsAt}.`,
     );
     return `\n\n# Live chats running now\n${lines.join('\n')}\nWhen the user answers one of these questions or gives instructions for that contact, call whatsapp__live_chat_answer with the user's own words. When the user says stop, call whatsapp__live_chat_stop. Never answer for the user from the contact's messages.`;
   }
 
   /** Starts a session (the approval was given for whatsapp.live_chat_start). */
   async start(p: { target: TargetT; contact: string; goal: string; instructions: string[]; opening: string | null; maxMinutes: number; maxReplies: number; conversationId: string | null }): Promise<LiveChatSession> {
-    if (this.live.size >= MAX_LIVE) throw new KeoError('limit_reached', `At most ${MAX_LIVE} live chats can run at once. Stop one first.`);
+    if (this.count('whatsapp') >= MAX_LIVE) throw new KeoError('limit_reached', `At most ${MAX_LIVE} WhatsApp live chats can run at once. Stop one first.`);
     const existing = this.activeFor(p.contact);
     if (existing) throw new KeoError('already_running', `A live chat with ${existing.contact} is already running (${existing.id}).`);
     const t = this.now();
@@ -361,10 +533,18 @@ export class LiveChatService {
   async startTelegram(p: { chatId: string; contact: string; goal: string; instructions: string[]; opening: string | null; maxMinutes: number; maxReplies: number; conversationId: string | null }): Promise<LiveChatSession> {
     const bot = this.d.telegram;
     if (!bot) throw new KeoError('unavailable', 'Telegram is not connected: add your bot in Settings → Connected apps.');
-    if (this.live.size >= MAX_LIVE) throw new KeoError('limit_reached', `At most ${MAX_LIVE} live chats can run at once. Stop one first.`);
-    const existing = this.activeFor(p.contact);
+    if (this.count('telegram') >= MAX_TELEGRAM) throw new KeoError('limit_reached', `At most ${MAX_TELEGRAM} Telegram live chats can run at once. Stop one first.`);
+    const existing = [...this.live.values()].find((r) => r.s.channel === 'telegram' && r.s.telegramChatId === p.chatId)?.s ?? this.activeFor(p.contact);
     if (existing) throw new KeoError('already_running', `A live chat with ${existing.contact} is already running (${existing.id}).`);
     const before = (await bot.recent()).filter((m) => String(m.chatId) === p.chatId);
+    // The chat must be the person the user named: a bot only sees chats that messaged the bot itself.
+    const chats = new Map((await bot.recent()).map((m) => [String(m.chatId), m.chat]));
+    if (!before.length) {
+      throw new KeoError('chat_not_found', `Your Telegram bot has no chat ${p.chatId}. ${p.contact} has to open your bot in Telegram, press Start and send it a message (messages sent to your own Telegram account never reach the bot).${chats.size ? ` Chats the bot has: ${[...chats.values()].join(', ')}.` : ''}`);
+    }
+    if (!sameTelegramName(before[0]!.chat, p.contact) && !before.some((m) => sameTelegramName(m.from, p.contact))) {
+      throw new KeoError('contact_mismatch', `That bot chat is “${before[0]!.chat}”, not “${p.contact}”, so nothing was started. ${p.contact} has not messaged your bot yet: ask them to open your bot in Telegram, press Start and send it a message (messages sent to your own Telegram account never reach the bot), then try again.`);
+    }
     const t = this.now();
     const s: LiveChatSession = {
       id: newId('lc_'),
@@ -411,6 +591,128 @@ export class LiveChatService {
     this.changed();
     this.schedule(r, 200);
     return this.copy(s);
+  }
+
+  /**
+   * A WhatsApp live chat in the background (Keo's own WhatsApp Web): the chat is opened and read
+   * through the page, so the user keeps their mouse, keyboard and screen.
+   */
+  async startBackground(p: { channel: 'whatsapp_bg' | 'telegram_bg'; contact: string; goal: string; instructions: string[]; opening: string | null; maxMinutes: number; maxReplies: number; conversationId: string | null }): Promise<LiveChatSession> {
+    const wa = this.d.backgrounds?.[p.channel];
+    if (!wa) throw new KeoError('unavailable', `${channelLabel(p.channel)} is not available.`);
+    if (this.count(p.channel) >= MAX_BACKGROUND) throw new KeoError('limit_reached', `At most ${MAX_BACKGROUND} ${channelLabel(p.channel)} chats can run at once. Stop one first.`);
+    const existing = this.activeFor(p.contact);
+    if (existing) throw new KeoError('already_running', `A live chat with ${existing.contact} is already running (${existing.id}).`);
+    const o = await wa.openChat(p.contact);
+    if (!o.opened) {
+      const several = o.candidates.length > 1;
+      throw new KeoError(several ? 'ambiguous_contact' : 'not_opened', `Could not open the chat with “${p.contact}” in ${wa.appName}.${o.candidates.length ? ` Chats found: ${o.candidates.join(', ')}.` : ''} ${several ? 'Ask the user which one they mean.' : `Use the name exactly as ${wa.appName} shows it.`}`);
+    }
+    const view = await wa.read();
+    const t = this.now();
+    const s: LiveChatSession = {
+      id: newId('lc_'),
+      contact: p.contact,
+      target: { hwnd: '', pid: 0, processName: p.channel === 'telegram_bg' ? 'telegram-web' : 'whatsapp-web' },
+      goal: p.goal,
+      guidance: [...p.instructions],
+      status: 'active',
+      question: null,
+      activity: 'Watching for new messages',
+      replies: 0,
+      maxReplies: p.maxReplies,
+      startedAt: new Date(t).toISOString(),
+      endsAt: new Date(t + p.maxMinutes * 60_000).toISOString(),
+      endedReason: null,
+      conversationId: p.conversationId,
+      transcript: [],
+      draft: null,
+      channel: p.channel,
+    };
+    const r: Runtime = { s, timer: null, busy: false, abort: new AbortController(), handled: this.contactCounts(view.messages, new Set()), pending: null, lastActivity: t, lastSend: 0, lastFocusRead: 0, ending: false, answered: false, sendNow: false, draftPrompted: false, reportSend: false };
+    for (const m of view.messages.slice(-8)) this.line(r, m.from === 'me' ? 'you' : 'them', m.text);
+    this.live.set(s.id, r);
+    this.d.audit.record({ kind: 'livechat', decision: 'started', detail: { sessionId: s.id, channel: p.channel, maxMinutes: p.maxMinutes, maxReplies: p.maxReplies } });
+    if (p.opening) await this.sendReply(r, p.opening);
+    this.changed();
+    this.schedule(r, 200);
+    return this.copy(s);
+  }
+
+  /** One look at a background WhatsApp chat (through the page), then the same reply rules. */
+  private async stepBackground(r: Runtime): Promise<void> {
+    const wa = this.d.backgrounds![r.s.channel as 'whatsapp_bg' | 'telegram_bg']!;
+    const t = this.now();
+    const o = await wa.openChat(r.s.contact, r.abort.signal);
+    if (!o.opened) return;
+    const page = await wa.read();
+    if (!headerMatches(page.header, r.s.contact) && !o.opened) return;
+    const view: WaView = { search: null, compose: null, send: null, header: page.header, chats: [], messages: page.messages };
+    const incoming = this.newIncoming(r, view.messages, sentByUsOf(r));
+    if (r.s.draft) {
+      if (incoming.length) r.s.draft = null;
+      else return this.sendReply(r, r.s.draft, true);
+    }
+    if (!incoming.length) {
+      r.pending = null;
+      if (r.answered && r.s.status === 'active') await this.respond(r, view, []);
+      return;
+    }
+    const sig = incoming.map((m) => normName(m)).join('');
+    if (!r.pending || r.pending.sig !== sig) {
+      r.pending = { sig, since: t, texts: incoming };
+      for (const m of incoming) this.line(r, 'them', m);
+      r.lastActivity = t;
+      r.s.activity = `${r.s.contact} wrote`;
+      this.changed();
+    }
+    if (r.s.status !== 'active') return;
+    if (!r.answered && t - r.pending.since < (this.d.debounceMs ?? 2500)) return;
+    await this.respond(r, view, incoming);
+  }
+
+  /** Sends a background WhatsApp reply through the page; an unconfirmed send pauses (never sent twice). */
+  private async sendBackground(r: Runtime, text: string): Promise<void> {
+    const wa = this.d.backgrounds![r.s.channel as 'whatsapp_bg' | 'telegram_bg']!;
+    let appears: boolean;
+    try {
+      const o = await wa.openChat(r.s.contact, r.abort.signal);
+      if (!o.opened) throw new KeoError('not_opened', `Could not open the chat with ${r.s.contact}.`);
+      appears = (await wa.send(r.s.contact, text, r.abort.signal)).appears;
+    } catch (e) {
+      if (r.abort.signal.aborted) return;
+      return this.pauseFor(r, `I could not send to ${r.s.contact} (${wa.appName} in the background): ${errorMessage(e).slice(0, 200)} Resume when it's fixed, or stop.`);
+    }
+    if (!appears) return this.pauseFor(r, `I pressed Send to ${r.s.contact} but could not confirm the message arrived. Please check ${wa.appName}, then resume or stop the live chat.`);
+    r.lastSend = this.now();
+    r.lastActivity = r.lastSend;
+    r.s.replies++;
+    this.line(r, 'keo', text);
+    r.s.activity = 'Replied';
+    this.d.audit.record({ kind: 'livechat', decision: 'replied', detail: { sessionId: r.s.id, chars: text.length, channel: r.s.channel } });
+    if (r.reportSend) {
+      r.reportSend = false;
+      this.d.alert(this.copy(r.s), `Sent to ${r.s.contact}: “${text.length > 300 ? `${text.slice(0, 300)}…` : text}”`, 'sent');
+    }
+    // Handled = everything up to and including Keo's reply.
+    const after = await wa.read().catch(() => null);
+    if (after) {
+      const recent = after.messages.slice(-30);
+      const mine = recent.map((m) => m.from).lastIndexOf('me');
+      r.handled = this.contactCounts(mine >= 0 ? recent.slice(0, mine + 1) : recent, sentByUsOf(r));
+    }
+    this.changed();
+    if (r.s.replies >= r.s.maxReplies) this.finish(r, `Reached the limit of ${r.s.maxReplies} replies`);
+  }
+
+  private pauseFor(r: Runtime, question: string): void {
+    r.s.status = 'paused';
+    r.s.question = question;
+    r.s.activity = 'Paused: needs you';
+    this.line(r, 'note', question);
+    this.d.audit.record({ kind: 'livechat', decision: 'paused_on_error', detail: { sessionId: r.s.id, channel: r.s.channel ?? 'whatsapp' } });
+    this.changed();
+    this.d.alert(this.copy(r.s), question, 'question');
   }
 
   /** One look at a Telegram chat: new messages from the contact, then the same reply rules as WhatsApp. */
@@ -537,6 +839,9 @@ export class LiveChatService {
    * carry on when Keo starts again (see restore).
    */
   shutdown(): void {
+    // Answer-everyone stays saved (it carries on at the next start); only its timer stops.
+    if (this.autoTimer) clearTimeout(this.autoTimer);
+    this.autoTimer = null;
     for (const r of this.live.values()) {
       r.ending = true;
       if (r.timer) clearTimeout(r.timer);
@@ -546,6 +851,7 @@ export class LiveChatService {
   }
 
   stopAll(reason = 'Stopped by you'): number {
+    this.stopAuto(reason);
     const ids = [...this.live.keys()];
     for (const id of ids) this.stop(id, reason);
     return ids.length;
@@ -582,6 +888,7 @@ export class LiveChatService {
     if (t >= Date.parse(r.s.endsAt)) return this.finish(r, 'Time limit reached');
     if (t - r.lastActivity > st.liveChat.quietMinutes * 60_000) return this.finish(r, `No new messages for ${st.liveChat.quietMinutes} minutes`);
     if (r.s.channel === 'telegram') return this.stepTelegram(r);
+    if (isBackground(r.s.channel)) return this.stepBackground(r);
     const w = await this.d.cap.desktop.backend.info(r.s.target.hwnd);
     if (!w || w.pid !== r.s.target.pid) return this.finish(r, 'The WhatsApp window was closed');
 
@@ -704,7 +1011,8 @@ export class LiveChatService {
     if (r.ending) return;
     if (r.s.replies >= r.s.maxReplies) return this.finish(r, `Reached the limit of ${r.s.maxReplies} replies`);
     const telegram = r.s.channel === 'telegram';
-    const mode = telegram ? 'immediately' : this.autonomous() ? 'when_idle' : this.d.settings().liveChat.sendMode;
+    const screenless = telegram || isBackground(r.s.channel);
+    const mode = screenless ? 'immediately' : this.autonomous() ? 'when_idle' : this.d.settings().liveChat.sendMode;
     if (!force && mode !== 'immediately' && !(await this.userIdle())) {
       r.s.draft = text;
       r.s.activity = mode === 'ask' ? 'Reply ready: Send now, or I will send it when you pause' : 'Reply ready: sending when you pause';
@@ -725,6 +1033,7 @@ export class LiveChatService {
     r.s.activity = 'Replying';
     this.changed();
     if (telegram) return this.sendTelegram(r, text);
+    if (isBackground(r.s.channel)) return this.sendBackground(r, text);
     const result = await this.withFocus(r, async () => {
       const view = await waView(this.d.cap, r.s.target, true);
       if (!headerMatches(view.header, r.s.contact)) {
@@ -963,6 +1272,7 @@ export class LiveChatService {
   private finish(r: Runtime, reason: string): void {
     if (r.ending) return;
     r.ending = true;
+    if (r.tg && r.s.telegramChatId) this.autoSeen.set(r.s.telegramChatId, Math.max(this.autoSeen.get(r.s.telegramChatId) ?? 0, ...r.tg.seen));
     if (r.timer) clearTimeout(r.timer);
     r.abort.abort();
     r.s.status = 'ended';
@@ -997,9 +1307,24 @@ export class LiveChatService {
   }
 }
 
+/** A Telegram chat or sender name is the person the user named ("Kidbro 2", "@kidbro", first name…). */
+export function sameTelegramName(name: string, contact: string): boolean {
+  const n = normName(name);
+  const c = normName(contact.replace(/^@/, ''));
+  if (!n || !c) return false;
+  return n === c || ` ${n} `.includes(` ${c} `) || ` ${c} `.includes(` ${n} `);
+}
+
+const isBackground = (c: LiveChannel | undefined): c is 'whatsapp_bg' | 'telegram_bg' => c === 'whatsapp_bg' || c === 'telegram_bg';
+
+/** How a channel is named to the user. */
+export function channelLabel(c: LiveChannel | AutoAnswer['channel'] | undefined): string {
+  return c === 'telegram' ? 'Telegram (your bot)' : c === 'telegram_bg' ? 'Telegram in the background' : c === 'whatsapp_bg' ? 'WhatsApp in the background' : 'WhatsApp';
+}
+
 /** How a live chat signs its notes on the helpers' board. */
 export function helperName(s: { contact: string; channel?: string }): string {
-  return `Live chat with ${s.contact}${s.channel === 'telegram' ? ' (Telegram)' : ''}`;
+  return `Live chat with ${s.contact}${s.channel === 'telegram' ? ' (Telegram bot)' : s.channel === 'telegram_bg' ? ' (Telegram)' : ''}`;
 }
 
 function boardBlock(notes: Array<{ from: string; text: string }>): string {

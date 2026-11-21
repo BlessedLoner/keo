@@ -61,7 +61,7 @@ function LiveChatCard({ s }: { s: LiveChatSession }) {
         <Icon name="chat" size={16} />
         <strong className="grow">
           Live chat with {s.contact}
-          {s.channel === 'telegram' ? ' · Telegram' : ' · WhatsApp'}
+          {s.channel === 'telegram' ? ' · Telegram bot' : s.channel === 'telegram_bg' ? ' · Telegram (background)' : s.channel === 'whatsapp_bg' ? ' · WhatsApp (background)' : ' · WhatsApp'}
         </strong>
         <span className={`chip ${chip}`}>{LIVE_LABEL[s.status]}</span>
         <span className="muted small">
@@ -143,8 +143,10 @@ function LiveChatCard({ s }: { s: LiveChatSession }) {
 
 function LiveChats() {
   const q = useInvoke('livechat:list', {}, { refreshOn: ['livechat:changed'], pollMs: 15000 });
+  const autoQ = useInvoke('livechat:auto', {}, { refreshOn: ['livechat:changed'], pollMs: 15000 });
   const list = q.data ?? [];
-  if (!list.length) return null;
+  const auto = autoQ.data ?? null;
+  if (!list.length && !auto) return null;
   const running = list.filter((s) => s.status !== 'ended');
   const ended = list.filter((s) => s.status === 'ended').slice(0, 3);
   return (
@@ -159,6 +161,24 @@ function LiveChats() {
           </button>
         )}
       </div>
+      {auto && (
+        <div className="card livechat active">
+          <div className="row">
+            <Icon name="chat" size={16} />
+            <strong className="grow">Answering everyone on {auto.channel === 'telegram' ? 'your Telegram bot' : auto.channel === 'telegram_bg' ? 'your Telegram' : 'your WhatsApp'}</strong>
+            <span className="chip ok">On</span>
+            <span className="muted small">
+              {auto.started} chat{auto.started === 1 ? '' : 's'} so far · until {new Date(auto.endsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <button className="btn sm danger" onClick={() => void invoke('livechat:autoStop', {})}>
+              Stop
+            </button>
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            Goal: {auto.goal}
+          </div>
+        </div>
+      )}
       {[...running, ...ended].map((s) => (
         <LiveChatCard key={s.id} s={s} />
       ))}

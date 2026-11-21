@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { looksLikeCardNumber, parseComputerCombo } from '../src/main/capabilities/computer';
+import { bestElement, looksLikeCardNumber, parseComputerCombo } from '../src/main/capabilities/computer';
 import { ControlSession, type ControlUi } from '../src/main/desktop/fullControl';
 import { isAllowedProcess } from '../src/main/desktop/desktopService';
 import { channelAllowed } from '../src/main/ipc/roles';
@@ -219,6 +219,87 @@ describe('Full control', () => {
     expect(bad.step.state).toBe('failed');
     expect(JSON.stringify(bad.step.error)).toMatch(/To recipients/);
     expect(v.subject).toBe('Monday');
+  });
+
+  it('computer__do: several steps in one call — clicks by name, types, presses keys — then shows the window', async () => {
+    setup();
+    const clicked: string[] = [];
+    const v: Record<string, string> = { search: '' };
+    const n = (key: string, role: string, name: string, y: number, extra: Partial<UiaNodeRaw> = {}): UiaNodeRaw => ({ rid: `rid.${key}`, role, name, x: 20, y, w: 300, h: 30, depth: 1, parent: 0, patterns: ['invoke'], ...extra });
+    let page: 'home' | 'results' = 'home';
+    const app: FakeUiaApp = {
+      window: { w: 1000, h: 800, x: 0, y: 0 },
+      extraWindows: [],
+      nodes: () => [
+        { rid: 'rid.root', role: 'window', name: 'Music', x: 0, y: 0, w: 1000, h: 800, depth: 0, parent: -1 },
+        n('search', 'edit', 'Search', 20, { patterns: ['value'], value: v.search }),
+        n('home', 'tabitem', 'Home', 60),
+        n('delete', 'button', 'Delete playlist', 100),
+        n('hidden', 'button', 'Search help', 140, { offscreen: true }),
+        ...(page === 'results' ? [n('song', 'listitem', 'Blue in Green — Miles Davis', 200)] : []),
+      ],
+      act: (rid, action, text) => {
+        if (action === 'set_value') v[rid.replace('rid.', '')] = text ?? '';
+        return action;
+      },
+    };
+    h.desktop.addApp({ hwnd: '7101', pid: 7171, processName: 'music', title: 'Music', className: 'x', minimized: false, x: 0, y: 0, width: 1000, height: 800, foreground: true }, app);
+    h.desktop.foreground = '7101';
+    const original = h.desktop.clickAt.bind(h.desktop);
+    h.desktop.clickAt = (hwnd, x, y, button, double) => {
+      clicked.push(`${x},${y}`);
+      return original(hwnd, x, y, button, double);
+    };
+    const origKeys = h.desktop.keys.bind(h.desktop);
+    h.desktop.keys = async (hwnd, mods, key) => {
+      if (key === 0x0d) page = 'results';
+      return origKeys(hwnd, mods, key);
+    };
+    const r = await run('computer.do', { steps: [{ do: 'click', name: 'Search' }, { do: 'keys', combo: 'enter' }, { do: 'wait_for', name: 'Blue in Green' }, { do: 'click', name: 'Blue in Green', role: 'listitem' }] });
+    if ('rejected' in r) throw new Error(r.rejected);
+    expect(r.needed).toBe(false);
+    expect(r.step.state).toBe('succeeded');
+    const out = r.step.result as { done: number; stopped: string | null; steps: string[]; after: { elements: string[] } };
+    expect(out.done).toBe(4);
+    expect(out.stopped).toBeNull();
+    expect(out.steps[0]).toMatch(/edit “Search”/); // the box, not the hidden “Search help” button
+    expect(clicked).toHaveLength(2);
+    expect(out.after.elements).toContain('listitem “Blue in Green — Miles Davis”');
+    expect(out.after.elements.join(' ')).not.toContain('Search help'); // only what a person can see
+  });
+
+  it('computer__do: a step that sends or deletes must say so (then the user approves); a failed step stops the run', async () => {
+    setup();
+    const n = (key: string, role: string, name: string, y: number): UiaNodeRaw => ({ rid: `rid.${key}`, role, name, x: 20, y, w: 300, h: 30, depth: 1, parent: 0, patterns: ['invoke'] });
+    const app: FakeUiaApp = { window: { w: 1000, h: 800, x: 0, y: 0 }, extraWindows: [], nodes: () => [{ rid: 'rid.root', role: 'window', name: 'Music', x: 0, y: 0, w: 1000, h: 800, depth: 0, parent: -1 }, n('home', 'tabitem', 'Home', 60), n('delete', 'button', 'Delete playlist', 100)], act: (_r, a) => a };
+    h.desktop.addApp({ hwnd: '7101', pid: 7171, processName: 'music', title: 'Music', className: 'x', minimized: false, x: 0, y: 0, width: 1000, height: 800, foreground: true }, app);
+    h.desktop.foreground = '7101';
+    const before = h.desktop.calls.filter((c) => c.op === 'click_at').length;
+    const sneaky = await run('computer.do', { steps: [{ do: 'click', name: 'Delete playlist' }] });
+    if ('rejected' in sneaky) throw new Error(sneaky.rejected);
+    expect(sneaky.step.state).toBe('failed');
+    expect(JSON.stringify(sneaky.step.error)).toMatch(/sends, pays, deletes/);
+    expect(h.desktop.calls.filter((c) => c.op === 'click_at').length).toBe(before);
+    const declared = await run('computer.do', { steps: [{ do: 'click', name: 'Delete playlist', effect: 'deletes' }] });
+    if ('rejected' in declared) throw new Error(declared.rejected);
+    expect(declared.needed).toBe(true);
+    expect(declared.tier).toBe('critical');
+    // Step 2 is not there: step 1 ran, the run stops and says why, and the window is shown.
+    const partial = await run('computer.do', { steps: [{ do: 'click', name: 'Home' }, { do: 'click', name: 'Settings' }, { do: 'keys', combo: 'ctrl+s' }] });
+    if ('rejected' in partial) throw new Error(partial.rejected);
+    const out = partial.step.result as { done: number; stopped: string; after: { elements: string[] } };
+    expect(out.done).toBe(1);
+    expect(out.stopped).toMatch(/Step 2 .*No “Settings”/);
+    expect(out.after.elements).toContain('tabitem “Home”');
+  });
+
+  it('finds the element a person means by its name', () => {
+    const n = (name: string, role: string, extra: Partial<UiaNodeRaw> = {}): UiaNodeRaw => ({ rid: name, role, name, x: 0, y: 0, w: 10, h: 10, depth: 1, parent: 0, ...extra });
+    const nodes = [n('Save as', 'menuitem'), n('Save', 'button'), n('Autosave settings', 'button'), n('Search', 'button', { offscreen: true }), n('Search', 'edit')];
+    expect(bestElement(nodes, 'save')?.rid).toBe('Save');
+    expect(bestElement(nodes, 'Search')?.role).toBe('edit');
+    expect(bestElement(nodes, 'search', 'button')?.role).toBe('button');
+    expect(bestElement(nodes, 'Print')).toBeNull();
   });
 
   it('Enter in a chat app must be declared as sending; shortcuts with the Win key work', async () => {

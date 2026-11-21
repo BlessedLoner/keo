@@ -34,13 +34,41 @@ export class TelegramBot {
     const r = await this.call<{ username?: string; first_name?: string }>('getMe', undefined, signal);
     return { username: r.username ?? '', name: r.first_name ?? '' };
   }
-  /** The chats that messaged the bot lately (people must message it first: bots cannot start chats), with their last messages. */
+  /** Messages read so far (newest last), and the next update Telegram has not given Keo yet. */
+  private seen: Array<{ id: number; chatId: number; chat: string; from: string; text: string; at: string }> = [];
+  private nextUpdate = 0;
+  private reading: Promise<void> | null = null;
+
+  /**
+   * The chats that messaged the bot lately (people must message it first: bots cannot start chats),
+   * with their last messages, newest first. Each read asks Telegram only for what is new and tells it
+   * what Keo has read (offset), so new messages always come through (Telegram gives at most 100 at a
+   * time, oldest first, and keeps unread ones for 24 hours).
+   */
   async recent(signal?: AbortSignal): Promise<Array<{ id: number; chatId: number; chat: string; from: string; text: string; at: string }>> {
-    const updates = await this.call<Array<{ message?: { message_id: number; chat: { id: number; title?: string; first_name?: string; username?: string }; from?: { first_name?: string; username?: string }; text?: string; caption?: string; date: number } }>>('getUpdates', { limit: 50, allowed_updates: ['message'] }, signal);
-    return updates
-      .flatMap((u) => (u.message ? [u.message] : []))
-      .map((m) => ({ id: m.message_id, chatId: m.chat.id, chat: m.chat.title ?? m.chat.first_name ?? m.chat.username ?? String(m.chat.id), from: m.from?.first_name ?? m.from?.username ?? '', text: (m.text ?? m.caption ?? '').slice(0, 1000), at: new Date(m.date * 1000).toISOString() }))
-      .reverse();
+    // One read at a time (live chats and the agent may ask together).
+    while (this.reading) await this.reading;
+    this.reading = (async () => {
+      for (let round = 0; round < 5; round++) {
+        type Upd = { update_id: number; message?: { message_id: number; chat: { id: number; title?: string; first_name?: string; last_name?: string; username?: string }; from?: { first_name?: string; last_name?: string; username?: string }; text?: string; caption?: string; date: number } };
+        const updates = await this.call<Upd[]>('getUpdates', { limit: 100, offset: this.nextUpdate || undefined, allowed_updates: ['message'] }, signal);
+        for (const u of updates) {
+          if (typeof u.update_id === 'number') this.nextUpdate = Math.max(this.nextUpdate, u.update_id + 1);
+          const m = u.message;
+          if (!m) continue;
+          const name = (p?: { first_name?: string; last_name?: string; username?: string; title?: string }) => [p?.title ?? [p?.first_name, p?.last_name].filter(Boolean).join(' '), p?.username ? `@${p.username}` : ''].filter(Boolean).join(' ') || '';
+          this.seen.push({ id: m.message_id, chatId: m.chat.id, chat: name(m.chat) || String(m.chat.id), from: name(m.from), text: (m.text ?? m.caption ?? '').slice(0, 1000), at: new Date(m.date * 1000).toISOString() });
+        }
+        if (this.seen.length > 500) this.seen.splice(0, this.seen.length - 500);
+        if (updates.length < 100) break;
+      }
+    })();
+    try {
+      await this.reading;
+    } finally {
+      this.reading = null;
+    }
+    return [...this.seen].reverse();
   }
   async send(chatId: number | string, text: string, signal?: AbortSignal): Promise<{ messageId: number }> {
     const r = await this.call<{ message_id: number }>('sendMessage', { chat_id: chatId, text: text.slice(0, 4096) }, signal);

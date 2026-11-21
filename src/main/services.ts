@@ -65,6 +65,7 @@ import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
 import { BackgroundJobs, backgroundJobCapabilities, RESUME_WITHIN_MS } from './agent/backgroundJobs';
 import { boardCapabilities, HelperBoard, type BoardNote } from './agent/board';
+import { TELEGRAM_SITE, WebChat, WHATSAPP_SITE, type ChatBackground, type WebChatSite } from './livechat/webChat';
 import { reminderCapabilities } from './capabilities/reminders';
 import { Scheduler, whenText } from './schedule/scheduler';
 import { fileCapabilities } from './capabilities/files';
@@ -107,7 +108,7 @@ import { WebService } from './web/webService';
 import { PresenceService, type VoiceReport } from './presence/presenceService';
 import { PowerShellSpeechEngine, WakeService, type SpeechEngine } from './voice/wakeService';
 import { findQuote, nameMentioned } from './agent/quotes';
-import type { AgentEvent, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
+import type { AgentEvent, AutoAnswer, BackgroundJob, LiveChatSession, Message, Presence, ScheduledItem } from '../shared/domain';
 import { TERMINAL_TASK } from './tasks/stateMachine';
 import { AI_VIDEO_MODELS, AiVideoError, AiVideoPending, estimateCost, FalVideo, modelSeconds, MOTION_CLONE_MODEL, MUSIC_MODEL, SFX_MODEL, PICTURE_MODEL, SWAP_MODEL, swapCost, TALK_MODEL, type AiVideoModelId, type SwapResolution } from './studio/aiVideo';
 import { captionLines, spreadWords, wavOf } from './studio/captions';
@@ -223,6 +224,8 @@ export interface ServiceDeps {
   openBrowser?: (url: string) => Promise<void>;
   /** Keo's browser window for web apps: tests run it without a window and may choose the browser. */
   webBrowser?: { headless?: boolean; pick?: () => BrowserChoice | null };
+  /** WhatsApp and Telegram in the background (tests: fakes, never the real apps). */
+  backgrounds?: { whatsapp_bg: ChatBackground; telegram_bg: ChatBackground };
   /** Faster live chat timings for tests (poll, debounce, gap between replies, sleep). */
   liveChatTiming?: { pollMs?: number; debounceMs?: number; minGapMs?: number; sleep?: (ms: number) => Promise<void> };
   /** Epoch ms now for reminders and routines (tests use a fake clock). */
@@ -279,6 +282,38 @@ export class Services {
   readonly live: LiveChatService;
   /** Long requests running in the background, each in its own hidden conversation. */
   readonly jobs: BackgroundJobs;
+  /** Settings → Connected apps: the user's own WhatsApp and Telegram, as linked to Keo. */
+  async chatAccounts(): Promise<Array<{ app: 'whatsapp' | 'telegram'; status: 'not_linked' | 'linking' | 'loading' | 'ready'; phone: string | null; name: string | null; linkedAt: string | null }>> {
+    const out = [];
+    for (const app of ['whatsapp', 'telegram'] as const) {
+      const bg = this.backgrounds[app === 'telegram' ? 'telegram_bg' : 'whatsapp_bg'];
+      const a = bg.account();
+      out.push({ app, status: await bg.status().catch(() => (a ? ('ready' as const) : ('not_linked' as const))), phone: a?.phone ?? null, name: a?.name ?? null, linkedAt: a?.linkedAt || null });
+    }
+    return out;
+  }
+
+  /** Answer everyone, turned on from Settings by the user (their click is the approval). */
+  async startAnswerEveryone(where: 'whatsapp' | 'telegram' | 'telegram_bot', goal: string, minutes: number): Promise<AutoAnswer> {
+    if (where === 'telegram_bot') {
+      const why = this.connectedUnavailable('telegram');
+      if (why) throw new KeoError('unavailable', why);
+    } else if (!this.backgrounds[where === 'telegram' ? 'telegram_bg' : 'whatsapp_bg'].account()) {
+      throw new KeoError('not_linked', `Link your ${where === 'telegram' ? 'Telegram' : 'WhatsApp'} first.`);
+    }
+    this.audit.record({ kind: 'livechat', decision: 'auto_from_settings', detail: { where, minutes } });
+    return this.live.startAuto({
+      channel: where === 'telegram_bot' ? 'telegram' : where === 'telegram' ? 'telegram_bg' : 'whatsapp_bg',
+      goal,
+      instructions: [],
+      maxMinutes: minutes,
+      maxReplies: this.settings.get().liveChat.maxReplies,
+      conversationId: null,
+    });
+  }
+
+  /** WhatsApp and Telegram in the background (Keo's own web apps). */
+  readonly backgrounds: { whatsapp_bg: ChatBackground; telegram_bg: ChatBackground };
   /** The helpers' shared board (live chats, background jobs, the user's chat). */
   readonly board: HelperBoard;
   /** Reminders and scheduled routines (kept in the database). */
@@ -502,8 +537,32 @@ export class Services {
       },
       log: this.log,
     });
+    // WhatsApp and Telegram in the background: each app's web version in its own copy of Keo's
+    // browser (its own profile), with a window only while the user links it, then without one.
+    const background = (site: WebChatSite, name: string): ChatBackground => {
+      let visible = false;
+      return new WebChat(site, {
+        browser: new KeoBrowser({
+          profileDir: () => path.join(d.profile.userData, name),
+          pick: () => {
+            const list = (d.browsers ?? installedBrowsers)().filter((b) => b.id === 'chrome' || b.id === 'edge');
+            const b = list.find((x) => x.id === 'chrome') ?? list[0];
+            return b ? { exe: b.exe, label: b.label } : null;
+          },
+          headless: () => !visible,
+          log: (event, detail) => this.log.info(event, detail),
+        }),
+        linkedFile: path.join(d.profile.userData, `${name}.linked`),
+        profileDir: path.join(d.profile.userData, name),
+        changed: () => this.push('chats:changed', {}),
+        setVisible: (v) => (visible = v),
+        log: (event, detail) => this.log.info(event, detail),
+      });
+    };
+    this.backgrounds = d.backgrounds ?? { whatsapp_bg: background(WHATSAPP_SITE, 'whatsapp-web'), telegram_bg: background(TELEGRAM_SITE, 'telegram-web') };
     const boardFile = path.join(d.profile.userData, 'helper-board.json');
     const liveFile = path.join(d.profile.userData, 'live-chats.json');
+    const autoFile = path.join(d.profile.userData, 'telegram-answer-everyone.json');
     this.board = new HelperBoard({
       changed: () => this.push('board:changed', {}),
       store: {
@@ -550,6 +609,7 @@ export class Services {
       alert: (session, text, kind) => this.liveChatAlert(session, text, kind),
       telegram: { recent: (signal) => this.connected.telegram.recent(signal), send: (chatId, text, signal) => this.connected.telegram.send(chatId, text, signal) },
       board: this.board,
+      backgrounds: this.backgrounds,
       store: {
         load: () => (fs.existsSync(liveFile) ? (JSON.parse(fs.readFileSync(liveFile, 'utf8')) as LiveChatSession[]) : null),
         save: (sessions) => {
@@ -558,6 +618,13 @@ export class Services {
         },
       },
       findWhatsApp: () => resolveWhatsApp(capDeps, undefined, getSettings()),
+      autoStore: {
+        load: () => (fs.existsSync(autoFile) ? (JSON.parse(fs.readFileSync(autoFile, 'utf8')) as AutoAnswer | null) : null),
+        save: (a) => {
+          fs.writeFileSync(`${autoFile}.tmp`, JSON.stringify(a));
+          fs.renameSync(`${autoFile}.tmp`, autoFile);
+        },
+      },
       research: async (query, signal) => {
         const st = getSettings();
         if (!st.permissions.webSearchEnabled || !this.web.sourceFor(st.web.engine)) return null;
@@ -960,6 +1027,7 @@ export class Services {
         ...capDeps,
         live: this.live,
         telegramUnavailable: () => this.connectedUnavailable('telegram'),
+        backgrounds: this.backgrounds,
         userMessage: (id) => {
           const m = id ? this.conversations.getMessage(id) : null;
           // A background job's brief is Keo's text, not the user's.
@@ -4160,6 +4228,7 @@ export class Services {
     this.studio.close();
     this.fileIndex?.close?.();
     await this.webBrowser.close();
+    for (const bg of Object.values(this.backgrounds)) await bg.close().catch(() => undefined);
     this.desktop.backend.dispose();
     this.log.info('app.shutdown', {});
     this.db.close();

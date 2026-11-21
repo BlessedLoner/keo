@@ -150,6 +150,64 @@ export function bestBox(boxes: UiaNodeRaw[], field: string): UiaNodeRaw | null {
   }
   return top >= 30 ? pick : null;
 }
+/** Roles a person clicks. */
+const CLICK_ROLES = new Set(['button', 'splitbutton', 'menuitem', 'hyperlink', 'link', 'listitem', 'tabitem', 'checkbox', 'radiobutton', 'treeitem', 'dataitem', 'edit', 'combobox', 'text', 'image']);
+
+/**
+ * The element a person means by its name (“Save”, “Search”, “New chat”): exact name first, then a
+ * name that starts with it, then one that contains it as whole words; visible and clickable first.
+ * `role` narrows it (“button”, “link”, “tab”, “edit”…).
+ */
+export function bestElement(nodes: UiaNodeRaw[], name: string, role?: string): UiaNodeRaw | null {
+  const want = normField(name);
+  if (!want) return null;
+  const roleWant = role ? normField(role).replace(/\s+/g, '') : null;
+  const roleOk = (r: string) => !roleWant || r === roleWant || (roleWant === 'button' && r === 'splitbutton') || (roleWant === 'link' && r === 'hyperlink') || (roleWant === 'tab' && r === 'tabitem') || (roleWant === 'menu' && r === 'menuitem') || (roleWant === 'box' && (r === 'edit' || r === 'combobox'));
+  let pick: UiaNodeRaw | null = null;
+  let top = 0;
+  for (const n of nodes) {
+    if (!roleOk(n.role) || n.disabled) continue;
+    const names = [normField(n.name ?? ''), normField(n.aid ?? '')].filter(Boolean);
+    let sc = 0;
+    for (const nm of names) {
+      if (nm === want) sc = Math.max(sc, 100);
+      else if (nm.startsWith(`${want} `)) sc = Math.max(sc, 70);
+      else if (want.length >= 3 && ` ${nm} `.includes(` ${want} `)) sc = Math.max(sc, 50);
+    }
+    if (!sc) continue;
+    if (CLICK_ROLES.has(n.role) || n.patterns?.includes('invoke')) sc += 10;
+    if (n.offscreen || !n.w || !n.h) sc -= 40;
+    if (sc > top) {
+      top = sc;
+      pick = n;
+    }
+  }
+  return top >= 40 ? pick : null;
+}
+
+/** One line per element a person can see, for the map Keo returns after acting. */
+export function elementLines(nodes: UiaNodeRaw[], limit: number): { lines: string[]; omitted: number } {
+  const lines: string[] = [];
+  let omitted = 0;
+  const seen = new Set<string>();
+  for (const n of nodes) {
+    if (n.offscreen || !n.w || !n.h) continue;
+    const named = (n.name ?? '').trim();
+    const interesting = CLICK_ROLES.has(n.role) || n.role === 'document' || n.role === 'window' || n.patterns?.includes('invoke') || n.patterns?.includes('value');
+    if (!interesting || (!named && n.value === undefined)) continue;
+    const states = [n.focused ? 'focused' : '', n.selected ? 'selected' : '', n.disabled ? 'disabled' : '', n.toggle === 'on' ? 'checked' : ''].filter(Boolean);
+    const line = `${n.role} “${named.slice(0, 70)}”${n.value ? ` = “${n.value.slice(0, 60)}”` : ''}${states.length ? ` (${states.join(', ')})` : ''}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    if (lines.length >= limit) {
+      omitted++;
+      continue;
+    }
+    lines.push(line);
+  }
+  return { lines, omitted };
+}
+
 const fullControlOff = (s: Settings) => (s.permissions.fullControl ? null : 'Full control is off. The user can turn it on in Access & capabilities → Full control.');
 
 function effectTier(effect: Effect, what: string) {
@@ -523,5 +581,171 @@ export function computerCapabilities(d: ComputerDeps): AnyCapability[] {
     },
   });
 
-  return [click, type, keys, scroll, drag, fillForm];
+  /** A quick read of the window in front (a few seconds at most), for finding elements and the after-map. */
+  const quickRead = async (w: RawWindow) => backend.uiaSnapshot(w.hwnd, { maxNodes: 900, maxDepth: 50, budgetMs: 3500 });
+
+  const Step = z.discriminatedUnion('do', [
+    z
+      .object({
+        do: z.literal('click'),
+        name: z.string().trim().min(1).max(120).describe('The button, link, tab, box or item’s name as shown (“Save”, “New chat”, “Search”)'),
+        role: z.string().trim().max(20).optional().describe('Optional: button, link, tab, menu, box, listitem, checkbox…'),
+        double: z.boolean().default(false),
+        button: z.enum(['left', 'right']).default('left'),
+        effect: Effect,
+      })
+      .strict(),
+    z.object({ do: z.literal('click_at'), x: coord, y: coord, what: z.string().trim().min(2).max(120), double: z.boolean().default(false), effect: Effect }).strict(),
+    z.object({ do: z.literal('type'), text: z.string().min(1).max(20000), replace: z.boolean().default(false) }).strict(),
+    z.object({ do: z.literal('keys'), combo: z.string().min(1).max(40).refine((c) => parseComputerCombo(c) !== null, 'Unsupported key or combination'), repeat: z.number().int().min(1).max(20).default(1), effect: Effect }).strict(),
+    z.object({ do: z.literal('wait_for'), name: z.string().trim().min(1).max(120).describe('Text of an element, or of the window title, that shows the app is ready'), seconds: z.number().min(0.5).max(15).default(5) }).strict(),
+  ]);
+  type StepT = z.infer<typeof Step>;
+  const stepEffect = (st: StepT): Effect => ('effect' in st ? st.effect : 'none');
+  const stepLabel = (st: StepT): string =>
+    st.do === 'click'
+      ? `${st.double ? 'double-click' : st.button === 'right' ? 'right-click' : 'click'} “${st.name}”`
+      : st.do === 'click_at'
+        ? `click ${st.what}`
+        : st.do === 'type'
+          ? `${st.replace ? 'replace with' : 'type'} “${st.text.length > 60 ? `${st.text.slice(0, 60)}…` : st.text}”`
+          : st.do === 'keys'
+            ? `press ${st.combo.toUpperCase()}${st.repeat > 1 ? ` ×${st.repeat}` : ''}`
+            : `wait for “${st.name}”`;
+
+  const clickByName = async (st: Extract<StepT, { do: 'click' }>, ctx: CapabilityContext): Promise<string> => {
+    const done = await d.begin(ctx, {});
+    try {
+      const w = await foreground();
+      const raw = await quickRead(w);
+      const node = bestElement(raw.nodes, st.name, st.role);
+      if (!node) {
+        const { lines } = elementLines(raw.nodes, 25);
+        throw new CapabilityError('element_not_found', `No “${st.name}”${st.role ? ` (${st.role})` : ''} in ${w.processName} (“${w.title.slice(0, 60)}”). What is there: ${lines.join('; ') || 'nothing Keo can read — use screen__look and click_at'}.`, { dispatched: 'no' });
+      }
+      if (st.effect === 'none' && (RISKY_NAME.test(node.name ?? '') || RISKY_NAME.test(node.aid ?? ''))) {
+        throw new CapabilityError('needs_approval', `“${node.name}” in ${w.processName} looks like it sends, pays, deletes or submits. Nothing was clicked. If that is what the user wants, give this step the right \`effect\` so they can approve it.`, { dispatched: 'no' });
+      }
+      const c = await backend.uiaCenter(w.hwnd, node.rid);
+      await need('clickAt')(w.hwnd, c.x, c.y, st.button, st.double);
+      return `${node.role} “${(node.name || node.aid || st.name).slice(0, 80)}” in ${w.processName}`;
+    } finally {
+      done();
+    }
+  };
+
+  const waitFor = async (st: Extract<StepT, { do: 'wait_for' }>, ctx: CapabilityContext): Promise<string> => {
+    const until = Date.now() + st.seconds * 1000;
+    const want = normField(st.name);
+    for (;;) {
+      if (ctx.signal.aborted) throw new CapabilityError('cancelled', 'Stopped.', { dispatched: 'no' });
+      const a = await backend.userActivity();
+      const w = a.foreground ? await backend.info(a.foreground) : null;
+      if (w && normField(w.title).includes(want)) return `the window “${w.title.slice(0, 80)}”`;
+      if (w) {
+        const node = bestElement((await quickRead(w)).nodes, st.name);
+        if (node) return `${node.role} “${(node.name || st.name).slice(0, 80)}”`;
+      }
+      if (Date.now() >= until) throw new CapabilityError('not_appeared', `“${st.name}” did not appear within ${st.seconds} s.`, { dispatched: 'no' });
+      await new Promise((r) => setTimeout(r, d.focusSettleMs === 0 ? 0 : 300));
+    }
+  };
+
+  const runOne = async (st: StepT, ctx: CapabilityContext): Promise<string> => {
+    switch (st.do) {
+      case 'click':
+        return `clicked ${await clickByName(st, ctx)}`;
+      case 'click_at': {
+        const r = await click.execute({ x: st.x, y: st.y, what: st.what, button: 'left', double: st.double, effect: st.effect }, ctx);
+        return `clicked ${r.element} in ${r.app}`;
+      }
+      case 'type': {
+        const r = await type.execute({ text: st.text, replace: st.replace, method: 'auto' }, ctx);
+        if (r.confirmed === false) throw new CapabilityError('not_confirmed', `Typed into ${r.into} in ${r.app}, but Keo could not find the text there yet. Do not type it again before looking.`, { dispatched: 'yes' });
+        return `typed into ${r.into}${r.confirmed ? ' (read back)' : ''}`;
+      }
+      case 'keys':
+        await keys.execute({ combo: st.combo, repeat: st.repeat, effect: st.effect }, ctx);
+        return `pressed ${st.combo.toUpperCase()}`;
+      case 'wait_for':
+        return `saw ${await waitFor(st, ctx)}`;
+    }
+  };
+
+  const doSteps = defineCapability({
+    ...base,
+    id: 'computer.do',
+    title: 'Do several steps in an app',
+    timeoutMs: 180000,
+    description:
+      'Full control, the fast way to use an app like a person: up to 8 steps in ONE call, run one after another in the app in front — click a button, link, tab or box BY ITS NAME ({do:"click", name:"New chat"}), click a point from your latest look ({do:"click_at", x, y, what}), type at the keyboard focus ({do:"type", text, replace}), press keys ({do:"keys", combo:"ctrl+l"}), wait until something appears ({do:"wait_for", name:"Inbox"}). It stops at the first step that fails and says why. The result ends with `after`: the window in front and the elements a person can see on it now (role, name, value, focused…) — use it to plan the next steps instead of screen__look. Give a step `effect` when it sends, posts, pays, deletes, submits or installs (e.g. clicking Send, Enter in a chat): the user approves the run once. Keo never types passwords or card numbers.',
+    input: z
+      .object({
+        steps: z.array(Step).min(1).max(8),
+        look: z.boolean().default(true).describe('Return the window’s elements afterwards (on by default)'),
+      })
+      .strict(),
+    output: z.object({
+      done: z.number(),
+      total: z.number(),
+      steps: z.array(z.string()),
+      stopped: z.string().nullable(),
+      after: z.object({ app: z.string(), window: z.string(), elements: z.array(z.string()), omitted: z.number() }).nullable(),
+    }),
+    risk: 'high',
+    verificationPolicy: 'Each step is checked as it runs (the element is found by name before clicking; typed text is read back); the window’s elements are read afterwards.',
+    autonomy: (i) => {
+      const effects = [...new Set(i.steps.map(stepEffect).filter((e) => e !== 'none'))] as Array<Exclude<Effect, 'none'>>;
+      if (effects.length) return { tier: 'critical' as const, reason: `These steps ${effects.map((e) => EFFECT_WORDS[e]).join(' and ')}: the user approves it every time.` };
+      if (i.steps.some((st) => st.do === 'keys' && /^alt\+f4$|^ctrl\+q$|^ctrl\+shift\+w$/.test(st.combo.toLowerCase().replace(/\s+/g, '')))) return { tier: 'important' as const, reason: 'This closes a window or an app.' };
+      return { tier: 'routine' as const };
+    },
+    precheck: (i) => (i.steps.some((st) => st.do === 'type' && looksLikeCardNumber(st.text)) ? 'That text contains a card number. Keo never types card numbers — the user enters payment details themselves.' : null),
+    preview: (i) => {
+      const effects = i.steps.filter((st) => stepEffect(st) !== 'none');
+      return {
+        summary: `${i.steps.length} step${i.steps.length > 1 ? 's' : ''}: ${i.steps.map(stepLabel).join(', then ')}`.slice(0, 300),
+        target: 'The app in front',
+        consequences: effects.length ? effects.map((st) => `“${stepLabel(st)}” ${EFFECT_WORDS[stepEffect(st) as Exclude<Effect, 'none'>]}.`) : ['Clicks, typing and keys in whichever app is in front.'],
+        dataExport: null,
+      };
+    },
+    auditView: (i) => ({ steps: i.steps.map((st) => st.do), effects: i.steps.map(stepEffect).filter((e) => e !== 'none') }),
+    async execute(i, ctx) {
+      const results: string[] = [];
+      let stopped: string | null = null;
+      for (const [k, st] of i.steps.entries()) {
+        if (ctx.signal.aborted) {
+          stopped = `Stopped before step ${k + 1}.`;
+          break;
+        }
+        try {
+          results.push(await runOne(st, ctx));
+        } catch (e) {
+          // Nothing done yet: a plain failure (nothing to report but why). Otherwise report how far it got.
+          if (k === 0 && e instanceof CapabilityError && e.dispatched === 'no') throw e;
+          stopped = `Step ${k + 1} (${stepLabel(st)}) did not work: ${(e as Error).message}`;
+          break;
+        }
+      }
+      let after: { app: string; window: string; elements: string[]; omitted: number } | null = null;
+      if (i.look && !ctx.signal.aborted) {
+        try {
+          // A moment for the app to react to the last step, like a person glancing at it.
+          if (d.focusSettleMs !== 0) await new Promise((r) => setTimeout(r, 250));
+          const w = await foreground();
+          const { lines, omitted } = elementLines((await quickRead(w)).nodes, 70);
+          after = { app: w.processName, window: w.title.slice(0, 120), elements: lines, omitted };
+        } catch {
+          after = null;
+        }
+      }
+      return { done: results.length, total: i.steps.length, steps: results, stopped, after };
+    },
+    async verify(_i, o) {
+      return o.stopped ? { verified: false, detail: o.stopped } : { verified: true, detail: `All ${o.total} steps done.` };
+    },
+  });
+
+  return [click, type, keys, scroll, drag, fillForm, doSteps];
 }

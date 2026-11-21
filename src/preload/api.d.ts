@@ -22,6 +22,7 @@ export interface PushPayloads {
   'files:photosChanged': PhotoIndexState;
   'jobs:changed': Record<string, never>;
   'board:changed': Record<string, never>;
+  'chats:changed': Record<string, never>;
   'schedule:changed': Record<string, never>;
   /** The real voice level (microphone or playback), relayed from the main window to Keo's bar and Keo mode. */
   'presence:level': { level: number; source: 'mic' | 'playback' | null };

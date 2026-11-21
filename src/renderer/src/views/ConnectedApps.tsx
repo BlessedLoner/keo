@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useUi } from '../components/ui';
 import { errText, invoke } from '../lib/api';
+import { ChatAccounts } from './ChatAccounts';
 
 type App = 'telegram' | 'notion' | 'slack';
 type Status = { telegram: { connected: boolean }; notion: { connected: boolean }; slack: { connected: boolean }; drive: { connected: boolean }; googleReady: boolean };
@@ -9,8 +10,8 @@ type Status = { telegram: { connected: boolean }; notion: { connected: boolean }
 /** How each app is connected, step by step. */
 const APPS: Record<App, { label: string; what: string; steps: string[]; placeholder: string }> = {
   telegram: {
-    label: 'Telegram',
-    what: 'Keo reads messages sent to your bot and sends messages and files (like exported videos) from it, after you approve each one.',
+    label: 'Telegram bot',
+    what: 'For a bot people message (like a help desk) — not your own account (that is above). Keo reads messages sent to your bot and sends messages and files (like exported videos) from it, after you approve each one.',
     steps: ['In Telegram, open a chat with @BotFather and send /newbot.', 'Give the bot a name and a username; BotFather replies with a token.', 'Paste that token here. Then message your bot once, so it can write back to you.'],
     placeholder: '123456789:AA…',
   },
@@ -73,6 +74,8 @@ export function ConnectedApps() {
   return (
     <section className="card">
       <h2 style={{ marginTop: 0 }}>Connected apps</h2>
+      <ChatAccounts />
+      <h3 style={{ margin: '16px 0 4px' }}>Other apps</h3>
       <p className="small muted">Ask Keo in chat, e.g. “send my latest video to Telegram”, “add these ideas to my Notion page”, “post the update in #general”, “save the export to Drive”. Anything that sends or writes asks you first. Tokens are stored encrypted on this PC.</p>
       {(Object.keys(APPS) as App[]).map((app) => (
         <div key={app} className="connected-row">

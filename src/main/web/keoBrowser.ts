@@ -48,8 +48,8 @@ export interface KeoBrowserOptions {
   profileDir: () => string;
   /** Chrome or Edge, whichever the user chose or is installed; null = neither. */
   pick: () => BrowserChoice | null;
-  /** Tests run it without a window. */
-  headless?: boolean;
+  /** Without a window (tests, or WhatsApp running in the background); read at each start. */
+  headless?: boolean | (() => boolean);
   log?: (event: string, detail: Record<string, unknown>) => void;
 }
 
@@ -149,6 +149,8 @@ export class KeoBrowser {
   /** Newly opened tabs, so an action can report (and move to) a tab it opened. */
   private opened: string[] = [];
   private chooser: ((backendNodeId: number) => void) | null = null;
+  /** The browser's own name with "Headless" removed, when running without a window. */
+  private ua: string | null = null;
   /** The command line used for the last launch (checked by tests: no debugging port). */
   lastArgs: string[] = [];
 
@@ -156,6 +158,31 @@ export class KeoBrowser {
 
   running(): boolean {
     return !!this.cdp && !this.cdp.closed;
+  }
+
+  private isHeadless(): boolean {
+    return typeof this.o.headless === 'function' ? this.o.headless() : !!this.o.headless;
+  }
+
+  /**
+   * Runs a script in the current tab (in Keo's own isolated world: the page's DOM, not its scripts)
+   * and returns its JSON value. For Keo's own integrations (WhatsApp in the background), never for
+   * text from a page or the model.
+   */
+  async evaluate<T>(expression: string): Promise<T> {
+    const p = await this.page();
+    const cdp = await this.ensure();
+    const contextId = await this.world(p);
+    const r = await withTimeout(
+      cdp.send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', { expression, contextId, returnByValue: true, awaitPromise: true }, p.sessionId!),
+      20000,
+      'page_busy',
+    ).catch((e: unknown) => {
+      if (e instanceof CdpError && /context/i.test(e.message)) p.ctx = null;
+      throw e;
+    });
+    if (r.exceptionDetails) throw new WebError('page_script_failed', (r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? '').split('\n')[0]!.slice(0, 200));
+    return r.result.value as T;
   }
 
   browserLabel(): string {
@@ -171,7 +198,7 @@ export class KeoBrowser {
     if (!pick) throw new WebError('no_browser', 'Neither Google Chrome nor Microsoft Edge is installed, so Keo cannot open its browser window.');
     const dir = this.o.profileDir();
     fs.mkdirSync(dir, { recursive: true });
-    this.lastArgs = launchArgs(dir, !!this.o.headless);
+    this.lastArgs = launchArgs(dir, this.isHeadless());
     const proc = spawn(pick.exe, this.lastArgs, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: false });
     // The last of the browser's own error output, for the log when it fails to start.
     let stderr = '';
@@ -188,7 +215,9 @@ export class KeoBrowser {
     this.cdp = cdp;
     this.label = pick.label;
     try {
-      await withTimeout(cdp.send('Browser.getVersion'), 25000, 'did not answer');
+      const v = await withTimeout(cdp.send<{ userAgent?: string }>('Browser.getVersion'), 25000, 'did not answer');
+      // A window-less browser names itself "HeadlessChrome"; sites (WhatsApp Web) see the normal name.
+      this.ua = this.isHeadless() && v.userAgent ? v.userAgent.replace(/HeadlessChrome/g, 'Chrome') : null;
     } catch {
       this.o.log?.('web.browser_start_failed', { browser: pick.label, exited: proc.exitCode, stderr: stderr.slice(-600) });
       this.reset();
@@ -207,7 +236,7 @@ export class KeoBrowser {
     }
     this.current = [...this.pages.keys()][0] ?? null;
     this.opened = [];
-    this.o.log?.('web.browser_started', { browser: pick.label, headless: !!this.o.headless });
+    this.o.log?.('web.browser_started', { browser: pick.label, headless: this.isHeadless() });
   }
 
   private reset(): void {
@@ -291,6 +320,7 @@ export class KeoBrowser {
     const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: p.targetId, flatten: true });
     p.sessionId = sessionId;
     await cdp.send('Page.enable', {}, sessionId);
+    if (this.ua) await cdp.send('Network.setUserAgentOverride', { userAgent: this.ua }, sessionId).catch(() => undefined);
     return sessionId;
   }
 
@@ -418,7 +448,7 @@ export class KeoBrowser {
     } else p = await this.page();
     const sid = await this.attach(p);
     this.current = p.targetId;
-    if (!this.o.headless) await cdp.send('Page.bringToFront', {}, sid).catch(() => undefined);
+    if (!this.isHeadless()) await cdp.send('Page.bringToFront', {}, sid).catch(() => undefined);
     const r = await cdp.send<{ errorText?: string }>('Page.navigate', { url }, sid);
     if (r.errorText) throw new WebError('navigation_failed', `The page could not be opened (${r.errorText}).`, 'yes');
     const until = Date.now() + 20000;
@@ -685,7 +715,18 @@ export class KeoBrowser {
     return { met: false, url: p.url, title: p.title, waitedMs: Date.now() - t0 };
   }
 
-  async screenshot(): Promise<{ png: Buffer; url: string; title: string }> {
+  /** A real mouse click at a point of the current tab (page coordinates), for Keo's own integrations. */
+  async clickPoint(x: number, y: number): Promise<void> {
+    await this.mouseClick(await this.page(), x, y);
+  }
+
+  /** Real text input where the keyboard focus is in the current tab (like typing it at once). */
+  async insertText(text: string): Promise<void> {
+    const p = await this.page();
+    await this.cdp!.send('Input.insertText', { text }, p.sessionId!);
+  }
+
+    async screenshot(): Promise<{ png: Buffer; url: string; title: string }> {
     const p = await this.page();
     const { data } = await this.cdp!.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, p.sessionId!);
     return { png: Buffer.from(data, 'base64'), url: p.url, title: p.title };
