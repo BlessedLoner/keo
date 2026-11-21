@@ -42,6 +42,16 @@ const VOICE_FIRST = `
 # Voice-first mode
 The user talks to Keo and listens to the replies. Answer in one to three short, natural spoken sentences, the way a person would say it: no lists, tables, headings, links, emoji or code unless the user asks to see them. Lead with the answer. For anything long (a plan, a list of results, a draft), say the gist in a sentence and offer to show the details on screen. Numbers, times and names in words that read well aloud. Still use tools exactly as usual, and still ask before anything that sends, posts, buys or deletes.`;
 /** Rounds that only update the checklist do not use up the tool-round limit, up to this many. */
+/** Written in the user's place when Keo picks up interrupted work (see resume). */
+export const RESUME_NOTE =
+  'Keo was restarted while working on this. Carry on from where you stopped: look at your checklist and what is already done (check the current state of the window, page or file first), do not redo finished steps, and finish the rest.';
+
+/** Extra stretches of rounds a long task may take while it keeps making progress (checkpoints). */
+const MAX_CHECKPOINTS = 4;
+/** Progress so far: checklist steps finished plus actions that ran. */
+function progressOf(meta: MessageMeta): number {
+  return (meta.plan?.steps ?? []).filter((s) => s.status === 'done' || s.status === 'skipped').length * 1000 + (meta.tools ?? []).filter((t) => t.outcome === 'executed').length;
+}
 const FREE_PLAN_ROUNDS = 3;
 /** Studio's step list on screen is progress only, like the checklist: its rounds are free too, up to this many. */
 const STUDIO_STEPS_TOOL = 'studio__checklist';
@@ -283,6 +293,20 @@ export class AgentService {
     return { userMessageId: user.id, done: this.runTurn(conversationId, user.id) };
   }
 
+  /**
+   * Picks up work that was interrupted (Keo restarted mid-task): a short note in the user's place
+   * asks the model to carry on from its checklist, without redoing finished steps. Actions still ask
+   * for approval as usual.
+   */
+  resume(conversationId: string): { userMessageId: string; done: Promise<Message> } {
+    if (this.active.has(conversationId)) throw new KeoError('busy', 'Keo is still responding in this conversation.');
+    this.conversations.require(conversationId);
+    const user = this.conversations.addMessage({ conversationId, role: 'user', content: RESUME_NOTE, status: 'complete', meta: { auto: 'resume' } });
+    this.resumedTurns.add(user.id);
+    return { userMessageId: user.id, done: this.runTurn(conversationId, user.id) };
+  }
+  private readonly resumedTurns = new Set<string>();
+
   /** Regenerates the reply to the latest user message. */
   retry(conversationId: string): Promise<Message> {
     if (this.active.has(conversationId)) throw new KeoError('busy', 'Keo is still responding in this conversation.');
@@ -388,6 +412,7 @@ export class AgentService {
     this.emit({ type: 'turn_started', conversationId, messageId: assistant.id, correlationId });
 
     const meta: MessageMeta = { correlationId, tools: [] };
+    if (this.resumedTurns.delete(sourceMessageId)) meta.resumed = true;
     let text = '';
     let lastFlush = 0;
     const flush = (force = false) => {
@@ -568,9 +593,28 @@ export class AgentService {
         text += s;
         this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: s });
       };
+      // Long tasks: at the round limit, work that is still moving forward saves a checkpoint and carries
+      // on (up to MAX_CHECKPOINTS more stretches); only work that stopped moving stops here.
+      let roundBase = 0;
+      let checkpoints = 0;
+      let lastProgress = progressOf(meta);
       for (let iteration = 0; ; iteration++) {
-        const used = iteration - freeRounds;
+        const used = iteration - freeRounds - roundBase;
         if (used >= roundLimit()) {
+          const now = progressOf(meta);
+          const open = (meta.plan?.steps ?? []).filter((s) => s.status === 'pending' || s.status === 'in_progress').length;
+          if (open > 0 && checkpoints < MAX_CHECKPOINTS && now > lastProgress && !signal.aborted) {
+            checkpoints++;
+            lastProgress = now;
+            roundBase += used;
+            const steps = meta.plan?.steps ?? [];
+            note(`${text && !text.endsWith('\n') ? '\n\n' : ''}_Checkpoint ${checkpoints}: ${steps.filter((s) => s.status === 'done').length} of ${steps.length} steps done — carrying on._\n\n`);
+            meta.checkpoints = checkpoints;
+            // Saved, so a restart can pick the work up from here (see resumeInterrupted).
+            this.conversations.updateMessage(assistant.id, { content: text, meta });
+            this.log.info('agent.checkpoint', { checkpoint: checkpoints, open, rounds: iteration }, correlationId);
+            continue;
+          }
           text += `${text ? '\n\n' : ''}_Stopped after ${roundLimit()} tool rounds (limit set in Settings). Say “continue” to carry on._`;
           cut = 'the rest (Keo reached its step limit; say “continue”)';
           break;

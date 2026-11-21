@@ -530,6 +530,7 @@ export const invokeSchemas = {
   'livechat:sendNow': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'livechat:discardDraft': z.object({ id: z.string().regex(/^lc_[A-Za-z0-9_-]{4,64}$/) }).strict(),
   'jobs:list': empty,
+  'board:list': empty,
   'jobs:cancel': z.object({ id: z.string().regex(/^job_[A-Za-z0-9]{6,64}$/) }).strict(),
   'schedule:list': empty,
   'schedule:pause': z.object({ id: z.string().regex(/^sch_[A-Za-z0-9]{6,64}$/), paused: z.boolean() }).strict(),
@@ -895,6 +896,7 @@ export interface InvokeOutputs {
   'livechat:sendNow': LiveChatSession;
   'livechat:discardDraft': LiveChatSession;
   'jobs:list': BackgroundJob[];
+  'board:list': Array<{ id: string; at: string; from: string; text: string }>;
   'jobs:cancel': { cancelled: boolean };
   'schedule:list': ScheduledItem[];
   'schedule:pause': ScheduledItem | null;

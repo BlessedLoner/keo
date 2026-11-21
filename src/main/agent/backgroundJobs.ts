@@ -62,6 +62,8 @@ export interface BackgroundJobDeps {
   /** Runs one turn in the job's conversation (AgentService.send / cancel), resolved lazily. */
   agent: () => {
     send(conversationId: string, text: string, opts: { background: true }): { done: Promise<Message> };
+    /** Carries on interrupted work in that conversation (see AgentService.resume). */
+    resume?(conversationId: string): { done: Promise<Message> };
     cancel(conversationId: string): boolean;
   };
   getSettings: () => Settings;
@@ -69,6 +71,8 @@ export interface BackgroundJobDeps {
   log: Logger;
   /** Where jobs are kept across restarts (Services sets a file in the profile; tests may omit it). */
   store?: { load(): { jobs: BackgroundJob[]; hidden: string[] } | null; save(all: { jobs: BackgroundJob[]; hidden: string[] }): void };
+  /** How long after start interrupted jobs carry on (tests: 0). */
+  resumeDelayMs?: number;
   /** A job finished, failed or was cancelled; its report is already in the parent conversation. */
   finished(job: BackgroundJob, report: Message | null): void;
   changed(): void;
@@ -90,6 +94,9 @@ export interface StartJob {
  * stays free. Up to `agent.maxBackgroundJobs` run at once; more wait in order.
  * When a job ends, its report goes into the conversation that started it.
  */
+/** Work interrupted by a restart is picked up again only when it started this recently. */
+export const RESUME_WITHIN_MS = 2 * 60 * 60_000;
+
 export class BackgroundJobs {
   readonly lease = new DesktopLease();
   private jobs: BackgroundJob[] = [];
@@ -212,8 +219,11 @@ export class BackgroundJobs {
     job.startedAt = nowIso();
     this.save();
     let sent: { done: Promise<Message> };
+    const agent = this.d.agent();
+    const resuming = !!job.resume && !!agent.resume;
+    job.resume = false;
     try {
-      sent = this.d.agent().send(job.conversationId, brief, { background: true });
+      sent = resuming ? agent.resume!(job.conversationId) : agent.send(job.conversationId, brief, { background: true });
     } catch (e) {
       this.settle(job, null, (e as Error).message);
       return;
@@ -337,15 +347,38 @@ export class BackgroundJobs {
     return () => this.lease.release(owner);
   }
 
+  /** The job's title, for the conversation it runs in (null when it is not a job's). */
+  titleFor(conversationId: string | null | undefined): string | null {
+    return conversationId ? (this.byConversation(conversationId)?.title ?? null) : null;
+  }
+
   /** True when this conversation belongs to a job started by a scheduled routine. */
   isRoutineConversation(conversationId: string | null | undefined): boolean {
     return !!conversationId && !!this.byConversation(conversationId)?.scheduleId;
   }
 
-  /** Startup: jobs that were running or queued when Keo closed are reported as interrupted, never replayed. */
-  recover(): number {
+  /**
+   * Startup: a job that was running when Keo closed (and started at most RESUME_WITHIN_MS ago)
+   * carries on from where it stopped in its own conversation; other unfinished jobs are reported as
+   * interrupted, never replayed from the start. Returns how many were interrupted.
+   */
+  recover(now = Date.now()): number {
     this.load();
-    const stale = this.jobs.filter((j) => !TERMINAL.has(j.state));
+    let resumed = 0;
+    for (const j of this.jobs) {
+      if (j.state !== 'running' || !j.startedAt || now - Date.parse(j.startedAt) > RESUME_WITHIN_MS || !this.d.conversations.get(j.conversationId)) continue;
+      j.state = 'queued';
+      j.resume = true;
+      j.waitingForDesktop = false;
+      resumed++;
+      this.d.log.info('jobs.resuming', { jobId: j.id });
+    }
+    const stale = this.jobs.filter((j) => !TERMINAL.has(j.state) && !j.resume);
+    if (resumed) {
+      this.save();
+      // Once the rest of Keo has started.
+      setTimeout(() => this.pump(), this.d.resumeDelayMs ?? 3000).unref?.();
+    }
     for (const j of stale) {
       j.state = 'interrupted';
       j.finishedAt = nowIso();

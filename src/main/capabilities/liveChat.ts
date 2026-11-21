@@ -29,7 +29,7 @@ const view = (s: { id: string; contact: string; status: string; question: string
  * relayed by the agent (an answer must be traceable to a message the user
  * actually wrote, so text from the contact can never steer a session).
  */
-export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService; userMessage: (id: string | null) => string | null }): AnyCapability[] {
+export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService; userMessage: (id: string | null) => string | null; telegramUnavailable?: () => string | null }): AnyCapability[] {
   const start = defineCapability({
     id: 'whatsapp.live_chat_start',
     version: '1.0.0',
@@ -116,6 +116,74 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
     async verify(_i, o) {
       return o.status === 'ended' ? { verified: false, detail: 'The live chat ended immediately.' } : { verified: true, detail: `Live chat with ${o.contact} is running (${o.id}).` };
+    },
+  });
+
+  const startTelegram = defineCapability({
+    id: 'telegram.live_chat_start',
+    version: '1.0.0',
+    title: 'Chat live on Telegram',
+    description:
+      'Start a LIVE Telegram chat through the user\'s Telegram bot with one chat (chatId from telegram__recent; the person must have messaged the bot first): Keo keeps reading new messages and replying for the user until the user says stop (or the time/reply limit is reached), with the same rules as WhatsApp live chats (it pauses and asks about money, meetings, personal matters, "are you a bot?"). It needs no screen, so it runs alongside a WhatsApp live chat. Answer, stop and list it with the whatsapp__live_chat_* tools (they cover every live chat). Put the user\'s purpose in goal and their facts/rules in instructions (their own words).',
+    input: z
+      .object({
+        chatId: z.union([z.number(), z.string().trim().min(1).max(64)]),
+        contact: z.string().trim().min(1).max(120).describe('The person or group name, as telegram__recent shows it.'),
+        goal: z.string().trim().min(1).max(600),
+        instructions: z.array(z.string().trim().min(1).max(400)).max(10).default([]),
+        opening: z.string().trim().min(1).max(1500).optional(),
+        replyToLatest: z.boolean().default(false),
+        maxMinutes: z.number().int().min(5).max(720).optional(),
+        maxReplies: z.number().int().min(1).max(300).optional(),
+      })
+      .strict(),
+    output: Session,
+    risk: 'high',
+    approval: 'always',
+    permissions: [],
+    consequential: true,
+    idempotent: false,
+    timeoutMs: 60000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Telegram confirms every reply with a message id.',
+    unavailableReason: () => d.telegramUnavailable?.() ?? null,
+    autonomy: (i) => ({ tier: 'important', mustBeNamed: i.contact }),
+    preview: (i, s) => {
+      const minutes = i.maxMinutes ?? s.liveChat.maxMinutes;
+      const replies = i.maxReplies ?? s.liveChat.maxReplies;
+      return {
+        summary: `Chat live with “${i.contact}” on Telegram until you say stop`,
+        target: `Telegram chat ${i.chatId} (through your bot)`,
+        consequences: [
+          `Goal: ${i.goal}`,
+          ...(i.instructions.length ? [`Your instructions: ${i.instructions.join(' · ')}`] : []),
+          ...(i.opening ? [`First message: “${i.opening}”`] : []),
+          ...(i.replyToLatest ? ['Replies to their latest message right away.'] : []),
+          `Keo reads new messages and replies from your bot — up to ${replies} replies over ${minutes} minutes, ending earlier after ${s.liveChat.quietMinutes} quiet minutes or when you say stop.`,
+          'It pauses and asks you about money, prices, payments, meetings, personal or urgent matters, “are you a bot?”, and anything it is unsure about.',
+          'It needs no screen: your mouse and keyboard stay yours.',
+        ],
+        dataExport: `Their messages are sent to ${d.activeProviderDestination()} to write replies; replies go to Telegram.`,
+      };
+    },
+    auditView: (i) => ({ contactLength: i.contact.length, instructions: i.instructions.length, opening: !!i.opening, replyToLatest: i.replyToLatest }),
+    async execute(i, ctx) {
+      const s = await d.live.startTelegram({
+        chatId: String(i.chatId),
+        contact: i.contact,
+        goal: i.goal,
+        instructions: i.instructions,
+        opening: i.opening ?? null,
+        maxMinutes: i.maxMinutes ?? ctx.settings.liveChat.maxMinutes,
+        maxReplies: i.maxReplies ?? ctx.settings.liveChat.maxReplies,
+        conversationId: ctx.conversationId,
+      });
+      if (i.replyToLatest) d.live.replyToLatest(s.id);
+      return view(s);
+    },
+    async verify(_i, o) {
+      return o.status === 'ended' ? { verified: false, detail: 'The live chat ended immediately.' } : { verified: true, detail: `Telegram live chat with ${o.contact} is running (${o.id}).` };
     },
   });
 
@@ -229,5 +297,5 @@ export function liveChatCapabilities(d: CapabilityDeps & { live: LiveChatService
     },
   });
 
-  return [start, answer, stop, sendNow, status] as AnyCapability[];
+  return [start, startTelegram, answer, stop, sendNow, status] as AnyCapability[];
 }

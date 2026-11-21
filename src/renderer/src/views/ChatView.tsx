@@ -384,6 +384,16 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming, turn }: { m:
   const plan = livePlan ?? m.meta.plan;
   const copy = () => invoke('app:copyText', { text: m.content }).then((r) => (r.copied ? ui.toast('Copied') : ui.error('Copy failed')), () => ui.error('Copy failed'));
 
+  if (m.role === 'user' && m.meta.auto === 'resume') {
+    // Written by Keo in the user's place when it picks interrupted work back up.
+    return (
+      <div className="msg note">
+        <div className="bubble">
+          <Icon name="info" size={14} /> Keo restarted while working on this — carrying on from where it stopped.
+        </div>
+      </div>
+    );
+  }
   if (m.role === 'note') {
     return (
       <div className="msg note">

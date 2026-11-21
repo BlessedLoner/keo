@@ -167,6 +167,18 @@ export class ConversationRepo {
    * Startup recovery: any message still marked "streaming" was interrupted by
    * a crash or forced exit. Keep the partial text and label it honestly.
    */
+  /**
+   * Replies still being written (status "streaming") that were working through a checklist with steps
+   * left, started after `since`: the work Keo picks back up after a restart. Read before markInterrupted.
+   */
+  unfinishedTurns(since: string): Array<{ conversationId: string; messageId: string }> {
+    return this.db
+      .all<MsgRow>("SELECT * FROM messages WHERE status = 'streaming' AND role = 'assistant' AND created_at >= ? ORDER BY created_at ASC", [since])
+      .map(toMessage)
+      .filter((m) => (m.meta.plan?.steps ?? []).some((s) => s.status === 'pending' || s.status === 'in_progress'))
+      .map((m) => ({ conversationId: m.conversationId, messageId: m.id }));
+  }
+
   markInterrupted(): number {
     return this.db.run("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'").changes;
   }

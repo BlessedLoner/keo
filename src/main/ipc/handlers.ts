@@ -1357,6 +1357,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     'livechat:sendNow': ({ id }) => s.live.sendDraftNow(id),
     'livechat:discardDraft': ({ id }) => s.live.discardDraft(id),
     'jobs:list': () => s.jobs.list(),
+    'board:list': () => s.board.recent(null, 30).reverse(),
     'jobs:cancel': ({ id }) => ({ cancelled: s.jobs.cancel(id) }),
     'schedule:list': () => s.schedule.list(),
     'schedule:pause': ({ id, paused }) => s.schedule.setPaused(id, paused),

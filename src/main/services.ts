@@ -35,7 +35,7 @@ import { launchPowerShellTestWindow, runSelfTest, type SelfTestReport, type Test
 import type { Settings } from '../shared/settings';
 import { ContextBuilder } from './agent/contextBuilder';
 import { AgentService, deriveTitle, type PendingQuestion } from './agent/agentService';
-import { advancedCapabilities, whatsappCheck } from './capabilities/advanced';
+import { advancedCapabilities, resolveWhatsApp, whatsappCheck } from './capabilities/advanced';
 import { liveChatCapabilities } from './capabilities/liveChat';
 import { accessCapabilities } from './capabilities/access';
 import { appCapabilities } from './capabilities/apps';
@@ -63,7 +63,8 @@ import { FfmpegSetup } from './video/setup';
 import { editLabel, parseDirection, type Word } from './video/recipe';
 import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
-import { BackgroundJobs, backgroundJobCapabilities } from './agent/backgroundJobs';
+import { BackgroundJobs, backgroundJobCapabilities, RESUME_WITHIN_MS } from './agent/backgroundJobs';
+import { boardCapabilities, HelperBoard, type BoardNote } from './agent/board';
 import { reminderCapabilities } from './capabilities/reminders';
 import { Scheduler, whenText } from './schedule/scheduler';
 import { fileCapabilities } from './capabilities/files';
@@ -99,7 +100,7 @@ import type { ChatProvider } from './providers/types';
 import { SecretStore, type SecretCipher } from './secrets/secretStore';
 import { SettingsStore } from './settings/settingsStore';
 import { TaskOrchestrator } from './tasks/orchestrator';
-import { KeoError } from './util/errors';
+import { errorMessage, KeoError } from './util/errors';
 import { VisionService, type ImageTools, type WindowCaptureSource } from './vision/visionService';
 import { VoiceService } from './voice/voiceService';
 import { WebService } from './web/webService';
@@ -278,6 +279,8 @@ export class Services {
   readonly live: LiveChatService;
   /** Long requests running in the background, each in its own hidden conversation. */
   readonly jobs: BackgroundJobs;
+  /** The helpers' shared board (live chats, background jobs, the user's chat). */
+  readonly board: HelperBoard;
   /** Reminders and scheduled routines (kept in the database). */
   readonly schedule: Scheduler;
   /** Shared dependencies of the capabilities (used by the dev-only desktop e2e). */
@@ -499,6 +502,18 @@ export class Services {
       },
       log: this.log,
     });
+    const boardFile = path.join(d.profile.userData, 'helper-board.json');
+    const liveFile = path.join(d.profile.userData, 'live-chats.json');
+    this.board = new HelperBoard({
+      changed: () => this.push('board:changed', {}),
+      store: {
+        load: () => (fs.existsSync(boardFile) ? (JSON.parse(fs.readFileSync(boardFile, 'utf8')) as BoardNote[]) : null),
+        save: (notes) => {
+          fs.writeFileSync(`${boardFile}.tmp`, JSON.stringify(notes));
+          fs.renameSync(`${boardFile}.tmp`, boardFile);
+        },
+      },
+    });
     const jobsFile = path.join(d.profile.userData, 'background-jobs.json');
     this.jobs = new BackgroundJobs({
       conversations: this.conversations,
@@ -533,6 +548,16 @@ export class Services {
       log: this.log,
       conversations: this.conversations,
       alert: (session, text, kind) => this.liveChatAlert(session, text, kind),
+      telegram: { recent: (signal) => this.connected.telegram.recent(signal), send: (chatId, text, signal) => this.connected.telegram.send(chatId, text, signal) },
+      board: this.board,
+      store: {
+        load: () => (fs.existsSync(liveFile) ? (JSON.parse(fs.readFileSync(liveFile, 'utf8')) as LiveChatSession[]) : null),
+        save: (sessions) => {
+          fs.writeFileSync(`${liveFile}.tmp`, JSON.stringify(sessions));
+          fs.renameSync(`${liveFile}.tmp`, liveFile);
+        },
+      },
+      findWhatsApp: () => resolveWhatsApp(capDeps, undefined, getSettings()),
       research: async (query, signal) => {
         const st = getSettings();
         if (!st.permissions.webSearchEnabled || !this.web.sourceFor(st.web.engine)) return null;
@@ -925,11 +950,16 @@ export class Services {
       ...workflowCapabilities({ ...capDeps, workflows: this.workflows }),
       ...subAgentCapabilities({ providers: this.providers, registry: this.registry, web: this.web, log: this.log, getSettings }),
       ...backgroundJobCapabilities(() => this.jobs),
+      ...boardCapabilities(this.board, (conversationId) => {
+        const job = this.jobs.titleFor(conversationId);
+        return job ? `Job: ${job}` : 'Keo (your chat)';
+      }),
       ...reminderCapabilities({ scheduler: this.schedule, isJobConversation: (id) => this.jobs.isJobConversation(id) }),
       ...accessCapabilities({ ...capDeps, updateSettings: (permissions) => this.settings.update({ permissions }), currentSettings: getSettings }),
       ...liveChatCapabilities({
         ...capDeps,
         live: this.live,
+        telegramUnavailable: () => this.connectedUnavailable('telegram'),
         userMessage: (id) => {
           const m = id ? this.conversations.getMessage(id) : null;
           // A background job's brief is Keo's text, not the user's.
@@ -1029,13 +1059,16 @@ export class Services {
     };
     this.agent.minToolRounds = (conversationId) => Math.max(this.studioConversations.has(conversationId) ? 24 : 0, getSettings().permissions.fullControl ? 60 : 0);
     this.agent.systemExtra = (conversationId) =>
-      this.jobs.isJobConversation(conversationId) ? this.live.agentContext() + this.researchContext() + this.videoContext() + this.studioContext(conversationId) + this.jobs.jobContext(conversationId) : this.agentExtra(conversationId);
+      this.jobs.isJobConversation(conversationId)
+        ? this.live.agentContext() + this.researchContext() + this.videoContext() + this.studioContext(conversationId) + this.jobs.jobContext(conversationId) + this.board.context(`Job: ${this.jobs.titleFor(conversationId) ?? ''}`, true)
+        : this.agentExtra(conversationId);
     this.agentExtra = (conversationId?: string) =>
       this.live.agentContext() +
       this.researchContext() +
       this.videoContext() +
       this.studioContext(conversationId) +
       this.jobs.statusContext() +
+      this.board.context('Keo (your chat)', this.jobs.list().some((j) => j.state === 'running' || j.state === 'queued') || this.live.list().some((s) => s.status !== 'ended')) +
       this.schedule.statusContext() +
       this.activeWindowContext() +
       (this.voiceMode?.isActive()
@@ -3963,12 +3996,32 @@ export class Services {
     if (!working && cur !== 'keo') this.settings.update({ activeProvider: 'keo' });
   }
 
+  /** How long after start interrupted work carries on (tests set 0). */
+  resumeDelayMs = 4000;
+
   start(): { interruptedMessages: number; recovery: ReturnType<TaskOrchestrator['recover']> } {
     this.useKeoIfNothingElse();
+    // Work cut off by a restart (a checklist with steps left, started recently) carries on by itself.
+    const unfinished = this.conversations.unfinishedTurns(new Date(Date.now() - RESUME_WITHIN_MS).toISOString());
     const interruptedMessages = this.conversations.markInterrupted();
     const recovery = this.tasks.recover();
     const interruptedJobs = this.jobs.recover();
     if (interruptedJobs) this.log.info('jobs.interrupted_on_start', { jobs: interruptedJobs });
+    const own = [...new Set(unfinished.map((u) => u.conversationId))].filter((c) => !this.jobs.isJobConversation(c));
+    // Live chats that were running carry on too (once the rest of Keo has started).
+    setTimeout(() => void this.live.restore().catch((e) => this.log.warn('livechat.restore_failed', { error: errorMessage(e) })), this.resumeDelayMs).unref?.();
+    if (own.length) {
+      setTimeout(() => {
+        for (const c of own) {
+          try {
+            void this.agent.resume(c).done.catch(() => undefined);
+            this.log.info('agent.resumed_after_restart', { conversationId: c });
+          } catch (e) {
+            this.log.warn('agent.resume_failed', { error: errorMessage(e) });
+          }
+        }
+      }, this.resumeDelayMs).unref?.();
+    }
     // Reminders and routines that came due while Keo was closed run once now, marked late.
     this.schedule.start();
     this.tasks.pump();
@@ -4088,7 +4141,8 @@ export class Services {
     this.googleAuth.cancelSignIn();
     this.voiceMode.stop('closing');
     this.wake.stop();
-    this.live.stopAll('Keo was closed');
+    // Running live chats are kept (not ended): they carry on when Keo starts again.
+    this.live.shutdown();
     this.grants.revokeAll();
     this.snapshots.clear();
     this.jobs.shutdown();

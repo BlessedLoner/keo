@@ -59,7 +59,10 @@ function LiveChatCard({ s }: { s: LiveChatSession }) {
     <div className={`card livechat ${s.status}`}>
       <div className="row">
         <Icon name="chat" size={16} />
-        <strong className="grow">Live chat with {s.contact}</strong>
+        <strong className="grow">
+          Live chat with {s.contact}
+          {s.channel === 'telegram' ? ' · Telegram' : ' · WhatsApp'}
+        </strong>
         <span className={`chip ${chip}`}>{LIVE_LABEL[s.status]}</span>
         <span className="muted small">
           {s.replies}/{s.maxReplies} replies{live ? ` · until ${new Date(s.endsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
@@ -165,6 +168,28 @@ function LiveChats() {
 
 const JOB_LABEL: Record<BackgroundJob['state'], string> = { queued: 'Queued', running: 'Working', completed: 'Done', failed: 'Failed', cancelled: 'Stopped', interrupted: 'Interrupted' };
 const JOB_CHIP: Record<BackgroundJob['state'], string> = { queued: 'info', running: 'accent', completed: 'ok', failed: 'danger', cancelled: '', interrupted: 'warn' };
+
+/** The helpers' shared board: short notes live chats, background jobs and the user's chat leave for each other. */
+function HelperBoardList() {
+  const q = useInvoke('board:list', {}, { refreshOn: ['board:changed'], pollMs: 30000 });
+  const notes = (q.data ?? []).filter((n) => Date.now() - Date.parse(n.at) < 24 * 3600_000).slice(0, 8);
+  if (!notes.length) return null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <h3 style={{ margin: '0 0 6px' }}>Helper board</h3>
+      <div className="card">
+        {notes.map((n) => (
+          <div key={n.id} className="small" style={{ padding: '3px 0' }}>
+            <span className="muted">
+              {new Date(n.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {n.from}:
+            </span>{' '}
+            {n.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** Long requests Keo works on in the background; their reports go to the conversation that asked. */
 function BackgroundJobs() {
@@ -287,6 +312,7 @@ export function TasksView() {
         <BackgroundJobs />
         <Scheduled />
         <LiveChats />
+        <HelperBoardList />
         <GrantsBanner />
         {shown.length === 0 ? (
           <Empty icon="tasks" title={filter === 'attention' ? 'Nothing needs your attention' : 'No tasks here'}>

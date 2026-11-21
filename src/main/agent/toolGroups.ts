@@ -78,7 +78,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
-  connected: 'connected apps: Telegram (the user’s bot), Notion pages, Slack channels, Google Drive (files Keo saves there)',
+  connected: 'connected apps: Telegram (the user’s bot; also live Telegram chats), Notion pages, Slack channels, Google Drive (files Keo saves there)',
 };
 
 /** Words that bring a group in (the newest user messages, lower-cased). */

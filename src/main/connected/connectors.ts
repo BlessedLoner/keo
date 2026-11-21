@@ -35,11 +35,11 @@ export class TelegramBot {
     return { username: r.username ?? '', name: r.first_name ?? '' };
   }
   /** The chats that messaged the bot lately (people must message it first: bots cannot start chats), with their last messages. */
-  async recent(signal?: AbortSignal): Promise<Array<{ chatId: number; chat: string; from: string; text: string; at: string }>> {
-    const updates = await this.call<Array<{ message?: { chat: { id: number; title?: string; first_name?: string; username?: string }; from?: { first_name?: string; username?: string }; text?: string; caption?: string; date: number } }>>('getUpdates', { limit: 50, allowed_updates: ['message'] }, signal);
+  async recent(signal?: AbortSignal): Promise<Array<{ id: number; chatId: number; chat: string; from: string; text: string; at: string }>> {
+    const updates = await this.call<Array<{ message?: { message_id: number; chat: { id: number; title?: string; first_name?: string; username?: string }; from?: { first_name?: string; username?: string }; text?: string; caption?: string; date: number } }>>('getUpdates', { limit: 50, allowed_updates: ['message'] }, signal);
     return updates
       .flatMap((u) => (u.message ? [u.message] : []))
-      .map((m) => ({ chatId: m.chat.id, chat: m.chat.title ?? m.chat.first_name ?? m.chat.username ?? String(m.chat.id), from: m.from?.first_name ?? m.from?.username ?? '', text: (m.text ?? m.caption ?? '').slice(0, 1000), at: new Date(m.date * 1000).toISOString() }))
+      .map((m) => ({ id: m.message_id, chatId: m.chat.id, chat: m.chat.title ?? m.chat.first_name ?? m.chat.username ?? String(m.chat.id), from: m.from?.first_name ?? m.from?.username ?? '', text: (m.text ?? m.caption ?? '').slice(0, 1000), at: new Date(m.date * 1000).toISOString() }))
       .reverse();
   }
   async send(chatId: number | string, text: string, signal?: AbortSignal): Promise<{ messageId: number }> {

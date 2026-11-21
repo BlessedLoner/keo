@@ -234,6 +234,12 @@ export interface MessageMeta {
   timings?: { modelMs: number; toolMs: number; totalMs: number; modelCalls: number };
   /** Older tool results shortened during this reply to keep the context small. */
   compactedResults?: number;
+  /** Checkpoints a long task saved when it reached the round limit and carried on. */
+  checkpoints?: number;
+  /** This reply picked up work that was interrupted (Keo restarted) or paused. */
+  resumed?: boolean;
+  /** A message Keo wrote itself in the user's place (shown as a small note, not as the user's words). */
+  auto?: 'resume';
   /** Files and pictures the user attached to this message. */
   attachments?: MessageAttachment[];
   /** How the work in this reply really ended; absent for a plain answer with no steps. */
@@ -262,6 +268,8 @@ export interface BackgroundJob {
   scheduleId?: string | null;
   /** How the job's work really ended (completed jobs can still be partly done or waiting on the user). */
   ending?: TurnEnding | null;
+  /** The job was running when Keo closed and carries on from where it stopped (not from the start). */
+  resume?: boolean;
 }
 
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
@@ -502,6 +510,10 @@ export interface LiveChatSession {
   transcript: LiveChatLine[];
   /** A reply Keo is ready to send (waiting for the user to pause, or for "Send now"). */
   draft: string | null;
+  /** Where the chat happens: WhatsApp on the screen (default), or Telegram through the user's bot (no screen needed). */
+  channel?: 'whatsapp' | 'telegram';
+  /** The Telegram chat (channel "telegram"). */
+  telegramChatId?: string;
 }
 
 export interface NavigationGrant {

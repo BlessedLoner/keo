@@ -189,6 +189,23 @@ describe('live chat sessions', () => {
     expect(session().question ?? '').not.toMatch(/could not confirm/);
   });
 
+  it('after a restart, the WhatsApp live chat carries on and answers the message that came in meanwhile', async () => {
+    const { wa } = await startWithMum();
+    // Keo closes (the running session is gone from memory; it was saved).
+    const live = h.services.live as unknown as { live: Map<string, { timer: NodeJS.Timeout | null; abort: AbortController }> };
+    for (const r of live.live.values()) {
+      if (r.timer) clearTimeout(r.timer);
+      r.abort.abort();
+    }
+    live.live.clear();
+    incoming(wa, 'Mum', 'Are you still there?');
+    brain.push(decision({ action: 'reply', message: 'Yes Mum, I am here!' }));
+    expect(await h.services.live.restore()).toBe(1);
+    await waitFor(() => wa.sent.length === 1, 5000)
+    expect(wa.sent[0]!.text).toBe('Yes Mum, I am here!');
+    expect(session().status).toBe('active');
+  });
+
   it('a send that never shows still pauses and asks the user to check (nothing is sent again)', async () => {
     const { wa } = await startWithMum();
     wa.dropSends = true;
