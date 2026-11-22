@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { FX_JS, FX_USAGE } from './fxKit';
 
 /**
  * The libraries Keo's builder ships with (open source, installed with Keo, never downloaded while
@@ -54,6 +55,56 @@ export const BUILD_FONTS: Array<{ family: string; pkg: string; css: string[]; ro
   { family: 'JetBrains Mono', pkg: '@fontsource-variable/jetbrains-mono', css: ['wght.css', 'wght-italic.css'], role: 'monospace (code, numbers, terminals)' },
 ];
 
+/**
+ * More display and character fonts, from the font files Keo ships for Studio (SIL Open Font License,
+ * each folder has its OFL.txt): the range an art director needs, not only safe sans and serifs.
+ */
+export const EXTRA_FONTS: Array<{ family: string; dir: string; role: string }> = [
+  { family: 'Unbounded', dir: 'unbounded', role: 'wide geometric display (bold modern headlines)' },
+  { family: 'Bricolage Grotesque', dir: 'bricolagegrotesque', role: 'characterful grotesk (studios, friendly brands)' },
+  { family: 'Syne', dir: 'syne', role: 'art-gallery display (creative, avant-garde)' },
+  { family: 'Instrument Serif', dir: 'instrumentserif', role: 'editorial serif with italic (magazines, luxury)' },
+  { family: 'DM Serif Display', dir: 'dmserifdisplay', role: 'high-contrast serif display' },
+  { family: 'Big Shoulders Display', dir: 'bigshouldersdisplay', role: 'tall condensed display (cinematic, industrial)' },
+  { family: 'Archivo Black', dir: 'archivoblack', role: 'heavy grotesk (brutalist, posters)' },
+  { family: 'Anton', dir: 'anton', role: 'condensed impact headlines' },
+  { family: 'Rubik Mono One', dir: 'rubikmonoone', role: 'chunky mono caps (brutalist, playful)' },
+  { family: 'Space Mono', dir: 'spacemono', role: 'retro monospace (tech, zines)' },
+  { family: 'Teko', dir: 'teko', role: 'sporty condensed (sport, fitness)' },
+  { family: 'Oswald', dir: 'oswald', role: 'condensed sans (sport, news)' },
+  { family: 'Monoton', dir: 'monoton', role: 'neon retro lines (80s, music)' },
+  { family: 'Righteous', dir: 'righteous', role: 'retro rounded display' },
+  { family: 'Bungee', dir: 'bungee', role: 'urban signage display' },
+  { family: 'Shrikhand', dir: 'shrikhand', role: 'fat retro italic (food, fun)' },
+  { family: 'Abril Fatface', dir: 'abrilfatface', role: 'fat didone headlines (posters, editorial)' },
+  { family: 'Permanent Marker', dir: 'permanentmarker', role: 'marker handwriting (notes, collage)' },
+  { family: 'Caveat', dir: 'caveat', role: 'casual handwriting' },
+  { family: 'Montserrat', dir: 'montserrat', role: 'classic geometric sans' },
+  { family: 'Raleway', dir: 'raleway', role: 'elegant thin-to-bold sans' },
+  { family: 'Bangers', dir: 'bangers', role: 'comic book display' },
+  { family: 'Black Ops One', dir: 'blackopsone', role: 'stencil military display (games)' },
+  { family: 'Great Vibes', dir: 'greatvibes', role: 'formal script (weddings)' },
+  { family: 'Pacifico', dir: 'pacifico', role: 'surf script (casual brands)' },
+];
+
+/** Where Keo's own font files are: the source folder when developing, the built app's folder when installed. */
+function extraFontDir(modules: string): string | null {
+  const root = path.dirname(modules);
+  for (const d of [path.join(root, 'src', 'renderer', 'public', 'fonts'), path.join(root, 'out', 'renderer', 'fonts')]) if (fs.existsSync(d)) return d;
+  return null;
+}
+
+/** A font file's weight and style from its name ("…-wght-italic.woff2", "Poppins-Bold.ttf", "…-400-normal.woff2"). */
+export function fontFace(file: string): { weight: string; style: 'normal' | 'italic' } {
+  const n = file.toLowerCase();
+  const style = /italic/.test(n) ? 'italic' : 'normal';
+  if (/wght|variable/.test(n)) return { weight: '100 900', style };
+  const num = /-(\d{3})-/.exec(n)?.[1];
+  if (num) return { weight: num, style };
+  const named: Array<[RegExp, string]> = [[/extrabold/, '800'], [/semibold/, '600'], [/black/, '900'], [/bold/, '700'], [/light/, '300'], [/medium/, '500']];
+  return { weight: named.find(([r]) => r.test(n))?.[1] ?? '400', style };
+}
+
 /** fonts.css plus just the font files it uses (Latin and Latin Extended), into lib/fonts. */
 function makeFonts(modules: string, libDir: string): void {
   const out: string[] = ['/* Fonts that come with Keo — SIL Open Font License 1.1 (see LICENSES.txt). */'];
@@ -80,6 +131,24 @@ function makeFonts(modules: string, libDir: string): void {
       licenses.push(`${f.family}\n${fs.readFileSync(path.join(dir, 'LICENSE'), 'utf8')}`);
     } catch {
       /* the license text is in the package; the notice in fonts.css still applies */
+    }
+  }
+  const extra = extraFontDir(modules);
+  if (extra) {
+    for (const f of EXTRA_FONTS) {
+      const dir = path.join(extra, f.dir);
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir).filter((x) => /\.(woff2|ttf)$/i.test(x))) {
+        copyTree(path.join(dir, file), path.join(libDir, file));
+        const { weight, style } = fontFace(file);
+        const format = file.toLowerCase().endsWith('.ttf') ? 'truetype' : 'woff2';
+        out.push(`@font-face {\n  font-family: '${f.family}';\n  font-style: ${style};\n  font-display: swap;\n  font-weight: ${weight};\n  src: url(./${file}) format('${format}');\n}`);
+      }
+      try {
+        licenses.push(`${f.family}\n${fs.readFileSync(path.join(dir, 'OFL.txt'), 'utf8')}`);
+      } catch {
+        /* the notice in fonts.css still applies */
+      }
     }
   }
   fs.mkdirSync(libDir, { recursive: true });
@@ -136,8 +205,8 @@ export const BUILD_LIBRARIES = {
     importMap: { '@dimforge/rapier3d-compat': '/lib/rapier/rapier.es.js' },
   },
   fonts: {
-    label: 'Fonts (15 real web fonts, offline: sans, serif, display, pixel and mono)',
-    usage: `<link rel="stylesheet" href="/lib/fonts/fonts.css"> then font-family by name, with a fallback: ${BUILD_FONTS.map((f) => `"${f.family}" (${f.role})`).join(', ')}. Variable weights 100–900 where the font has them. Pick one or two that fit the brand (a heading font and a body font).`,
+    label: `Fonts (${BUILD_FONTS.length + EXTRA_FONTS.length} real web fonts, offline: sans, serif, display, condensed, retro, handwriting, pixel and mono)`,
+    usage: `<link rel="stylesheet" href="/lib/fonts/fonts.css"> then font-family by name, with a fallback: ${[...BUILD_FONTS, ...EXTRA_FONTS].map((f) => `"${f.family}" (${f.role})`).join(', ')}. Variable weights 100–900 where the font has them. Pick what the art direction says (a display font with character and a body font) — not the same safe pair every time.`,
     files: [],
     make: makeFonts,
   },
@@ -147,6 +216,15 @@ export const BUILD_LIBRARIES = {
       'For any car or driving game. Brings three.js, Rapier and the fonts with it. FIRST read lib/drive/README.md with build__read: it is the whole API on one page (options, car spec units, a world of several cities with travel, passenger jobs, events, the game object). Do not read the kit\'s other files while building (that only wastes the user\'s allowance) — but when the user reports a problem that is not in your own files (the car, physics, police, HUD misbehave), DO read the kit file involved (lib/drive/vehicle.js for the car and its physics, game.js for the loop and crashes, ai.js for police and traffic) and measure it while playing (build__check) until you find the cause. The game is one call: <script type="module"> import { createDriveGame } from "/lib/drive/index.js"; const game = await createDriveGame({ city: "/assets/city.json", title: "…", cars: [{ id, name, style, price, color, spec: { power: 12000 (newtons), topSpeed: 80 (m/s), grip: 3.4, mass: 1400 (kg) }, model: "/assets/cars/x.glb" }], races: […], jobs: {…}, cities: […], onEvent(e, game) { … } }); </script>. The kit draws the menus, HUD, garage, controls and credit itself: do not rebuild them. Missions and story go in your own js files using the game object.',
     files: [['keo-drive-kit', 'drive']],
     needs: ['three', 'rapier', 'fonts'],
+  },
+  fx: {
+    label: "Keo's effects kit (film grain, WebGL shader backgrounds, kinetic split-text reveals, custom cursor, magnetic buttons, marquees, 3D tilt, parallax, counters, reading bar, page wipes)",
+    usage: FX_USAGE,
+    files: [],
+    make: (_modules: string, libDir: string) => {
+      fs.mkdirSync(libDir, { recursive: true });
+      fs.writeFileSync(path.join(libDir, 'fx.js'), FX_JS);
+    },
   },
   icons: {
     label: 'Icons (Lucide: 2,300+ clean line icons, offline)',

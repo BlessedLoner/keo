@@ -1004,10 +1004,12 @@ export class Services {
         get host() {
           return self.buildHost;
         },
-        look: async (png, brief, signal) =>
+        look: async (png, brief, signal, mode) =>
           this.askVision(
             [png],
-            `This is a screenshot of a ${brief.slice(0, 400)} that Keo built, as a visitor sees it. In a few short lines: what it shows, and anything that looks broken, empty, unfinished, overlapping, unreadable, off-screen or ugly (be specific: where and what). Say "Looks right." if nothing is wrong.`,
+            mode === 'critique'
+              ? `You are the creative director of a top digital design studio (award-winning sites). This is the first screen of a ${brief.slice(0, 500)} that Keo built. Be honest and demanding. Score 1–10 each: originality (does it look like a template?), typography, composition and hierarchy, colour, imagery (real art-directed visuals, or emoji, clip-art and placeholders?), and sense of motion/craft. Then list the 3–5 most important changes, each concrete enough to code (what, where, how — e.g. "make the headline 14vw Unbounded, break it over the image, left-aligned"). Also say anything broken. No praise padding.`
+              : `This is a screenshot of a ${brief.slice(0, 400)} that Keo built, as a visitor sees it. In a few short lines: what it shows, and anything that looks broken, empty, unfinished, overlapping, unreadable, off-screen or ugly (be specific: where and what). Say "Looks right." if nothing is wrong.`,
             signal,
           ),
         city: async (place, radius, signal) => {

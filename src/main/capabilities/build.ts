@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CheckAction } from '../build/checkActions';
 import { BUILD_LIBRARIES, BUILD_LIBRARY_IDS, type BuildLibraryId } from '../build/libraries';
 import { BuildError, BuildId, BuildKind, TodoItem, type BuildManifest, type BuildProjects } from '../build/projects';
+import { ART_DIRECTIONS, directionBrief, directionById, pickDirections } from '../build/directions';
 import type { BuildCheck } from '../build/host';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
@@ -13,9 +14,9 @@ import { CapabilityError, defineCapability, type AnyCapability } from './types';
 export interface BuildDeps {
   projects: BuildProjects;
   /** The preview and its checks (Keo's sandboxed windows); null in tests without Electron. */
-  host: { open(id: string, page?: string): Promise<void>; check(id: string, page?: string, o?: { waitMs?: number; width?: number; height?: number; actions?: CheckAction[] }): Promise<BuildCheck>; changed?(id: string): void } | null;
+  host: { open(id: string, page?: string): Promise<void>; check(id: string, page?: string, o?: { waitMs?: number; width?: number; height?: number; actions?: CheckAction[]; settle?: boolean }): Promise<BuildCheck>; changed?(id: string): void } | null;
   /** Keo's vision model looks at a screenshot: what it shows and what looks wrong; null when no model sees pictures. */
-  look?: (png: Buffer, brief: string, signal: AbortSignal) => Promise<string>;
+  look?: (png: Buffer, brief: string, signal: AbortSignal, mode?: 'check' | 'critique') => Promise<string>;
   /** An AI picture for the site (Keo's picture maker): PNG bytes. */
   picture?: (prompt: string, size: '1024x1024' | '1536x1024' | '1024x1536', signal: AbortSignal) => Promise<Buffer>;
   /** A real place from OpenStreetMap, as the drive kit's city.json. */
@@ -23,6 +24,9 @@ export interface BuildDeps {
   /** A realistic AI 3D model (GLB bytes) from a description; null when it cannot be made here (and why). */
   model3d?: { make: (prompt: string, signal: AbortSignal) => Promise<Buffer>; unavailable: () => string | null; costLabel: string };
 }
+
+const CRITIQUES_PER_WINDOW = 2;
+const CRITIQUE_WINDOW_MS = 20 * 60_000;
 
 const fail = (code: string, message: string) => new CapabilityError(code, message, { dispatched: 'no' });
 const run = <T>(f: () => T): T => {
@@ -39,13 +43,16 @@ const LIB_HELP = BUILD_LIBRARY_IDS.map((id) => `${id}: ${BUILD_LIBRARIES[id].lab
 const HOW_TO_BUILD = [
   'How Keo builds (follow it):',
   '0. One build per request: when the user continues ("continue", "are you done?", "fix it", "add…"), keep working on that build (build__start in the same chat gives it back with its files; build__list finds others); never start a second build for the same thing.',
-  '1. Plan first: the pages or screens, the features, the look (colours, fonts, motion), the data the backend keeps. Build the whole thing, not a demo: every page, every button working, real content (no lorem ipsum), mobile and desktop layouts.',
+  '1. Plan first: the pages or screens, the features, the data the backend keeps. Build the whole thing, not a demo: every page, every button working, real content (no lorem ipsum), mobile and desktop layouts.',
+  'ART DIRECTION (Keo is a creative studio, not a template machine): build__start gives the build an art direction — type, colour, layout, motion, signature moves — chosen to suit it and different from Keo\'s recent builds; it lists two other directions too. Commit to it fully and push it further: it is the floor, not the ceiling. If the user describes a look, follow theirs instead (build__update direction, or none). Make every site feel designed by a top studio for THIS brand: a bold idea in the first screen (huge type, a moving shader or 3D scene, an unexpected layout), real hierarchy and rhythm, details that reward a closer look (hover states, micro-interactions, transitions between pages). Use the "fx" library for the signature moves (grain, shader backgrounds, split-text reveals, cursor, magnetic buttons, marquees, tilt, page wipes) and GSAP for scroll stories.',
+  'NEVER (it makes sites look generic and dated): emoji as pictures or illustrations; the cream page + serif headline + three rounded cards template; a centred hero with two buttons over a stock gradient; icons in coloured circles as the main visuals; the same fonts as the last build. Pictures: build__picture (art-directed photos, renders, illustrations in one consistent style), SVG art, CSS art or a three.js scene — real visuals, not placeholders.',
   '2. Files: index.html at the root (and other pages: about.html, shop.html…), css/, js/, assets/. Pages link files by root paths (/css/site.css, /js/app.js). Split the code into several focused files (css/base.css, css/sections.css, js/motion.js, js/form.js…), never one huge file.',
   '   SMALL CALLS (a reply has a length limit; a call that is too long is cut off and fails): one file per build__write call, under 8,000 characters. A longer file is written in parts: build__write its first part, then build__append the next parts, each under 8,000 characters, in order. Never put a whole site in one call.',
-  '3. Libraries come with Keo (never from the internet): list them in build__start or build__update and Keo copies them into /lib. Every site: "fonts" (real web fonts — choose ones that fit the brand) and "icons" (Lucide icons; never emoji as icons). No CDN links, no Google Fonts links, no remote images: make pictures with build__picture, SVG, CSS or canvas.',
+  '3. Libraries come with Keo (never from the internet): list them in build__start or build__update and Keo copies them into /lib. Every site: "fonts" (the art direction\'s fonts), "icons" (Lucide icons; never emoji as icons) and "fx" (Keo\'s effects kit); "gsap" for scroll and motion. No CDN links, no Google Fonts links, no remote images: make pictures with build__picture, SVG, CSS or canvas.',
   '4. Backend (websites and apps that keep data, have accounts, forms, orders…): api/index.js written like a Cloudflare Worker — export default { async fetch(request, env) { … } } routing on new URL(request.url).pathname under /api/…, answering with Response.json(...). The database is env.DB, like Cloudflare D1: await env.DB.prepare("SELECT … WHERE id = ?").bind(id).all() → { results }, .first(), .run() → { meta: { last_row_id } }, env.DB.batch([...]). Tables in api/schema.sql (CREATE TABLE IF NOT EXISTS …), made automatically. Hash passwords with crypto.subtle (PBKDF2), keep sessions in a table with a random token in an HttpOnly cookie. Pages call it with fetch("/api/…"). Settings go in build__update vars (env.NAME); secrets (payment keys) never in files: put them on the to-do list.',
   '5. Check your work: build__check loads a page like a visitor, reports errors, missing files and what it looks like. Fix everything it finds (build__edit for small changes), check again until clean. Check every page, and the API by using the pages.',
   '6. To-do list: things only the user can do (buy a domain, create a Paystack or Stripe account and add its secret key, an email service, a Cloudflare account, legal pages’ details, real photos or texts) go in build__update todo with how to do each. Never pretend those are done.',
+  '6b. Taste check (websites, landing pages, portfolios, shops, motion sites): once it works, build__check the home page with critique: true — an art director scores it and lists what would make it extraordinary. Apply the changes, and critique again if any score was below 8 (at most two rounds). A site that works but looks ordinary is not finished.',
   '7. Finish: build__open shows it to the user in Keo’s preview. Tell them what you built, the pages and features, how to try it, and their to-do list. PUT-IT-ONLINE.md in the folder explains going online.',
   '',
   'Car and driving games (racing, police chases, taxi and delivery, open-world city driving): ALWAYS the "drive" library — a tested engine with realistic lighting, real cities, real car physics, traffic, police, races, passengers to pick up, travel between cities, a garage and a HUD. Never write a car game from scratch. Steps: build__start with libraries ["drive"]; build__read lib/drive/README.md once (the whole API on one page — never read the kit\'s other files); build__city for the real place (a US downtown fits street racing; the kit shows the credit line). For a game across several cities or countries, build__city once per city into its own file (path "assets/cities/<name>.json") and list them in cities: the player travels between them; a whole country as one map is not possible, so say so and offer its main cities. For realistic cars build__model each car (about one per class, it costs credits: ask how many the user wants if unclear; without credits the kit draws its own cars). Then index.html calling createDriveGame with the cars, races, cities and jobs, and your own js files for missions and story on the returned game object. Car specs are in real units (power in newtons, about 8000–16000; topSpeed in metres per second, about 60–100), never 0–1 ratings. Make the brand and car names up (real brands need a licence). Check with build__check, then build__open.',
@@ -74,9 +81,10 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
         kind: BuildKind,
         brief: z.string().trim().max(2000).describe('What it is and for whom, in a few sentences (kept with the build).'),
         libraries: Libraries.default([]),
+        direction: z.string().max(40).optional().describe(`An art direction id (${ART_DIRECTIONS.map((x) => x.id).join(', ')}), or "none" when the user described their own look. Leave it out and Keo picks the best fit that recent builds did not use.`),
       })
       .strict(),
-    output: Manifest.extend({ next: z.string(), continued: z.boolean(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional() }),
+    output: Manifest.extend({ next: z.string(), continued: z.boolean(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional(), artDirection: z.string().optional(), otherDirections: z.array(z.string()).optional() }),
     approval: 'never',
     consequential: false,
     idempotent: false,
@@ -95,11 +103,23 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
           ...summary(d, m),
           continued: true,
           files: run(() => d.projects.files(m.id)),
-          next: 'This chat already has this build: carry on with it (do not start another). Its files are listed: read what is there with build__read, write what is missing, fix what is broken, then build__check and build__open.',
+          ...(m.direction && directionById(m.direction) ? { artDirection: directionBrief(directionById(m.direction)!) } : {}),
+          next: 'This chat already has this build: carry on with it (do not start another). Its files are listed: read what is there with build__read, write what is missing, fix what is broken, then build__check and build__open. Keep its art direction.',
         };
       }
-      const m = run(() => d.projects.create({ title: i.title, kind: i.kind, brief: i.brief, libraries: i.libraries, ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}) }));
-      return { ...summary(d, m), continued: false, next: 'Write the files with build__write (one file per call, under 8,000 characters; long files in parts with build__append), then build__check each page and fix what it finds.' };
+      // An art direction that suits it and that Keo's last builds did not use (a drive game keeps the kit's own look).
+      const recent = d.projects.list().slice(0, 4).map((b) => b.direction).filter((x): x is string => !!x);
+      const options = pickDirections(i.brief, i.kind, recent, 3);
+      const usesKitLook = i.libraries.includes('drive');
+      const chosen = usesKitLook || i.direction === 'none' ? undefined : (i.direction && directionById(i.direction)) || options[0];
+      const libraries = chosen ? ([...new Set([...i.libraries, 'fonts', 'icons', 'fx'])] as BuildLibraryId[]) : i.libraries;
+      const m = run(() => d.projects.create({ title: i.title, kind: i.kind, brief: i.brief, libraries, ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}), ...(chosen ? { direction: chosen.id } : {}) }));
+      return {
+        ...summary(d, m),
+        continued: false,
+        ...(chosen ? { artDirection: directionBrief(chosen), otherDirections: options.filter((o) => o.id !== chosen.id).map((o) => `${o.id}: ${o.name} — ${o.mood}`) } : {}),
+        next: `${chosen ? `Design it in the art direction above (${chosen.name}) and tell the user in one line which direction you chose (they can ask for another). ` : ''}Write the files with build__write (one file per call, under 8,000 characters; long files in parts with build__append), then build__check each page and fix what it finds.`,
+      };
     },
   });
 
@@ -181,7 +201,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     title: 'Read a build',
     description: 'List a build’s files (no path) with its settings, to-do list and where the work stands (the last check, open problems, recent changes), or read one file (path). Continuing a build (“continue editing the shop site”): read this first, then the files you will change, and pick up from the open problems.',
     input: z.object({ build: BuildId, path: z.string().min(3).max(300).optional() }).strict(),
-    output: z.object({ build: Manifest.optional(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional(), state: z.unknown().optional(), next: z.string().optional(), path: z.string().optional(), content: z.string().optional(), truncated: z.boolean().optional() }),
+    output: z.object({ build: Manifest.optional(), artDirection: z.string().optional(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional(), state: z.unknown().optional(), next: z.string().optional(), path: z.string().optional(), content: z.string().optional(), truncated: z.boolean().optional() }),
     approval: 'never',
     consequential: false,
     idempotent: true,
@@ -201,8 +221,11 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
             : st.changedSinceCheck
               ? 'Files changed after its last check: build__check it first to see where it stands.'
               : 'Its last check passed: read the files you will change, make the change, then build__check again.';
+        const man = run(() => d.projects.manifest(i.build));
+        const dir = man.direction ? directionById(man.direction) : undefined;
         return {
-          build: summary(d, run(() => d.projects.manifest(i.build))),
+          build: summary(d, man),
+          ...(dir ? { artDirection: directionBrief(dir) } : {}),
           files: run(() => d.projects.files(i.build)),
           state: { lastCheck: st.last ? { at: st.last.at.slice(0, 16).replace('T', ' '), passed: st.last.ok, problems: st.last.problems } : null, lastGood: st.good?.at.slice(0, 16).replace('T', ' ') ?? null, changedSinceCheck: st.changedSinceCheck, recentChanges: recent },
           next,
@@ -226,9 +249,10 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
         libraries: Libraries.optional(),
         vars: z.record(z.string().regex(/^[A-Z][A-Z0-9_]{1,40}$/), z.string().max(400)).optional(),
         todo: z.array(TodoItem).max(40).optional(),
+        direction: z.string().max(40).optional().describe('Another art direction id (when the user wants a different look), or "none".'),
       })
       .strict(),
-    output: Manifest,
+    output: Manifest.extend({ artDirection: z.string().optional() }),
     approval: 'never',
     consequential: false,
     idempotent: true,
@@ -238,8 +262,11 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     preview: () => ({ summary: 'Change the build’s settings', target: null, consequences: [], dataExport: null }),
     auditView: (i) => ({ libraries: i.libraries ?? null, todo: i.todo?.length ?? null }),
     async execute(i) {
-      const { build, ...patch } = i;
-      return summary(d, run(() => d.projects.update(build, patch)));
+      const { build, direction, ...patch } = i;
+      if (direction && direction !== 'none' && !directionById(direction)) throw fail('invalid_input', `There is no art direction “${direction}”. Choose one of: ${ART_DIRECTIONS.map((x) => x.id).join(', ')}.`);
+      const m = run(() => d.projects.update(build, { ...patch, ...(direction ? { direction: direction === 'none' ? undefined : direction } : {}) }));
+      const dir = m.direction ? directionById(m.direction) : undefined;
+      return { ...summary(d, m), ...(dir ? { artDirection: directionBrief(dir) } : {}) };
     },
   });
 
@@ -274,6 +301,16 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     },
   });
 
+  // The art director's critique costs a picture read and leads to rounds of changes: at most two per
+  // build in a short while, so polishing never eats a whole request.
+  const critiques = new Map<string, number[]>();
+  const mayCritique = (build: string, now = Date.now()) => {
+    const recent = (critiques.get(build) ?? []).filter((t) => now - t < CRITIQUE_WINDOW_MS);
+    if (recent.length >= CRITIQUES_PER_WINDOW) return false;
+    critiques.set(build, [...recent, now]);
+    return true;
+  };
+
   const check = defineCapability({
     ...base,
     id: 'build.check',
@@ -281,7 +318,7 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     description:
       'Load a page of a build like a visitor would (in Keo’s sandbox, with its API), let it run, and report its errors, missing files, the text it shows, and what it looks like (Keo’s vision model looks at a screenshot). Then USE it with actions, in order: {do:"click", text:"Play"} (the words on a button or link; or selector, or x and y for a canvas), {do:"keys", keys:["KeyW"], holdSeconds:3} (keys as KeyboardEvent.code, held together), {do:"type", text:"…", selector:"#email"}, {do:"scroll", y:800}, {do:"wait", seconds:2}, {do:"measure", expression:"window.game.player.mph"} (a JavaScript expression read in the page: a score, a speed, a count of items, whether a message is shown). The report lists what each action did; text and the screenshot are from after the actions. A page that loads is not proof it works: play the game (start it, hold the controls, measure that things move and the score changes), submit the form, open the menu. For a problem the user saw after a while ("the car breaks after a minute"), play that long: hold the keys up to 60 s at a time and measure the values involved (speed, health, position) before and after. Fix what it finds and check again. Use mobile: true to check the phone layout.',
     input: z
-      .object({ build: BuildId, page: z.string().max(300).default(''), mobile: z.boolean().default(false), waitSeconds: z.number().min(1).max(15).default(3), actions: z.array(CheckAction).max(14).default([]) })
+      .object({ build: BuildId, page: z.string().max(300).default(''), mobile: z.boolean().default(false), waitSeconds: z.number().min(1).max(15).default(3), actions: z.array(CheckAction).max(14).default([]), critique: z.boolean().default(false) })
       .strict(),
     output: z.object({
       page: z.string(),
@@ -308,12 +345,14 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     async execute(i, ctx) {
       if (!d.host) throw fail('unavailable', 'The preview is not available here.');
       const m = run(() => d.projects.manifest(i.build));
-      const r = await d.host.check(i.build, i.page, { waitMs: i.waitSeconds * 1000, actions: i.actions, ...(i.mobile ? { width: 390, height: 844 } : {}) });
+      const critique = i.critique && mayCritique(i.build);
+      const r = await d.host.check(i.build, i.page, { waitMs: i.waitSeconds * 1000, actions: i.actions, ...(i.mobile ? { width: 390, height: 844 } : {}), ...(critique ? { settle: true } : {}) });
       const steps = r.steps ?? [];
       // An action that found nothing to act on, or a value that could not be read, is a finding too.
       const stuck = steps.filter((s) => /: not (found|clicked)|→ error:|no answer from the page|the link did not open/.test(s));
       let looks: string | null = null;
-      if (r.screenshot && d.look) looks = await d.look(r.screenshot, `${m.kind} “${m.title}”: ${m.brief}`, ctx.signal).catch(() => null);
+      const dir = m.direction ? directionById(m.direction) : undefined;
+      if (r.screenshot && d.look) looks = await d.look(r.screenshot, `${m.kind} “${m.title}”: ${m.brief}${dir ? ` (art direction: ${dir.name} — ${dir.mood})` : ''}`, ctx.signal, critique ? 'critique' : 'check').catch(() => null);
       const ok = !r.errors.length && !r.missing.length && !stuck.length;
       const used = steps.length > 0;
       const interactive = m.kind === 'game' || m.kind === 'app';
@@ -338,7 +377,11 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
             : `Fix the errors and missing files (build__edit / build__write), then check again.${back}`
           : !used && interactive
             ? `It loads without errors, but nothing was tried yet: check again with actions that use the ${m.kind} (start it, hold the controls or fill the form, and measure that it responds) before telling the user it works.`
-            : 'No errors. Compare the measured values and the look with what should have happened; fix anything wrong, check the other pages (and mobile), then build__open it for the user.',
+            : i.critique && !critique
+              ? 'Works. The art director already reviewed this build twice just now: finish the changes from those notes, check the pages still work, then build__open it and tell the user what you made.'
+              : critique
+              ? 'Works. The art director’s notes are in looks: make the changes that lift it (bolder idea, type, composition, motion, real visuals) in as few edits as you can, then critique once more only if a score was below 8.'
+              : 'No errors. Compare the measured values and the look with what should have happened; fix anything wrong, check the other pages (and mobile), then build__open it for the user.',
       };
     },
   });

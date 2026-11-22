@@ -175,7 +175,7 @@ describe('Keo’s builder: robust building', () => {
     expect(again.id).toBe(first.id);
     expect(again.continued).toBe(true);
     expect(again.files.map((f) => f.path)).toContain('js/game.js');
-    expect(again.libraries).toEqual(['three', 'rapier']);
+    expect(again.libraries).toEqual(expect.arrayContaining(['three', 'rapier']));
     // Another chat starts its own.
     const other = (await start.execute({ title: 'Other', kind: 'game', brief: 'x', libraries: [] } as never, { conversationId: 'conv2', signal: new AbortController().signal } as never)) as { id: string };
     expect(other.id).not.toBe(first.id);

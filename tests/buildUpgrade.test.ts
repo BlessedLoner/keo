@@ -43,11 +43,13 @@ describe('builder libraries, fonts and icons', () => {
     // Every file the css points to is there; nothing else (no Cyrillic, Greek, Vietnamese…).
     const used = [...css.matchAll(/url\(\.\/([^)]+)\)/g)].map((x) => x[1]!);
     for (const u of used) expect(fs.existsSync(path.join(dir, u)), u).toBe(true);
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.woff2'));
-    expect(files.every((f) => /-latin(-ext)?-/.test(f))).toBe(true);
+    const files = fs.readdirSync(dir).filter((f) => /\.(woff2|ttf)$/.test(f));
+    // The packaged fonts: only their Latin files (Keo's own extra fonts are Latin-only already).
+    expect(files.filter((f) => /-(cyrillic|greek|vietnamese)/.test(f))).toEqual([]);
     expect(files.length).toBe(new Set(used).size);
     const kb = files.reduce((n, f) => n + fs.statSync(path.join(dir, f)).size, 0) / 1024;
-    expect(kb).toBeLessThan(3000);
+    // About 40 families; a page downloads only the ones it uses.
+    expect(kb).toBeLessThan(6000);
     expect(fs.readFileSync(path.join(dir, 'LICENSES.txt'), 'utf8')).toContain('SIL Open Font License');
     // Icons: one sprite with Lucide's symbols.
     const sprite = fs.readFileSync(path.join(p.dir(m.id), 'lib', 'icons', 'sprite.svg'), 'utf8');
@@ -211,5 +213,74 @@ describe('links in builds', () => {
     expect(run('Our menu')).toBe(`clicked our menu ${OPENS}keobuild://bd_1a2b3c/menu.html]`);
     // A jump within the same page is not a page that must open.
     expect(run('Hours')).toBe('clicked hours');
+  });
+});
+
+describe('creative direction in the builder', () => {
+  it('picks art directions that suit the brief, and never the ones recent builds used', async () => {
+    const { pickDirections, ART_DIRECTIONS } = await import('../src/main/build/directions');
+    expect(pickDirections('a website for a streetwear brand drop', 'website')[0]!.id).toBe('neo-brutalist');
+    expect(pickDirections('an AI app for meditation', 'app')[0]!.id).toBe('liquid-aurora');
+    const two = pickDirections('a bakery website', 'website', ['organic-soft', 'collage-maximal']);
+    expect(two.map((d) => d.id)).not.toContain('organic-soft');
+    expect(new Set(two.map((d) => d.id)).size).toBe(3);
+    // Every direction names fonts Keo really ships to builds.
+    const { BUILD_FONTS, EXTRA_FONTS } = await import('../src/main/build/libraries');
+    const families = [...BUILD_FONTS, ...EXTRA_FONTS].map((f) => f.family);
+    for (const d of ART_DIRECTIONS) for (const name of d.type.match(/"([^"]+)"/g) ?? []) expect(families, `${d.id}: ${name}`).toContain(name.replace(/"/g, ''));
+  });
+
+  it('a new build gets a direction, the effects kit and 40 fonts; the next build looks different', async () => {
+    const p = make();
+    const looks: string[] = [];
+    const caps = buildCapabilities({ projects: p, host: null, look: async (_png: Buffer, _b: string, _s: AbortSignal, mode?: string) => (looks.push(mode ?? ''), 'ok') } as never);
+    const start = caps.find((c) => c.id === 'build.start')!;
+    const ctx = (id: string) => ({ signal: new AbortController().signal, conversationId: id }) as never;
+    const a = (await start.execute(start.input.parse({ title: 'Sunrise Bakery', kind: 'website', brief: 'A bakery website with a menu and orders' }) as never, ctx('c1'))) as { id: string; artDirection: string; otherDirections: string[] };
+    expect(a.artDirection).toMatch(/^Art direction: /);
+    expect(a.otherDirections).toHaveLength(2);
+    const lib = path.join(p.dir(a.id), 'lib');
+    expect(fs.readFileSync(path.join(lib, 'fx', 'fx.js'), 'utf8')).toContain('window.fx =');
+    const css = fs.readFileSync(path.join(lib, 'fonts', 'fonts.css'), 'utf8');
+    for (const fam of ['Unbounded', 'Instrument Serif', 'Big Shoulders Display', 'Inter']) expect(css).toContain(`font-family: '${fam}'`);
+    expect(fs.existsSync(path.join(lib, 'fonts', 'unbounded-latin-wght-normal.woff2'))).toBe(true);
+    const b = (await start.execute(start.input.parse({ title: 'Crumbs', kind: 'website', brief: 'Another bakery website' }) as never, ctx('c2'))) as { id: string };
+    expect(p.manifest(b.id).direction).not.toBe(p.manifest(a.id).direction);
+    // The user's own look: no direction forced on it.
+    const c = (await start.execute(start.input.parse({ title: 'Mine', kind: 'website', brief: 'x', direction: 'none' }) as never, ctx('c3'))) as { id: string; artDirection?: string };
+    expect(c.artDirection).toBeUndefined();
+    // Changing the look later.
+    const upd = caps.find((x) => x.id === 'build.update')!;
+    const u = (await upd.execute(upd.input.parse({ build: a.id, direction: 'cinematic-dark' }) as never, ctx('c1'))) as { artDirection: string };
+    expect(u.artDirection).toMatch(/Cinematic Dark/);
+    await expect(upd.execute(upd.input.parse({ build: a.id, direction: 'made-up' }) as never, ctx('c1'))).rejects.toThrow(/no art direction/);
+  });
+
+  it('font files say their weight and style', async () => {
+    const { fontFace } = await import('../src/main/build/libraries');
+    expect(fontFace('syne-latin-wght-normal.woff2')).toEqual({ weight: '100 900', style: 'normal' });
+    expect(fontFace('InstrumentSerif-Italic.ttf')).toEqual({ weight: '400', style: 'italic' });
+    expect(fontFace('Poppins-ExtraBold.ttf')).toEqual({ weight: '800', style: 'normal' });
+    expect(fontFace('space-mono-latin-700-italic.woff2')).toEqual({ weight: '700', style: 'italic' });
+  });
+});
+
+describe('the art director’s critique', () => {
+  it('waits for entrance animations, and is limited to two per build so polishing never eats a request', async () => {
+    const p = make();
+    const m = p.create({ title: 'Studio', kind: 'website', direction: 'kinetic-swiss' });
+    const modes: string[] = [];
+    const settles: boolean[] = [];
+    const host = { open: async () => undefined, check: async (_id: string, _p?: string, o?: { settle?: boolean }) => (settles.push(!!o?.settle), { page: 'index.html', title: 'S', errors: [], warnings: [], missing: [], text: '', steps: [], screenshot: Buffer.from('png') }) };
+    const caps = buildCapabilities({ projects: p, host, look: async (_png: Buffer, brief: string, _s: AbortSignal, mode?: string) => (modes.push(`${mode}:${/Kinetic Swiss/.test(brief)}`), 'notes') } as never);
+    const check = caps.find((c) => c.id === 'build.check')!;
+    const ctx = { signal: new AbortController().signal } as never;
+    const run = async () => (await check.execute(check.input.parse({ build: m.id, critique: true }) as never, ctx)) as { next: string };
+    await run();
+    await run();
+    const third = await run();
+    expect(modes).toEqual(['critique:true', 'critique:true', 'check:true']);
+    expect(settles).toEqual([true, true, false]);
+    expect(third.next).toMatch(/reviewed this build twice/);
   });
 });

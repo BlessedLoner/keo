@@ -397,7 +397,7 @@ export class BuildHost {
    * Loads a page in a hidden window like a visitor would, lets it run a few seconds, and reports
    * its errors, missing files, text and a screenshot: how Keo checks its own work.
    */
-  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number; actions?: CheckAction[] } = {}): Promise<BuildCheck> {
+  async check(id: string, page = '', o: { waitMs?: number; width?: number; height?: number; shotWidth?: number; actions?: CheckAction[]; settle?: boolean } = {}): Promise<BuildCheck> {
     this.d.projects().manifest(id);
     this.d.projects().refreshLibraries(id);
     this.preview();
@@ -440,6 +440,12 @@ export class BuildHost {
           did += at() === want ? ` → opened ${short(want)}` : ` → the link did not open ${short(want)} (still on ${short(at())})`;
         }
         steps.push(`${actionLabel(a)}${a.do === 'measure' ? ' → ' : ': '}${did}`.slice(0, 700));
+      }
+      // Judging the look: let entrance animations end first (a slow fade-in is not a faded design).
+      if (o.settle && !win.isDestroyed()) {
+        await new Promise((r) => setTimeout(r, 3500));
+        await win.webContents.executeJavaScript('document.getAnimations().forEach(function (a) { try { if (a.effect && a.effect.getTiming().iterations !== Infinity) a.finish(); } catch (e) {} }); true').catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 400));
       }
       const title = win.isDestroyed() ? '' : win.webContents.getTitle();
       const text = win.isDestroyed() ? '' : String(await win.webContents.executeJavaScript('(document.body && document.body.innerText || "").slice(0, 1500)').catch(() => ''));
