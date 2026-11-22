@@ -64,6 +64,7 @@ import { editLabel, parseDirection, type Word } from './video/recipe';
 import { ResearchResults } from './research/results';
 import { subAgentCapabilities } from './agent/subAgents';
 import { BackgroundJobs, backgroundJobCapabilities, RESUME_WITHIN_MS } from './agent/backgroundJobs';
+import { manageFileCapabilities } from './capabilities/manageFiles';
 import { boardCapabilities, HelperBoard, type BoardNote } from './agent/board';
 import { TELEGRAM_SITE, WebChat, WHATSAPP_SITE, type ChatBackground, type WebChatSite } from './livechat/webChat';
 import { reminderCapabilities } from './capabilities/reminders';
@@ -144,6 +145,12 @@ export interface ServiceDeps {
   convertImage?: (bytes: Buffer, mime: string, side: number) => Promise<Buffer>;
   /** The user's Documents folder (saved research goes to Documents\Keo Research). */
   documentsDir?: string;
+  /** The user's Desktop, Downloads and Music folders (Windows' real ones; by default under homeDir). */
+  desktopDir?: string;
+  downloadsDir?: string;
+  musicDir?: string;
+  /** Sends a file or folder to the Recycle Bin (tests: a fake). */
+  trashFile?: (p: string) => Promise<void>;
   /** Porcupine and its recorder (tests inject a fake). */
   porcupineFactory?: () => PorcupineFactory;
   /** Voice-mode microphone and speaker (tests); the app uses the main window's recorder/speech. */
@@ -873,6 +880,26 @@ export class Services {
         workRoot: () => path.join(d.profile.userData, 'research'),
       }),
       ...fileCapabilities(capDeps),
+      ...manageFileCapabilities({
+        allowed: (p) => this.fileSearch.allowed(p),
+        enabled: () => getSettings().files.searchEnabled,
+        known: () => {
+          const home = d.homeDir ?? os.homedir();
+          return {
+            home,
+            desktop: d.desktopDir ?? path.join(home, 'Desktop'),
+            documents: d.documentsDir ?? path.join(home, 'Documents'),
+            downloads: d.downloadsDir ?? path.join(home, 'Downloads'),
+            pictures: d.picturesDir ?? path.join(home, 'Pictures'),
+            videos: d.videosDir ?? path.join(home, 'Videos'),
+            music: d.musicDir ?? path.join(home, 'Music'),
+          };
+        },
+        trash: d.trashFile ?? (async () => {
+          throw new Error('The Recycle Bin is not available here.');
+        }),
+        undoFile: path.join(d.profile.userData, 'file-undo.json'),
+      }),
       ...findFileCapabilities({
         search: this.fileSearch,
         enabled: () => getSettings().files.searchEnabled,

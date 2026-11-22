@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import type { AppDiscovery, DiscoveredApp } from '../desktop/appDiscovery';
-import { normApp } from '../desktop/appDiscovery';
+import { normApp, openSettingsPage } from '../desktop/appDiscovery';
 import { matchProfiles, profileLabel, safeWebUrl, searchUrl, type InstalledBrowser } from '../desktop/browserProfiles';
 import type { CapabilityDeps } from './builtins';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 import { elementLines } from './computer';
+import { knowhowFor } from '../desktop/appKnowhow';
 import type { Settings } from '../../shared/settings';
 
 const AppOut = z.object({ name: z.string(), appId: z.string(), kind: z.enum(['store', 'desktop']), publisher: z.string().nullable(), openWindow: z.boolean() });
@@ -18,7 +19,14 @@ export interface AppsDeps extends CapabilityDeps {
   /** Installed Chromium browsers with their profile names (no other profile data). */
   browsers: () => InstalledBrowser[];
   openTab: (exe: string, profileDir: string, url: string) => Promise<void>;
+  /** Opens a Windows Settings page (ms-settings:<page>); tests inject a fake. */
+  openSettings?: (page: string) => Promise<void>;
 }
+
+/** Common Settings pages, by what people call them. */
+export const SETTINGS_PAGES: Record<string, string> = {
+  bluetooth: 'bluetooth', display: 'display', 'night light': 'nightlight', wifi: 'network-wifi', 'wi-fi': 'network-wifi', network: 'network', 'airplane mode': 'network-airplanemode', vpn: 'network-vpn', sound: 'sound', volume: 'apps-volume', notifications: 'notifications', 'focus': 'focus', power: 'powersleep', battery: 'batterysaver', storage: 'storagesense', 'default apps': 'defaultapps', apps: 'appsfeatures', startup: 'startupapps', 'windows update': 'windowsupdate', update: 'windowsupdate', background: 'personalization-background', wallpaper: 'personalization-background', colors: 'colors', themes: 'themes', 'lock screen': 'lockscreen', taskbar: 'taskbar', mouse: 'mousetouchpad', touchpad: 'devices-touchpad', keyboard: 'keyboard', printers: 'printers', 'date and time': 'dateandtime', time: 'dateandtime', language: 'regionlanguage', privacy: 'privacy', camera: 'privacy-webcam', microphone: 'privacy-microphone', location: 'privacy-location', 'sign-in': 'signinoptions', accounts: 'yourinfo', about: 'about', 'multitasking': 'multitasking', 'clipboard': 'clipboard', 'mobile devices': 'mobile-devices', 'phone link': 'mobile-devices',
+};
 
 const kindLabel = (a: DiscoveredApp) => `${a.kind === 'store' ? 'Microsoft Store app' : 'desktop app'}${a.publisher ? ` by ${a.publisher}` : ''}`;
 
@@ -71,15 +79,16 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
    * step can be a computer__do run straight away (no separate look). A few seconds at most; skipped
    * when it cannot be read.
    */
-  const seen = async (hwnd: string, settings: Settings): Promise<{ elements?: string[] }> => {
-    if (!settings.permissions.fullControl) return {};
+  const seen = async (hwnd: string, settings: Settings, processName?: string): Promise<{ elements?: string[]; tips?: string[] }> => {
+    const tips = knowhowFor(processName)?.tips;
+    if (!settings.permissions.fullControl) return tips ? { tips } : {};
     try {
       if (d.launchWaitMs !== 0) await new Promise((r) => setTimeout(r, 600)); // the window draws its controls
       const raw = await d.desktop.backend.uiaSnapshot(hwnd, { maxNodes: 900, maxDepth: 50, budgetMs: 3500 });
       const { lines } = elementLines(raw.nodes, 70);
-      return lines.length ? { elements: lines } : {};
+      return { ...(lines.length ? { elements: lines } : {}), ...(tips ? { tips } : {}) };
     } catch {
-      return {};
+      return tips ? { tips } : {};
     }
   };
 
@@ -104,6 +113,8 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       window: z.object({ hwnd: z.string(), pid: z.number(), processName: z.string(), allowed: z.boolean() }).nullable(),
       /** Full control: what a person can see on the app's window now (plan a computer__do run from it). */
       elements: z.array(z.string()).optional(),
+      /** Know-how for this app: where things are and its shortcuts. */
+      tips: z.array(z.string()).optional(),
     }),
     risk: 'medium',
     approval: 'always',
@@ -144,7 +155,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       if (before.length) {
         const w = before[0]!;
         const r = await d.desktop.backend.focus(w.hwnd).catch(() => ({ foreground: false }));
-        if (r.foreground) return { name: app.name, appId: app.appId, kind: app.kind, action: 'switched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings)) };
+        if (r.foreground) return { name: app.name, appId: app.appId, kind: app.kind, action: 'switched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings, w.processName)) };
       }
       try {
         await d.launchApp(app.appId);
@@ -156,7 +167,7 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       while (Date.now() < until) {
         if (ctx.signal.aborted) break;
         const w = (await openWindows(app, ctx.settings)).find((x) => !known.has(x.hwnd));
-        if (w) return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings)) };
+        if (w) return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: { hwnd: w.hwnd, pid: w.pid, processName: w.processName, allowed: w.allowed }, ...(await seen(w.hwnd, ctx.settings, w.processName)) };
         await new Promise((r) => setTimeout(r, 500));
       }
       return { name: app.name, appId: app.appId, kind: app.kind, action: 'launched' as const, window: null };
@@ -164,6 +175,45 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
     async verify(_i, o) {
       if (o.window) return { verified: true, detail: `${o.name} is open (${o.window.processName}${o.window.allowed ? '' : ', not in the allowed apps yet'}).` };
       return { verified: false, detail: `${o.name} was started, but its window did not appear within the wait. It may still be loading — check desktop__list_windows.` };
+    },
+  });
+
+  const settingsPage = defineCapability({
+    id: 'apps.settings_page',
+    version: '1.0.0',
+    title: 'Open a Settings page',
+    description: `Open a Windows Settings page directly (no searching or typing): ${Object.keys(SETTINGS_PAGES).join(', ')} — or any ms-settings page name (e.g. "network-wifi", "personalization-background"). It only opens the page; changing a setting there is a separate step the user sees.`,
+    input: z.object({ page: z.string().trim().min(2).max(60) }).strict(),
+    output: z.object({ opened: z.string(), window: z.boolean() }),
+    risk: 'low',
+    approval: 'always',
+    permissions: ['desktop.launch'],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 20000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'The Settings window is seen open.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: (i) => ({ summary: `Open ${i.page} settings`, target: null, consequences: ['Opens the page; nothing is changed.'], dataExport: null }),
+    auditView: (i) => ({ page: i.page }),
+    async execute(i, ctx) {
+      const want = i.page.toLowerCase().replace(/^ms-settings:/, '').replace(/\s*settings?$/, '').trim();
+      const page = SETTINGS_PAGES[want] ?? want.replace(/\s+/g, '-');
+      if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(page)) throw new CapabilityError('invalid_input', `“${i.page}” is not a Settings page name.`, { dispatched: 'no' });
+      await (d.openSettings ?? openSettingsPage)(page);
+      // The Settings window (title "Settings") should be there within a few seconds.
+      const until = Date.now() + Math.min(d.launchWaitMs ?? 6000, 6000);
+      let window = false;
+      while (d.desktop && !window && Date.now() < until && !ctx.signal.aborted) {
+        const all = await d.desktop.listWindows(ctx.settings, true).catch(() => []);
+        window = all.some((w) => /^settings$/i.test(w.title.trim()) || /^systemsettings$/i.test(w.processName.replace(/\.exe$/i, '')));
+        if (!window) await new Promise((r) => setTimeout(r, 400));
+      }
+      return { opened: `ms-settings:${page}`, window };
+    },
+    async verify(i, o) {
+      return o.window ? { verified: true, detail: `${i.page} settings are open (${o.opened}).` } : { verified: false, detail: `Windows was asked to open ${o.opened}, but the Settings window was not seen yet.` };
     },
   });
 
@@ -259,5 +309,5 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
     },
   });
 
-  return [find, open, profiles, openTab];
+  return [find, open, settingsPage, profiles, openTab];
 }

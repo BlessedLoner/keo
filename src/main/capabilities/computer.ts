@@ -5,6 +5,7 @@ import { isProtectedProcess, type DesktopService } from '../desktop/desktopServi
 import type { UiaNodeRaw } from '../desktop/backend';
 import { enterTextChecked, stableSnapshot } from './advanced';
 import { KEY_CODES, type CapabilityDeps } from './builtins';
+import { knowhowFor } from '../desktop/appKnowhow';
 import { CapabilityError, defineCapability, type AnyCapability, type CapabilityContext } from './types';
 
 /**
@@ -661,16 +662,33 @@ export function computerCapabilities(d: ComputerDeps): AnyCapability[] {
       }
       case 'type': {
         const r = await type.execute({ text: st.text, replace: st.replace, method: 'auto' }, ctx);
-        if (r.confirmed === false) throw new CapabilityError('not_confirmed', `Typed into ${r.into} in ${r.app}, but Keo could not find the text there yet. Do not type it again before looking.`, { dispatched: 'yes' });
-        return `typed into ${r.into}${r.confirmed ? ' (read back)' : ''}`;
+        // Some boxes (an address bar, a search box) cannot be read back: the run carries on, and the
+        // next steps (enter, wait_for) show whether it worked. It is never typed again.
+        return `typed into ${r.into}${r.confirmed ? ' (read back)' : r.confirmed === false ? ' (could not read it back; not typed again)' : ''}`;
       }
-      case 'keys':
+      case 'keys': {
+        const before = (await backend.userActivity().catch(() => null))?.foreground ?? null;
         await keys.execute({ combo: st.combo, repeat: st.repeat, effect: st.effect }, ctx);
+        // Keys that open a window (win+r, win+e, ctrl+n, ctrl+o, ctrl+s the first time…): the next step
+        // waits until that window is in front, so typing never lands in the window behind it.
+        if (/^(win(dows)?\+[a-z]|ctrl\+(n|o|s|shift\+s|p|f|h|g)|f12|alt\+(d|f4)|win(dows)?)$/i.test(st.combo.replace(/\s+/g, ''))) {
+          const until = Date.now() + (d.focusSettleMs === 0 ? 0 : 2500);
+          for (;;) {
+            const now = (await backend.userActivity().catch(() => null))?.foreground ?? null;
+            if ((now && now !== before) || Date.now() >= until) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          if (d.focusSettleMs !== 0) await new Promise((r) => setTimeout(r, 250));
+        }
         return `pressed ${st.combo.toUpperCase()}`;
+      }
       case 'wait_for':
         return `saw ${await waitFor(st, ctx)}`;
     }
   };
+
+  /** The app the last run ended in: its know-how is given again only when a run reaches another app. */
+  let lastApp: string | null = null;
 
   const doSteps = defineCapability({
     ...base,
@@ -690,7 +708,7 @@ export function computerCapabilities(d: ComputerDeps): AnyCapability[] {
       total: z.number(),
       steps: z.array(z.string()),
       stopped: z.string().nullable(),
-      after: z.object({ app: z.string(), window: z.string(), elements: z.array(z.string()), omitted: z.number() }).nullable(),
+      after: z.object({ app: z.string(), window: z.string(), elements: z.array(z.string()), omitted: z.number(), tips: z.array(z.string()).optional() }).nullable(),
     }),
     risk: 'high',
     verificationPolicy: 'Each step is checked as it runs (the element is found by name before clicking; typed text is read back); the window’s elements are read afterwards.',
@@ -728,14 +746,17 @@ export function computerCapabilities(d: ComputerDeps): AnyCapability[] {
           break;
         }
       }
-      let after: { app: string; window: string; elements: string[]; omitted: number } | null = null;
+      let after: { app: string; window: string; elements: string[]; omitted: number; tips?: string[] } | null = null;
       if (i.look && !ctx.signal.aborted) {
         try {
           // A moment for the app to react to the last step, like a person glancing at it.
           if (d.focusSettleMs !== 0) await new Promise((r) => setTimeout(r, 250));
           const w = await foreground();
           const { lines, omitted } = elementLines((await quickRead(w)).nodes, 70);
-          after = { app: w.processName, window: w.title.slice(0, 120), elements: lines, omitted };
+          // Know-how for an app the first time a run lands in it (a person knows the shortcuts).
+          const tips = lastApp !== w.processName ? knowhowFor(w.processName, w.title)?.tips : undefined;
+          lastApp = w.processName;
+          after = { app: w.processName, window: w.title.slice(0, 120), elements: lines, omitted, ...(tips ? { tips } : {}) };
         } catch {
           after = null;
         }

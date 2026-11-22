@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AppDiscovery, validAppId, type StartApp } from '../src/main/desktop/appDiscovery';
+import { knowhowFor } from '../src/main/desktop/appKnowhow';
 import { installedBrowsers, matchProfiles, profilesFromLocalState, safeWebUrl } from '../src/main/desktop/browserProfiles';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { makeHarness, waitFor, type Harness } from './helpers';
@@ -90,6 +91,8 @@ describe('opening apps', () => {
     expect(launched).toEqual(['Microsoft.WindowsCalculator_8wekyb3d8bbwe!App']);
     expect(r.step?.state).toBe('succeeded');
     expect((r.step?.result as { action: string }).action).toBe('launched');
+    // Know-how comes with it: how a person uses Calculator fast.
+    expect((r.step?.result as { tips?: string[] }).tips?.join(' ')).toMatch(/type the sum with the keyboard/);
   });
 
   it('never guesses between several matching apps: fails with the candidates for the user to choose', async () => {
@@ -300,5 +303,36 @@ describe('installed apps picker', () => {
     expect(launched).toEqual(['5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App']);
     const { SettingsSchema } = await import('../src/shared/settings');
     expect(() => SettingsSchema.parse({ permissions: { launchableApps: [{ id: 'x', label: 'X' }] } })).toThrow();
+  });
+});
+
+describe('app know-how', () => {
+  it('knows the apps people use most, by process name or window title; a file dialog wins over its app', () => {
+    expect(knowhowFor('explorer', 'Downloads')?.app).toBe('File Explorer');
+    expect(knowhowFor('explorer.exe')?.tips.join(' ')).toMatch(/ctrl\+l.*shell:downloads/);
+    expect(knowhowFor('msedge')?.app).toMatch(/browser/);
+    expect(knowhowFor('SystemSettings')?.tips.join(' ')).toMatch(/ms-settings:bluetooth/);
+    expect(knowhowFor('WINWORD')?.app).toBe('Word');
+    expect(knowhowFor('WINWORD', 'Save As')?.app).toMatch(/File dialog/);
+    expect(knowhowFor('WhatsApp.Root')?.tips.join(' ')).toMatch(/whatsapp__ tools/);
+    expect(knowhowFor('someobscureapp', 'My Tool')).toBeNull();
+  });
+});
+
+describe('Settings pages', () => {
+  it('opens a Settings page directly by what people call it', async () => {
+    const { appCapabilities } = await import('../src/main/capabilities/apps');
+    const opened: string[] = [];
+    const caps = appCapabilities({ openSettings: async (p: string) => void opened.push(p) } as never);
+    const page = caps.find((c) => c.id === 'apps.settings_page')!;
+    const ctx = { signal: new AbortController().signal } as never;
+    await page.execute(page.input.parse({ page: 'Bluetooth settings' }) as never, ctx);
+    await page.execute(page.input.parse({ page: 'Wi-Fi' }) as never, ctx);
+    await page.execute(page.input.parse({ page: 'ms-settings:windowsupdate' }) as never, ctx);
+    expect(opened).toEqual(['bluetooth', 'network-wifi', 'windowsupdate']);
+    const seen = appCapabilities({ openSettings: async () => {}, desktop: { listWindows: async () => [{ title: 'Settings', processName: 'ApplicationFrameHost.exe' }] } } as never).find((c) => c.id === 'apps.settings_page')!;
+    const o = await seen.execute(seen.input.parse({ page: 'sound' }) as never, { signal: new AbortController().signal, settings: {} } as never);
+    expect(await seen.verify!({ page: 'sound' } as never, o as never, ctx)).toMatchObject({ verified: true });
+    await expect(page.execute(page.input.parse({ page: 'bad; page' }) as never, ctx)).rejects.toThrow(/not a Settings page/);
   });
 });

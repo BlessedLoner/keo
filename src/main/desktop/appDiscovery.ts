@@ -203,6 +203,20 @@ function readStartApps(withPublishers: boolean, timeoutMs: number): Promise<Star
 }
 
 /** Starts an app by its Windows app id (works for Store and desktop apps alike); no shell, one validated argument. */
+/** Opens a Windows Settings page (ms-settings:<page>) directly, the way the Run box would. */
+export function openSettingsPage(page: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(page)) return reject(new Error('invalid settings page'));
+    const explorer = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'explorer.exe');
+    const p = spawn(explorer, [`ms-settings:${page}`], { detached: true, stdio: 'ignore', shell: false, windowsHide: false });
+    p.once('error', reject);
+    p.once('spawn', () => {
+      p.unref();
+      resolve();
+    });
+  });
+}
+
 export function launchByAppId(appId: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!validAppId(appId)) return reject(new Error('invalid app id'));
