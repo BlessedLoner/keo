@@ -146,7 +146,24 @@ public static class KeoWin {
     return b.Left >= a.Left - tol && b.Top >= a.Top - tol && b.Right <= a.Right + tol && b.Bottom <= a.Bottom + tol && (b.Right - b.Left) * 2 >= (a.Right - a.Left);
   }
 
-  static bool IsFg(IntPtr h) { return PartOfTarget(GetForegroundWindow(), h); }
+  static bool IsFg(IntPtr h) { return PartOfTarget(GetForegroundWindow(), Root(h)); }
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+
+  // The top-level window Windows brings to the front: Store apps (Settings, Calculator, Clock…) draw
+  // in an inner surface (Windows.UI.Core.CoreWindow, the app's own process) inside a frame window of
+  // ApplicationFrameHost. The inner surface can never be the foreground window itself, so focusing
+  // it and checking it means focusing and checking its frame.
+  static IntPtr Root(IntPtr h) {
+    var r = GetAncestor(h, 2);
+    if (r != IntPtr.Zero && r != h) return r;
+    if (Cls(h) == "Windows.UI.Core.CoreWindow") {
+      var f = IntPtr.Zero;
+      while ((f = FindWindowEx(IntPtr.Zero, f, "ApplicationFrameWindow", null)) != IntPtr.Zero)
+        if (FindWindowEx(f, IntPtr.Zero, "Windows.UI.Core.CoreWindow", null) == h) return f;
+    }
+    return h;
+  }
 
   static string Text(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
   static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, sb.Capacity); return sb.ToString(); }
@@ -240,6 +257,7 @@ public static class KeoWin {
 
   public static bool Focus(IntPtr h) {
     if (!IsWindow(h)) throw new Exception("target_gone");
+    h = Root(h);
     if (IsIconic(h)) ShowWindow(h, 9);
     BringWindowToTop(h);
     SetForegroundWindow(h);

@@ -1,3 +1,4 @@
+import type { KnownFolders } from './agent/knownFolders';
 import { EditDnaService } from './studio/editDna';
 import type { DnaVisionModel } from '../shared/editDna';
 import type { ProviderId } from '../shared/domain';
@@ -409,6 +410,18 @@ export class Services {
     this.videoTranscribe = d.videoTranscribe;
     this.studioNarrate = d.studioNarrate;
     this.studioRoot = path.join(d.profile.userData, 'studio');
+    this.knownFolders = () => {
+      const home = d.homeDir ?? os.homedir();
+      return {
+        home,
+        desktop: d.desktopDir ?? path.join(home, 'Desktop'),
+        documents: d.documentsDir ?? path.join(home, 'Documents'),
+        downloads: d.downloadsDir ?? path.join(home, 'Downloads'),
+        pictures: d.picturesDir ?? path.join(home, 'Pictures'),
+        videos: d.videosDir ?? path.join(home, 'Videos'),
+        music: d.musicDir ?? path.join(home, 'Music'),
+      };
+    };
     this.profile = d.profile;
     this.log = d.logger ?? new Logger(d.profile.logsDir, d.logEcho ?? false);
     this.ownsLog = !d.logger;
@@ -883,18 +896,7 @@ export class Services {
       ...manageFileCapabilities({
         allowed: (p) => this.fileSearch.allowed(p),
         enabled: () => getSettings().files.searchEnabled,
-        known: () => {
-          const home = d.homeDir ?? os.homedir();
-          return {
-            home,
-            desktop: d.desktopDir ?? path.join(home, 'Desktop'),
-            documents: d.documentsDir ?? path.join(home, 'Documents'),
-            downloads: d.downloadsDir ?? path.join(home, 'Downloads'),
-            pictures: d.picturesDir ?? path.join(home, 'Pictures'),
-            videos: d.videosDir ?? path.join(home, 'Videos'),
-            music: d.musicDir ?? path.join(home, 'Music'),
-          };
-        },
+        known: () => this.knownFolders(),
         trash: d.trashFile ?? (async () => {
           throw new Error('The Recycle Bin is not available here.');
         }),
@@ -1092,6 +1094,7 @@ export class Services {
 
     const context = new ContextBuilder(this.conversations, this.memory, this.projects);
     context.extraContext = (text) => this.people.context(text);
+    context.folders = () => this.knownFolders();
     this.agent = new AgentService(
       this.conversations,
       context,
@@ -1147,6 +1150,7 @@ export class Services {
     this.agent.isBuildWork = (conversationId, text) =>
       !!this.builds.forConversation(conversationId) ||
       /\b(build|make|create|rebuild|redesign|code|develop)\b[^.?!]{0,80}\b(game|website|web ?site|web app|app|landing page|online shop|store|dashboard|portfolio|site)\b/i.test(text);
+    this.agent.knownFolders = this.knownFolders;
     this.agent.buildFinish = (id) => {
       try {
         const st = this.builds.checkState(id);
@@ -3898,6 +3902,8 @@ export class Services {
   readonly editDna: EditDnaService;
   /** Keo's builder: websites, apps and games as projects in Documents\\Keo\\Builds. */
   readonly builds: BuildProjects;
+  /** The user's main folders (real paths): told to Keo, and used for "Documents/…" in any path. */
+  readonly knownFolders: () => KnownFolders;
   /** Its preview and sandbox windows (set by the app; none in tests). */
   buildHost: BuildDeps['host'] = null;
   /** AI shots: pictures made into video clips by AI video models through fal.ai (the user's key). */

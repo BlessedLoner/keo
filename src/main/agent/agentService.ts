@@ -15,6 +15,7 @@ import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { GROUP_PROMPTS, SYSTEM_PROMPT } from './systemPrompt';
+import { withKnownPaths, type KnownFolders } from './knownFolders';
 import { chooseGroups, fitToolGroups, groupOf, groupScores, HARD_TOOL_LIMIT, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_CAP, TOOL_GROUPS, type ToolGroup } from './toolGroups';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
@@ -94,6 +95,8 @@ export class AgentService {
    * still open (never checked since, or the last check failed). A reply does not end on an unchecked build.
    */
   buildFinish: ((buildId: string) => { open: string; problems: string[] } | null) | null = null;
+  /** The user's main folders (their real paths). */
+  knownFolders: (() => KnownFolders) | null = null;
   /** A consequential action the user approved worked: Keo may learn from it (who a name means). */
   learned: ((capabilityId: string, input: unknown, result: unknown) => void) | null = null;
   /** Tool groups a conversation always gets (e.g. Studio's tools for Keo Studio's own conversations). */
@@ -1075,7 +1078,10 @@ export class AgentService {
     if (call.parseError) {
       return { activity: { ...base, summary: 'Malformed tool request', outcome: 'rejected', detail: call.parseError }, content: json({ status: 'rejected', error: call.parseError }), isError: true };
     }
-    const admission = this.registry.admit({ capabilityId, input: call.input, origin: 'model', correlationId: ctx.correlationId });
+    // "Documents/…", "Downloads" and the like become the user's real folders before the tool checks the path.
+    const folders = this.knownFolders?.();
+    const input = folders ? withKnownPaths(call.input, folders) : call.input;
+    const admission = this.registry.admit({ capabilityId, input, origin: 'model', correlationId: ctx.correlationId });
     if (!admission.ok) {
       return {
         activity: { ...base, summary: `Rejected request for ${capabilityId.slice(0, 60)}`, outcome: 'rejected', detail: admission.reason },

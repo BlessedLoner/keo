@@ -6,6 +6,7 @@ import type { MemoryRepo } from '../repos/memory';
 import type { ProjectRepo } from '../repos/projects';
 import type { NeutralMessage } from '../providers/types';
 import { renderPlan } from './workPlan';
+import { knownFoldersLine, type KnownFolders } from './knownFolders';
 
 export interface BuiltContext {
   messages: NeutralMessage[];
@@ -51,6 +52,8 @@ export class ContextBuilder {
 
   /** More per-turn context about what the latest message mentions (people Keo has messaged before). */
   extraContext: ((latestUserText: string) => string | null) | null = null;
+  /** The user's main folders, so Keo never has to ask where Documents is. */
+  folders: (() => KnownFolders) | null = null;
 
   build(opts: { conversationId: string; settings: Settings; unresolvedTasks: Task[]; now?: Date }): BuiltContext {
     const { settings } = opts;
@@ -105,6 +108,8 @@ export class ContextBuilder {
     const ctx: string[] = [];
     const now = opts.now ?? new Date();
     ctx.push(`Current local time: ${now.toString()}`);
+    const folders = this.folders?.();
+    if (folders) ctx.push(knownFoldersLine(folders));
     if (memories.length) {
       ctx.push(
         'Relevant user-confirmed memories (most relevant first):\n' +

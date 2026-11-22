@@ -120,6 +120,16 @@ export function manageFileCapabilities(d: ManageFilesDeps): AnyCapability[] {
   };
 
   /** How many files an action touches (for asking first when it is a lot). */
+  /** One of the user's main folders itself (Desktop, Documents, Downloads, Pictures, Videos, Music, home). */
+  const isMainFolder = (p: string): boolean => {
+    try {
+      const full = path.resolve(resolve(p)).toLowerCase();
+      return Object.values(d.known()).some((k) => k && path.resolve(k).toLowerCase() === full);
+    } catch {
+      return false;
+    }
+  };
+
   const countOf = (a: Action): number => {
     try {
       if (a.op === 'sort') return fs.readdirSync(resolve(a.folder)).length;
@@ -152,7 +162,7 @@ export function manageFileCapabilities(d: ManageFilesDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Work with files and folders',
     description:
-      'Make folders, rename, copy, move, duplicate, send to the Recycle Bin, and sort a folder into subfolders by type (Images, Videos, Music, Documents, Archives, Installers, Other) or by month — up to 50 actions in ONE call, done directly and exactly (never on the screen in File Explorer). Paths: full paths, or a known folder followed by the rest: "Documents/New Keo Test", "Downloads/report.pdf", "Pictures". copy and move put the item INTO the "to" folder (made if missing). Nothing is ever overwritten: a name already taken becomes "name (2)". Use files__search first to find a file the user describes. Every call can be undone with files__undo. Use this for any request about organising, creating, renaming or moving files and folders; show the result with files__reveal if the user wants to see it.',
+      'Make folders, rename, copy, move, duplicate, send to the Recycle Bin, and sort a folder into subfolders (this MOVES its files into new folders — it is never the way to change how a folder is shown or ordered in File Explorer; sorting the view by date or name is done on the screen) by type (Images, Videos, Music, Documents, Archives, Installers, Other) or by month — up to 50 actions in ONE call, done directly and exactly (never on the screen in File Explorer). Paths: full paths, or a known folder followed by the rest: "Documents/New Keo Test", "Downloads/report.pdf", "Pictures". copy and move put the item INTO the "to" folder (made if missing). Nothing is ever overwritten: a name already taken becomes "name (2)". Use files__search first to find a file the user describes. Every call can be undone with files__undo. Use this for any request about organising, creating, renaming or moving files and folders; show the result with files__reveal if the user wants to see it.',
     input: z.object({ actions: z.array(Action).min(1).max(50) }).strict(),
     output: z.object({ done: z.array(z.string()), failed: z.array(z.string()), undo: z.string() }),
     risk: 'medium',
@@ -167,6 +177,9 @@ export function manageFileCapabilities(d: ManageFilesDeps): AnyCapability[] {
     unavailableReason: off,
     // Small everyday changes run as asked; deleting, or moving or sorting many files, asks first.
     autonomy: (i) => {
+      // Re-sorting one of the user's main folders changes where everything in it is: always asked.
+      const main = i.actions.find((a) => a.op === 'sort' && isMainFolder(a.folder));
+      if (main && main.op === 'sort') return { tier: 'always_ask' as const, reason: `it moves everything in ${resolve(main.folder)} into new folders` };
       if (i.actions.some((a) => a.op === 'delete')) return { tier: 'important' as const, reason: 'it sends files to the Recycle Bin' };
       const many = i.actions.reduce((n, a) => n + countOf(a), 0);
       return many > 20 ? { tier: 'important' as const, reason: `it moves or sorts about ${many} files` } : { tier: 'routine' as const };

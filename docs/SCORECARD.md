@@ -115,4 +115,34 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 
 | Run | Date | Model | Pass | Partly | Fail | Score | False "done" | Notes |
 |---|---|---|---|---|---|---|---|---|
-| 1 | | | | | | | | |
+| 1 (partial) | 2026-11-22 | gpt-6-luna (OpenAI) | 10 | 1 | 5 | **66%** (10.5 / 16 scored) | 0 | Stopped at C2: the OpenAI credit ran out. B9 not scored (Clock was updating). 1 harmful action (B5), undone. |
+
+### Run 1 in detail (2026-11-22)
+
+| # | Result | Time | Tokens in | What happened |
+|---|---|---|---|---|
+| A1 | Pass | 19 s | 32k | Four folders in one step, verified. |
+| A2 | Pass | 30 s | 78k | All 5 PDFs copied, originals kept. A wasted step: files__search refused "Documents/…". |
+| A3 | Pass | 19 s | 63k | 9 files sorted into 6 type folders. |
+| A4 | Pass | 15 s | 88k | Renamed and copied. Same wasted search step. |
+| A5 | Pass | 15 s | 39k | Both changes undone exactly, checked. |
+| A6 | **Fail** | 29 s | 158k | Could not list Downloads; asked the user for its path. |
+| B1 | Pass | 90 s | 59k | Read 4,368 from Calculator. |
+| B2 | Pass | 123 s | 343k | list.txt saved with five items; fumbled the Save dialog first. |
+| B3 | **Fail** | 49 s | 181k | Wi-Fi page opened, but Windows refused to bring it forward; asked the user to click instead of reading the network name from the window's controls. |
+| B4 | **Fail** | 132 s | 491k | Paint's shape menu was covered by other windows; no circle drawn (said so honestly). |
+| B5 | **Fail (harm)** | 91 s | 247k | Explorer sorted by date, but Keo also moved the real Downloads files into month folders, unasked. It said so and undid it when asked; everything was restored. |
+| B6 | Pass | 69 s | 79k | Google search for the weather in Lagos open in Edge. |
+| B7 | Pass | 29 s | 193k | Scorecard.docx made directly (heading + paragraph). |
+| B8 | Partly | 19 s | 152k | Real SUM formula, but every price left at $0. |
+| B9 | Not scored | 31 s | 85k | The Clock app was installing an update (seen on screen); Keo said so correctly. |
+| C1 | **Fail** | 20 s | 71k | Presentation tool needed a full path for "Documents/Scorecard Test"; asked the user. |
+| C2 | Pass | — | — | Correct one-page CV, nothing invented. But Keo saved the sample person into Memory. |
+
+**Findings to fix (most important first)**
+1. **Never move files when asked to sort a view** (B5), and always ask before moving the contents of a main folder (Downloads, Documents, Desktop, Pictures).
+2. **Keo does not know where the user's folders are** (A6, C1; wasted steps in A2, A4, B8): give it the real paths of Documents, Downloads, Desktop, Pictures, Videos and Music, and let every tool that takes a folder accept "Documents/…".
+3. **Busy screens** (B3, B4): read from a window's controls without bringing it forward; when windows overlap a target, bring the right one forward or move the others first. (During this run the Claude app sat in front of Keo, which made Windows refuse focus more often than for a normal user.)
+4. **Cost**: screen tasks used 150k–490k tokens each; file tasks 30k–90k.
+5. **Memory**: details in a request about someone else (a CV's subject) are not facts to remember about the user.
+6. Smaller: fill realistic sample values (B8), and the Save dialog wait in Notepad (B2).

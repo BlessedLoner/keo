@@ -78,6 +78,9 @@ describe('working with files and folders', () => {
     const del = manage.input.parse({ actions: [{ op: 'delete', path: 'Desktop/old.txt' }] });
     expect(manage.autonomy?.(del as never)).toMatchObject({ tier: 'important' });
     expect(manage.autonomy?.(manage.input.parse({ actions: [{ op: 'make_folder', path: 'Desktop/New' }] }) as never)).toMatchObject({ tier: 'routine' });
+    // Re-sorting a main folder (here Downloads) always asks, whatever the user's approval setting.
+    expect(manage.autonomy?.(manage.input.parse({ actions: [{ op: 'sort', folder: 'Downloads', by: 'month' }] }) as never)).toMatchObject({ tier: 'always_ask' });
+    expect(manage.autonomy?.(manage.input.parse({ actions: [{ op: 'sort', folder: 'Downloads/Mixed', by: 'type' }] }) as never)).toMatchObject({ tier: 'routine' });
     await run([{ op: 'delete', path: 'Desktop/old.txt' }]);
     expect(trashed).toEqual([path.join(known.desktop, 'old.txt')]);
     const outside = path.join(path.dirname(home), 'not-mine');
