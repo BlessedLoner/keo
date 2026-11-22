@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { BUILD_LIBRARY_IDS, copyLibrary, withImportMap, withNeeds, type BuildLibraryId } from './libraries';
-import { goBack, HISTORY_DIR, recordBefore, versions, type BuildVersion } from './history';
+import { checkState, goBack, goBackToGood, HISTORY_DIR, recordBefore, recordCheck, versions, type BuildCheckState, type BuildVersion } from './history';
 
 /**
  * Keo's builder: websites (with their backend), web apps and games as real projects, each a folder
@@ -313,12 +313,23 @@ export class BuildProjects {
     return versions(this.dir(id));
   }
 
-  /** Goes back to how the build was before a version (the latest one when none is given). */
-  goBack(id: string, version?: number): { version: number; restored: string[]; removed: string[] } {
+  /** Remembers what a check found (and whether it is the new last good state). */
+  recordCheck(id: string, r: { ok: boolean; good: boolean; problems: string[] }): void {
+    this.manifest(id);
+    recordCheck(this.dir(id), r);
+  }
+
+  checkState(id: string): BuildCheckState {
+    this.manifest(id);
+    return checkState(this.dir(id));
+  }
+
+  /** Goes back to how the build was before a version (the latest one when none is given), or to its last passing check. */
+  goBack(id: string, version?: number | 'good'): { version: number; restored: string[]; removed: string[] } {
     this.manifest(id);
     let r: { version: number; restored: string[]; removed: string[] };
     try {
-      r = goBack(this.dir(id), version);
+      r = version === 'good' ? goBackToGood(this.dir(id)) : goBack(this.dir(id), version);
     } catch (e) {
       throw new BuildError(e instanceof Error ? e.message : String(e));
     }

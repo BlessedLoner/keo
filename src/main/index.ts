@@ -1,5 +1,5 @@
 import { Mp4Reader } from './studio/mp4';
-import { BUILD_SCHEMES, BuildHost } from './build/host';
+import { BUILD_SCHEMES, BuildHost, isBuildPageNavigation } from './build/host';
 import { voicedSpans, wavOf } from './studio/captions';
 import { LOOKS, projectDuration, type EditOp } from '../shared/studio';
 import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
@@ -228,6 +228,9 @@ function hardenSession(): void {
 app.on('web-contents-created', (_e, contents) => {
   contents.on('will-attach-webview', (ev) => ev.preventDefault());
   contents.on('will-navigate', (ev, url) => {
+    // A build's own pages link to each other: allowed only inside the sandboxed build preview and
+    // check windows (their own guard keeps each window inside its own build).
+    if (isBuildPageNavigation(contents.session, url)) return;
     if (originOf(url) !== TRUSTED_ORIGIN) {
       ev.preventDefault();
       log.warn('navigation.blocked', { scheme: url.split(':')[0] });

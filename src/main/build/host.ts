@@ -4,7 +4,7 @@ import { BrowserWindow, session, type Session } from 'electron';
 import { BuildError, type BuildProjects } from './projects';
 import { libraryAlias } from './libraries';
 import { RUNNER_HTML } from './runner';
-import { actionLabel, actionScript, type CheckAction } from './checkActions';
+import { OPENS, actionLabel, actionScript, type CheckAction } from './checkActions';
 
 /**
  * Where Keo's builds run: the preview window and the backend sandbox.
@@ -19,6 +19,18 @@ export const BUILD_SCHEMES = [
   { scheme: 'keobuild', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
   { scheme: 'keoapi', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ] as const;
+
+/** The sessions build pages run in (the preview the user sees, and Keo's checks). */
+export const BUILD_PARTITIONS = ['persist:keo-build', 'keo-build-check'] as const;
+
+/**
+ * Keo blocks every window from leaving Keo's own pages; a build's pages linking to each other is the
+ * one exception, and only in the build sessions (never Keo's own windows).
+ */
+export function isBuildPageNavigation(ses: Session, url: string, partitionSession: (p: string) => Session = (p) => session.fromPartition(p)): boolean {
+  if (!/^keobuild:\/\/bd_[a-z0-9]{6,24}\//i.test(url)) return false;
+  return BUILD_PARTITIONS.some((p) => partitionSession(p) === ses);
+}
 
 const PAGE_CSP =
   "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'";
@@ -75,6 +87,7 @@ interface Runner {
 
 export class BuildHost {
   private previewSession: Session | null = null;
+  private checkSession: Session | null = null;
   private apiSession: Session | null = null;
   private readonly previews = new Map<string, BrowserWindow>();
   private readonly runners = new Map<string, Runner>();
@@ -118,6 +131,19 @@ export class BuildHost {
     ses.protocol.handle('keobuild', (req) => this.servePage(req));
     this.lockDown(ses, 'keobuild:', ['fullscreen', 'pointerLock']);
     this.previewSession = ses;
+    return ses;
+  }
+
+  /**
+   * Keo's checks get their own session, wiped before each check: every check is a new visitor (an
+   * empty cart, no saved login), and what Keo clicks while checking never shows up in the user's preview.
+   */
+  private checker(): Session {
+    if (this.checkSession) return this.checkSession;
+    const ses = session.fromPartition('keo-build-check');
+    ses.protocol.handle('keobuild', (req) => this.servePage(req));
+    this.lockDown(ses, 'keobuild:', ['fullscreen', 'pointerLock']);
+    this.checkSession = ses;
     return ses;
   }
 
@@ -375,12 +401,15 @@ export class BuildHost {
     this.d.projects().manifest(id);
     this.d.projects().refreshLibraries(id);
     this.preview();
+    await this.checker()
+      .clearStorageData()
+      .catch(() => undefined);
     this.logs.set(id, { errors: [], warnings: [], missing: new Set() });
     const win = new BrowserWindow({
       show: false,
       width: o.width ?? 1280,
       height: o.height ?? 800,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'persist:keo-build', offscreen: false, backgroundThrottling: false },
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'keo-build-check', offscreen: false, backgroundThrottling: false },
     });
     this.watch(id, win);
     try {
@@ -399,8 +428,18 @@ export class BuildHost {
             new Promise<string>((r) => setTimeout(() => r('no answer from the page (it may be frozen)'), 12_000 + (a.do === 'keys' ? a.holdSeconds * 1000 : 0))),
           ]).catch((e: unknown) => `error: ${e instanceof Error ? e.message : String(e)}`);
         }
-        steps.push(`${actionLabel(a)}${a.do === 'measure' ? ' → ' : ': '}${did}`.slice(0, 700));
         if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
+        // A link was clicked: the page it points to must really open (a link that goes nowhere is a bug).
+        const opens = did.indexOf(OPENS);
+        if (opens >= 0) {
+          const want = did.slice(opens + OPENS.length, did.lastIndexOf(']')).split('#')[0]!;
+          did = did.slice(0, opens).trimEnd();
+          const at = () => (win.isDestroyed() ? want : win.webContents.getURL().split('#')[0]!);
+          for (let t = 0; t < 10 && at() !== want; t++) await new Promise((r) => setTimeout(r, 250));
+          const short = (u: string) => u.replace(`keobuild://${id}/`, '/');
+          did += at() === want ? ` → opened ${short(want)}` : ` → the link did not open ${short(want)} (still on ${short(at())})`;
+        }
+        steps.push(`${actionLabel(a)}${a.do === 'measure' ? ' → ' : ': '}${did}`.slice(0, 700));
       }
       const title = win.isDestroyed() ? '' : win.webContents.getTitle();
       const text = win.isDestroyed() ? '' : String(await win.webContents.executeJavaScript('(document.body && document.body.innerText || "").slice(0, 1500)').catch(() => ''));

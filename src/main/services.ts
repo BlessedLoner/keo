@@ -1145,6 +1145,16 @@ export class Services {
     this.agent.isBuildWork = (conversationId, text) =>
       !!this.builds.forConversation(conversationId) ||
       /\b(build|make|create|rebuild|redesign|code|develop)\b[^.?!]{0,80}\b(game|website|web ?site|web app|app|landing page|online shop|store|dashboard|portfolio|site)\b/i.test(text);
+    this.agent.buildFinish = (id) => {
+      try {
+        const st = this.builds.checkState(id);
+        if (!st.changedSinceCheck && st.last?.ok) return null;
+        if (!st.last || st.changedSinceCheck) return { open: st.last ? 'files changed after its last check' : 'it was never checked', problems: [] };
+        return { open: 'its last check found problems', problems: st.last.problems };
+      } catch {
+        return null; // a build that is gone (or unreadable) holds nothing up
+      }
+    };
     // A WhatsApp message the user approved reached the chat Keo verified: remember who that name means.
     this.agent.learned = (capabilityId, input, result) => {
       if (capabilityId !== 'whatsapp.send_message') return;

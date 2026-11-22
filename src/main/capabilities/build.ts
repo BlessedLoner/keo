@@ -179,9 +179,9 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     ...base,
     id: 'build.read',
     title: 'Read a build',
-    description: 'List a build’s files (no path) with its settings and to-do list, or read one file (path).',
+    description: 'List a build’s files (no path) with its settings, to-do list and where the work stands (the last check, open problems, recent changes), or read one file (path). Continuing a build (“continue editing the shop site”): read this first, then the files you will change, and pick up from the open problems.',
     input: z.object({ build: BuildId, path: z.string().min(3).max(300).optional() }).strict(),
-    output: z.object({ build: Manifest.optional(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional(), path: z.string().optional(), content: z.string().optional(), truncated: z.boolean().optional() }),
+    output: z.object({ build: Manifest.optional(), files: z.array(z.object({ path: z.string(), bytes: z.number() })).optional(), state: z.unknown().optional(), next: z.string().optional(), path: z.string().optional(), content: z.string().optional(), truncated: z.boolean().optional() }),
     approval: 'never',
     consequential: false,
     idempotent: true,
@@ -191,7 +191,23 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     preview: (i) => ({ summary: i.path ? `Read ${i.path}` : 'List the build’s files', target: null, consequences: [], dataExport: null }),
     auditView: () => ({}),
     async execute(i) {
-      if (!i.path) return { build: summary(d, run(() => d.projects.manifest(i.build))), files: run(() => d.projects.files(i.build)) };
+      if (!i.path) {
+        const st = run(() => d.projects.checkState(i.build));
+        const recent = run(() => d.projects.versions(i.build)).slice(0, 4).map((v) => ({ version: v.version, at: v.lastAt.slice(0, 16).replace('T', ' '), files: v.files.slice(0, 8) }));
+        const next = !st.last
+          ? 'It has not been checked yet: read its main files, then build__check it (use it, not only load it) before changing more.'
+          : !st.last.ok
+            ? `Its last check found problems (state.lastCheck.problems): read the files involved and fix those first, then build__check.`
+            : st.changedSinceCheck
+              ? 'Files changed after its last check: build__check it first to see where it stands.'
+              : 'Its last check passed: read the files you will change, make the change, then build__check again.';
+        return {
+          build: summary(d, run(() => d.projects.manifest(i.build))),
+          files: run(() => d.projects.files(i.build)),
+          state: { lastCheck: st.last ? { at: st.last.at.slice(0, 16).replace('T', ' '), passed: st.last.ok, problems: st.last.problems } : null, lastGood: st.good?.at.slice(0, 16).replace('T', ' ') ?? null, changedSinceCheck: st.changedSinceCheck, recentChanges: recent },
+          next,
+        };
+      }
       const text = run(() => d.projects.read(i.build, i.path!));
       return { path: i.path, content: text.slice(0, 120_000), truncated: text.length > 120_000 };
     },
@@ -295,12 +311,16 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
       const r = await d.host.check(i.build, i.page, { waitMs: i.waitSeconds * 1000, actions: i.actions, ...(i.mobile ? { width: 390, height: 844 } : {}) });
       const steps = r.steps ?? [];
       // An action that found nothing to act on, or a value that could not be read, is a finding too.
-      const stuck = steps.filter((s) => /: not (found|clicked)|→ error:|no answer from the page/.test(s));
+      const stuck = steps.filter((s) => /: not (found|clicked)|→ error:|no answer from the page|the link did not open/.test(s));
       let looks: string | null = null;
       if (r.screenshot && d.look) looks = await d.look(r.screenshot, `${m.kind} “${m.title}”: ${m.brief}`, ctx.signal).catch(() => null);
       const ok = !r.errors.length && !r.missing.length && !stuck.length;
       const used = steps.length > 0;
       const interactive = m.kind === 'game' || m.kind === 'app';
+      const before = run(() => d.projects.checkState(i.build));
+      // Only the home page (or the page asked for) counts; a pass that never used a game or app proves little.
+      run(() => d.projects.recordCheck(i.build, { ok, good: ok && (used || !interactive), problems: [...r.errors, ...r.missing.map((x) => `missing ${x}`), ...stuck] }));
+      const back = !ok && before.good && before.changedSinceGood ? ` It last passed a check at ${before.good.at.slice(0, 16).replace('T', ' ')}: if your fixes keep making it worse, build__undo with toLastGood: true puts it back to that state, then fix from there.` : '';
       return {
         page: r.page,
         title: r.title,
@@ -314,8 +334,8 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
         looks,
         next: !ok
           ? stuck.length && !r.errors.length && !r.missing.length
-            ? 'Some actions did not work (see steps): either the page does not respond as it should — fix it — or the action named the wrong thing: read the page text and try again.'
-            : 'Fix the errors and missing files (build__edit / build__write), then check again.'
+            ? `Some actions did not work (see steps): either the page does not respond as it should — fix it — or the action named the wrong thing: read the page text and try again.${back}`
+            : `Fix the errors and missing files (build__edit / build__write), then check again.${back}`
           : !used && interactive
             ? `It loads without errors, but nothing was tried yet: check again with actions that use the ${m.kind} (start it, hold the controls or fill the form, and measure that it responds) before telling the user it works.`
             : 'No errors. Compare the measured values and the look with what should have happened; fix anything wrong, check the other pages (and mobile), then build__open it for the user.',
@@ -392,8 +412,8 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     ...base,
     id: 'build.undo',
     title: 'Undo changes to a build',
-    description: 'Go back to how a build was: without version, undo the latest change (“undo that”, “put it back”); with a version from build__history, undo that version and everything after it. Files go back to how they were and files added since are removed. Then build__check it.',
-    input: z.object({ build: BuildId, version: z.number().int().min(1).optional() }).strict(),
+    description: 'Go back to how a build was: without version, undo the latest change (“undo that”, “put it back”); with a version from build__history, undo that version and everything after it; with toLastGood, go back to how it was at its last passing build__check (when fixes keep making it worse). Files go back to how they were and files added since are removed. Then build__check it.',
+    input: z.object({ build: BuildId, version: z.number().int().min(1).optional(), toLastGood: z.boolean().default(false) }).strict(),
     output: z.object({ version: z.number(), restored: z.array(z.string()), removed: z.array(z.string()) }),
     approval: 'never',
     consequential: false,
@@ -401,10 +421,10 @@ export function buildCapabilities(d: BuildDeps): AnyCapability[] {
     timeoutMs: 30_000,
     verificationPolicy: 'Each file is put back from the copy kept before it was changed.',
     autonomy: () => ({ tier: 'routine' }),
-    preview: (i) => ({ summary: i.version ? `Go back to before version ${i.version}` : 'Undo the latest change to the build', target: null, consequences: ['Files go back to how they were; files added since are removed.'], dataExport: null }),
-    auditView: (i) => ({ version: i.version ?? null }),
+    preview: (i) => ({ summary: i.toLastGood ? 'Go back to the last version that passed its check' : i.version ? `Go back to before version ${i.version}` : 'Undo the latest change to the build', target: null, consequences: ['Files go back to how they were; files added since are removed.'], dataExport: null }),
+    auditView: (i) => ({ version: i.version ?? null, toLastGood: i.toLastGood }),
     async execute(i) {
-      return run(() => d.projects.goBack(i.build, i.version));
+      return run(() => d.projects.goBack(i.build, i.toLastGood ? 'good' : i.version));
     },
   });
 

@@ -60,7 +60,11 @@ export function keyOf(code: string): { code: string; key: string; keyCode: numbe
   return { code, key: code, keyCode: 0 };
 }
 
+/** How the click script marks a link to another page: `[opens <url>]`. */
+export const OPENS = '[opens ';
+
 const CLICK = `(function (a) {
+  var OPENS = ${JSON.stringify(OPENS)};
   var vis = function (e) { var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   var words = function (e) { return String(e.innerText || e.value || e.getAttribute('aria-label') || '').trim().toLowerCase(); };
   var el = null;
@@ -75,13 +79,16 @@ const CLICK = `(function (a) {
   if (el) { el.scrollIntoView({ block: 'center' }); var r = el.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top + r.height / 2; }
   var target = el || document.elementFromPoint(x, y) || document.body;
   if (target.disabled) return 'not clicked: "' + words(target).slice(0, 60) + '" is disabled';
+  // A link to another page: say where it goes, so the check can see that the page really opened.
+  var link = target.closest ? target.closest('a[href]') : null;
+  var goes = link && link.target !== '_blank' && !link.hasAttribute('download') && link.href && link.href.split('#')[0] !== location.href.split('#')[0] ? link.href : '';
   ['pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(function (t) {
     var E = t.indexOf('pointer') === 0 && window.PointerEvent ? PointerEvent : MouseEvent;
     target.dispatchEvent(new E(t, { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window, button: 0 }));
   });
   if (typeof target.click === 'function') target.click();
   else target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
-  return 'clicked ' + (words(target).split('\\n')[0].slice(0, 60) || target.tagName.toLowerCase());
+  return 'clicked ' + (words(target).split('\\n')[0].slice(0, 60) || target.tagName.toLowerCase()) + (goes ? ' ' + OPENS + goes + ']' : '');
 })`;
 
 const KEYS = `(function (a) {

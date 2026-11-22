@@ -60,11 +60,23 @@ const FREE_STEP_ROUNDS = 6;
 const ESCALATE_AFTER_ROUNDS = 3;
 /** Tool rounds a turn may take once Keo's builder is in use (a site is written one file at a time). */
 const BUILD_ROUNDS = 60;
+/** Tools that change a build's files (build.start only when it made a new one). */
+const BUILD_CHANGES = /^build\.(write|append|edit|undo|picture|city|model)$/;
+/** How many times a reply is sent back to check and fix a build before the user is told it is unproven. */
+const BUILD_FINISH_NUDGES = 3;
+
+/** Said to the model only, when it would end while a build it changed has no passing check since. */
+export function buildFinishNote(builds: Array<{ id: string; open: string; problems: string[] }>): string {
+  const each = builds.map((b) => `${b.id}: ${b.open}${b.problems.length ? ` — ${b.problems.slice(0, 5).join('; ')}` : ''}`).join(' | ');
+  return `[Keo application note — not typed by the user] You changed a build in this reply, but it is not proven to work yet (${each}). Do not end here: build__check it now (use it — play the game, fill the form, click through — and measure), fix what the check finds, and check again until it passes. If several fixes only make it worse, build__undo with toLastGood: true and fix from there. If it truly needs something only the user can give (a key, an asset, an account), ask for exactly that in one short question.`;
+}
 
 interface ActiveTurn {
   controller: AbortController;
   messageId: string;
   taskIds: string[];
+  /** Builds whose files this turn changed (the builder's finish check looks at them). */
+  builds?: Set<string>;
 }
 
 export class AgentService {
@@ -77,6 +89,11 @@ export class AgentService {
   heavyModel: ((provider: ChatProvider) => string | null) | null = null;
   /** This turn is building something (a build already in this chat, or a request to make one). */
   isBuildWork: ((conversationId: string, text: string) => boolean) | null = null;
+  /**
+   * A build this turn changed: null when a check after the latest change passed, otherwise what is
+   * still open (never checked since, or the last check failed). A reply does not end on an unchecked build.
+   */
+  buildFinish: ((buildId: string) => { open: string; problems: string[] } | null) | null = null;
   /** A consequential action the user approved worked: Keo may learn from it (who a name means). */
   learned: ((capabilityId: string, input: unknown, result: unknown) => void) | null = null;
   /** Tool groups a conversation always gets (e.g. Studio's tools for Keo Studio's own conversations). */
@@ -584,6 +601,7 @@ export class AgentService {
       let usageIn = 0;
       let claimNudged = false;
       let finishNudged = false;
+      let buildNudges = 0;
       // What worked earlier in this conversation: a reply that sums it up is not making anything up.
       const earlier = this.conversations
         .messages(conversationId)
@@ -773,6 +791,27 @@ export class AgentService {
           if (issue?.problems.length) {
             this.log.warn('agent.unfinished_claim', { problems: issue.problems.length }, correlationId);
             note(`\n\n> ⚠ Keo: this reply sounds finished, but these actions failed or could not be verified: ${describeProblems(issue.problems)}.`);
+          }
+          // The builder finishes the job: a build changed this turn must pass a check after the change.
+          // Keo is sent back to check and fix (a few times); if it still ends, the user is told plainly.
+          const openBuilds = [...(turn.builds ?? [])].flatMap((id) => {
+            const st = this.buildFinish?.(id) ?? null;
+            return st ? [{ id, ...st }] : [];
+          });
+          const waitsOnUser = /\?\s*$/.test(result.text.trim());
+          if (openBuilds.length && !issue && !waitsOnUser && buildNudges < BUILD_FINISH_NUDGES && used + 1 < roundLimit()) {
+            buildNudges++;
+            this.log.warn('agent.build_unchecked', { builds: openBuilds.map((b) => b.id), nudge: buildNudges }, correlationId);
+            if (text && !text.endsWith('\n')) note('\n\n');
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(no text)' }], native: result.native });
+            messages.push({ role: 'user', content: [{ type: 'text', text: buildFinishNote(openBuilds) }] });
+            phase('thinking');
+            continue;
+          }
+          if (openBuilds.length && !waitsOnUser) {
+            this.log.warn('agent.build_left_unchecked', { builds: openBuilds.map((b) => b.id) }, correlationId);
+            const p = openBuilds[0]!;
+            note(`\n\n> ⚠ Keo: the build is not proven to work yet — ${p.open}${p.problems.length ? ` (${p.problems.slice(0, 3).join('; ')})` : ''}. Say “keep fixing” to carry on.`);
           }
           break;
         }
@@ -1085,6 +1124,8 @@ export class AgentService {
           out = await run(2);
         }
         this.dataChanged(cap.id);
+        const changedBuild = BUILD_CHANGES.test(cap.id) ? ((call.input as { build?: unknown } | null)?.build ?? (out as { id?: unknown } | null)?.id) : null;
+        if (typeof changedBuild === 'string') (ctx.turn.builds ??= new Set()).add(changedBuild);
         const savedMemory = cap.id === 'memory.propose' && (out as { status?: string }).status !== 'proposed';
         const outcome = savedMemory ? 'executed' : cap.id === 'task.propose_plan' || cap.id.endsWith('.propose') || cap.id.endsWith('.propose_item') ? 'proposed' : 'executed';
         const cards = cap.id === 'research.show_products' ? (out as ToolActivity['cards']) : undefined;

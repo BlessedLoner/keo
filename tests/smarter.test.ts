@@ -341,3 +341,60 @@ describe('Re-reading after a change is not a loop', () => {
     expect(g.check(read as never, 5)).toBeNull();
   });
 });
+
+describe('a builder that finishes the job', () => {
+  const idIn = (req: ChatRequest) => /bd_[a-z0-9]{6,24}/.exec(JSON.stringify(req.messages))?.[0] ?? '';
+  const buildNotes = (req: ChatRequest) => req.messages.flatMap((m) => m.content).filter((b) => b.type === 'text' && b.text.includes('not proven to work yet'));
+
+  it('a reply cannot end on a build it changed until a check after the change passes', async () => {
+    h = makeHarness({
+      script: (req, n) => {
+        if (n === 0) return calls(['build__start', { title: 'Bakery', kind: 'website', brief: 'A bakery site' }]);
+        if (n === 1) return calls(['build__write', { build: idIn(req), files: [{ path: 'index.html', content: '<h1>Bakery</h1>' }] }]);
+        if (n === 2) return reply('Your bakery site is ready.');
+        // Sent back: the model checks it (Keo's preview is not in tests: the passing check is recorded as it would be).
+        expect(buildNotes(req)).toHaveLength(1);
+        if (n === 3) {
+          h.services.builds.recordCheck(idIn(req), { ok: true, good: true, problems: [] });
+          return calls(['build__read', { build: idIn(req) }]);
+        }
+        return reply('Checked it: the page loads with no errors. Your bakery site is ready.');
+      },
+    });
+    const c = h.services.conversations.create();
+    const msg = await h.services.agent.send(c.id, 'make a website for my bakery').done;
+    expect(h.provider.calls).toBe(5);
+    expect(msg.content).not.toContain('not proven to work yet');
+    expect(msg.status).toBe('complete');
+  });
+
+  it('a build that still fails after Keo was sent back a few times is reported plainly, not called done', async () => {
+    h = makeHarness({
+      script: (req, n) => {
+        if (n === 0) return calls(['build__start', { title: 'Racer', kind: 'game', brief: 'A racing game' }]);
+        if (n === 1) return calls(['build__write', { build: idIn(req), files: [{ path: 'index.html', content: '<canvas></canvas>' }] }]);
+        if (n === 2) h.services.builds.recordCheck(idIn(req), { ok: false, good: false, problems: ['TypeError: car is undefined'] });
+        return reply('The game is ready.');
+      },
+    });
+    const c = h.services.conversations.create();
+    const msg = await h.services.agent.send(c.id, 'make a racing game').done;
+    // Sent back three times, then the user is told what is still wrong.
+    expect(h.provider.calls).toBe(6);
+    expect(msg.content).toContain('the build is not proven to work yet — its last check found problems (TypeError: car is undefined)');
+  });
+
+  it('a question to the user is not held up', async () => {
+    h = makeHarness({
+      script: (req, n) => {
+        if (n === 0) return calls(['build__start', { title: 'Shop', kind: 'website', brief: 'A shop' }]);
+        if (n === 1) return calls(['build__write', { build: idIn(req), files: [{ path: 'index.html', content: '<h1>Shop</h1>' }] }]);
+        return reply('Which payment provider should the shop use?');
+      },
+    });
+    const c = h.services.conversations.create();
+    const msg = await h.services.agent.send(c.id, 'make an online shop website').done;
+    expect(h.provider.calls).toBe(3);
+    expect(msg.content).not.toContain('not proven');
+  });
+});

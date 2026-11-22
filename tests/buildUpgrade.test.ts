@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BUILD_FONTS, BUILD_LIBRARIES, withImportMap } from '../src/main/build/libraries';
 import { BuildProjects } from '../src/main/build/projects';
 import { buildCapabilities } from '../src/main/capabilities/build';
@@ -108,5 +108,108 @@ describe('build history', () => {
     expect(r.restored).toEqual(['index.html']);
     goBack(dir);
     expect(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')).toBe('v0');
+  });
+});
+
+describe('a builder that finishes the job', () => {
+  const ctx = { signal: new AbortController().signal } as never;
+  // A stand-in for Keo's sandboxed preview: each check reports what the test sets.
+  const setup = () => {
+    const p = make();
+    const m = p.create({ title: 'Racer', kind: 'game' });
+    let report = { errors: [] as string[], missing: [] as string[], steps: [] as string[] };
+    const host = { open: async () => undefined, check: async () => ({ page: 'index.html', title: 'Racer', errors: report.errors, warnings: [], missing: report.missing, text: 'Play', steps: report.steps, screenshot: null }) };
+    const caps = buildCapabilities({ projects: p, host } as never);
+    const get = (id: string) => caps.find((c) => c.id === id)!;
+    const call = async (id: string, input: object) => (await get(id).execute(get(id).input.parse({ build: m.id, ...input }) as never, ctx)) as Record<string, unknown>;
+    return { p, m, call, set: (r: Partial<typeof report>) => void (report = { ...report, ...r }) };
+  };
+
+  it('remembers each check; a game only counts as good once it was played', async () => {
+    const { p, m, call, set } = setup();
+    p.write(m.id, [{ path: 'index.html', content: '<h1>v1</h1>' }]);
+    expect(p.checkState(m.id)).toMatchObject({ last: null, changedSinceCheck: true });
+    await call('build.check', {});
+    // Loaded fine, but nothing was played: checked, not yet good.
+    expect(p.checkState(m.id)).toMatchObject({ last: { ok: true }, good: null, changedSinceCheck: false, changedSinceGood: true });
+    set({ steps: ['click "Play": clicked', 'keys KeyW 3s: held'] });
+    await call('build.check', { actions: [{ do: 'click', text: 'Play' }] });
+    expect(p.checkState(m.id)).toMatchObject({ last: { ok: true }, changedSinceGood: false });
+    expect(p.checkState(m.id).good).not.toBeNull();
+    p.write(m.id, [{ path: 'index.html', content: '<h1>v2</h1>' }]);
+    expect(p.checkState(m.id)).toMatchObject({ changedSinceCheck: true, changedSinceGood: true });
+  });
+
+  it('when fixes make it worse, it goes back to the last version that passed — even for changes made seconds later', async () => {
+    const { p, m, call, set } = setup();
+    p.write(m.id, [{ path: 'index.html', content: 'good' }]);
+    set({ steps: ['click "Play": clicked'] });
+    await call('build.check', { actions: [{ do: 'click', text: 'Play' }] });
+    // Two quick "fixes" that break it (well within the 2 minutes that normally make one version).
+    p.write(m.id, [{ path: 'index.html', content: 'broken 1' }]);
+    p.write(m.id, [{ path: 'index.html', content: 'broken 2' }, { path: 'js/extra.js', content: 'x' }]);
+    set({ errors: ['TypeError: car is undefined'] });
+    const bad = await call('build.check', {});
+    expect(bad.ok).toBe(false);
+    expect(String(bad.next)).toMatch(/toLastGood: true/);
+    expect(p.checkState(m.id).last?.problems).toEqual(['TypeError: car is undefined']);
+    const back = await call('build.undo', { toLastGood: true });
+    expect(back.removed).toEqual(['js/extra.js']);
+    expect(fs.readFileSync(path.join(p.dir(m.id), 'index.html'), 'utf8')).toBe('good');
+    expect(p.checkState(m.id).changedSinceGood).toBe(false);
+    await expect(call('build.undo', { toLastGood: true })).rejects.toThrow(/Nothing changed since the last good check/);
+  });
+
+  it('"continue editing" starts from where the work stands: last check, open problems, recent changes', async () => {
+    const { p, m, call, set } = setup();
+    p.write(m.id, [{ path: 'index.html', content: 'v1' }]);
+    expect(String((await call('build.read', {})).next)).toMatch(/not been checked yet/);
+    set({ errors: ['ReferenceError: score is not defined'], missing: ['img/car.png'] });
+    await call('build.check', {});
+    const r = await call('build.read', {});
+    expect(r.state).toMatchObject({ lastCheck: { passed: false, problems: ['ReferenceError: score is not defined', 'missing img/car.png'] }, lastGood: null, changedSinceCheck: false });
+    expect((r.state as { recentChanges: unknown[] }).recentChanges).toHaveLength(1);
+    expect(String(r.next)).toMatch(/fix those first/);
+  });
+
+  it('a reply that would end on an unproven build is sent back to check and fix it', async () => {
+    const { buildFinishNote } = await import('../src/main/agent/agentService');
+    const note = buildFinishNote([{ id: 'bd_1', open: 'its last check found problems', problems: ['TypeError: car is undefined'] }]);
+    expect(note).toMatch(/not typed by the user/);
+    expect(note).toMatch(/build__check it now/);
+    expect(note).toMatch(/TypeError: car is undefined/);
+    expect(note).toMatch(/toLastGood: true/);
+  });
+});
+
+describe('links in builds', () => {
+  it('a build’s pages may link to each other only inside the build windows, never in Keo’s own', async () => {
+    vi.doMock('electron', () => ({ BrowserWindow: class {}, session: { fromPartition: () => ({}) } }));
+    const { isBuildPageNavigation } = await import('../src/main/build/host');
+    const preview = { name: 'preview' };
+    const check = { name: 'check' };
+    const keoWindow = { name: 'keo' };
+    const parts = (p: string) => (p === 'persist:keo-build' ? preview : check) as never;
+    expect(isBuildPageNavigation(preview as never, 'keobuild://bd_51d1052102/menu.html', parts)).toBe(true);
+    expect(isBuildPageNavigation(check as never, 'keobuild://bd_51d1052102/order.html', parts)).toBe(true);
+    expect(isBuildPageNavigation(keoWindow as never, 'keobuild://bd_51d1052102/menu.html', parts)).toBe(false);
+    expect(isBuildPageNavigation(preview as never, 'https://example.com/', parts)).toBe(false);
+    vi.doUnmock('electron');
+  });
+
+  it('a check that clicks a link says where it goes, so a link that opens nothing is caught', async () => {
+    const { actionScript, OPENS } = await import('../src/main/build/checkActions');
+    const link = (href: string, words: string) => ({
+      innerText: words, href, target: '', disabled: false, tagName: 'A',
+      hasAttribute: () => false, getAttribute: () => null, getBoundingClientRect: () => ({ left: 0, top: 0, width: 50, height: 20 }),
+      scrollIntoView: () => undefined, dispatchEvent: () => true, click: () => undefined,
+      closest(this: unknown) { return this; },
+    });
+    const links = [link('keobuild://bd_1a2b3c/menu.html', 'Our menu'), link('keobuild://bd_1a2b3c/#hours', 'Hours')];
+    const doc = { querySelectorAll: () => links, querySelector: () => null, elementFromPoint: () => null, body: {} };
+    const run = (text: string) => new Function('document', 'location', 'window', 'PointerEvent', 'MouseEvent', `return ${actionScript({ do: 'click', text } as never).script}`)(doc, { href: 'keobuild://bd_1a2b3c/' }, {}, undefined, class { constructor(public t: string) {} });
+    expect(run('Our menu')).toBe(`clicked our menu ${OPENS}keobuild://bd_1a2b3c/menu.html]`);
+    // A jump within the same page is not a page that must open.
+    expect(run('Hours')).toBe('clicked hours');
   });
 });
