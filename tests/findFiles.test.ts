@@ -71,6 +71,12 @@ function ok<T>(r: Awaited<ReturnType<typeof run>>): T {
 type Found = { results: Array<{ path: string; name: string; kind: string; match: string }>; via: string; note: string | null; trust: string };
 
 describe('the index query', () => {
+  it('asks Windows Search for the largest (or newest) first when that is what the user wants', () => {
+    expect(buildIndexSql({ text: '', kind: 'any', folder: 'C:/Users/me/Downloads', limit: 5, sort: 'largest' }, ['C:/Users/me'])).toMatch(/ORDER BY System\.Size DESC$/);
+    expect(buildIndexSql({ text: 'cv', kind: 'any', limit: 5, sort: 'newest' }, ['C:/Users/me'])).toMatch(/ORDER BY System\.DateModified DESC$/);
+    expect(buildIndexSql({ text: 'cv', kind: 'any', limit: 5 }, ['C:/Users/me'])).not.toContain('ORDER BY');
+  });
+
   it('uses fast prefix terms per word (no leading-wildcard LIKE), scopes and filters', () => {
     const sql = buildIndexSql({ text: 'orange table', kind: 'picture', modifiedWithinDays: 7, limit: 10 }, ['C:\\Users\\me'], Date.parse('2026-10-24T12:00:00Z'));
     expect(sql.startsWith('SELECT TOP 300 System.ItemPathDisplay')).toBe(true);

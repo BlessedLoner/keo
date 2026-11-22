@@ -202,12 +202,13 @@ export function appCapabilities(d: AppsDeps): AnyCapability[] {
       const page = SETTINGS_PAGES[want] ?? want.replace(/\s+/g, '-');
       if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(page)) throw new CapabilityError('invalid_input', `“${i.page}” is not a Settings page name.`, { dispatched: 'no' });
       await (d.openSettings ?? openSettingsPage)(page);
-      // The Settings window (title "Settings") should be there within a few seconds.
-      const until = Date.now() + Math.min(d.launchWaitMs ?? 6000, 6000);
+      // The Settings window (title "Settings") should be there within a few seconds; a minimised
+      // Settings stays hidden until Windows restores it, which can take a while on a slow PC.
+      const until = Date.now() + Math.min(d.launchWaitMs ?? 12000, 12000);
       let window = false;
       while (d.desktop && !window && Date.now() < until && !ctx.signal.aborted) {
         const all = await d.desktop.listWindows(ctx.settings, true).catch(() => []);
-        window = all.some((w) => /^settings$/i.test(w.title.trim()) || /^systemsettings$/i.test(w.processName.replace(/\.exe$/i, '')));
+        window = all.some((w) => /^settings\b/i.test(w.title.trim()) || /^systemsettings$/i.test(w.processName.replace(/\.exe$/i, '')));
         if (!window) await new Promise((r) => setTimeout(r, 400));
       }
       return { opened: `ms-settings:${page}`, window };

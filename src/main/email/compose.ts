@@ -13,6 +13,8 @@ export interface Outgoing {
   references?: string[];
   /** A calendar invite (text/calendar; method=REQUEST). */
   ics?: string;
+  /** Files from this PC, attached as they are (checked before: inside the allowed folders). */
+  attachments?: Array<{ path: string; filename: string }>;
 }
 
 /**
@@ -32,6 +34,7 @@ export async function composeMessage(m: Outgoing, messageId = newMessageId(m.fro
     date: new Date(),
     ...(m.inReplyTo ? { inReplyTo: m.inReplyTo, references: [...(m.references ?? []), m.inReplyTo].filter((v, i, all) => all.indexOf(v) === i) } : {}),
     ...(m.ics ? { icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: m.ics } } : {}),
+    ...(m.attachments?.length ? { attachments: m.attachments.map((a) => ({ filename: a.filename, path: a.path })) } : {}),
   });
   // Bcc reaches SMTP's envelope only; the composer leaves it out of the message itself.
   const raw = await new Promise<Buffer>((resolve, reject) => mail.compile().build((err, out) => (err ? reject(err) : resolve(out))));

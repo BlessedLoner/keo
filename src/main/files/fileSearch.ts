@@ -39,6 +39,8 @@ export interface FileQuery {
   /** Search only inside this folder (must be inside the allowed folders). */
   folder?: string | undefined;
   limit: number;
+  /** Best matches first (default), the largest files first, or the newest first. */
+  sort?: 'match' | 'largest' | 'newest' | undefined;
 }
 
 export interface FileHit {
@@ -113,7 +115,8 @@ export function buildIndexSql(q: FileQuery, roots: string[], now = Date.now()): 
     const since = new Date(now - q.modifiedWithinDays * 86400_000).toISOString().slice(0, 19).replace('T', ' ');
     where.push(`System.DateModified >= '${since}'`);
   }
-  return `SELECT TOP 300 System.ItemPathDisplay, System.ItemType, System.Size, System.DateModified FROM SystemIndex WHERE ${where.join(' AND ')}`;
+  const order = q.sort === 'largest' ? ' ORDER BY System.Size DESC' : q.sort === 'newest' ? ' ORDER BY System.DateModified DESC' : '';
+  return `SELECT TOP 300 System.ItemPathDisplay, System.ItemType, System.Size, System.DateModified FROM SystemIndex WHERE ${where.join(' AND ')}${order}`;
 }
 
 const norm = (p: string) => path.resolve(p).toLowerCase().replace(/[\\/]+$/, '');
@@ -169,7 +172,9 @@ export class FileSearch {
     }
     if (words.length && (q.kind === 'any' || q.kind === 'picture')) hits = await this.withDescribed(hits, q);
     hits = hits.filter((h) => q.kind === 'any' || h.kind === q.kind);
-    hits.sort((a, b) => rank(b, words) - rank(a, words) || (b.modified ?? '').localeCompare(a.modified ?? ''));
+    if (q.sort === 'largest') hits.sort((a, b) => (b.size ?? -1) - (a.size ?? -1));
+    else if (q.sort === 'newest') hits.sort((a, b) => (b.modified ?? '').localeCompare(a.modified ?? ''));
+    else hits.sort((a, b) => rank(b, words) - rank(a, words) || (b.modified ?? '').localeCompare(a.modified ?? ''));
     return { hits: hits.slice(0, q.limit), via, ms: Date.now() - t0, total: hits.length };
   }
 

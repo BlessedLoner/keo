@@ -180,6 +180,31 @@ describe('email over IMAP/SMTP', () => {
     expect(sender.sent).toHaveLength(0);
   });
 
+  it('attaches files from this PC to a draft, names them on the approval, and refuses missing or secret files', async () => {
+    const { server } = setup();
+    const home = `${h.dir}-home`;
+    fs.mkdirSync(path.join(home, 'Documents'), { recursive: true });
+    const pdf = path.join(home, 'Documents', 'invoice.pdf');
+    fs.writeFileSync(pdf, '%PDF-1.4 sample invoice');
+    const input = { to: ['me@example.test'], subject: 'Invoice', body: 'Here it is.', attachments: [pdf] };
+    const pending = await run('email.draft', input, false);
+    if ('rejected' in pending) throw new Error(pending.rejected);
+    expect(pending.preview.consequences.join(' | ')).toContain(`Attached: invoice.pdf (${pdf})`);
+    expect(pending.preview.dataExport).toMatch(/uploaded to your mail server/);
+    ok(await run('email.draft', input));
+    const source = server.boxes.drafts.at(-1)!.source;
+    expect(source).toMatch(/Content-Disposition: attachment; filename=invoice\.pdf/);
+    // Missing, secret-looking and outside files never get attached.
+    for (const [file, why] of [
+      [path.join(home, 'Documents', 'nope.pdf'), /no file at/],
+      [path.join(home, 'Documents', 'recovery-codes.txt'), /passwords or keys/],
+    ] as const) {
+      if (/recovery/.test(file)) fs.writeFileSync(file, 'x');
+      const r = await run('email.draft', { ...input, attachments: [file] }, false);
+      expect('rejected' in r ? r.rejected : JSON.stringify(r)).toMatch(why);
+    }
+  });
+
   it('marks mail read after approval', async () => {
     const { server, news } = setup();
     ok(await run('email.mark_read', { refs: [`inbox:${news}`] }));

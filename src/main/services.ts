@@ -209,6 +209,8 @@ export interface ServiceDeps {
   pictureAi?: PictureAi | null;
   /** A picture as PNG through Chromium's decoder (pictures ffmpeg cannot read). */
   pictureNormalize?: (file: string) => Promise<Buffer | null>;
+  /** Picture edits drawn on a canvas in the app, for when ffmpeg is not set up. */
+  pictureCanvasEdit?: (source: string, ops: import('./pictures/edit').EditOp[], format: 'png' | 'jpg') => Promise<{ bytes: Buffer; width: number; height: number }>;
   /** C:\\Windows\\Fonts (tests may point elsewhere). */
   fontsDir?: string;
   /** The Windows Search index for finding files (tests inject a fake or null; the app uses Windows Search). */
@@ -791,6 +793,7 @@ export class Services {
         };
       },
       ...(d.pictureNormalize ? { normalize: d.pictureNormalize } : {}),
+      ...(d.pictureCanvasEdit ? { canvasEdit: d.pictureCanvasEdit } : {}),
     });
     const home = d.homeDir ?? os.homedir();
     this.fileIndex = d.fileIndex !== undefined ? d.fileIndex : new WindowsSearchIndex();
@@ -926,7 +929,7 @@ export class Services {
         saveShot: (png, meta) => this.visuals.saveShot(png, meta),
         fileRefused: (p) => (!this.fileSearch.allowed(p) ? 'That file is outside the folders Keo may use (Settings → Files).' : looksSecret(p) ? 'That file usually holds passwords or keys; Keo does not upload it.' : null),
       }),
-      ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost }),
+      ...emailCapabilities({ email: this.email, smtpHost: () => getSettings().email.smtpHost, fileAllowed: (p) => this.fileSearch.allowed(p) }),
       ...connectedAppCapabilities({ ...this.connected, unavailable: (app) => this.connectedUnavailable(app) }),
       ...calendarCapabilities({ calendar: this.calendar, auth: this.googleAuth, clientId: () => this.googleClientId(), timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone }),
       ...visualCapabilities({

@@ -116,6 +116,8 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 | Run | Date | Model | Pass | Partly | Fail | Score | False "done" | Notes |
 |---|---|---|---|---|---|---|---|---|
 | 1 (partial) | 2026-11-22 | gpt-6-luna (OpenAI) | 10 | 1 | 5 | **66%** (10.5 / 16 scored) | 0 | Stopped at C2: the OpenAI credit ran out. B9 not scored (Clock was updating). 1 harmful action (B5), undone. |
+| 2 (partial) | 2026-11-23 | keo-fast (Keo Pro) | 17 | 3 | 1 | **88%** (18.5 / 21 scored) | 0 | After fixes 13b342f. The six run-1 failures retried (5 pass, 1 partly) plus C3–C5, H1, H4; tasks not rerun keep their run-1 result. No harmful actions. 23 tasks not run yet (builder, Studio, 3D, email, calendar, live chat, reminders). |
+| 2b (retries) | 2026-11-23 | keo-fast (Keo Pro) | 19 | 2 | 0 | **95%** (20 / 21 scored) | 0 | After the gap fixes: C5 (photo text without video tools: 10 s, 34k tokens, was a 499k-token fail) and H4 (Gmail draft with the PDF attached, nothing sent) now pass. Still partly: B4 (oval, not a circle), H1 (prices not opened on the seller's page). |
 
 ### Run 1 in detail (2026-11-22)
 
@@ -146,3 +148,27 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 4. **Cost**: screen tasks used 150k–490k tokens each; file tasks 30k–90k.
 5. **Memory**: details in a request about someone else (a CV's subject) are not facts to remember about the user.
 6. Smaller: fill realistic sample values (B8), and the Save dialog wait in Notepad (B2).
+
+### Run 2 in detail (2026-11-23, keo-fast on the Keo Pro account)
+
+| # | Result | Time | Tokens in | What happened |
+|---|---|---|---|---|
+| A6 | Pass | 30 s | 71k | Right five files and sizes; 6 searches (no "list a folder by size"). |
+| B3 | Pass | 61 s | 81k | Named the right Wi-Fi network. The Settings opener said "window not seen" though Settings was open. |
+| B4 | Partly | 91 s | 367k | Red outline drawn with Paint's shape tool — an oval (328×224), not a circle. |
+| B5 | Pass | 159 s | 382k | Explorer sorted newest first (checked: -System.DateModified); no file moved. Slow and costly for one click. |
+| B8 | Pass | 75 s | 148k | Real prices and a SUM total. |
+| C1 | Pass | 25 s | 191k | Six real slides saved straight into Documents\Scorecard Test. |
+| C3 | Pass | 20 s | 166k | Income, five expenses, totals and "left" as formulas. |
+| C4 | Pass | 15 s | 47k | 482-triangle STL, 92 × 112 × 114 mm. |
+| C5 | **Fail** | 199 s | 499k | The picture editor needs the video tools (ffmpeg), not set up on this PC; the Paint fallback failed. Original untouched. |
+| H1 | Partly | 50 s | 73k | Three real laptops with Best Buy prices and a pick; could not open the product pages to confirm prices (said so). |
+| H4 | Partly | 90 s | 243k | Found and copied the newest PDF; email drafts cannot carry attachments, so no draft (nothing sent). |
+
+**New findings**
+1. Putting text on a picture should not need the video tools (C5).
+2. Email drafts need attachments (H4).
+3. Screen work is still expensive: 150k–500k tokens a task, against 30k–190k for direct tools.
+4. The Settings opener misses an already-open Settings window (B3).
+5. Research could open the sellers' pages to confirm and date prices (H1).
+6. Files: a "largest files in a folder" listing (A6).

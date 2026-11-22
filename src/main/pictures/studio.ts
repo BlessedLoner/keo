@@ -47,6 +47,8 @@ export interface PictureStudioDeps {
   ai(): PictureAi | null;
   /** The picture as PNG through another decoder (the app: Chromium's), for files ffmpeg cannot read; null if it cannot either. */
   normalize?(file: string): Promise<Buffer | null>;
+  /** The same edits drawn on a canvas in the app (no ffmpeg needed): used when the video tools are not set up. */
+  canvasEdit?(source: string, ops: EditOp[], format: "png" | "jpg"): Promise<{ bytes: Buffer; width: number; height: number }>;
 }
 
 export class PictureError extends Error {
@@ -141,6 +143,16 @@ export class PictureStudio {
   ): Promise<{ path: string; width: number; height: number }> {
     this.checkSource(source);
     for (const op of ops) if (op.op === "overlay") this.checkSource(op.image);
+    // Without the video tools, the app draws the same edits itself (nothing to set up first).
+    if (!this.d.runner() && this.d.canvasEdit) {
+      const done = await this.d.canvasEdit(source, ops, o.format).catch((e: unknown) => {
+        throw new PictureError("render_failed", `The picture could not be made: ${e instanceof Error ? e.message : String(e)}`);
+      });
+      if (signal.aborted) throw new PictureError("cancelled", "Cancelled.");
+      const out = this.target(o.name, `.${o.format}`, o.folder);
+      writeAtomic(out, done.bytes);
+      return { path: out, width: done.width, height: done.height };
+    }
     const r = this.tools();
     const dir = this.work();
     try {

@@ -1,7 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { buildIcs, type Outgoing } from '../email/compose';
 import { EMAIL_TRUST, REF, type EmailService } from '../email/emailService';
 import { SmtpError } from '../email/smtp';
+import { looksSecret } from './findFiles';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
 /**
@@ -15,7 +18,12 @@ export interface EmailDeps {
   email: EmailService;
   /** Where outgoing mail goes (the SMTP server), for the approval card. */
   smtpHost: () => string;
+  /** Whether Keo may use a file on this PC (inside the folders the user allowed). */
+  fileAllowed?: (p: string) => boolean;
 }
+
+/** The most a message can carry in attachments (most mail servers refuse about 25 MB). */
+const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
 
 const EMAIL_RE = /^[^\s@<>",;:()[\]\\]+@[^\s@<>",;:()[\]\\]+\.[^\s@<>",;:()[\]\\]+$/;
 export const Address = z.string().trim().max(254).regex(EMAIL_RE, 'Must be a plain email address like name@example.com');
@@ -38,12 +46,13 @@ export function when(d: Date): string {
 }
 
 /** Exactly what an approval card shows for a message about to leave. */
-export function messageLines(m: { to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }): string[] {
+export function messageLines(m: { to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; attachments?: Array<{ path: string; filename: string }> }): string[] {
   return [
     `To: ${m.to.join(', ')}`,
     ...(m.cc.length ? [`Cc: ${m.cc.join(', ')}`] : []),
     ...(m.bcc.length ? [`Bcc: ${m.bcc.join(', ')}`] : []),
     `Subject: ${m.subject || '(no subject)'}`,
+    ...(m.attachments?.length ? [`Attached: ${m.attachments.map((a) => `${a.filename} (${a.path})`).join(', ')}`] : []),
     `Body:\n${m.body}`,
   ];
 }
@@ -203,20 +212,47 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
     bcc: z.array(Address).max(50).default([]),
     subject: Subject.optional(),
     body: Body,
+    /** Files from this PC to attach (full paths, as files__search gives them). */
+    attachments: z.array(z.string().min(3).max(500)).max(10).default([]),
   };
 
-  type Draftish = { to: string[]; cc: string[]; bcc: string[]; subject?: string | undefined; body: string; replyToRef?: string | undefined; replyAll?: boolean | undefined };
+  /** The files to attach, checked: they exist, are files, are inside the allowed folders, are not secrets, and fit. */
+  const attachmentsOf = (paths: string[]): Array<{ path: string; filename: string }> | string => {
+    let total = 0;
+    const out: Array<{ path: string; filename: string }> = [];
+    for (const p of paths) {
+      if (!path.isAbsolute(p)) return `Give the full path of the file to attach (${p.slice(0, 80)}), as files__search returned it.`;
+      if (d.fileAllowed && !d.fileAllowed(p)) return `${p} is outside the folders Keo may use (Settings → Files).`;
+      if (looksSecret(p)) return `${path.basename(p)} usually holds passwords or keys; Keo does not attach it.`;
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(p);
+      } catch {
+        return `There is no file at ${p}.`;
+      }
+      if (!st.isFile()) return `${p} is a folder, not a file: attach the files in it (or a .zip of it).`;
+      total += st.size;
+      out.push({ path: p, filename: path.basename(p) });
+    }
+    if (total > ATTACH_MAX_BYTES) return `The attachments add up to ${Math.round(total / 1048576)} MB; most mail servers refuse over 20 MB. Share a link instead (for example Google Drive).`;
+    return out;
+  };
+
+  type Draftish = { to: string[]; cc: string[]; bcc: string[]; subject?: string | undefined; body: string; replyToRef?: string | undefined; replyAll?: boolean | undefined; attachments?: string[] | undefined };
   /** The final message for a draft or send: the same function feeds the approval card and the server. */
   const resolve = (i: Draftish): Outgoing | string => {
+    const files = attachmentsOf(i.attachments ?? []);
+    if (typeof files === 'string') return files;
+    const attach = files.length ? { attachments: files } : {};
     if (i.replyToRef) {
       const plan = d.email.replyPlan(i.replyToRef, !!i.replyAll);
       if (!plan) return 'Read that message first with email__read_thread: Keo only answers messages it has read in this session.';
       const to = i.to.length ? i.to : plan.to;
       if (!to.length) return 'The message has no address to reply to.';
-      return { from: from(), to, cc: i.cc.length ? i.cc : plan.cc, bcc: i.bcc, subject: i.subject ?? plan.subject, body: i.body, ...(plan.inReplyTo ? { inReplyTo: plan.inReplyTo } : {}), references: plan.references };
+      return { from: from(), to, cc: i.cc.length ? i.cc : plan.cc, bcc: i.bcc, subject: i.subject ?? plan.subject, body: i.body, ...(plan.inReplyTo ? { inReplyTo: plan.inReplyTo } : {}), references: plan.references, ...attach };
     }
     if (!i.to.length) return 'Give at least one recipient (to).';
-    return { from: from(), to: i.to, cc: i.cc, bcc: i.bcc, subject: i.subject ?? '', body: i.body };
+    return { from: from(), to: i.to, cc: i.cc, bcc: i.bcc, subject: i.subject ?? '', body: i.body, ...attach };
   };
   const must = (i: Draftish): Outgoing => {
     const m = resolve(i);
@@ -224,7 +260,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
     return m;
   };
   const sendExport = () => `The message goes from your account through ${d.smtpHost()} to the recipients.`;
-  const sendAudit = (m: Outgoing | string) => (typeof m === 'string' ? {} : { to: m.to.length, cc: m.cc.length, bcc: m.bcc.length, subjectLength: m.subject.length, bodyLength: m.body.length, reply: !!m.inReplyTo });
+  const sendAudit = (m: Outgoing | string) => (typeof m === 'string' ? {} : { to: m.to.length, cc: m.cc.length, bcc: m.bcc.length, subjectLength: m.subject.length, bodyLength: m.body.length, reply: !!m.inReplyTo, attachments: m.attachments?.length ?? 0 });
   const sentOutput = z.object({ sent: z.boolean(), messageId: z.string(), accepted: z.array(z.string()), rejected: z.array(z.string()) });
   const doSend = async (m: Outgoing) => {
     try {
@@ -244,7 +280,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Save an email draft',
     description:
-      'Save an email as a draft in the user’s Drafts folder (nothing is sent). For a reply draft give replyToRef (a message read with email__read_thread): recipients, "Re:" subject and threading come from it unless you set them.',
+      'Save an email as a draft in the user’s Drafts folder (nothing is sent). For a reply draft give replyToRef (a message read with email__read_thread): recipients, "Re:" subject and threading come from it unless you set them. attachments: files from this PC (full paths, up to 10, 20 MB in all).',
     input: z.object({ ...Compose, replyToRef: Ref.optional(), replyAll: z.boolean().default(false) }).strict(),
     output: z.object({ saved: z.boolean(), folder: z.string() }),
     risk: 'low',
@@ -264,7 +300,13 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
     },
     preview: (i) => {
       const m = resolve(i);
-      return { summary: 'Save an email draft (not sent)', target: `Drafts folder of ${d.email.address()}`, consequences: typeof m === 'string' ? [m] : [...messageLines(m), 'Saved as a draft only: nothing is sent.'], dataExport: null };
+      const files = typeof m === 'string' ? 0 : (m.attachments?.length ?? 0);
+      return {
+        summary: 'Save an email draft (not sent)',
+        target: `Drafts folder of ${d.email.address()}`,
+        consequences: typeof m === 'string' ? [m] : [...messageLines(m), 'Saved as a draft only: nothing is sent.'],
+        dataExport: files ? `The attached file${files === 1 ? ' is' : 's are'} uploaded to your mail server’s Drafts folder.` : null,
+      };
     },
     auditView: (i) => sendAudit(resolve(i)),
     async execute(i, ctx) {
@@ -283,7 +325,7 @@ export function emailCapabilities(d: EmailDeps): AnyCapability[] {
     version: '1.0.0',
     title: 'Send an email',
     description:
-      'Send a new email from the user’s account. Only to recipients the user asked for, with the text they agreed to; the approval shows the exact To, Cc, Bcc, subject and body. For answering a message use email__reply.',
+      'Send a new email from the user’s account. Only to recipients the user asked for, with the text they agreed to; the approval shows the exact To, Cc, Bcc, subject, body and attached files. attachments: files from this PC (full paths, up to 10, 20 MB in all). For answering a message use email__reply.',
     input: z.object({ ...Compose, to: z.array(Address).min(1).max(50) }).strict(),
     output: sentOutput,
     risk: 'high',

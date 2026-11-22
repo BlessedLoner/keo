@@ -22,7 +22,7 @@ const NAMES: Record<string, keyof KnownFolders> = {
 
 /** Fields of tool inputs that hold a file or folder path. */
 // (Not "to", "from" or "target": those also name people and chats in message tools.)
-const PATH_KEY = /^(path|paths|folder|folders|file|files|src|source|dest|destination|dir|directory|outputFolder|picture|pictures|image|images|video|audio)$/i;
+const PATH_KEY = /^(path|paths|attachments|folder|folders|file|files|src|source|dest|destination|dir|directory|outputFolder|picture|pictures|image|images|video|audio)$/i;
 
 /** The full path for a value that starts with a main folder's name, or null when it does not. */
 export function knownPath(value: string, k: KnownFolders): string | null {

@@ -1,5 +1,6 @@
 import { Mp4Reader } from './studio/mp4';
 import { BUILD_SCHEMES, BuildHost, isBuildPageNavigation } from './build/host';
+import { CANVAS_EDIT_JS, CANVAS_FONTS } from './pictures/canvasEdit';
 import { voicedSpans, wavOf } from './studio/captions';
 import { LOOKS, projectDuration, type EditOp } from '../shared/studio';
 import { presetOps, type PresetId, type PresetOptions } from '../shared/studioPresets';
@@ -554,6 +555,39 @@ async function captureScreen(): Promise<{ png: Buffer; width: number; height: nu
  * letterboxed on white: shown by Chromium in a hidden window of the locked-down report session
  * (JavaScript off, no network) and captured.
  */
+/** The picture types Chromium decodes, by extension. */
+const PICTURE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.jfif': 'image/jpeg', '.webp': 'image/webp', '.bmp': 'image/bmp', '.gif': 'image/gif' };
+
+/**
+ * Picture edits without ffmpeg: a hidden page in its own offline session (it can load nothing but
+ * the data it is given) draws the edits on a canvas and returns the finished picture.
+ */
+async function canvasEditPicture(source: string, ops: import('./pictures/edit').EditOp[], format: 'png' | 'jpg'): Promise<{ bytes: Buffer; width: number; height: number }> {
+  const dataUrl = (file: string) => {
+    const mime = PICTURE_MIME[path.extname(file).toLowerCase()];
+    if (mime) return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
+    const img = nativeImage.createFromPath(file);
+    if (img.isEmpty()) throw new Error(`${path.basename(file)} is not a picture Keo can read.`);
+    return `data:image/png;base64,${img.toPNG().toString('base64')}`;
+  };
+  const overlays: Record<string, string> = {};
+  for (const op of ops) if (op.op === 'overlay') overlays[op.image] = dataUrl(op.image);
+  const ses = session.fromPartition('keo-canvas-edit');
+  ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !(d.url.startsWith('data:') || d.url === 'about:blank') }));
+  const win = new BrowserWindow({ show: false, width: 200, height: 200, webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await win.loadURL('about:blank');
+    await win.webContents.executeJavaScript(`${CANVAS_EDIT_JS};true`);
+    const job = { src: dataUrl(source), overlays, ops, format, fonts: CANVAS_FONTS };
+    const r = (await win.webContents.executeJavaScript(`window.keoCanvasEdit(${JSON.stringify(job)})`)) as { dataUrl: string; width: number; height: number };
+    const bytes = Buffer.from(r.dataUrl.slice(r.dataUrl.indexOf(',') + 1), 'base64');
+    if (!bytes.length) throw new Error('empty picture');
+    return { bytes, width: r.width, height: r.height };
+  } finally {
+    win.destroy();
+  }
+}
+
 async function convertImage(bytes: Buffer, mime: string, side: number): Promise<Buffer> {
   if (!/^image\/(webp|avif|gif)$/.test(mime)) throw new Error('unsupported picture type');
   const html = `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:${side}px;height:${side}px;overflow:hidden;background:#fff}img{width:${side}px;height:${side}px;object-fit:contain;display:block}</style><img src="data:${mime};base64,${bytes.toString('base64')}">`;
@@ -784,6 +818,7 @@ app.whenReady().then(() => {
           const img = nativeImage.createFromPath(file);
           return img.isEmpty() ? null : img.toPNG();
         },
+        pictureCanvasEdit: (source, ops, format) => canvasEditPicture(source, ops, format),
         attachmentImages: {
           // Any picture as a JPEG the model can see (at most maxSide) and a small thumbnail.
           prepare: async (bytes, mime, maxSide) => {

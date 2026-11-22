@@ -65,6 +65,30 @@ function ok<T>(r: Awaited<ReturnType<typeof run>>): T {
   return r.step.result as T;
 }
 
+describe('editing without the video tools', () => {
+  it('draws the edits on a canvas in the app instead of asking the user to set up ffmpeg', async () => {
+    const docs = fs.mkdtempSync(path.join(os.tmpdir(), 'keo-docs-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'keo-home-'));
+    dirs.push(docs, home);
+    const drawn: Array<{ source: string; ops: string[]; format: string }> = [];
+    h = makeHarness({
+      deps: {
+        videoRunner: () => null,
+        documentsDir: docs,
+        homeDir: home,
+        pictureAi: null,
+        pictureCanvasEdit: async (source, ops, format) => (drawn.push({ source, ops: ops.map((o) => o.op), format }), { bytes: Buffer.from('png'), width: 640, height: 480 }),
+      },
+    });
+    const pic = path.join(home, 'shop.jpeg');
+    fs.writeFileSync(pic, 'jpeg');
+    const r = ok<{ path: string; width: number }>(await run('picture.edit', { source: pic, operations: [{ op: 'text', text: 'SALE 50%' }, { op: 'round_corners' }] }));
+    expect(drawn).toEqual([{ source: pic, ops: ['text', 'round_corners'], format: 'png' }]);
+    expect(fs.readFileSync(r.path, 'utf8')).toBe('png');
+    expect(r.width).toBe(640);
+  });
+});
+
 describe('the edit graph', () => {
   it('extends the canvas, writes text from a file in a Windows font with a glow, and rounds the corners', () => {
     const ops = [

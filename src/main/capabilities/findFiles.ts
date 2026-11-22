@@ -77,6 +77,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
         modifiedWithinDays: z.number().int().min(1).max(3650).optional(),
         folder: z.string().trim().max(500).optional().describe('Only inside this folder (full path), e.g. a folder found earlier.'),
         limit: z.number().int().min(1).max(50).default(15),
+        sort: z.enum(['match', 'largest', 'newest']).default('match').describe('largest: the biggest files first ("the five biggest files in Downloads": folder + sort largest + limit 5); newest: the latest changed first.'),
       })
       .strict()
       .refine((x) => x.query || x.kind !== 'any' || x.modifiedWithinDays || x.folder, 'Give words to look for, a kind, a date range or a folder.'),
@@ -95,7 +96,7 @@ export function findFileCapabilities(d: FindFilesDeps): AnyCapability[] {
     preview: (i) => ({ summary: `Find ${i.kind === 'any' ? 'files' : `${i.kind}s`}${i.query ? ` matching “${i.query.slice(0, 80)}”` : ''}`, target: i.folder ?? null, consequences: ['Looks up file names and dates; nothing is opened or changed.'], dataExport: `The names and paths found go to ${d.destination()}.` }),
     auditView: (i) => ({ kind: i.kind, queryLength: i.query.length, inFolder: !!i.folder }),
     async execute(i, ctx) {
-      const r = await d.search.search({ text: i.query, kind: i.kind, modifiedWithinDays: i.modifiedWithinDays, folder: i.folder, limit: i.limit }, ctx.signal);
+      const r = await d.search.search({ text: i.query, kind: i.kind, modifiedWithinDays: i.modifiedWithinDays, folder: i.folder, limit: i.limit, sort: i.sort }, ctx.signal);
       let note = !r.hits.length
         ? r.via === 'scan'
           ? 'Nothing matched by name. Try fewer or different words, another kind, or ask the user where it might be.'
