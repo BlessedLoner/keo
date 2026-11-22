@@ -159,6 +159,78 @@ describe('realistic models, guides and Studio', () => {
     expect(off.unavailableReason?.({} as never)).toContain('Keo Cloud');
   });
 
+  it('teaches like a technical poster: callouts with notes, x-ray casings, exploded views carry over between steps', () => {
+    const scene = VisualScene.parse({
+      title: 'Engine',
+      objects: [
+        { id: 'casing', shape: 'cylinder', shell: true, label: 'Casing', note: 'Holds everything in line' },
+        { id: 'fan', shape: 'cylinder', label: 'Fan', note: 'Pulls in air', apart: [0, 0, -3] },
+        { id: 'shaft', shape: 'cylinder' },
+      ],
+      steps: [
+        { title: 'Whole', say: 'The whole engine.', callouts: 'all' },
+        { title: 'Inside', say: 'Seen through the casing.', view: 'xray' },
+        { title: 'Apart', say: 'Pulled apart.', explode: true },
+        { title: 'Fan', say: 'The fan.', focus: ['fan'] },
+        { title: 'Together', say: 'Back together, solid again.', explode: false, view: 'normal' },
+      ],
+    });
+    const st = stepStates(scene);
+    expect(st.map((s) => s.fan!.xray)).toEqual([0, 0, 1, 1, 1, 0]);
+    expect(st.map((s) => s.fan!.apart)).toEqual([0, 0, 0, 1, 1, 0]);
+    expect(sceneProblems(scene)).toEqual([]);
+    // An x-ray needs a casing to see through, and an exploded view needs parts that come apart.
+    const bare = VisualScene.parse({ title: 'x', objects: [{ id: 'a', shape: 'box' }], steps: [{ title: 't', say: 's', view: 'xray', explode: true }] });
+    expect(sceneProblems(bare).join(' ')).toMatch(/no object is a shell.*no object has "apart"/);
+  });
+
+  it('makes an object in parts: a few at a time, reusing the library for free, keeping what worked when one part fails', async () => {
+    const s = store();
+    s.saveModel('engine-fan', Buffer.from('glTF old fan'));
+    const asked: string[] = [];
+    let running = 0;
+    let most = 0;
+    const caps = visualCapabilities({
+      store: s,
+      model3d: {
+        make: async (prompt) => {
+          asked.push(prompt);
+          running++;
+          most = Math.max(most, running);
+          await new Promise((r) => setTimeout(r, 20));
+          running--;
+          if (prompt.includes('nozzle')) throw new Error('the 3D service was busy');
+          return Buffer.from('glTF part');
+        },
+        unavailable: () => null,
+        costLabel: 'about 100 Studio credits',
+      },
+    });
+    const parts = caps.find((c) => c.id === 'visual.model_parts')!;
+    const library = caps.find((c) => c.id === 'visual.models')!;
+    const input = parts.input.parse({
+      subject: 'turbofan jet engine',
+      style: 'photoreal aerospace, brushed titanium, studio light',
+      parts: ['fan', 'compressor', 'combustor', 'turbine', 'nozzle'].map((n) => ({ name: `engine-${n}`, prompt: `the ${n} of a jet engine, detailed` })),
+    });
+    const preview = parts.preview(input as never, {} as never);
+    expect(preview.consequences[0]).toMatch(/^4 new parts.*100 Studio credits/);
+    expect(preview.consequences[1]).toMatch(/1 part reused from your library for free/);
+    const out = (await parts.execute(input as never, ctx)) as { made: string[]; reused: string[]; failed: Array<{ name: string }> };
+    expect(out.reused).toEqual(['engine-fan']);
+    expect(out.made.sort()).toEqual(['engine-combustor', 'engine-compressor', 'engine-turbine']);
+    expect(out.failed.map((f) => f.name)).toEqual(['engine-nozzle']);
+    expect(asked).toHaveLength(4); // the fan was not made again
+    expect(most).toBeLessThanOrEqual(3); // a few at a time
+    expect(asked[0]).toMatch(/One part of a turbofan jet engine.*shown entirely on its own.*photoreal aerospace/);
+    expect(s.readModel('engine-fan')?.toString()).toBe('glTF old fan');
+    const lib = (await library.execute({} as never, ctx)) as { models: Array<{ name: string }> };
+    expect(lib.models.map((m) => m.name)).toEqual(['engine-combustor', 'engine-compressor', 'engine-fan', 'engine-turbine']);
+    // All parts already there: free, and needs no approval beyond routine.
+    const again = parts.input.parse({ ...input, parts: input.parts.filter((p: { name: string }) => p.name !== 'engine-nozzle') });
+    expect(parts.autonomy?.(again as never)).toMatchObject({ tier: 'routine' });
+  });
+
   it('a website guide is put together from pictures taken of the real page, each with its outlined place', async () => {
     const s = store();
     const guide = visualCapabilities({ store: s }).find((c) => c.id === 'visual.guide')!;

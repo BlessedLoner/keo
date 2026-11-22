@@ -3,7 +3,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MediaClip } from '../src/shared/studio';
 import { refineCut, sceneCandidates, sceneSplitTimes, signatureDistance } from '../src/shared/studioScenes';
+import { Mp4Writer } from '../src/main/studio/mp4';
 import { makeHarness, tempDir, type Harness } from './helpers';
+
+const AVCC = Buffer.from([1, 0x42, 0xe0, 0x33, 0xff, 0xe1, 0x00, 0x04, 0x67, 0x42, 0xe0, 0x33, 0x01, 0x00, 0x02, 0x68, 0xce]);
 
 /** Finding shot changes inside a video (fake render window: nothing is decoded). */
 
@@ -199,19 +202,23 @@ describe('Smooth preview copies', () => {
           setTimeout(() => {
             if (job.kind !== 'export') return h!.services.studio.jobDone(jobId, null, 'not in this test');
             sizes.push({ width: job.size!.width, height: job.size!.height });
-            const tmp = JSON.parse(fs.readFileSync(path.join(h!.dir, 'studio', `${job.projectId}.json`), 'utf8'));
-            const out = path.join(h!.dir, 'studio', 'made', `preview-${tmp.assets[0].id}.mp4`);
+            // Like the render window: a real 6-second video where the export writes (its temporary name).
+            const out = (h!.services.studio as unknown as { exportTargets: Map<string, string> }).exportTargets.get(job.exportId)!;
             fs.mkdirSync(path.dirname(out), { recursive: true });
-            fs.writeFileSync(out, 'x');
-            h!.services.studio.jobDone(jobId, { file: out, durationSec: 6, frames: 180, bytes: 1 }, null);
+            const w = new Mp4Writer(out, { width: job.size!.width, height: job.size!.height, avcC: AVCC }, null);
+            for (let i = 0; i < 150; i++) w.writeVideo(Buffer.alloc(40, i), (i * 1e6) / 25, 1e6 / 25, i % 25 === 0);
+            w.finish();
+            h!.services.studio.jobDone(jobId, { file: out, durationSec: 6, frames: 150, bytes: 1 }, null);
           }, 2),
       },
     });
     const s = h.services.studio;
+    s.strongPc = () => false; // the copy size of an ordinary laptop
     const p = s.create('Drone', 'landscape');
     const [b, sm] = (await s.importFiles(p.id, [big, small])).added;
-    const r = await s.makePreviewCopies(p.id);
-    expect(r.made).toBe(1);
+    // The 4K video gets its copy by itself after import, in the background.
+    for (let k = 0; k < 300 && (s.previewCopying(p.id).length || !sizes.length); k++) await new Promise((r) => setTimeout(r, 10));
+    expect(s.previewCopying(p.id)).toEqual([]);
     expect(sizes).toEqual([{ width: 960, height: 540 }]);
     expect(s.assetFile(p.id, b!.id, true)).toMatch(/preview-as_.*\.mp4$/);
     expect(s.assetFile(p.id, b!.id)).toBe(big);

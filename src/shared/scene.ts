@@ -54,6 +54,12 @@ export const SceneObject = z
     model: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,47}$/).optional(),
     /** A short name shown next to it when the step points at it. */
     label: z.string().trim().min(1).max(40).optional(),
+    /** One line under the label in its callout: what this part is for ("Pushes most of the air around the core"). */
+    note: z.string().trim().min(1).max(140).optional(),
+    /** An outer casing or skin: in an x-ray step it turns to see-through glass with glowing edges, so the parts inside show. */
+    shell: z.boolean().default(false),
+    /** Where it moves to in an exploded view, from where it is (e.g. [0, 0, 3]: pulled 3 m forward along the engine). */
+    apart: Vec3.optional(),
     /** Moves and turns with this object (a wheel on a car, a floor of a building). */
     parent: Id.optional(),
     hidden: z.boolean().default(false),
@@ -87,12 +93,18 @@ export const SceneStep = z
   .object({
     title: z.string().trim().min(1).max(60),
     /** What is happening in this step, in plain words: shown as a caption and read aloud while it moves. */
-    say: z.string().trim().min(1).max(420),
-    seconds: z.number().min(2).max(20).default(6),
+    say: z.string().trim().min(1).max(700),
+    seconds: z.number().min(2).max(30).default(6),
     camera: Camera.optional(),
     moves: z.array(SceneMove).max(30).default([]),
-    /** The parts this step is about: they are lit and labelled, the rest is dimmed. */
+    /** The parts this step is about: they glow, the camera goes to them, and their callouts show. */
     focus: z.array(Id).max(12).default([]),
+    /** Which callouts show: the parts in focus (default), every labelled part (an overview), or none. */
+    callouts: z.enum(['focus', 'all', 'none']).default('focus'),
+    /** x-ray: casings (shell) turn see-through so the inside shows; normal: solid again. Carries over to later steps. */
+    view: z.enum(['normal', 'xray']).optional(),
+    /** true: parts with "apart" slide out into an exploded view; false: they come back together. Carries over. */
+    explode: z.boolean().optional(),
   })
   .strict();
 export type SceneStep = z.infer<typeof SceneStep>;
@@ -107,8 +119,8 @@ export const VisualScene = z
     ground: z.enum(['grid', 'floor', 'grass', 'concrete', 'asphalt', 'none']).default('floor'),
     style: z.enum(SCENE_STYLES).default('real'),
     camera: Camera.default({ from: [8, 6, 10], to: [0, 1, 0] }),
-    objects: z.array(SceneObject).min(1).max(90),
-    steps: z.array(SceneStep).min(1).max(12),
+    objects: z.array(SceneObject).min(1).max(120),
+    steps: z.array(SceneStep).min(1).max(16),
   })
   .strict();
 export type VisualScene = z.infer<typeof VisualScene>;
@@ -170,6 +182,8 @@ export function sceneProblems(scene: VisualScene): string[] {
   scene.steps.forEach((s, i) => {
     for (const m of s.moves) if (!ids.has(m.id)) out.push(`Step ${i + 1} moves "${m.id}", which is not an object.`);
     for (const f of s.focus) if (!ids.has(f)) out.push(`Step ${i + 1} points at "${f}", which is not an object.`);
+    if (s.view === 'xray' && !scene.objects.some((o) => o.shell)) out.push(`Step ${i + 1} is an x-ray, but no object is a shell (mark the casing or skin with shell: true).`);
+    if (s.explode && !scene.objects.some((o) => o.apart)) out.push(`Step ${i + 1} explodes the view, but no object has "apart" (where each part moves to when pulled apart).`);
   });
   return [...new Set(out)].slice(0, 12);
 }
@@ -183,20 +197,28 @@ export interface ObjectState {
   opacity: number;
   hidden: boolean;
   spin: Vec3;
+  /** 1 while exploded (the part sits at at + apart), 0 when together. */
+  apart: number;
+  /** 1 while the step shows an x-ray (casings see-through), 0 otherwise. */
+  xray: number;
 }
 
 export type SceneState = Record<string, ObjectState>;
 
 export function startState(scene: VisualScene): SceneState {
   const s: SceneState = {};
-  for (const o of scene.objects) s[o.id] = { at: [...o.at], rot: [...o.rot], scale: [1, 1, 1], color: o.color, opacity: o.opacity, hidden: o.hidden, spin: [0, 0, 0] };
+  for (const o of scene.objects) s[o.id] = { at: [...o.at], rot: [...o.rot], scale: [1, 1, 1], color: o.color, opacity: o.opacity, hidden: o.hidden, spin: [0, 0, 0], apart: 0, xray: 0 };
   return s;
 }
 
 /** The state once a step has finished: each move changes only what it names; a spin lasts for its own step. */
 export function applyStep(before: SceneState, step: SceneStep): SceneState {
   const after: SceneState = {};
-  for (const [id, o] of Object.entries(before)) after[id] = { ...o, at: [...o.at], rot: [...o.rot], scale: [...o.scale], spin: [0, 0, 0] };
+  for (const [id, o] of Object.entries(before)) {
+    after[id] = { ...o, at: [...o.at], rot: [...o.rot], scale: [...o.scale], spin: [0, 0, 0] };
+    if (step.explode !== undefined) after[id]!.apart = step.explode ? 1 : 0;
+    if (step.view !== undefined) after[id]!.xray = step.view === 'xray' ? 1 : 0;
+  }
   for (const m of step.moves) {
     const o = after[m.id];
     if (!o) continue;

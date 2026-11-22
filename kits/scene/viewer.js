@@ -293,6 +293,7 @@ export class SceneViewer {
       mesh.receiveShadow = true;
       pivot.add(mesh);
       part.meshes.push(mesh);
+      if (o.shell) this.ghost(part, mesh, pivot);
       if (!part.mats.includes(mat)) part.mats.push(mat);
       if (tint && !part.tints.includes(mat)) part.tints.push(mat);
     };
@@ -319,6 +320,31 @@ export class SceneViewer {
     for (const m of part.mats) m.userData.opacity = m.opacity;
     if (this.toCome.has(o.id) && o.shape !== 'person' && o.shape !== 'tree' && o.shape !== 'model') this.sketch(part);
     return part;
+  }
+
+  /**
+   * The x-ray look of a casing: a see-through blue glass copy of the mesh with glowing edges, shown
+   * instead of the solid one while a step is an x-ray (it fades in and out with the step).
+   */
+  ghost(part, mesh, holder) {
+    if (!mesh.geometry) return;
+    part.xray ??= { glass: [], lines: [] };
+    const glass = new THREE.MeshPhysicalMaterial({ color: '#7fd4ff', emissive: '#1d6fae', emissiveIntensity: 0.35, roughness: 0.15, metalness: 0, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    const g = new THREE.Mesh(mesh.geometry, glass);
+    g.position.copy(mesh.position);
+    g.quaternion.copy(mesh.quaternion);
+    g.scale.copy(mesh.scale);
+    g.visible = false;
+    g.renderOrder = 2;
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 28), new THREE.LineBasicMaterial({ color: '#9fe4ff', transparent: true, opacity: 0, depthWrite: false }));
+    edges.position.copy(mesh.position);
+    edges.quaternion.copy(mesh.quaternion);
+    edges.scale.copy(mesh.scale);
+    edges.visible = false;
+    edges.renderOrder = 3;
+    (mesh.parent ?? holder).add(g, edges);
+    part.xray.glass.push(g);
+    part.xray.lines.push(edges);
   }
 
   /** The sketch of a part still to be built: its outline in thin lines over a faint white. */
@@ -381,6 +407,12 @@ export class SceneViewer {
           }
           part.meshes.push(n);
         });
+        if (o.shell) {
+          // The stand-in's x-ray copy goes with it; the real model gets its own.
+          for (const g of [...(part.xray?.glass ?? []), ...(part.xray?.lines ?? [])]) g.parent?.remove(g);
+          part.xray = undefined;
+          for (const n of [...part.meshes]) this.ghost(part, n, part.pivot);
+        }
         part.pivot.add(root);
         this.opts.onChange?.(this.info());
       })
@@ -645,7 +677,12 @@ export class SceneViewer {
       // Something that appears is set down into place, the way a part is lowered onto a building.
       // A part with a sketch is filled in where its lines are instead.
       const arriving = from.hidden && !to.hidden && !p.sketch ? (1 - k) * (1 - k) * Math.min(1.2, p.height * 0.5) : 0;
-      p.pivot.position.set(lerp(from.at[0], to.at[0], k), lerp(from.at[1], to.at[1], k) + arriving, lerp(from.at[2], to.at[2], k));
+      // Exploded view: the part slides out along its own "apart" and back.
+      const apart = p.o.apart ? lerp(from.apart ?? 0, to.apart ?? 0, k) : 0;
+      const ax = p.o.apart ? p.o.apart[0] * apart : 0;
+      const ay = p.o.apart ? p.o.apart[1] * apart : 0;
+      const az = p.o.apart ? p.o.apart[2] * apart : 0;
+      p.pivot.position.set(lerp(from.at[0], to.at[0], k) + ax, lerp(from.at[1], to.at[1], k) + arriving + ay, lerp(from.at[2], to.at[2], k) + az);
       // A spin is worked out from the time, never added up, so any moment can be shown on its own.
       const spin = to.spin;
       p.pivot.rotation.set(rad(lerp(from.rot[0], to.rot[0], k) + spin[0] * this.t), rad(lerp(from.rot[1], to.rot[1], k) + spin[1] * this.t), rad(lerp(from.rot[2], to.rot[2], k) + spin[2] * this.t));
@@ -654,7 +691,19 @@ export class SceneViewer {
       const dim = 1;
       const show = lerp(from.hidden ? 0 : from.opacity, to.hidden ? 0 : to.opacity, k) / Math.max(0.05, p.o.opacity);
       const visible = show * dim > 0.01;
-      for (const m of p.meshes) m.visible = visible;
+      // X-ray: a casing fades to blue glass with glowing edges, so what is inside shows.
+      const xray = p.xray ? lerp(from.xray ?? 0, to.xray ?? 0, k) : 0;
+      for (const m of p.meshes) m.visible = visible && xray < 0.98;
+      if (p.xray) {
+        for (const g of p.xray.glass) {
+          g.visible = visible && xray > 0.02;
+          g.material.opacity = 0.16 * xray * show;
+        }
+        for (const l of p.xray.lines) {
+          l.visible = visible && xray > 0.02;
+          l.material.opacity = 0.75 * xray * show;
+        }
+      }
       if (p.sketch) {
         const left = Math.max(0, 1 - Math.min(1, show));
         for (const g of p.sketch.objs) g.visible = left > 0.01;
@@ -662,15 +711,18 @@ export class SceneViewer {
         p.sketch.fill.opacity = 0.32 * left;
       }
       const colour = new THREE.Color(from.color).lerp(new THREE.Color(to.color), k);
+      // What the step is about glows softly (a slow pulse), the way a teacher points at it.
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 320);
       for (const m of p.mats) {
-        const opacity = (m.userData.opacity ?? 1) * show * dim;
+        const opacity = (m.userData.opacity ?? 1) * show * dim * (1 - xray);
         m.opacity = opacity;
+        if (xray > 0.02) m.transparent = true;
         m.depthWrite = opacity > 0.6 && m.userData.kind !== 'glass' && m.userData.kind !== 'water';
         if (m.userData.glows) continue;
         if (m.emissive) {
-          if (focus.has(id) && !m.userData.keepsColor) {
-            m.emissive.copy(colour);
-            m.emissiveIntensity = 0.07;
+          if (focus.has(id) && !this.opts.still) {
+            m.emissive.set('#3ab8ff');
+            m.emissiveIntensity = 0.1 + 0.16 * pulse;
           } else {
             m.emissive.set('#000000');
             m.emissiveIntensity = m.userData.baseEmissive ?? 0;
@@ -731,7 +783,9 @@ export class SceneViewer {
     const sum = new THREE.Vector3();
     let n = 0;
     this.three.updateMatrixWorld(true);
-    for (const id of ids) {
+    // Flow arrows and tubes are guides that run along the whole thing: the camera centres on the solid parts.
+    const solid = ids.filter((id) => !['arrow', 'tube'].includes(this.parts.get(id)?.o.shape));
+    for (const id of solid.length ? solid : ids) {
       const p = this.parts.get(id);
       if (!p) continue;
       sum.add(new THREE.Box3().setFromObject(p.pivot).getCenter(new THREE.Vector3()));
@@ -758,34 +812,111 @@ export class SceneViewer {
     return { from: this.camFrom.clone(), to: this.camTo.clone() };
   }
 
+  /** The parts whose callouts show in this step: those in focus, every labelled part (an overview), or none. */
+  calloutIds() {
+    const s = this.sceneData.steps[this.step];
+    if (!s || s.callouts === 'none') return [];
+    const ids = s.callouts === 'all' ? [...this.parts.keys()] : [...(this.focus ?? [])];
+    return ids.filter((id) => {
+      const p = this.parts.get(id);
+      return !!p?.o.label && p.meshes.concat(p.xray?.glass ?? []).some((m) => m.visible);
+    });
+  }
+
+  /** Where a part is on the screen (its middle), in pixels; null when behind the camera. */
+  screenOf(p, w, h) {
+    const box = new THREE.Box3().setFromObject(p.pivot);
+    if (box.isEmpty()) return null;
+    const c = box.getCenter(new THREE.Vector3()).project(this.camera);
+    if (c.z > 1) return null;
+    return { x: ((c.x + 1) / 2) * w, y: ((1 - c.y) / 2) * h };
+  }
+
+  /**
+   * Callouts like a technical poster: each labelled part gets a numbered card (its name and what it
+   * is for) in a column beside the picture, joined to the part by a thin line with a dot on it.
+   */
   placeLabels() {
     if (!this.opts.labels) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
-    const want = new Set();
-    for (const id of this.focus ?? []) {
+    if (!this.lineLayer) {
+      this.lineLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.lineLayer.setAttribute('style', 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible');
+      this.labelLayer.appendChild(this.lineLayer);
+    }
+    const narrow = w < 560;
+    const cardW = narrow ? 132 : 214;
+    const ids = this.calloutIds();
+    const want = new Set(ids);
+    const items = [];
+    ids.forEach((id, i) => {
       const p = this.parts.get(id);
-      if (!p?.o.label || !p.meshes[0]?.visible) continue;
-      want.add(id);
+      const at = this.screenOf(p, w, h);
+      if (!at) return;
       let el = this.labels.get(id);
       if (!el) {
         el = document.createElement('div');
-        el.textContent = p.o.label;
-        el.style.cssText = `position:absolute;transform:translate(-50%,-140%);padding:5px 11px;border-radius:999px;font:600 13px "Plus Jakarta Sans","Inter",system-ui,sans-serif;white-space:nowrap;color:${this.look.label};background:${this.look.labelBg};border:1px solid rgba(127,160,255,.6);box-shadow:0 6px 18px rgba(0,0,0,.35);backdrop-filter:blur(6px)`;
         this.labelLayer.appendChild(el);
         this.labels.set(id, el);
       }
-      const box = new THREE.Box3().setFromObject(p.pivot);
-      const top = new THREE.Vector3((box.min.x + box.max.x) / 2, box.max.y, (box.min.z + box.max.z) / 2).project(this.camera);
-      const behind = top.z > 1;
-      el.style.display = behind ? 'none' : 'block';
-      el.style.left = `${((top.x + 1) / 2) * w}px`;
-      el.style.top = `${((1 - top.y) / 2) * h}px`;
+      const num = i + 1;
+      const key = `${num}|${p.o.label}|${p.o.note ?? ''}|${narrow}`;
+      if (el.dataset.key !== key) {
+        el.dataset.key = key;
+        el.innerHTML = '';
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;gap:7px;font:700 12.5px "Plus Jakarta Sans","Inter",system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase';
+        const badge = document.createElement('span');
+        badge.textContent = String(num);
+        badge.style.cssText = 'flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;background:#3ab8ff;color:#04111c';
+        const title = document.createElement('span');
+        title.textContent = p.o.label;
+        head.append(badge, title);
+        el.appendChild(head);
+        if (p.o.note && !narrow) {
+          const note = document.createElement('div');
+          note.textContent = p.o.note;
+          note.style.cssText = 'margin-top:3px;font:500 11.5px/1.35 "Plus Jakarta Sans","Inter",system-ui,sans-serif;opacity:.82';
+          el.appendChild(note);
+        }
+        el.style.cssText = `position:absolute;width:${cardW}px;box-sizing:border-box;padding:7px 10px;border-radius:10px;color:${this.look.label};background:${this.look.labelBg};border:1px solid rgba(58,184,255,.55);box-shadow:0 8px 22px rgba(0,0,0,.35);backdrop-filter:blur(6px)`;
+      }
+      items.push({ id, el, at, left: at.x < w / 2, hgt: Math.max(30, el.offsetHeight || 40) });
+    });
+    // Two columns, each card as near its part's height as it can be without overlapping the next.
+    const lines = [];
+    for (const left of [true, false]) {
+      const col = items.filter((it) => it.left === left).sort((a, b) => a.at.y - b.at.y);
+      let y = 10;
+      for (const it of col) {
+        it.y = Math.max(y, Math.min(h - it.hgt - 10, it.at.y - it.hgt / 2));
+        y = it.y + it.hgt + 8;
+      }
+      // Too many to fit: push the column back up from the bottom.
+      let bottom = h - 10;
+      for (const it of [...col].reverse()) {
+        if (it.y + it.hgt > bottom) it.y = Math.max(10, bottom - it.hgt);
+        bottom = it.y - 8;
+      }
+      for (const it of col) {
+        const x = left ? 12 : w - cardW - 12;
+        it.el.style.display = 'block';
+        it.el.style.left = `${x}px`;
+        it.el.style.top = `${it.y}px`;
+        const ex = left ? x + cardW : x;
+        const ey = it.y + it.hgt / 2;
+        const bend = left ? ex + 18 : ex - 18;
+        lines.push(`<polyline points="${ex},${ey} ${bend},${ey} ${it.at.x},${it.at.y}" fill="none" stroke="#3ab8ff" stroke-width="1.4" stroke-opacity=".85"/><circle cx="${it.at.x}" cy="${it.at.y}" r="3.6" fill="#3ab8ff"/><circle cx="${it.at.x}" cy="${it.at.y}" r="7" fill="none" stroke="#3ab8ff" stroke-opacity=".45"/>`);
+      }
     }
+    this.lineLayer.innerHTML = lines.join('');
     for (const [id, el] of this.labels)
-      if (!want.has(id)) {
-        el.remove();
-        this.labels.delete(id);
+      if (!want.has(id) || !items.some((it) => it.id === id)) {
+        if (!want.has(id)) {
+          el.remove();
+          this.labels.delete(id);
+        } else el.style.display = 'none';
       }
   }
 
@@ -793,9 +924,8 @@ export class SceneViewer {
   labelPoints() {
     const out = [];
     this.three.updateMatrixWorld(true);
-    for (const id of this.focus ?? []) {
+    for (const id of this.calloutIds()) {
       const p = this.parts.get(id);
-      if (!p?.o.label || !p.meshes[0]?.visible) continue;
       const box = new THREE.Box3().setFromObject(p.pivot);
       const top = new THREE.Vector3((box.min.x + box.max.x) / 2, box.max.y, (box.min.z + box.max.z) / 2).project(this.camera);
       if (top.z > 1) continue;

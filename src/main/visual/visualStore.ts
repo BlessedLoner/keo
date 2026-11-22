@@ -49,6 +49,19 @@ export class VisualStore {
     return file;
   }
 
+  /** The realistic models made so far (the library: reused for free in later explanations). */
+  models(): Array<{ name: string; kb: number; made: string }> {
+    const dir = this.dir('models');
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.glb') && MODEL_NAME.test(f.slice(0, -4)))
+      .map((f) => {
+        const st = fs.statSync(path.join(dir, f));
+        return { name: f.slice(0, -4), kb: Math.round(st.size / 1024), made: st.mtime.toISOString().slice(0, 10) };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** A model's bytes, or null when there is no such model. Never a path from outside. */
   readModel(name: string): Buffer | null {
     if (!MODEL_NAME.test(name)) return null;
