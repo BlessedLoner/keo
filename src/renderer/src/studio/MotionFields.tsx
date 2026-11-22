@@ -1,3 +1,4 @@
+import { Design } from '@shared/studioDesign';
 import { SAMPLE_SCENE } from '@shared/scene';
 import { useState } from 'react';
 import { TRANSITION_LABEL } from './Timeline';
@@ -565,6 +566,17 @@ export const MOTION_SAMPLE: Record<(typeof MOTION_PIECES)[number], Omit<Extract<
   social_card: { text: 'This is the best thing I bought all year. Totally worth it!', sub: '@happycustomer', value: 1280 },
   viewfinder: { text: 'REC', sub: '4K · 60 FPS' },
   glitch_title: { text: 'Level up', sub: 'New update' },
+  // A design of Keo's own (layers with keyframes); Keo makes a new one for each video.
+  design: {
+    text: 'Kinetic title',
+    design: Design.parse({
+      layers: [
+        { kind: 'particles', count: 60, particle: 'spark', size: 1.4, colors: ['#FF3B6B', '#FFD23F'], spreadX: 150, spreadY: 80, motion: 'burst', speed: 1.2, from: 0.3 },
+        { kind: 'text', text: 'MAKE IT LOUD', font: 'Unbounded', size: 13, weight: 900, color: '#FFFFFF', color2: '#FF3B6B', tracking: -0.04, split: 'chars', stagger: 0.035, revealFor: 0.7, enter: { y: 22, rotation: 12, opacity: 1 }, y: 0.46, leaveAt: -0.6 },
+        { kind: 'shape', shape: 'line', w: 60, h: 0, stroke: '#FFD23F', strokeWidth: 1, y: 0.6, draw: 0, keys: [{ t: 0.5, draw: 0 }, { t: 1.2, draw: 1, ease: 'expo' }, { t: -0.5, opacity: 1 }, { t: -0.1, opacity: 0 }] },
+      ],
+    }),
+  },
 };
 
 /** Motion graphics: ready-made animated pieces added at the playhead (Keo can sync them to the speech). */

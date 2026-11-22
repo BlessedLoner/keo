@@ -555,6 +555,15 @@ export class StudioService {
     return next;
   }
 
+  /** Sets (or clears) the video's art direction. */
+  setDirection(id: string, direction: string | undefined): Project {
+    const p = this.get(id);
+    const { direction: _old, ...rest } = p;
+    const next = Project.parse(direction ? { ...rest, direction } : rest);
+    this.save(next, false);
+    return next;
+  }
+
   open(id: string): Project {
     const p = this.get(id);
     this.current = id;

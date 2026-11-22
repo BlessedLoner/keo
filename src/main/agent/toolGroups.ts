@@ -154,6 +154,8 @@ export function groupScores(texts: string[]): Map<ToolGroup, number> {
  * also make the model choose better. Room is kept for the checklist and tools__load.
  */
 export const TOOL_CAP = 120;
+/** The most tools any service accepts in one request (OpenAI: 128): never sent more than this. */
+export const HARD_TOOL_LIMIT = 128;
 
 /**
  * Keeps `groups` within `cap` tools: groups the request needs for sure (`pinned`: core, tools in

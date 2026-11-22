@@ -15,7 +15,7 @@ import { newCorrelationId } from '../util/ids';
 import type { ContextBuilder } from './contextBuilder';
 import { unsupportedClaims } from './claims';
 import { GROUP_PROMPTS, SYSTEM_PROMPT } from './systemPrompt';
-import { chooseGroups, fitToolGroups, groupOf, groupScores, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_GROUPS, type ToolGroup } from './toolGroups';
+import { chooseGroups, fitToolGroups, groupOf, groupScores, HARD_TOOL_LIMIT, LOAD_TOOLS, loadToolsSpec, parseLoad, TOOL_CAP, TOOL_GROUPS, type ToolGroup } from './toolGroups';
 import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './language';
 import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
@@ -530,9 +530,17 @@ export class AgentService {
       for (const t of this.registry.toolSpecs()) groupSize.set(groupOf(t.name), (groupSize.get(groupOf(t.name)) ?? 0) + 1);
       // "Send every tool" (Settings) is kept as it is, except with services that refuse that many.
       const capped = settings.agent.toolSelection !== 'all' || (provider.id !== 'anthropic' && provider.id !== 'test');
+      // Groups loaded during this reply (tools__load) and the one an open question waits on are
+      // never left out; groups kept only because earlier turns used them give way when needed.
+      const loaded = new Set<ToolGroup>();
       const fit = () => {
         if (!capped) return;
-        const left = fitToolGroups(groups, pinned, scores, (g) => groupSize.get(g) ?? 0);
+        const size = (g: ToolGroup) => groupSize.get(g) ?? 0;
+        let left = fitToolGroups(groups, pinned, scores, size);
+        if ([...groups].reduce((n, g) => n + size(g), 0) > TOOL_CAP) {
+          const must = new Set<ToolGroup>(['core', ...loaded, ...(pendingTool ? [groupOf(pendingTool)] : [])]);
+          left = [...left, ...fitToolGroups(groups, must, scores, size)];
+        }
         if (left.length) this.log.info('agent.tool_groups_trimmed', { left, kept: [...groups] }, correlationId);
       };
       fit();
@@ -540,7 +548,14 @@ export class AgentService {
       const buildTools = () => {
         if (!toolsOn) return [];
         const missing = TOOL_GROUPS.filter((g) => !groups.has(g));
-        return [...this.registry.toolSpecs().filter((t) => groups.has(groupOf(t.name))), PLAN_TOOL_SPEC, ...(missing.length ? [loadToolsSpec(missing)] : [])];
+        let specs = this.registry.toolSpecs().filter((t) => groups.has(groupOf(t.name)));
+        // Never more than a service accepts (OpenAI refuses over 128): the last resort when even the
+        // groups that must stay are too many — the tools still run when called by name.
+        if (capped && specs.length > HARD_TOOL_LIMIT - 2) {
+          this.log.warn('agent.tools_cut', { from: specs.length, to: HARD_TOOL_LIMIT - 2 }, correlationId);
+          specs = specs.slice(0, HARD_TOOL_LIMIT - 2);
+        }
+        return [...specs, PLAN_TOOL_SPEC, ...(missing.length ? [loadToolsSpec(missing)] : [])];
       };
       let tools = buildTools();
       const groupPrompts = () =>
@@ -865,6 +880,7 @@ export class AgentService {
             for (const g of want) {
               groups.add(g);
               pinned.add(g);
+              loaded.add(g);
             }
             // Loading more may leave out a group the request mentioned less (it can be loaded again).
             fit();

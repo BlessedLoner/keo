@@ -32,6 +32,8 @@ const USES: Record<MotionClip['piece'], { sub?: string; items?: string; icon?: b
   social_card: { sub: '@handle', value: true },
   viewfinder: { sub: 'Bottom line (4K · 60 FPS)' },
   glitch_title: { sub: 'Kicker' },
+  // Keo's own design: its layers are changed by asking Keo.
+  design: {},
 };
 
 const SETTINGS: Array<[VisualScene['background'], string]> = [['sky', 'Daylight'], ['sunset', 'Sunset'], ['night', 'Night'], ['light', 'Light studio'], ['dark', 'Dark studio']];

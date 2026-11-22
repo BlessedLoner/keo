@@ -2,6 +2,7 @@ import type { MotionClip } from '@shared/studio';
 import type { MotionState } from '@shared/studioMotion';
 import { placeLayer } from './motion';
 import { drawScene3d } from './scene3d';
+import { drawDesign } from './designPiece';
 
 /**
  * Motion clips: ready-made motion graphics drawn frame by frame (the same frame for the same time,
@@ -1731,6 +1732,10 @@ const PIECES: Record<MotionClip['piece'], (k: Ctx, frame: { W: number; H: number
   glitch_title: glitchTitle,
   // A 3D explanation: Keo's scene viewer draws it; here it is copied onto the frame.
   scene3d: (k, frame) => drawScene3d(k.ctx, k.c, k.t, frame.W, frame.H),
+  // Keo's own design: its layers carry their own entrances and exits.
+  design: (k, frame) => {
+    if (k.c.design) drawDesign(k.ctx, k.c.design, k.t, k.d, frame.W, frame.H, k.c.id);
+  },
 };
 
 /** Draws a motion clip at timeline time t (m: its place and motion from motionAt). */
@@ -1743,7 +1748,7 @@ export function drawMotionClip(ctx: CanvasRenderingContext2D, c: MotionClip, m: 
   const room = (Math.max(0.3, 2 * half) * W * 0.92) / scale;
   const k: Ctx = { ctx, c, t: lt, d: c.duration, U: Math.min(W, H) / 100, W, H, room: Math.min(room, (W * 0.9) / scale), rand: rng(c.id) };
   // Every piece goes out the same way: up and away, fading (light sweeps end on their own).
-  const out = c.piece === 'light_sweep' || c.piece === 'scene' || c.piece === 'backdrop' || c.piece === 'scene3d' ? 0 : exitP(k);
+  const out = c.piece === 'light_sweep' || c.piece === 'scene' || c.piece === 'backdrop' || c.piece === 'scene3d' || c.piece === 'design' ? 0 : exitP(k);
   const alpha = m.opacity * (1 - out);
   if (alpha <= 0.002) return;
   ctx.save();
@@ -1769,6 +1774,7 @@ export function motionBox(c: MotionClip, W: number, H: number): { w: number; h: 
     case 'backdrop':
     case 'scene3d':
     case 'viewfinder':
+    case 'design':
       return { w: W / Math.max(0.01, c.transform.scale), h: H / Math.max(0.01, c.transform.scale) };
     case 'ticker':
     case 'progress':

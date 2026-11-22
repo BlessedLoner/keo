@@ -10,6 +10,7 @@ import { STYLES, type StyleId } from '../../shared/studioStyles';
 import { MOMENTS, type MomentId } from '../../shared/studioMoments';
 import { BEAT_INFO, MotionBeatInput } from '../../shared/studioMotionEdit';
 import { BrandPatch } from '../../shared/studioBrand';
+import { pickVideoDirections, VIDEO_DIRECTIONS, videoDirectionBrief, videoDirectionById, withDirectionDefaults } from '../../shared/studioDirections';
 import { CHARACTER_VOICES, CharacterPatch } from '../../shared/studioCharacters';
 import { VIRAL_TEMPLATES, type ViralId } from '../../shared/studioViral';
 import { ShowcaseScene } from '../../shared/studioShowcase';
@@ -122,10 +123,14 @@ function state(s: StudioService, p: Project) {
 }
 const State = z.object({ projectId: z.string(), durationSec: z.number(), timeline: z.string(), history: z.object({ undo: z.boolean(), redo: z.boolean() }) });
 
+/** Keo's own motion graphics: the design piece's data, in full (the user sees a short line in Studio). */
+const DESIGN_HELP =
+  'YOUR OWN motion graphic, designed from scratch for this video (any title, lower third, transition card, kinetic typography, logo sting, chart, infographic, pattern): design = { layers, background? } — layers bottom first: text (font, size in U, weight, color/color2 gradient, tracking, uppercase, hollow, glow; split "lines"|"words"|"chars" builds it piece by piece from revealAt with stagger, enter = where pieces come from {x,y,scale,rotation,blur,opacity}, leaveAt = they leave), shape (rect|circle|ring|line|polygon|star|path with SVG d in a 100×100 box; fill/fill2 gradient, stroke, glow, draw 0..1 draws it on), particles (dot|square|star|line|ring|spark; float|rise|fall|burst|orbit|twinkle|drift) and gradient (full-frame colours, linear or radial, drift). Every layer: x, y (0..1 of the frame), scale, rotation, opacity, blend, keys [{t, x, y, scale, scaleX, scaleY, rotation, opacity, blur, draw, wipe, skewX, ease}] (t in seconds, negative = from the end; eases linear|in|out|in-out|back|elastic|bounce|expo|snap|hold), loop {kind float|pulse|spin|wiggle|flicker|sway}, from/until. U = 1% of the frame’s shorter side. text = its name. Use it whenever the ready-made pieces would look generic';
+
 /** How Keo adds motion graphics (motion clips) synced to the speech. */
 const MOTION_HELP =
   'Motion graphics (After Effects style, drawn by Studio, on the Motion track): add_motion {piece, text, sub, items, icon, value, unit, accent, accent2, color (#RRGGBB), font, say, sayItems, start, duration, place, transform}. Pieces: ' +
-  MOTION_PIECES.map((p) => `${p} (${MOTION_PIECE_INFO[p].use})`).join('; ') +
+  MOTION_PIECES.map((p) => `${p} (${p === 'design' ? DESIGN_HELP : MOTION_PIECE_INFO[p].use})`).join('; ') +
   `. Icons: ${MOTION_ICONS.join(', ')} (or an emoji). place: ${MOTION_PLACES.join('|')} — auto keeps it off the speaker (above the head on tall videos, beside it on wide ones). Sync to the speech with say: the words exactly as they are said (from studio__transcript); the clip then starts on them, its words come in as they are said, and it stays a moment after (start and duration are then optional). For pills, lists and icons give sayItems (the words said for each item) so each item comes in on its own words. Change one later with set {clip, text, motion: {piece, sub, items, icon, value, unit, accent, accent2, color, font, beats}} or set {clip, transform}. Motion for a talking video or podcast: transcribe first (studio__transcript), then put one motion clip on each key moment (about one every 6–12 seconds, never two at once, none in the first second): a headline when a topic starts, a counter when a number is said, a list or pills when steps or points are listed, a word pop on a punchline, a quote card on a strong line, a lower third with the speaker's name near the start, a light sweep between parts. Keep each text short (what is said, not the whole sentence) and use the brand colours when there is a brand kit. Then look at a few frames (studio__look) to check nothing covers the face.`;
 
 const OPS_HELP =
@@ -251,7 +256,8 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     auditView: (i) => ({ ops: i.ops.map((o) => o.op) }),
     async execute(i) {
       const p = run(() => s.resolve(i.projectId));
-      const checked = z.array(EditOp).safeParse(i.ops);
+      // The video's art direction gives its fonts and colours to pieces Keo did not style on purpose.
+      const checked = z.array(EditOp).safeParse(withDirectionDefaults(i.ops, videoDirectionById(p.direction)));
       if (!checked.success) {
         // Exactly what to fix, by the op's place in the list.
         const issues = checked.error.issues.slice(0, 4).map((x) => `ops[${x.path.join('.').replace(/^(\d+)/, '$1]')}${x.path.length ? '' : ']'}: ${x.message}`.replace('ops[]', 'ops'));
@@ -259,6 +265,51 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       }
       const r = run(() => s.edit(p.id, checked.data));
       return { ...state(s, r.project), changes: r.changes };
+    },
+  });
+
+  const direction = defineCapability({
+    id: 'studio.direction',
+    version: '1.0.0',
+    title: 'Choose the video’s art direction',
+    description: `Give a video its own art direction before designing its look: fonts, palette, colour grade, transitions, captions, energy, music and signature graphics, so Keo's videos never all look the same. Without direction, Keo picks the best fit for what the video is about (about) that recent projects did not use, and names two others. Directions: ${VIDEO_DIRECTIONS.map((d) => `${d.id} (${d.name})`).join(', ')}; "none" when the user described their own look. After it, motion pieces and texts take its fonts and colours unless you set others; design its signature graphics with the "design" motion piece.`,
+    input: z.object({ projectId: ProjectId.optional(), about: z.string().trim().max(400).optional(), direction: z.string().trim().max(40).optional() }).strict(),
+    output: z.object({ direction: z.string().nullable(), brief: z.string().nullable(), others: z.array(z.string()) }),
+    risk: 'low',
+    approval: 'never',
+    permissions: [],
+    consequential: false,
+    idempotent: true,
+    timeoutMs: 15_000,
+    maxAttempts: 1,
+    modelVisible: true,
+    verificationPolicy: 'Saved with the project.',
+    autonomy: () => ({ tier: 'routine' }),
+    preview: (i) => ({ summary: i.direction ? `Use the ${i.direction} art direction` : 'Choose an art direction for the video', target: null, consequences: [], dataExport: null }),
+    auditView: (i) => ({ direction: i.direction ?? null }),
+    async execute(i) {
+      const p = run(() => s.resolve(i.projectId));
+      if (i.direction === 'none') {
+        run(() => s.setDirection(p.id, undefined));
+        return { direction: null, brief: null, others: [] };
+      }
+      if (i.direction && !videoDirectionById(i.direction)) throw fail('invalid_input', `There is no art direction “${i.direction}”. Choose one of: ${VIDEO_DIRECTIONS.map((d) => d.id).join(', ')}.`);
+      const recent = s
+        .list()
+        .filter((x) => x.id !== p.id)
+        .slice(0, 4)
+        .map((x) => {
+          try {
+            return s.get(x.id).direction;
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((x): x is string => !!x);
+      const options = pickVideoDirections(`${i.about ?? ''} ${p.name}`, recent, 3);
+      const chosen = videoDirectionById(i.direction) ?? options[0]!;
+      run(() => s.setDirection(p.id, chosen.id));
+      return { direction: chosen.id, brief: videoDirectionBrief(chosen), others: options.filter((o) => o.id !== chosen.id).map((o) => `${o.id}: ${o.name} — ${o.mood}`) };
     },
   });
 
@@ -287,13 +338,24 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
     },
   });
 
+  // The art director's critique leads to rounds of changes: at most two per video in a short while.
+  const critiques = new Map<string, number[]>();
+  const mayCritique = (id: string, now = Date.now()) => {
+    const recent = (critiques.get(id) ?? []).filter((t) => now - t < 20 * 60_000);
+    if (recent.length >= 2) return false;
+    critiques.set(id, [...recent, now]);
+    return true;
+  };
+
   const look = defineCapability({
     id: 'studio.look',
     version: '1.0.0',
     title: 'Look at the video',
     description:
-      'Draw frames of the Studio timeline at the given seconds (exactly as the export will look) and have them described, to check your own work: is the text readable and inside the frame, does it cover faces, are captions in sync, is anything black or cut off. Ask a specific question.',
-    input: z.object({ projectId: ProjectId.optional(), times: z.array(z.number().min(0).max(86400)).min(1).max(6), question: z.string().trim().min(3).max(400).default('Describe each frame and point out anything that looks wrong for a finished video.') }).strict(),
+      'Draw frames of the Studio timeline at the given seconds (exactly as the export will look) and have them described, to check your own work: is the text readable and inside the frame, does it cover faces, are captions in sync, is anything black or cut off. Ask a specific question. With critique: true a creative director judges the frames instead (originality, typography, composition, colour, graphics, energy against the video\'s art direction) and lists the changes that would make it extraordinary — use it once the edit works, then apply the changes (at most two critiques per video).',
+    input: z
+      .object({ projectId: ProjectId.optional(), times: z.array(z.number().min(0).max(86400)).min(1).max(6), question: z.string().trim().min(3).max(400).default('Describe each frame and point out anything that looks wrong for a finished video.'), critique: z.boolean().default(false) })
+      .strict(),
     output: z.object({ times: z.array(z.number()), answer: z.string() }),
     risk: 'low',
     approval: 'never',
@@ -318,7 +380,12 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       const frames = await s.frames(p.id, times, 512).catch((e: unknown) => {
         throw fail('render', `The frames could not be drawn: ${errorMessage(e).slice(0, 200)}`);
       });
-      const prompt = `These are ${frames.length} frames of a ${p.width}x${p.height} video being edited, at ${frames.map((f) => `${f.time.toFixed(2)} s`).join(', ')}. ${i.question} Reply as JSON: {"frames":[{"time":seconds,"description":"..."}],"problems":["..."]}.`;
+      const dir = videoDirectionById(p.direction);
+      const critique = i.critique && mayCritique(p.id);
+      const at = frames.map((f) => `${f.time.toFixed(2)} s`).join(', ');
+      const prompt = critique
+        ? `You are the creative director of an award-winning video studio. These are ${frames.length} frames of a ${p.width}x${p.height} video “${p.name}” at ${at}${dir ? `, made in the art direction “${dir.name}” (${dir.mood})` : ''}. Be honest and demanding. Score 1–10: originality (does it look like a template?), typography, composition, colour and grade, graphics and motion design, energy and pacing as far as frames show. Then the 3–5 most important changes, each concrete enough to do in an editor (what, where, when, how). Reply as JSON: {"scores":{"originality":n,"typography":n,"composition":n,"colour":n,"graphics":n,"energy":n},"changes":["..."],"problems":["..."]}.`
+        : `These are ${frames.length} frames of a ${p.width}x${p.height} video being edited, at ${at}. ${i.question}${i.critique ? ' (The creative director already reviewed this video twice just now: check it as an editor; finish the changes from those notes.)' : ''} Reply as JSON: {"frames":[{"time":seconds,"description":"..."}],"problems":["..."]}.`;
       const answer = await d.askVision(
         frames.map((f) => f.png),
         prompt,
@@ -2248,7 +2315,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
   });
 
   // Every Studio tool runs as Keo's: while the user watches, its edits play step by step on the timeline.
-  return [open, addMedia, edit, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, motionEdit, moment, brand, useBrand, dnaAnalyze, dnaFind, dnaApply, dnaCombine, characters, review, proofread, showcase, viral, series, writePost, postYouTube, versions, aiShot, shotAgain, swapCharacter, characterPictures, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
+  return [open, addMedia, edit, direction, undo, look, understand, checklist, ask, transcript, cleanUp, punch, sound, color, effect, captions, preset, studyTemplate, faceless, beat, scenes, reverse, cleanSound, previewCopies, track, stabilize, shorts, sounds, useSound, learnTemplate, templates, applyTemplate, style, motionEdit, moment, brand, useBrand, dnaAnalyze, dnaFind, dnaApply, dnaCombine, characters, review, proofread, showcase, viral, series, writePost, postYouTube, versions, aiShot, shotAgain, swapCharacter, characterPictures, talkingCharacter, aiMusic, aiSound, reframe, readAloud, template, exportVideo].map((c) => ({
     ...c,
     // A failure Keo did not expect still comes back in words Keo can tell the user (never a silent "internal").
     execute: async (i: never, ctx: never) => {

@@ -120,4 +120,8 @@ export const GROUP_PROMPTS: Partial<Record<string, string>> = {
   projects: `Projects
 - A project can have a workspace folder chosen by the user. Use files__list / files__read to understand it before changing anything; edit with files__write (read first and pass the hash; the user sees a diff), and check work with files__run_script (the project's own scripts). Keep unrelated files as they are and report failing checks honestly.
 - Saved workflows (workflows__list / workflows__get) are templates: look at the current screen and propose a fresh plan.`,
+  studio: `Keo Studio is a creative studio, not a template machine
+- Before designing a video's look, give it an art direction with studio__direction (about = what the video is): its fonts, colours, grade, transitions, captions, energy and music — different from recent videos. Tell the user in one line which you chose; follow the user's own look when they describe one (direction "none").
+- Make graphics for THIS video: the "design" motion piece is your own motion graphic from layers (split text that builds by word or letter, shapes and SVG paths that draw on, particles, gradients, each keyframed). Use it for titles, chapter cards, lower thirds, stings and infographics whenever the ready-made pieces would look generic, in the direction's fonts and colours. Never emoji as the main visual.
+- When the edit works, judge it with studio__look critique: true on 3–6 key frames, then apply the changes (at most two critiques per video). A video that works but looks ordinary is not finished.`,
 };

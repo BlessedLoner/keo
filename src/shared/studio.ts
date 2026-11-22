@@ -1,4 +1,5 @@
 import { sceneSeconds, VisualScene } from './scene';
+import { Design } from './studioDesign';
 import { z } from 'zod';
 
 /**
@@ -740,7 +741,7 @@ export const ADJUST_TRACK = 'Adjustments';
  * sweeps. Each piece animates in, lives (floats) and animates out on its own; `beats` (seconds into
  * the clip) make its words or items appear on the spoken words.
  */
-export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop', 'scene3d', 'ticker', 'countdown', 'location', 'subscribe', 'progress', 'split_title', 'price_tag', 'social_card', 'viewfinder', 'glitch_title'] as const;
+export const MOTION_PIECES = ['headline', 'word_pop', 'icon_burst', 'chips', 'stat', 'list', 'lower_third', 'quote', 'card3d', 'highlight', 'callout', 'light_sweep', 'scene', 'backdrop', 'scene3d', 'ticker', 'countdown', 'location', 'subscribe', 'progress', 'split_title', 'price_tag', 'social_card', 'viewfinder', 'glitch_title', 'design'] as const;
 export const MotionPiece = z.enum(MOTION_PIECES);
 export type MotionPiece = z.infer<typeof MotionPiece>;
 /** What each piece is for (shown to Keo and in the Studio). */
@@ -769,6 +770,7 @@ export const MOTION_PIECE_INFO: Record<MotionPiece, { label: string; use: string
   social_card: { label: 'Social post', use: 'a glass post card: avatar, sub = the @handle, text = the post, value = likes counting up; for testimonials and reactions' },
   viewfinder: { label: 'Camera viewfinder', use: 'FULL FRAME camera overlay: corner brackets, a blinking REC dot with text (default REC), a running timecode, sub = a line at the bottom; for vlogs and behind the scenes' },
   glitch_title: { label: 'Glitch title', use: 'big caps words that arrive in digital slices with red and cyan fringes and glitch again now and then; sub = a kicker; for tech, gaming, music' },
+  design: { label: 'Keo design', use: 'A motion graphic Keo designed for this video (its own layers, type, shapes, particles and timing). Ask Keo to change it.' },
   backdrop: { label: 'Backdrop', use: 'FULL SCREEN animated background (soft glows, a moving dot grid, text as a giant faint word drifting behind) to put under a framed video or a graphic; background = its colour' },
 };
 /** Icons motion clips draw (line icons); anything else in an icon field is drawn as an emoji. */
@@ -796,6 +798,8 @@ const MotionFields = {
   background: Hex.optional(),
   /** The 3D scene piece: the explanation it plays (objects, labels and steps, as data). */
   visual: VisualScene.optional(),
+  /** The design piece: Keo's own motion graphic (layers with keyframes, as data). */
+  design: Design.optional(),
   /** Seconds into the clip when each word or item appears (on the spoken words); evenly spread when missing. */
   beats: z.array(Sec).max(16).optional(),
 };
@@ -964,6 +968,8 @@ export const Project = z
     conversationId: z.string().max(80).optional(),
     /** The conversation of Studio's own Ask Keo panel for this project. */
     panelConversationId: z.string().max(80).optional(),
+    /** The video's art direction (an id from studioDirections.ts): its fonts, colours, grade and motion. */
+    direction: z.string().max(40).optional(),
   })
   .strict();
 export type Project = z.infer<typeof Project>;
@@ -1185,6 +1191,8 @@ const SetOp = z
         beats: z.array(Sec).max(16).nullable().optional(),
         /** The 3D scene piece: the whole scene, changed (colours, materials, camera, steps, setting). */
         visual: VisualScene.optional(),
+        /** The design piece: the whole design, changed (send every layer). */
+        design: Design.optional(),
       })
       .strict()
       .optional(),
@@ -2413,6 +2421,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
         const start = synced?.start ?? op.start;
         if (start === undefined) throw new EditError('A motion clip needs a start (seconds) or say (the spoken words it goes with).');
         if (op.piece === 'scene3d' && !op.visual) throw new EditError('A 3D scene clip needs visual: the scene to show (the same data as visual__explain).');
+        if (op.piece === 'design' && !op.design) throw new EditError('A design clip needs design: { layers: [...] } — the motion graphic you designed (text, shape, particles and gradient layers with keys).');
         const duration = op.duration ?? synced?.duration ?? (op.visual ? Math.min(600, sceneSeconds(op.visual)) : 3);
         const beats = op.beats ?? synced?.beats;
         const c = MotionClip.parse({
@@ -2433,6 +2442,7 @@ export function applyEdits(project: Project, ops: EditOp[], o: { rand?: () => st
           ...(op.font ? { font: op.font } : {}),
           ...(op.background ? { background: op.background } : {}),
           ...(op.visual ? { visual: op.visual } : {}),
+          ...(op.design ? { design: op.design } : {}),
           ...(beats?.length ? { beats: [...beats].filter((b) => b >= 0 && b < duration).sort((a, b) => a - b).map(round) } : {}),
           transform: { ...spot, ...(op.transform ?? {}) },
           ...(op.loop ? { loop: op.loop } : {}),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseGroups, fitToolGroups, groupOf, groupScores, LOAD_TOOLS, TOOL_CAP, type ToolGroup } from '../src/main/agent/toolGroups';
+import { chooseGroups, fitToolGroups, groupOf, groupScores, HARD_TOOL_LIMIT, LOAD_TOOLS, TOOL_CAP, type ToolGroup } from '../src/main/agent/toolGroups';
 import type { ChatRequest, ChatResult } from '../src/main/providers/types';
 import { makeHarness, type Harness } from './helpers';
 
@@ -70,6 +70,23 @@ describe('tool groups', () => {
 });
 
 describe('focused tools in a conversation', () => {
+  it('loading big groups during a reply never sends more tools than the service accepts (OpenAI refused 130)', async () => {
+    const reqs: ChatRequest[] = [];
+    h = makeHarness({
+      script: (req, n) => {
+        reqs.push(req);
+        if (n === 0) return reply('', [{ id: 'l1', name: 'tools__load', input: { groups: ['studio', 'desktop', 'screen', 'video', 'create', 'files', 'pictures', 'webapps', 'research'] } }]);
+        return reply('ok');
+      },
+    });
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, observationEnabled: true, fullControl: true } });
+    const c = h.services.conversations.create();
+    await h.services.agent.send(c.id, 'In my Studio project, redo the opening title and open the app if needed').done;
+    for (const r of reqs) expect(r.tools!.length).toBeLessThanOrEqual(HARD_TOOL_LIMIT);
+    // The groups it asked for are there (the tools that did not fit still run when called by name).
+    expect(names(reqs[1]!).some((x) => x.startsWith('studio__'))).toBe(true);
+  });
+
   it('a simple message gets only the core tools and tools__load; asking for a group loads it for the next step', async () => {
     const seen: string[][] = [];
     h = makeHarness({
