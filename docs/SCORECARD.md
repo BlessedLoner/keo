@@ -212,3 +212,5 @@ New: the builder's check window runs games at about 1 fps; builds cost 1–1.5M 
 
 **Cost cut 2 (2026-11-23):** Studio's specialist tools (templates, Edit DNA, brand kit, AI shots, characters, music, Shorts, series…) are their own group, loaded when the request is about them; with Full control on, the older desktop tools the computer tools replace are not sent. First call: Studio 29.1k → 22.3k (44% below the original 39.7k), screen 18.4k → 16.8k. Live: Calculator (B1) 63.6k → 44.0k tokens and 55 s → 19 s.
 
+**Cost cut 3 (28be16c, 2026-11-23):** build checks render at 30 fps (were about 1), old file contents are not resent, the checklist moved so the request start can be cached. Same request as D3 ("dodge falling blocks"): **1,028k → 234k tokens (−77%), 519 s → 206 s**, and Keo really played it (25 s on desktop: score about 395, level 2, a life lost; phone layout to game over with "NEW BEST").
+
