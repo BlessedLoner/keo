@@ -145,10 +145,32 @@ export class BuildProjects {
     return [...html.filter((p) => p === 'index.html'), ...html.filter((p) => p !== 'index.html')];
   }
 
+  /** A build folder with this id exists in Documents\Keo\Builds but is not on this account's list. */
+  private onDiskElsewhere(id: string): boolean {
+    try {
+      for (const f of fs.readdirSync(this.d.root(), { withFileTypes: true })) {
+        if (!f.isDirectory()) continue;
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(this.d.root(), f.name, 'keo-build.json'), 'utf8')) as { id?: string };
+          if (m.id === id) return true;
+        } catch {
+          /* not a build */
+        }
+      }
+    } catch {
+      /* no builds folder */
+    }
+    return false;
+  }
+
   /** The project's folder. */
   dir(id: string): string {
     const folder = this.index()[id];
-    if (!folder) throw new BuildError('Keo has no such build. List them with build__list.');
+    if (!folder) {
+      if (this.onDiskElsewhere(id))
+        throw new BuildError('Keo has no such build on this account’s list, but its folder is still on this PC (made under another Keo account, or taken off the list). Ask the user whether to copy it into this account before doing anything with it — never copy or change it without asking.');
+      throw new BuildError('Keo has no such build. List them with build__list.');
+    }
     return path.join(this.d.root(), folder);
   }
 

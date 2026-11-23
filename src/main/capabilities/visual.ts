@@ -8,6 +8,9 @@ import { sceneModels, sceneProblems, sceneSeconds, VisualGuide, VisualScene } fr
 import type { VisualStore } from '../visual/visualStore';
 import { CapabilityError, defineCapability, type AnyCapability } from './types';
 
+/** A service's answer that means it refused before doing anything (nothing made, nothing charged). */
+const REFUSED_BEFORE_START = /nothing was charged|exhausted balance|user is locked|top up your balance|quota|insufficient credit|no credit|payment required|\b402\b/i;
+
 export interface VisualDeps {
   store: VisualStore;
   /** A realistic 3D model (GLB bytes) from a description; unavailable() says why it cannot be made here. */
@@ -193,7 +196,10 @@ export function visualCapabilities(d: VisualDeps): AnyCapability[] {
         }
       };
       await Promise.all(Array.from({ length: Math.min(3, todo.length) }, worker));
-      if (!made.length && !reused.length) throw new CapabilityError('model_failed', `No part could be made: ${failed.map((f) => `${f.name}: ${f.error}`).join('; ')}`, { dispatched: 'unknown' });
+      // The service refused every part before starting (no credit, locked account, nothing charged): nothing
+      // happened, so the user is not asked to check whether it did.
+      const refusedAll = failed.length > 0 && failed.every((f) => REFUSED_BEFORE_START.test(f.error));
+      if (!made.length && !reused.length) throw new CapabilityError('model_failed', `No part could be made: ${failed.map((f) => `${f.name}: ${f.error}`).join('; ')}`, { dispatched: refusedAll ? 'no' : 'unknown' });
       return {
         made,
         reused,

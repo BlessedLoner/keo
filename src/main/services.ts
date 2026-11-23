@@ -777,20 +777,33 @@ export class Services {
         if (d.pictureAi !== undefined) return d.pictureAi;
         // As the user chose; 'auto': their own OpenAI key first, otherwise Keo Cloud with their Keo account.
         const source = getSettings().pictures.aiSource;
-        if (source !== 'keo' && this.secrets.has('openai'))
+        const keo: PictureAi | null =
+          source !== 'openai' && this.account.signedIn()
+            ? {
+                generate: async (o, signal) => this.asPng(await this.cloudPicture(() => this.account.image(o, signal)), d),
+                edit: async (o, signal) => {
+                  const ext = (o.name.split('.').pop() ?? 'png').toLowerCase();
+                  const type = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+                  return this.asPng(await this.cloudPicture(() => this.account.image({ prompt: o.prompt, size: o.size, quality: o.quality, background: o.background, image: { data: o.image, type } }, signal)), d);
+                },
+              }
+            : null;
+        if (source !== 'keo' && this.secrets.has('openai') && (source === 'openai' || !keo || Date.now() >= this.openaiPicturesDownUntil)) {
+          // 'auto': when the user's own key is out of credit or refused, the Keo account carries on
+          // (and the key is left alone for an hour) instead of every picture failing.
+          const viaKey = <T>(f: () => Promise<T>, fallback: (() => Promise<T>) | null): Promise<T> =>
+            f().catch((e: unknown) => {
+              if (!fallback || source === 'openai' || !(e instanceof ProviderError) || !['quota', 'auth'].includes(e.kind)) throw e;
+              this.openaiPicturesDownUntil = Date.now() + 60 * 60_000;
+              this.log.warn('pictures.fallback', { from: 'openai', to: 'keo', reason: e.kind });
+              return fallback();
+            });
           return {
-            generate: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.generateImage({ ...o, model }, signal)),
-            edit: (o, signal) => this.withImageModel(signal, (model) => this.providers.openai.editImage({ ...o, model }, signal)),
+            generate: (o, signal) => viaKey(() => this.withImageModel(signal, (model) => this.providers.openai.generateImage({ ...o, model }, signal)), keo ? () => keo.generate(o, signal) : null),
+            edit: (o, signal) => viaKey(() => this.withImageModel(signal, (model) => this.providers.openai.editImage({ ...o, model }, signal)), keo ? () => keo.edit(o, signal) : null),
           };
-        if (source === 'openai' || !this.account.signedIn()) return null;
-        return {
-          generate: async (o, signal) => this.asPng(await this.cloudPicture(() => this.account.image(o, signal)), d),
-          edit: async (o, signal) => {
-            const ext = (o.name.split('.').pop() ?? 'png').toLowerCase();
-            const type = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
-            return this.asPng(await this.cloudPicture(() => this.account.image({ prompt: o.prompt, size: o.size, quality: o.quality, background: o.background, image: { data: o.image, type } }, signal)), d);
-          },
-        };
+        }
+        return keo;
       },
       ...(d.pictureNormalize ? { normalize: d.pictureNormalize } : {}),
       ...(d.pictureCanvasEdit ? { canvasEdit: d.pictureCanvasEdit } : {}),
@@ -2967,9 +2980,24 @@ export class Services {
     const language = this.settings.get().wake.culture.split('-')[0]!.toLowerCase();
     const own = this.videoTranscribe;
     if (own) return { destination: 'the test transcriber', words: async (wav, signal) => (await own(wav, signal)).map((w) => ({ text: w.text, start: w.startSec, end: w.endSec })) };
-    if (this.secrets.has('openai'))
-      return { destination: 'OpenAI', words: async (wav, signal) => (await this.providers.openai.transcribeWords(wav, signal, { language })).map((w) => ({ text: w.word, start: w.start, end: w.end })) };
-    if (this.account.signedIn()) return { destination: 'Keo Cloud', text: (wav, signal) => this.account.transcribe(wav, language, signal) };
+    const keo = this.account.signedIn() ? (wav: Buffer, signal: AbortSignal) => this.account.transcribe(wav, language, signal) : null;
+    // The user's own OpenAI key gives word-by-word times. When that key is out of credit or refused,
+    // a signed-in Keo account carries on (and the key is left alone for an hour) instead of failing.
+    if (this.secrets.has('openai') && Date.now() >= this.openaiSpeechDownUntil)
+      return {
+        destination: keo ? 'OpenAI (Keo Cloud if your OpenAI key is out of credit)' : 'OpenAI',
+        words: async (wav, signal) => {
+          try {
+            return (await this.providers.openai.transcribeWords(wav, signal, { language })).map((w) => ({ text: w.word, start: w.start, end: w.end }));
+          } catch (e) {
+            if (!keo || !(e instanceof ProviderError) || !['quota', 'auth'].includes(e.kind)) throw e;
+            this.openaiSpeechDownUntil = Date.now() + 60 * 60_000;
+            this.log.warn('studio.transcribe_fallback', { from: 'openai', to: 'keo', reason: e.kind });
+            return spreadEvenly(await keo(wav, signal), wavSeconds(wav));
+          }
+        },
+      };
+    if (keo) return { destination: 'Keo Cloud', text: keo };
     return null;
   }
 
@@ -3907,6 +3935,10 @@ export class Services {
   readonly builds: BuildProjects;
   /** The user's main folders (real paths): told to Keo, and used for "Documents/…" in any path. */
   readonly knownFolders: () => KnownFolders;
+  /** The user's OpenAI key failed for speech (out of credit, refused): Keo Cloud is used until then. */
+  private openaiSpeechDownUntil = 0;
+  /** The same for AI pictures. */
+  private openaiPicturesDownUntil = 0;
   /** Its preview and sandbox windows (set by the app; none in tests). */
   buildHost: BuildDeps['host'] = null;
   /** AI shots: pictures made into video clips by AI video models through fal.ai (the user's key). */
@@ -4330,4 +4362,21 @@ function jpegSize(b: Buffer): { width: number; height: number } | null {
     at += 2 + len;
   }
   return null;
+}
+
+/** A WAV clip's length in seconds (from its header; 16-bit mono at its rate when the header is odd). */
+export function wavSeconds(wav: Buffer): number {
+  if (wav.length < 44) return 0;
+  const rate = wav.readUInt32LE(24) || 16000;
+  const channels = wav.readUInt16LE(22) || 1;
+  const bits = wav.readUInt16LE(34) || 16;
+  return Math.max(0, wav.length - 44) / (rate * channels * (bits / 8));
+}
+
+/** Words of a plain transcript spread evenly over a clip (when the service gives no times). */
+export function spreadEvenly(text: string, seconds: number): Array<{ text: string; start: number; end: number }> {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length || seconds <= 0) return [];
+  const each = seconds / words.length;
+  return words.map((w, i) => ({ text: w, start: Math.round(i * each * 1000) / 1000, end: Math.round((i + 1) * each * 1000) / 1000 }));
 }

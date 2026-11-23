@@ -118,6 +118,7 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 | 1 (partial) | 2026-11-22 | gpt-6-luna (OpenAI) | 10 | 1 | 5 | **66%** (10.5 / 16 scored) | 0 | Stopped at C2: the OpenAI credit ran out. B9 not scored (Clock was updating). 1 harmful action (B5), undone. |
 | 2 (partial) | 2026-11-23 | keo-fast (Keo Pro) | 17 | 3 | 1 | **88%** (18.5 / 21 scored) | 0 | After fixes 13b342f. The six run-1 failures retried (5 pass, 1 partly) plus C3–C5, H1, H4; tasks not rerun keep their run-1 result. No harmful actions. 23 tasks not run yet (builder, Studio, 3D, email, calendar, live chat, reminders). |
 | 2b (retries) | 2026-11-23 | keo-fast (Keo Pro) | 19 | 2 | 0 | **95%** (20 / 21 scored) | 0 | After the gap fixes: C5 (photo text without video tools: 10 s, 34k tokens, was a 499k-token fail) and H4 (Gmail draft with the PDF attached, nothing sent) now pass. Still partly: B4 (oval, not a circle), H1 (prices not opened on the seller's page). |
+| 3 (the rest) | 2026-11-23 | keo-fast / keo-strong (Keo Pro) | 7 | 5 | 1 | **73%** of the 13 new tasks; **87%** of all 35 scored (30.5 / 35) | 0 | Studio, 3D, guides, email, calendar, builder. 9 tasks need the user (D5, E2–E4, F3, G4, G5, H2, H3). |
 
 ### Run 1 in detail (2026-11-22)
 
@@ -172,3 +173,34 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 4. The Settings opener misses an already-open Settings window (B3).
 5. Research could open the sellers' pages to confirm and date prices (H1).
 6. Files: a "largest files in a folder" listing (A6).
+
+### Run 3 in detail (2026-11-23)
+
+| # | Result | Time | Tokens in | What happened |
+|---|---|---|---|---|
+| B9 | Pass | 213 s | 515k | 5-minute timer running in Clock (it was updating in run 1). Costly. |
+| E1 | Pass (you check sync) | 394 s + retry | 507k | 21 silences cut (−31 s). Captions first failed: speech went to the user's OpenAI key (out of credit). Fixed in the code (falls back to Keo Cloud); the retry made 72 caption lines. Timing is estimated (Keo Cloud gives text, not word times). |
+| E5 | Pass | 71 s | 589k | Documentary direction chosen; "KEO PODCAST" title designed by Keo (3 layers). Small and quiet. |
+| E6 | Pass | 343 s | 447k | 1080×1920, 89 s TikTok MP4 with sound in Videos\Keo. |
+| F1 | Partly | 48 s | 44k | 3D takeoff, 6 steps, correct text and labels; step 1 does not show the aircraft, labels overlap, the plane looks made of slabs. |
+| F2 | Partly | 82 s | 82k | Correct four-stroke explanation; realistic parts refused (fal.ai balance exhausted, nothing charged), so a see-through box. Task wrongly marked "outcome uncertain". |
+| F4 | Pass | 84 s | 163k | 8-step guide on the real httpbin form; nothing entered or submitted. |
+| G1 | Partly | — | — | Right summary of the first emails, then the Keo Cloud answer broke off ("malformed"). |
+| G2 | Pass | 36 s | 115k | Reply draft saved in Gmail Drafts, not sent. |
+| G3 | Pass | 10 s | 30k | Free 12:00–16:00 tomorrow, suggested 14:00; nothing booked. |
+| D4 | Partly | 98 s | 730k | Found the cart code and asked a fair question ($ prices vs a ₦ fee); copied the build to a new folder without asking (builds are per account). |
+| D2 | **Fail** | 187 s | 437k | AI pictures went to the user's OpenAI key (out of credit); then a file was cut off by the model's output limit and the reply ended — no contact form or back end, never checked. |
+| D3 | Partly | 32 s | 93k | A one-page game that starts and runs without errors; Keo did not play it (the quick tool skips the builder's checks). |
+
+**Findings from run 3 (most important first)**
+1. AI pictures need the same fallback as speech: a dead OpenAI key must give way to the Keo account (D2).
+2. A tool call cut off by the output limit must be retried in smaller pieces, not end the reply (D2).
+3. A broken Keo Cloud answer ("malformed") should be retried automatically (G1).
+4. Games and apps made with the quick one-page tool skip testing: route them to the builder, or check them too (D3).
+5. 3D: frame the whole object in step 1, keep labels from overlapping, and top up fal.ai so realistic parts can be made (F1, F2).
+6. A request refused before it started (nothing charged) is "failed", never "outcome uncertain" (F2).
+7. Builds from another account: explain and ask before copying (D4).
+8. Cost: screen and Studio tasks still run 450k–730k tokens.
+
+**Fixed after run 3 (2026-11-23):** findings 1–7 — pictures and captions fall back to the Keo account when the user's OpenAI key is out of credit; a cut-off step is asked for again in smaller pieces; a broken answer is asked for once more; every game or app goes to the builder; 3D step framing and label layout (checked on the takeoff scene); refused-before-start is "failed"; another account's build: Keo asks before copying. Still open: finding 8 (cost), the washed-out look of white models on the bright "realistic" sky, fal.ai credit, and the morning briefing listing Windows system files (NTUSER.DAT) as recently changed files.
+

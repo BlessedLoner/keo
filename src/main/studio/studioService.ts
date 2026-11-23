@@ -1207,6 +1207,7 @@ export class StudioService {
     let count = 0;
     let skipped = 0;
     const failed: string[] = [];
+    let lastError = '';
     /**
      * One piece of speech, tried up to three times (speech services fail now and then on a single
      * piece); a piece that still fails is skipped (a short gap in the words) instead of losing the file.
@@ -1217,8 +1218,11 @@ export class StudioService {
           return await f();
         } catch (e) {
           if (o.signal.aborted) throw new StudioError('Stopped.');
-          if (attempt >= 3) {
-            this.d.log.warn('studio.transcribe_piece_skipped', { at: Math.round(where), error: e instanceof Error ? e.message.slice(0, 160) : String(e) });
+          lastError = e instanceof Error ? e.message.slice(0, 160) : String(e);
+          // The account itself is refused (no credit, wrong key): trying the same piece again cannot help.
+          const hopeless = /quota|credit|billing|api key|unauthori[sz]ed|\b40[13]\b/i.test(lastError);
+          if (attempt >= 3 || hopeless) {
+            this.d.log.warn('studio.transcribe_piece_skipped', { at: Math.round(where), error: lastError });
             return null;
           }
           await new Promise((r) => setTimeout(r, this.d.retryDelayMs ?? 1000 * attempt * attempt));
@@ -1255,7 +1259,7 @@ export class StudioService {
         o.progress?.(++done, groups.length);
       }
       // Not one piece came back: this file did not work.
-      if (groups.length && missed === groups.length) throw new StudioError('the speech service did not answer for any part of it. Try again in a minute.');
+      if (groups.length && missed === groups.length) throw new StudioError(lastError ? `the speech service refused every part of it: ${lastError}` : 'the speech service did not answer for any part of it. Try again in a minute.');
       skipped += missed;
       count += words.length;
       p = this.learn(id, a.id, { speech: spans, words, wordsExact: exact });

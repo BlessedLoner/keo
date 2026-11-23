@@ -231,6 +231,18 @@ describe('realistic models, guides and Studio', () => {
     expect(parts.autonomy?.(again as never)).toMatchObject({ tier: 'routine' });
   });
 
+  it('when the 3D service refuses every part before starting (no credit, nothing charged), it is reported as not done — not "uncertain"', async () => {
+    const caps = visualCapabilities({
+      store: store(),
+      model3d: { make: async () => { throw new Error('User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing. Nothing was charged.'); }, unavailable: () => null, costLabel: 'about 100 Studio credits' },
+    });
+    const parts = caps.find((c) => c.id === 'visual.model_parts')!;
+    const input = parts.input.parse({ subject: 'car engine', style: 'realistic', parts: [{ name: 'engine-block', prompt: 'an engine block' }, { name: 'engine-head', prompt: 'a cylinder head' }] });
+    const err = await parts.execute(input as never, ctx).then(() => null, (e: unknown) => e as { dispatched?: string; message: string });
+    expect(err?.message).toMatch(/No part could be made/);
+    expect(err?.dispatched).toBe('no');
+  });
+
   it('a website guide is put together from pictures taken of the real page, each with its outlined place', async () => {
     const s = store();
     const guide = visualCapabilities({ store: s }).find((c) => c.id === 'visual.guide')!;

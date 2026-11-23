@@ -63,6 +63,15 @@ const ESCALATE_AFTER_ROUNDS = 3;
 const BUILD_ROUNDS = 60;
 /** Tools that change a build's files (build.start only when it made a new one). */
 const BUILD_CHANGES = /^build\.(write|append|edit|undo|picture|city|model)$/;
+/** How many times a step cut off by the output limit is asked for again, in smaller pieces. */
+const CUT_RETRIES = 2;
+
+/** Said to the model only: its last tool call was too long and did not run. */
+export function cutOffNote(tools: string[]): string {
+  const which = tools.length ? ` (${[...new Set(tools)].join(', ')})` : '';
+  return `[Keo application note — not typed by the user] Your last tool request${which} was cut off by the output limit, so it did NOT run and nothing changed. Do the same step again in smaller pieces: one file per call and under 4,000 characters (build__write the first part, then build__append the rest in parts), or fewer items per call. Then carry on.`;
+}
+
 /** How many times a reply is sent back to check and fix a build before the user is told it is unproven. */
 const BUILD_FINISH_NUDGES = 3;
 
@@ -620,6 +629,7 @@ export class AgentService {
       let claimNudged = false;
       let finishNudged = false;
       let buildNudges = 0;
+      let cutRetries = 0;
       // What worked earlier in this conversation: a reply that sums it up is not making anything up.
       const earlier = this.conversations
         .messages(conversationId)
@@ -684,6 +694,8 @@ export class AgentService {
         // made again, up to twice, when nothing of it was shown yet: the turn keeps all its work so far.
         let result!: Awaited<ReturnType<typeof provider.stream>>;
         let callStarted = Date.now();
+        // An answer that breaks off after part of it was shown is asked for once more (the user is told).
+        let midRetries = 0;
         for (let attempt = 1; ; attempt++) {
           let streamed = false;
           callStarted = Date.now();
@@ -715,6 +727,17 @@ export class AgentService {
             );
             break;
           } catch (e) {
+            const brokeMidway = e instanceof ProviderError && !signal.aborted && streamed && midRetries < 1 && (e.kind === 'malformed' || e.kind === 'network' || e.kind === 'timeout' || e.kind === 'server');
+            if (brokeMidway) {
+              midRetries++;
+              this.log.warn('agent.answer_broke_off', { kind: (e as ProviderError).kind, round: iteration }, correlationId);
+              const n = '\n\n_(The answer broke off — Keo is asking again.)_\n\n';
+              text += n;
+              this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: n });
+              first = false;
+              await new Promise((r) => setTimeout(r, 1000));
+              continue;
+            }
             const again = e instanceof ProviderError && !signal.aborted && !streamed && attempt < 3 && (e.kind === 'malformed' || e.kind === 'network' || e.kind === 'timeout' || e.kind === 'server');
             if (!again) {
               // This model cannot answer just now (its own problem, not the user's account or sign-in): carry on with another.
@@ -834,7 +857,16 @@ export class AgentService {
           break;
         }
         if (result.stopReason === 'max_tokens') {
-          // A tool call cut off by the token limit may carry truncated input: never run it.
+          // A tool call cut off by the token limit may carry truncated input: never run it. The model
+          // is told and asked for the same step in smaller pieces (a couple of times) before the reply ends.
+          if (cutRetries < CUT_RETRIES && used + 1 < roundLimit()) {
+            cutRetries++;
+            this.log.warn('agent.tool_call_cut', { retry: cutRetries, tools: result.toolCalls.map((c) => c.name) }, correlationId);
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text || '(a tool request that was cut off)' }], native: result.native });
+            messages.push({ role: 'user', content: [{ type: 'text', text: cutOffNote(result.toolCalls.map((c) => c.name)) }] });
+            phase('thinking');
+            continue;
+          }
           text += `${text ? '\n\n' : ''}_The model's tool request was cut off by the output limit, so it was not run._`;
           cut = 'a step that was cut off before it could run';
           break;

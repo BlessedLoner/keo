@@ -737,13 +737,16 @@ export class SceneViewer {
         }
     }
     // The camera: the step's own view when it names one; otherwise it stays with what the step is about.
-    const prev = this.camStart ?? this.cameraAt(this.step - 1);
+    // Where the move starts: the last step's view (or the opening view), framed the same way.
+    const before = this.sceneData.steps[this.step - 1];
+    const prev = this.camStart ?? this.framedFor(this.step - 1, this.cameraAt(this.step - 1), before ? before.focus : []);
     let next = s.camera ? { from: v3(s.camera.from), to: v3(s.camera.to) } : null;
     if (!next && s.focus.length) {
       const centre = this.centreOf(s.focus);
       if (centre) next = { to: centre, from: centre.clone().add(prev.from.clone().sub(prev.to)) };
     }
     next ??= prev;
+    next = this.framedFor(this.step, next, s.focus);
     this.camNow = { from: new THREE.Vector3().lerpVectors(prev.from, next.from, k), to: new THREE.Vector3().lerpVectors(prev.to, next.to, k) };
     if (!this.userMovedCamera) {
       this.camera.position.copy(this.camNow.from);
@@ -776,6 +779,73 @@ export class SceneViewer {
     this.t = keepT;
     this.camStart = keepStart;
     return cam;
+  }
+
+  /**
+   * The step's subject always in the picture: its focus parts, or for an overview the whole model —
+   * without the huge flat things around it (the ground, a runway) and the flow arrows. When the
+   * camera the step asks for would leave part of it outside the picture, or make it a speck, the
+   * camera keeps its angle and moves to frame it. Worked out once per step.
+   */
+  framedFor(step, cam, focus) {
+    this.framed ??= new Map();
+    const key = `${step}|${cam.from.toArray().join(',')}|${cam.to.toArray().join(',')}`;
+    const hit = this.framed.get(step);
+    if (hit && hit.key === key) return hit.cam;
+    const box = this.subjectBox(focus && focus.length ? focus : [...this.parts.keys()]);
+    let out = cam;
+    if (box) {
+      const probe = this.camera.clone();
+      probe.position.copy(cam.from);
+      probe.lookAt(cam.to);
+      probe.updateMatrixWorld(true);
+      probe.updateProjectionMatrix();
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, behind = false;
+      for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+        const p = new THREE.Vector3(x, y, z).project(probe);
+        if (p.z > 1) behind = true;
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      const outside = behind || minX < -0.98 || maxX > 0.98 || minY < -0.98 || maxY > 0.98;
+      const speck = Math.max(maxX - minX, maxY - minY) < 0.5;
+      if (outside || speck) {
+        const centre = box.getCenter(new THREE.Vector3());
+        const radius = Math.max(0.01, box.getSize(new THREE.Vector3()).length() / 2);
+        const dir = cam.from.clone().sub(cam.to);
+        if (dir.lengthSq() < 1e-6) dir.set(1, 0.5, 1);
+        dir.normalize();
+        const fov = (this.camera.fov * Math.PI) / 180;
+        const dist = (radius / Math.sin(fov / 2)) * 1.08;
+        out = { from: centre.clone().add(dir.multiplyScalar(dist)), to: centre };
+      }
+    }
+    this.framed.set(step, { key, cam: out });
+    return out;
+  }
+
+  /** The box around what a step is about, leaving out flow arrows, tubes and huge flat surroundings. */
+  subjectBox(ids) {
+    this.three.updateMatrixWorld(true);
+    const boxes = [];
+    for (const id of ids) {
+      const p = this.parts.get(id);
+      if (!p || ['arrow', 'tube'].includes(p.o.shape)) continue;
+      if (!p.meshes.some((m) => m.visible)) continue;
+      const b = new THREE.Box3().setFromObject(p.pivot);
+      if (!b.isEmpty()) boxes.push(b);
+    }
+    if (!boxes.length) return null;
+    const sizes = boxes.map((b) => b.getSize(new THREE.Vector3()).length()).sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)];
+    const all = new THREE.Box3();
+    for (const b of boxes) {
+      const sz = b.getSize(new THREE.Vector3());
+      const flat = sz.y < 0.05 * Math.max(sz.x, sz.z);
+      // The ground, a runway, a road: much bigger than the rest and flat — the setting, not the subject.
+      if (boxes.length > 2 && flat && sz.length() > 4 * median) continue;
+      all.union(b);
+    }
+    return all.isEmpty() ? null : all;
   }
 
   /** The middle of some parts, where they are right now. */
@@ -845,9 +915,14 @@ export class SceneViewer {
       this.lineLayer.setAttribute('style', 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible');
       this.labelLayer.appendChild(this.lineLayer);
     }
-    const narrow = w < 560;
-    const cardW = narrow ? 132 : 214;
     const ids = this.calloutIds();
+    // Too many cards to fit both columns with their notes: titles only (the narration says the rest).
+    if (this.compactStep !== this.step) {
+      this.compactStep = this.step;
+      this.compactLabels = false;
+    }
+    const narrow = w < 560 || this.compactLabels || ids.length * 66 > (h - 20) * 2;
+    const cardW = w < 560 ? 132 : narrow ? 176 : 214;
     const want = new Set(ids);
     const items = [];
     ids.forEach((id, i) => {
@@ -884,6 +959,26 @@ export class SceneViewer {
       }
       items.push({ id, el, at, left: at.x < w / 2, hgt: Math.max(30, el.offsetHeight || 40) });
     });
+    // Balance the two columns: when one side holds more than fits, the cards nearest the middle move across.
+    const room = h - 20;
+    const tall = (side) => items.filter((it) => it.left === side).reduce((n, it) => n + it.hgt + 8, 0);
+    for (let guard = 0; guard < items.length; guard++) {
+      const full = tall(true) > room ? true : tall(false) > room ? false : null;
+      if (full === null || tall(!full) + 40 > room) break;
+      const mover = items.filter((it) => it.left === full).sort((a, b) => Math.abs(a.at.x - w / 2) - Math.abs(b.at.x - w / 2))[0];
+      if (!mover) break;
+      mover.left = !full;
+    }
+    // And by count: one side never holds more than a card or two over the other.
+    for (let guard = 0; guard < items.length; guard++) {
+      const nl = items.filter((it) => it.left).length;
+      const nr = items.length - nl;
+      if (Math.abs(nl - nr) <= 1) break;
+      const from = nl > nr;
+      const mover = items.filter((it) => it.left === from).sort((a, b) => Math.abs(a.at.x - w / 2) - Math.abs(b.at.x - w / 2))[0];
+      if (!mover) break;
+      mover.left = !from;
+    }
     // Two columns, each card as near its part's height as it can be without overlapping the next.
     const lines = [];
     for (const left of [true, false]) {
@@ -899,6 +994,8 @@ export class SceneViewer {
         if (it.y + it.hgt > bottom) it.y = Math.max(10, bottom - it.hgt);
         bottom = it.y - 8;
       }
+      // Still overlapping (the column is fuller than the picture is tall): this step's cards go title-only.
+      for (let n = 1; n < col.length; n++) if (col[n].y < col[n - 1].y + col[n - 1].hgt + 2 && !narrow) this.compactLabels = true;
       for (const it of col) {
         const x = left ? 12 : w - cardW - 12;
         it.el.style.display = 'block';
