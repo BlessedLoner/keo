@@ -95,3 +95,35 @@ describe('builds of another account', () => {
     expect(() => b.dir('bd_000000')).toThrow(/no such build/);
   });
 });
+
+describe('cheaper long tasks', () => {
+  it('files written in older steps are not resent in full; the last two steps stay whole', async () => {
+    const { shrinkOldCalls } = await import('../src/main/agent/workPlan');
+    const big = 'x'.repeat(5000);
+    const step = (id: string) => [
+      { role: 'assistant' as const, content: [{ type: 'tool_call' as const, id, name: 'build__write', input: { build: 'bd_1', files: [{ path: 'index.html', content: big }] } }] },
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, callId: id, content: '{"status":"succeeded"}' }] },
+    ];
+    const messages = [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'build it' }] }, ...step('a'), ...step('b'), ...step('c')];
+    expect(shrinkOldCalls(messages as never, 1)).toBe(1);
+    const inputs = messages.filter((m) => m.role === 'assistant').map((m) => JSON.stringify((m.content[0] as { input: unknown }).input));
+    expect(inputs[0]).toContain('[Sent earlier: 5000 characters');
+    expect(inputs[1]).toContain('xxxxx');
+    expect(inputs[2]).toContain('xxxxx');
+    expect(shrinkOldCalls(messages as never, 1)).toBe(0); // done once
+  });
+
+  it('the checklist rides at the end of the request without changing the stored conversation', async () => {
+    const { withTrailingNote } = await import('../src/main/agent/agentService');
+    const msgs = [{ role: 'user' as const, content: [{ type: 'tool_result' as const, callId: 'a', content: 'ok' }] }];
+    const out = withTrailingNote(msgs as never, '[x] step one');
+    expect(out.at(-1)!.content.map((b) => b.type)).toEqual(['tool_result', 'text']);
+    expect(msgs[0]!.content).toHaveLength(1);
+    expect(withTrailingNote(msgs as never, '')).toBe(msgs);
+    // Before the user's own words, so they stay the last thing read.
+    const asked = withTrailingNote([{ role: 'user', content: [{ type: 'text', text: 'build it' }] }] as never, '[ ] plan');
+    expect(asked.at(-1)!.content.map((b) => (b as { text: string }).text)).toEqual(['[ ] plan', 'build it']);
+    const afterAssistant = withTrailingNote([{ role: 'assistant', content: [{ type: 'text', text: 'hi' }] }] as never, 'note');
+    expect(afterAssistant.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'note' }] });
+  });
+});

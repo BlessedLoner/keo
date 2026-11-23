@@ -409,8 +409,11 @@ export class BuildHost {
       show: false,
       width: o.width ?? 1280,
       height: o.height ?? 800,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'keo-build-check', offscreen: false, backgroundThrottling: false },
+      // Offscreen rendering: a hidden window only paints about once a second, so games and animations
+      // could not be played in a check; offscreen it runs at 30 frames a second (WebGL included).
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'keo-build-check', offscreen: true, backgroundThrottling: false },
     });
+    win.webContents.setFrameRate(30);
     this.watch(id, win);
     try {
       await win.loadURL(this.page(id, page)).catch((e: unknown) => this.note(id, 'errors', `The page did not load: ${e instanceof Error ? e.message : String(e)}`));

@@ -233,6 +233,36 @@ export function compactTurn(messages: NeutralMessage[], turnStart: number, budge
   return n;
 }
 
+/** Tools whose inputs carry whole files or long edits (resent on every later step otherwise). */
+const BULKY_CALLS = /^(build__(write|append|edit)|files__write|create__\w+|studio__edit|picture__edit)$/;
+const BULKY_FIELD_CHARS = 1500;
+
+/**
+ * Long builds resend every earlier file they wrote, inside the old tool calls, on every step. Tool calls
+ * older than the last `keep` steps of this turn have their long text fields (file contents, long edits)
+ * replaced by a short note: the result already said what was written, and the file is on disk.
+ * Returns how many fields were shortened.
+ */
+export function shrinkOldCalls(messages: NeutralMessage[], turnStart: number, keep = 2): number {
+  const steps: number[] = [];
+  for (let i = turnStart; i < messages.length; i++) if (messages[i]!.role === 'assistant' && messages[i]!.content.some((b) => b.type === 'tool_call')) steps.push(i);
+  const old = new Set(steps.slice(0, Math.max(0, steps.length - keep)));
+  let n = 0;
+  const shrink = (v: unknown, depth: number): unknown => {
+    if (typeof v === 'string') {
+      if (v.length <= BULKY_FIELD_CHARS || v.startsWith('[Sent earlier')) return v;
+      n++;
+      return `[Sent earlier: ${v.length} characters. Read the file again if you need it.]`;
+    }
+    if (depth > 4 || !v || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map((x) => shrink(x, depth + 1));
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, shrink(x, depth + 1)]));
+  };
+  for (const i of old)
+    for (const b of messages[i]!.content) if (b.type === 'tool_call' && BULKY_CALLS.test(b.name)) b.input = shrink(b.input, 0) as typeof b.input;
+  return n;
+}
+
 // ---------------------------------------------------------------------------
 // Finishing properly
 

@@ -21,7 +21,7 @@ import { asksForOtherLanguage, clearlyNotEnglish, REWRITE_IN_ENGLISH } from './l
 import { breaksChain, CHECK_FIRST, isTransient, recoverHint, SKIPPED_NOTE } from './recovery';
 import { chooseRoute, needsPlan, type RouteDecision } from './routing';
 import { turnEnding } from './ending';
-import { carryPlan, compactTurn, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
+import { carryPlan, compactTurn, shrinkOldCalls, describeProblems, finishIssues, finishNote, parsePlan, planContext, PLAN_TOOL, PLAN_TOOL_SPEC, RepeatGuard, type Problem } from './workPlan';
 
 export interface PendingQuestion {
   capabilityId: string;
@@ -65,6 +65,23 @@ const BUILD_ROUNDS = 60;
 const BUILD_CHANGES = /^build\.(write|append|edit|undo|picture|city|model)$/;
 /** Older desktop tools that computer__do and the other computer__ tools replace when Full control is on. */
 const SUPERSEDED_BY_FULL_CONTROL = new Set(['desktop__click', 'desktop__press_keys', 'desktop__scroll', 'desktop__set_text', 'desktop__launch_app']);
+
+/**
+ * The messages with a note added to the latest one (a copy: the stored conversation is not changed).
+ * It goes after any tool results but before the user's own words, so what the user said stays the
+ * last thing read; with no latest user message it becomes one of its own.
+ */
+export function withTrailingNote(messages: NeutralMessage[], note: string): NeutralMessage[] {
+  const text = note.trim();
+  if (!text) return messages;
+  const last = messages[messages.length - 1];
+  if (last?.role === 'user') {
+    const at = last.content.findIndex((b) => b.type !== 'tool_result');
+    const content = at < 0 ? [...last.content, { type: 'text' as const, text }] : [...last.content.slice(0, at), { type: 'text' as const, text }, ...last.content.slice(at)];
+    return [...messages.slice(0, -1), { ...last, content }];
+  }
+  return [...messages, { role: 'user', content: [{ type: 'text', text }] }];
+}
 
 /** How many times a step cut off by the output limit is asked for again, in smaller pieces. */
 const CUT_RETRIES = 2;
@@ -689,6 +706,9 @@ export class AgentService {
           break;
         }
         // On long runs, older tool results are shortened so the request, the plan and recent results stay in view.
+        // Whole files in old tool calls (a build's earlier writes) are not sent again on every step.
+        const slimmed = iteration > 1 ? shrinkOldCalls(messages, turnStart) : 0;
+        if (slimmed) this.log.info('agent.old_calls_shortened', { fields: slimmed }, correlationId);
         const shortened = iteration > 0 ? compactTurn(messages, turnStart, settings.agent.contextCharBudget) : 0;
         if (shortened) {
           meta.compactedResults = (meta.compactedResults ?? 0) + shortened;
@@ -709,8 +729,10 @@ export class AgentService {
             result = await provider.stream(
               {
                 model,
-                system: SYSTEM_PROMPT + (settings.voice.voiceFirst || spokenTurn ? VOICE_FIRST : '') + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId) + planContext(planned, meta.plan),
-                messages,
+                // The checklist changes on every step: it rides at the end of the request, so the start
+                // (instructions, tools, the conversation so far) stays the same and can be cached.
+                system: SYSTEM_PROMPT + (settings.voice.voiceFirst || spokenTurn ? VOICE_FIRST : '') + groupPrompts() + this.systemExtra(conversationId) + this.pendingContext(conversationId),
+                messages: withTrailingNote(messages, planContext(planned, meta.plan)),
                 tools,
                 maxOutputTokens: maxOut,
                 correlationId,

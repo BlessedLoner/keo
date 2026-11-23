@@ -57,7 +57,8 @@ describe('planning multi-step requests', () => {
     const systems: string[] = [];
     h = makeHarness({
       script: (req, n) => {
-        systems.push(req.system);
+        // The checklist travels at the end of the request (the start stays the same, for caching).
+        systems.push(req.system + JSON.stringify(req.messages.at(-1)));
         if (n === 0) return calls(plan(['Find the Notepad window', 'in_progress'], ['Type the note', 'pending'], ['Save it', 'pending']), ['desktop__list_windows', {}]);
         if (n === 1) return calls(plan(['Find the Notepad window', 'done'], ['Type the note', 'in_progress'], ['Save it', 'pending']), ['desktop__type_text', { target: notepad, text: 'buy milk' }]);
         if (n === 2) return calls(plan(['Find the Notepad window', 'done'], ['Type the note', 'done'], ['Save it', 'in_progress']), ['desktop__press_keys', { target: notepad, combo: 'ctrl+s' }]);
@@ -261,7 +262,8 @@ describe('long runs', () => {
     expect(newer?.content).not.toContain('shortened');
     // The request and the plan are untouched.
     expect(JSON.stringify(last.messages)).toContain('compare their titles');
-    expect(last.system).toContain('[~] Pick the right one');
+    expect(JSON.stringify(last.messages.at(-1))).toContain('[~] Pick the right one');
+    expect(last.system).not.toContain('[~] Pick the right one');
     expect(msg.meta.compactedResults).toBe(1);
     // In the first round nothing was shortened yet.
     expect(JSON.stringify(requests[1]!.messages)).not.toContain('shortened by Keo');
