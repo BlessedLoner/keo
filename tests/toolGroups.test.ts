@@ -33,6 +33,28 @@ describe('tool groups', () => {
     expect(sent).toContain(LOAD_TOOLS); // what was left out can still be loaded
   });
 
+  it('sends only what the request is about: 3D explanations when asked, no WhatsApp for a contact form, no old video pipeline in Studio', () => {
+    const groups = (t: string, extra: Partial<typeof base> = {}) => chooseGroups({ ...base, ...extra, texts: [t] });
+    expect(groups('make a folder called Notes in Documents').has('explain')).toBe(false);
+    expect(groups('explain how a plane takes off').has('explain')).toBe(true);
+    expect(groups('show me how to fill in the form on this website').has('explain')).toBe(true);
+    const site = groups('Build a portfolio website with a contact form that saves the messages people send');
+    expect(site.has('create')).toBe(true);
+    expect(site.has('whatsapp')).toBe(false);
+    expect(site.has('webapps')).toBe(false);
+    // Named, they still come.
+    expect(groups('Build a shop website and send the link to Ada on WhatsApp').has('whatsapp')).toBe(true);
+    const studio = groups('In my Studio project, add an animated opening title for the video');
+    expect(studio.has('studio')).toBe(true);
+    expect(studio.has('video')).toBe(false);
+    expect(studio.has('pictures')).toBe(false);
+    expect(groups('In Studio, use the photos from my trip in the video').has('pictures')).toBe(true);
+    // Recently used groups and attached pictures always stay.
+    expect(groups('Build a website for my bakery', { recent: ['whatsapp'] as never[] }).has('whatsapp')).toBe(true);
+    expect(groups('edit this video in studio', { pictures: true }).has('pictures')).toBe(true);
+    expect(groupOf('visual__explain')).toBe('explain');
+  });
+
   it('leaves out the least-mentioned groups first, never the pinned ones', () => {
     const groups = new Set<ToolGroup>(['core', 'studio', 'email', 'calendar', 'desktop']);
     const size: Record<string, number> = { core: 30, studio: 40, email: 20, calendar: 20, desktop: 30 };

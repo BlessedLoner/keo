@@ -8,7 +8,7 @@ import type { ToolSpec } from '../providers/types';
  * few turns, and on request: the model can load any group with tools__load in the same turn.
  * Any registered tool still runs if the model calls it by name.
  */
-export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected'] as const;
+export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected', 'explain'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number] | 'core';
 
 /** Which group a tool belongs to (by its name: "desktop__click" → desktop). */
@@ -52,6 +52,9 @@ export function groupOf(toolName: string): ToolGroup {
     case 'project':
     case 'workflows':
       return 'projects';
+    case 'visual':
+      // 3D explanations, website guides and realistic models: big tools, needed only when asked.
+      return 'explain';
     case 'telegram':
     case 'notion':
     case 'slack':
@@ -78,6 +81,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
+  explain: '3D explanations of how something works (step by step, labels, x-ray, exploded views), step-by-step guides on a website, realistic 3D models in parts',
   connected: 'connected apps: Telegram (the user’s bot and its live chats; the user’s own Telegram is chat__background_start), Notion pages, Slack channels, Google Drive (files Keo saves there)',
 };
 
@@ -98,6 +102,20 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   studio: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?|voice-?over|green ?screen|transition|thumbnail)\b/,
   projects: /\b(projects?|workflows?|workspace|milestone|backlog)\b/,
   connected: /\b(telegram|notion|slack|google drive|my drive|to drive|in drive)\b/,
+  explain: /\b(explain|explanation|how (does|do|did|is|are|can|would)|why (does|do|is|are)|teach|show me how|walk me through|step by step|diagram|3d|cutaway|x-?ray|exploded|guide|how it works|works inside|what is this|what's this)\b/,
+};
+
+/**
+ * Words that bring a group in only by their own names. Everyday words like "messages", "form" or
+ * "animated" match several groups; when the request is clearly about something else (building a site,
+ * editing a video), those groups stay out unless the request names them — they can still be loaded.
+ */
+const OWN_NAMES: Partial<Record<(typeof TOOL_GROUPS)[number], RegExp>> = {
+  whatsapp: /\b(whats ?app|text (him|her|them|my)|chat with|dm)\b/,
+  webapps: /\b(google (docs?|slides|sheets|forms)|ebay|amazon|jumia|etsy|log ?in|sign ?in|upload|browser|tabs?|portal|post on|checkout|listing)\b/,
+  email: /\b(e-?mails?|gmail|outlook|yahoo|inbox|newsletter|cc|bcc)\b|@\w+\.\w+/,
+  pictures: /\b(pictures?|images?|photos?|logo|png|jpe?g|gif|crop|wallpaper|thumbnail|poster|banner|illustration|icon)\b/,
+  video: /\b(template video|folder of (clips|videos)|video template)\b/,
 };
 
 export interface GroupHints {
@@ -125,6 +143,14 @@ export function chooseGroups(h: GroupHints): Set<ToolGroup> {
     out.add('screen');
     out.add('desktop');
   }
+  // Focus: building something, or editing in Studio, does not bring in groups that only matched an
+  // everyday word (the old video pipeline never comes with Studio unless asked by name).
+  const focused = (out.has('create') && TRIGGERS.create.test(text)) || out.has('studio');
+  if (focused)
+    for (const g of ['whatsapp', 'webapps', 'email', 'video', ...(out.has('studio') ? (['pictures'] as const) : [])] as Array<(typeof TOOL_GROUPS)[number]>) {
+      if (out.has(g) && OWN_NAMES[g] && !OWN_NAMES[g]!.test(text)) out.delete(g);
+    }
+  if (h.pictures) out.add('pictures');
   for (const g of h.recent) out.add(g);
   if (h.pendingTool) out.add(groupOf(h.pendingTool));
   // Working on the computer means looking at the screen too (Full control works from screen pictures).

@@ -119,6 +119,7 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 | 2 (partial) | 2026-11-23 | keo-fast (Keo Pro) | 17 | 3 | 1 | **88%** (18.5 / 21 scored) | 0 | After fixes 13b342f. The six run-1 failures retried (5 pass, 1 partly) plus C3–C5, H1, H4; tasks not rerun keep their run-1 result. No harmful actions. 23 tasks not run yet (builder, Studio, 3D, email, calendar, live chat, reminders). |
 | 2b (retries) | 2026-11-23 | keo-fast (Keo Pro) | 19 | 2 | 0 | **95%** (20 / 21 scored) | 0 | After the gap fixes: C5 (photo text without video tools: 10 s, 34k tokens, was a 499k-token fail) and H4 (Gmail draft with the PDF attached, nothing sent) now pass. Still partly: B4 (oval, not a circle), H1 (prices not opened on the seller's page). |
 | 3 (the rest) | 2026-11-23 | keo-fast / keo-strong (Keo Pro) | 7 | 5 | 1 | **73%** of the 13 new tasks; **87%** of all 35 scored (30.5 / 35) | 0 | Studio, 3D, guides, email, calendar, builder. 9 tasks need the user (D5, E2–E4, F3, G4, G5, H2, H3). |
+| 3b (reruns after 7e6f53e) | 2026-11-23 | keo-fast / keo-strong (Keo Pro) | 30 | 5 | 0 | **93%** of all 35 scored (32.5 / 35) | 0 | G1, D3 and D2 now pass. D2: full site, contact form saved and read back, wrong key refused; no real photos (the Keo Pro picture allowance ran out — said so). D3: built and played through the builder. Cost is the open problem: D3 1.0M and D2 1.5M tokens. |
 
 ### Run 1 in detail (2026-11-22)
 
@@ -203,4 +204,9 @@ All test files go in `Documents\Scorecard Test`, which is removed at the end.
 8. Cost: screen and Studio tasks still run 450k–730k tokens.
 
 **Fixed after run 3 (2026-11-23):** findings 1–7 — pictures and captions fall back to the Keo account when the user's OpenAI key is out of credit; a cut-off step is asked for again in smaller pieces; a broken answer is asked for once more; every game or app goes to the builder; 3D step framing and label layout (checked on the takeoff scene); refused-before-start is "failed"; another account's build: Keo asks before copying. Still open: finding 8 (cost), the washed-out look of white models on the bright "realistic" sky, fal.ai credit, and the morning briefing listing Windows system files (NTUSER.DAT) as recently changed files.
+
+**Reruns after 7e6f53e (2026-11-23):** G1 Pass (93 s, 103k: whole summary, important items first, says the list was cut short). D3 Pass (519 s, 1.03M: made in the builder, played by stepping the game loop — blocks fell, score rose, game over, best score saved; the check browser renders about 1 frame a second, which makes real-time play hard to test). D2 Pass (559 s, 1.52M: four pages and a private inbox; form tested end to end; pictures fell back from the OpenAI key to the Keo account, whose monthly picture allowance had run out, so designed placeholder frames were used and the user told).
+New: the builder's check window runs games at about 1 fps; builds cost 1–1.5M tokens.
+
+**Cost cut 1 (2026-11-23):** each model call resends Keo's instructions and tool list; tools were most of it. The 3D explanation tools now load only when asked, and a build or Studio request no longer pulls in WhatsApp, website, email, old-video or picture tools through everyday words. First call: build 30.8k → 19.7k, Studio 39.7k → 29.1k, screen 22.1k → 18.4k, files 12.1k → 8.4k tokens. Live: A1 32.5k → 17.6k, G3 29.5k → 17.4k; B1 (screen) unchanged at about 60k. Next: Studio's own tools (20k) and the desktop tools (8k).
 
