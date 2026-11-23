@@ -55,6 +55,32 @@ describe('tool groups', () => {
     expect(groupOf('visual__explain')).toBe('explain');
   });
 
+  it('Studio’s specialist tools come only when the request is about them, always with the everyday ones', () => {
+    const groups = (t: string) => chooseGroups({ ...base, texts: [t] });
+    expect(groupOf('studio__edit')).toBe('studio');
+    expect(groupOf('studio__dna_apply')).toBe('studio_more');
+    expect(groupOf('studio__ai_shot')).toBe('studio_more');
+    const plain = groups('In my Studio project, cut the silences and add captions');
+    expect(plain.has('studio')).toBe(true);
+    expect(plain.has('studio_more')).toBe(false);
+    const dna = groups('Edit my clip in the style of this reference video');
+    expect(dna.has('studio_more')).toBe(true);
+    expect(dna.has('studio')).toBe(true);
+    expect(groups('make shorts from my podcast video').has('studio_more')).toBe(true);
+  });
+
+  it('with Full control on, the older desktop tools the computer tools replace are not sent', async () => {
+    const reqs: ChatRequest[] = [];
+    h = makeHarness({ script: (req) => (reqs.push(req), reply('ok')) });
+    h.services.settings.update({ permissions: { desktopControlEnabled: true, observationEnabled: true, fullControl: true } });
+    const c = h.services.conversations.create();
+    await h.services.agent.send(c.id, 'open notepad and type hello').done;
+    const sent = names(reqs[0]!);
+    expect(sent).toContain('computer__do');
+    for (const old of ['desktop__click', 'desktop__press_keys', 'desktop__scroll', 'desktop__set_text', 'desktop__launch_app']) expect(sent).not.toContain(old);
+    expect(sent).toContain('desktop__list_windows');
+  });
+
   it('leaves out the least-mentioned groups first, never the pinned ones', () => {
     const groups = new Set<ToolGroup>(['core', 'studio', 'email', 'calendar', 'desktop']);
     const size: Record<string, number> = { core: 30, studio: 40, email: 20, calendar: 20, desktop: 30 };

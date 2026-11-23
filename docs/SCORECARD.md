@@ -210,3 +210,5 @@ New: the builder's check window runs games at about 1 fps; builds cost 1–1.5M 
 
 **Cost cut 1 (2026-11-23):** each model call resends Keo's instructions and tool list; tools were most of it. The 3D explanation tools now load only when asked, and a build or Studio request no longer pulls in WhatsApp, website, email, old-video or picture tools through everyday words. First call: build 30.8k → 19.7k, Studio 39.7k → 29.1k, screen 22.1k → 18.4k, files 12.1k → 8.4k tokens. Live: A1 32.5k → 17.6k, G3 29.5k → 17.4k; B1 (screen) unchanged at about 60k. Next: Studio's own tools (20k) and the desktop tools (8k).
 
+**Cost cut 2 (2026-11-23):** Studio's specialist tools (templates, Edit DNA, brand kit, AI shots, characters, music, Shorts, series…) are their own group, loaded when the request is about them; with Full control on, the older desktop tools the computer tools replace are not sent. First call: Studio 29.1k → 22.3k (44% below the original 39.7k), screen 18.4k → 16.8k. Live: Calculator (B1) 63.6k → 44.0k tokens and 55 s → 19 s.
+

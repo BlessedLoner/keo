@@ -8,7 +8,7 @@ import type { ToolSpec } from '../providers/types';
  * few turns, and on request: the model can load any group with tools__load in the same turn.
  * Any registered tool still runs if the model calls it by name.
  */
-export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected', 'explain'] as const;
+export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected', 'explain', 'studio_more'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number] | 'core';
 
 /** Which group a tool belongs to (by its name: "desktop__click" → desktop). */
@@ -48,7 +48,9 @@ export function groupOf(toolName: string): ToolGroup {
     case 'video':
       return 'video';
     case 'studio':
-      return 'studio';
+      // Everyday editing is "studio"; the specialist tools (templates, Edit DNA, brand kit, AI shots,
+      // characters, music, Shorts, series…) come when the request is about them.
+      return STUDIO_SPECIALIST.has(op ?? '') ? 'studio_more' : 'studio';
     case 'project':
     case 'workflows':
       return 'projects';
@@ -66,6 +68,14 @@ export function groupOf(toolName: string): ToolGroup {
   }
 }
 
+/** Studio's specialist tools (their own group: they are big and most edits never need them). */
+const STUDIO_SPECIALIST = new Set([
+  'showcase', 'learn_template', 'study_template', 'apply_template', 'viral_template', 'templates', 'use_template',
+  'dna_analyze', 'dna_find', 'dna_apply', 'dna_combine', 'brand', 'use_brand', 'make_shorts', 'series', 'track',
+  'characters', 'character_pictures', 'swap_character', 'talking_character', 'ai_shot', 'shot_again', 'ai_music', 'ai_sound',
+  'reframe', 'stabilize', 'write_post', 'post_youtube', 'faceless', 'read_aloud', 'versions',
+]);
+
 /** What each group is for (shown to the model so it can load one it needs). */
 export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   desktop: 'open apps, work in windows, click, type, draw, allowed apps; Full control (any app, like a person)',
@@ -81,6 +91,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   video: 'copy a template video’s edit from a folder of clips (older ffmpeg pipeline)',
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
+  studio_more: 'Keo Studio specialist tools: templates and viral templates, Edit DNA (copy a reference video’s style), brand kit, screen showcases, Shorts from a long video, series, tracking, AI shots, characters and talking characters, AI music and sounds, reframe, stabilise, faceless videos, read aloud, posts and YouTube, versions',
   explain: '3D explanations of how something works (step by step, labels, x-ray, exploded views), step-by-step guides on a website, realistic 3D models in parts',
   connected: 'connected apps: Telegram (the user’s bot and its live chats; the user’s own Telegram is chat__background_start), Notion pages, Slack channels, Google Drive (files Keo saves there)',
 };
@@ -102,6 +113,7 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   studio: /\b(videos?|clips?|reels?|tiktok|shorts|youtube|edit (the|this|my) video|render|montage|footage|template|captions?|subtitles?|studio|faceless|b-?roll|silences?|filler words?|retakes?|voice-?over|green ?screen|transition|thumbnail)\b/,
   projects: /\b(projects?|workflows?|workspace|milestone|backlog)\b/,
   connected: /\b(telegram|notion|slack|google drive|my drive|to drive|in drive)\b/,
+  studio_more: /\b(templates?|dna|reference|in the style of|style of|brand|logo|intro|outro|showcase|screenshots?|shorts|series|episodes?|track|follow|characters?|avatar|talking|ai (shot|clip|video|music|sound)|music|soundtrack|sound effects?|faceless|narrat\w*|voice-?over|read (it )?aloud|reframe|stabili[sz]e|shaky|post (it|this)|youtube|caption for|write a post|versions?|viral)\b/,
   explain: /\b(explain|explanation|how (does|do|did|is|are|can|would)|why (does|do|is|are)|teach|show me how|walk me through|step by step|diagram|3d|cutaway|x-?ray|exploded|guide|how it works|works inside|what is this|what's this)\b/,
 };
 
@@ -143,6 +155,8 @@ export function chooseGroups(h: GroupHints): Set<ToolGroup> {
     out.add('screen');
     out.add('desktop');
   }
+  // The specialist Studio tools always come with the everyday ones.
+  if (out.has('studio_more')) out.add('studio');
   // Focus: building something, or editing in Studio, does not bring in groups that only matched an
   // everyday word (the old video pipeline never comes with Studio unless asked by name).
   const focused = (out.has('create') && TRIGGERS.create.test(text)) || out.has('studio');

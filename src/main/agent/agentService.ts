@@ -63,6 +63,9 @@ const ESCALATE_AFTER_ROUNDS = 3;
 const BUILD_ROUNDS = 60;
 /** Tools that change a build's files (build.start only when it made a new one). */
 const BUILD_CHANGES = /^build\.(write|append|edit|undo|picture|city|model)$/;
+/** Older desktop tools that computer__do and the other computer__ tools replace when Full control is on. */
+const SUPERSEDED_BY_FULL_CONTROL = new Set(['desktop__click', 'desktop__press_keys', 'desktop__scroll', 'desktop__set_text', 'desktop__launch_app']);
+
 /** How many times a step cut off by the output limit is asked for again, in smaller pieces. */
 const CUT_RETRIES = 2;
 
@@ -560,7 +563,10 @@ export class AgentService {
       const buildTools = () => {
         if (!toolsOn) return [];
         const missing = TOOL_GROUPS.filter((g) => !groups.has(g));
-        let specs = this.registry.toolSpecs().filter((t) => groups.has(groupOf(t.name)));
+        // With Full control, the computer__ tools do what these older ones did: they are left out of the
+        // list (still run when called by name), so every step sends fewer tools.
+        const superseded = settings.permissions.fullControl ? SUPERSEDED_BY_FULL_CONTROL : null;
+        let specs = this.registry.toolSpecs().filter((t) => groups.has(groupOf(t.name)) && !superseded?.has(t.name));
         // Never more than a service accepts (OpenAI refuses over 128): the last resort when even the
         // groups that must stay are too many — the tools still run when called by name.
         if (capped && specs.length > HARD_TOOL_LIMIT - 2) {
