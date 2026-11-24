@@ -49,7 +49,7 @@ export function StudioCredits({ status, compact }: { status: AiVideoStatus | nul
           {!c.ready && <span className="muted"> · Studio AI is not switched on yet</span>}
         </span>
       ) : (
-        <span className="muted">Studio credits: could not check right now.</span>
+        <span className="muted" title={status.creditsError ?? undefined}>Studio credits: could not check right now{status.creditsError ? ` (${status.creditsError})` : ''}.</span>
       )}
       <button className={`btn sm ${c && c.total < 150 ? 'primary' : ''}`} onClick={() => void more()} disabled={busy}>
         {c && c.plan !== 'creator' && c.plan !== 'max' ? 'Get credits or Creator plan' : 'Get more credits'}

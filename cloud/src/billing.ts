@@ -357,8 +357,8 @@ export async function handleBilling(
             fastTasks: fast ? Math.floor(c.month / taskCost(fast)) : 0,
             strongBuilds: strong ? Math.floor(c.month / buildCost(strong)) : 0,
             bestBuilds: best ? Math.floor(c.month / buildCost(best)) : 0,
-            dayShare: c.month ? Math.round((c.day / c.month) * 1000) / 1000 : 0.15,
-            weekShare: c.month ? Math.round((c.week / c.month) * 1000) / 1000 : 0.4,
+            dayShare: c.month ? Math.round((c.day / c.month) * 1000) / 1000 : 0.35,
+            weekShare: c.month ? Math.round((c.week / c.month) * 1000) / 1000 : 0.6,
           };
         })(),
         prices: Object.fromEntries(list.filter((x) => x.plan === p.id).map((x) => [x.currency, x.amount])),

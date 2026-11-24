@@ -121,7 +121,7 @@ export function upgradePage(): Response {
     else if (al.fastTasks) out.push([true, 'Monthly AI allowance: about ' + n(al.fastTasks) + ' tasks on Keo Fast']);
     out.push([true, tier[p.id] || 'Keo models']);
     if (al.bestBuilds) out.push([true, 'Keo Best uses the allowance about twice as fast as Keo Strong (about ' + n(al.bestBuilds) + ' builds)']);
-    out.push([true, 'Up to ' + Math.round((al.dayShare || 0.15) * 100) + '% of it a day and ' + Math.round((al.weekShare || 0.4) * 100) + '% a week, so it lasts the month']);
+    out.push([true, 'Up to ' + Math.round((al.dayShare || 0.35) * 100) + '% of it a day and ' + Math.round((al.weekShare || 0.6) * 100) + '% a week, for new work, so it lasts the month (a task already started always finishes)']);
     out.push([f.web_search > 0, f.web_search > 0 ? 'Up to ' + f.web_search + ' web searches a day' : 'Keo web search']);
     out.push([f.images > 0, f.images > 0 ? 'Up to ' + f.images + ' AI pictures a day' : 'AI pictures']);
     out.push([f.voice_minutes > 0, f.voice_minutes > 0 ? 'Up to ' + f.voice_minutes + ' minutes of Keo’s voice a day' : 'Keo’s voice']);

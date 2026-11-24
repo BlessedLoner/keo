@@ -23,9 +23,9 @@ class World {
     ['u-owner', { plan: 'free', plan_until: null, blocked: false }],
   ]);
   plans: Array<Plan & Record<string, unknown>> = [
-    { id: 'free', name: 'Free', daily_requests: 30, daily_tokens: 400000, max_tier: 1, monthly_cost_usd: 0.6, features: { web_search: 2, images: 0, voice_minutes: 1 } },
-    { id: 'pro', name: 'Pro', daily_requests: 600, daily_tokens: 8000000, max_tier: 2, monthly_cost_usd: 12, features: { web_search: 50, images: 5, voice_minutes: 60 } },
-    { id: 'max', name: 'Max', daily_requests: 2000, daily_tokens: 15000000, max_tier: 3, monthly_cost_usd: 28, features: { web_search: 200, images: 60, voice_minutes: 120 } },
+    { id: 'free', name: 'Free', daily_requests: 30, daily_tokens: 400000, max_tier: 1, monthly_cost_usd: 0.6, day_share: 0.15, week_share: 0.4, features: { web_search: 2, images: 0, voice_minutes: 1 } },
+    { id: 'pro', name: 'Pro', daily_requests: 600, daily_tokens: 8000000, max_tier: 2, monthly_cost_usd: 12, day_share: 0.15, week_share: 0.4, features: { web_search: 50, images: 5, voice_minutes: 60 } },
+    { id: 'max', name: 'Max', daily_requests: 2000, daily_tokens: 15000000, max_tier: 3, monthly_cost_usd: 28, day_share: 0.15, week_share: 0.4, features: { web_search: 200, images: 60, voice_minutes: 120 } },
   ];
   models = [
     { id: 'keo-fast', label: 'Keo Fast', upstream: 'openai/gpt-4o-mini', tier: 1, vision: true, tools: true, context_tokens: 128000, max_output_tokens: 4096, price_in_per_m: 0.1, price_out_per_m: 0.5 },
@@ -474,8 +474,9 @@ describe('The AI allowance: billing months, day / week / month windows', () => {
     expect(new Date(addMonths(Date.parse('2027-01-31T08:00:00Z'), 1)).toISOString()).toBe('2027-02-28T08:00:00.000Z');
   });
 
-  it('the day and week are shares of the month (15% and 40% unless the plan says otherwise)', () => {
-    expect(capsFor(pro)).toEqual({ month: 12, week: 4.8, day: 1.8 });
+  it('the day and week are shares of the month (35% and 60% unless the plan says otherwise)', () => {
+    expect(capsFor(pro)).toEqual({ month: 12, week: 7.2, day: 4.2 });
+    expect(capsFor({ ...pro, day_share: 0.15, week_share: 0.4 })).toEqual({ month: 12, week: 4.8, day: 1.8 });
     expect(capsFor({ ...pro, day_share: 0.2, week_share: 0.5 })).toEqual({ month: 12, week: 6, day: 2.4 });
     // A database not yet updated: 30 times the old daily figure.
     expect(capsFor({ ...pro, monthly_cost_usd: null, daily_cost_usd: 0.35 }).month).toBeCloseTo(10.5);
@@ -766,5 +767,27 @@ describe('AI top-ups: more allowance without changing plan', () => {
     w.topups.delete('u-ana');
     const none = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { usage: { topup: unknown } };
     expect(none.usage.topup).toBeNull();
+  });
+});
+
+describe('A task already under way finishes', () => {
+  it('a later step of a task goes past today’s and this week’s share — never past the month', async () => {
+    w.setPlan('pro');
+    // Today's share (15% of $12 here) is used.
+    w.usage.set(`u-ana|${DAY}`, { cost_usd: 1.8 });
+    const step = (continuing: boolean) => w.call('/v1/chat/completions', { token: 'tok-ana', headers: continuing ? { 'x-keo-task': 'continuing' } : {}, body: { model: 'keo-strong', messages: [{ role: 'user', content: 'hi' }] } });
+    // A new request waits for tomorrow…
+    expect(await err(await step(false))).toMatchObject({ code: 'allowance_paused', window: 'day' });
+    // …but the next step of a task already started carries on.
+    expect((await step(true)).status).toBe(200);
+    await w.settle();
+    // The same for the week.
+    w.usage.set('u-ana|2026-10-20', { cost_usd: 0 });
+    w.usage.set(`u-ana|${DAY}`, { cost_usd: 4.8 });
+    expect((await step(true)).status).toBe(200);
+    await w.settle();
+    // The month is a hard ceiling, even for a task under way.
+    w.usage.set('u-ana|2026-10-21', { cost_usd: 12 });
+    expect(await err(await step(true))).toMatchObject({ code: 'allowance_paused', window: 'month' });
   });
 });

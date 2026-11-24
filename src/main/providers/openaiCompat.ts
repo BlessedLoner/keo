@@ -105,7 +105,7 @@ export class OpenAICompatProvider implements ChatProvider {
   }
 
   /** Headers a provider adds to each chat request (none by default). */
-  protected extraHeaders(): Record<string, string> {
+  protected extraHeaders(_req?: ChatRequest): Record<string, string> {
     return {};
   }
 
@@ -173,13 +173,13 @@ export class OpenAICompatProvider implements ChatProvider {
     try {
       let stream;
       try {
-        stream = await client.chat.completions.create(body, { signal, headers: this.extraHeaders() });
+        stream = await client.chat.completions.create(body, { signal, headers: this.extraHeaders(req) });
       } catch (err) {
         // "Function tools with reasoning_effort are not supported for <model> … set reasoning_effort to 'none'".
         const status = (err as { status?: number }).status;
         if (status !== 400 || !tools.length || body.reasoning_effort === 'none' || !/reasoning_effort/i.test(String((err as Error).message))) throw err;
         this.noReasoningWithTools.add(req.model);
-        stream = await client.chat.completions.create({ ...body, reasoning_effort: 'none' }, { signal, headers: this.extraHeaders() });
+        stream = await client.chat.completions.create({ ...body, reasoning_effort: 'none' }, { signal, headers: this.extraHeaders(req) });
       }
       handlers.onPhase?.('generating');
       for await (const chunk of stream) {

@@ -30,6 +30,8 @@ export interface ChatRequest {
   tools: ToolSpec[];
   maxOutputTokens: number;
   correlationId: string;
+  /** A later step of a task already under way (not the first model call of a request). */
+  continuing?: boolean;
 }
 
 export interface ToolCall {

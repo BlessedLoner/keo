@@ -172,7 +172,7 @@ describe('Keo Cloud payments', () => {
     const max = r.plans.find((p) => p.id === 'max')!.allowance;
     const free = r.plans.find((p) => p.id === 'free')!.allowance;
     // $12 ÷ ~$0.465 a Strong build; $28 ÷ ~$0.93 a Best build.
-    expect(pro).toMatchObject({ strongBuilds: 25, bestBuilds: 0, dayShare: 0.15, weekShare: 0.4 });
+    expect(pro).toMatchObject({ strongBuilds: 25, bestBuilds: 0, dayShare: 0.35, weekShare: 0.6 });
     expect(max).toMatchObject({ strongBuilds: 60, bestBuilds: 30 });
     expect(free.strongBuilds).toBe(0);
     expect(free.fastTasks).toBeGreaterThan(20);

@@ -116,7 +116,7 @@ describe('real photos (Openverse)', () => {
 
 describe('making assets (fal.ai, paid with Studio credits)', () => {
   it('says the price before, in credits through Keo or dollars with the user’s own key', () => {
-    const preview = (input: unknown) => caps['assets.make']!.preview!(caps['assets.make']!.input.parse(input) as never);
+    const preview = (input: unknown) => caps['assets.make']!.preview!(caps['assets.make']!.input.parse(input) as never, ctx() as never);
     const v = preview({ kind: 'vector', prompt: 'a rocket icon' });
     expect(v.summary).toContain('vector art (SVG)');
     expect(v.consequences.join(' ')).toMatch(/18 credits|Studio credits/);

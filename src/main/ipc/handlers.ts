@@ -149,8 +149,16 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
   const aiVideoStatus = async () => {
     const own = s.secrets.has('fal');
     const keo = !own && s.account.signedIn();
-    const credits = keo ? await s.account.studioCredits().catch(() => null) : null;
-    return { hasKey: own, secretStorage: s.secrets.available(), ...s.falSpending(), via: own ? ('own' as const) : keo ? ('keo' as const) : null, credits };
+    let creditsError: string | null = null;
+    const credits = keo
+      ? await s.account.studioCredits().catch((e: unknown) => {
+          // Why it could not be read: written to the log and shown briefly (never hidden).
+          creditsError = String((e as Error)?.message ?? e).slice(0, 200);
+          s.log.warn('studio.credits_failed', { reason: creditsError });
+          return null;
+        })
+      : null;
+    return { hasKey: own, secretStorage: s.secrets.available(), ...s.falSpending(), via: own ? ('own' as const) : keo ? ('keo' as const) : null, credits, creditsError };
   };
   const shownIssue = ({ ops, ...i }: ReviewIssue) => ({ ...i, key: issueKey(i), canFix: !!ops?.length });
   const studioErr = (e: unknown): never => {

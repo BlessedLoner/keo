@@ -135,3 +135,23 @@ describe('the plan sets how many background jobs run at once', () => {
     await waitFor(() => h.services.jobs.list().every((j) => j.state === 'completed'));
   });
 });
+
+describe('Keo Cloud is told when a step continues a task', () => {
+  it('the first model call of a request is new work; every later step continues it', async () => {
+    const seen: Array<boolean | undefined> = [];
+    let n = 0;
+    h = makeHarness({
+      script: (req: ChatRequest) => {
+        seen.push(req.continuing);
+        n++;
+        if (n === 1) return reply('', { toolCalls: [{ id: 'c1', name: 'build__list', input: {} }], stopReason: 'tool_use' });
+        return reply('Done.');
+      },
+    });
+    const c = h.services.conversations.create();
+    await h.services.agent.send(c.id, 'list my builds').done;
+    expect(seen).toEqual([false, true]);
+    await h.services.agent.send(c.id, 'thanks').done;
+    expect(seen.at(-1)).toBe(false);
+  });
+});

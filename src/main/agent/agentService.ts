@@ -753,6 +753,8 @@ export class AgentService {
                 tools,
                 maxOutputTokens: maxOut,
                 correlationId,
+                // Later steps of a task (or one picked up again): Keo Cloud lets it finish today.
+                continuing: modelCalls > 0 || !!meta.resumed,
               },
               {
                 onText: (delta) => {

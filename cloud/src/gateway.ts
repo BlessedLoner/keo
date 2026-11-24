@@ -350,7 +350,7 @@ export function monthlyBudget(plan: Plan): number {
   return day > 0 ? day * 30 : 0;
 }
 
-/** What may be spent in a day, a week and the billing month (the day and week are shares of the month). */
+/** What may be spent in a day, a week and the billing month (the day and week are shares of the month: 35% and 60% unless the plan says otherwise). */
 export function capsFor(plan: Plan): Caps {
   const month = monthlyBudget(plan);
   const share = (v: unknown, d: number) => {
@@ -358,7 +358,7 @@ export function capsFor(plan: Plan): Caps {
     return n > 0 && n <= 1 ? n : d;
   };
   const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
-  return { month, week: r6(month * share(plan.week_share, 0.4)), day: r6(month * share(plan.day_share, 0.15)) };
+  return { month, week: r6(month * share(plan.week_share, 0.6)), day: r6(month * share(plan.day_share, 0.35)) };
 }
 
 export type Window = 'day' | 'week' | 'month';
@@ -408,10 +408,13 @@ function overDailyCounts(a: Account): boolean {
  * Holds what a call could cost. Returns the hold's id, or the answer to send (a window used up, or
  * Keo's breaker).
  */
-async function hold(db: Supabase, a: Account, amount: number, kind: string): Promise<{ id: string; topup: boolean } | Response> {
+async function hold(db: Supabase, a: Account, amount: number, kind: string, continuing = false): Promise<{ id: string; topup: boolean } | Response> {
   if (overDailyCounts(a)) return pausedAnswer(a, 'day');
+  // A later step of a task already under way finishes within the month: today's and this week's
+  // shares only pace new work, they never stop a task half-done. The month stays a hard ceiling.
+  const caps = capsFor(a.plan);
   try {
-    return await db.reserve(a.user.id, amount, kind, a.windows, capsFor(a.plan));
+    return await db.reserve(a.user.id, amount, kind, a.windows, continuing ? { ...caps, day: 0, week: 0 } : caps);
   } catch (e) {
     const why = /allowance_(day|week|month)|keo_breaker/.exec((e as Error).message);
     if (why?.[0] === 'keo_breaker') return breakerAnswer();
@@ -717,7 +720,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     };
     // Before a paid call: hold what it could cost. After it: the real cost replaces the hold (zero
     // when the call failed, so a failure costs the user nothing).
-    const holdFor = (a: Account, usd: number, kind: string) => hold(db, a, usd, kind);
+    const holdFor = (a: Account, usd: number, kind: string, continuing = false) => hold(db, a, usd, kind, continuing);
     const done = (a: Account, h: { id: string }, u: Added) => deps.waitUntil(db.settle(h.id, a.user.id, a.day, u).catch((e) => console.error('settle failed', (e as Error).message)));
 
     // Web search: results (title, link, snippet) found by OpenRouter's web search.
@@ -945,7 +948,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       const stream = body.stream === true;
       let maxOut = Math.min(Number(body.max_tokens ?? body.max_completion_tokens ?? model.max_output_tokens) || model.max_output_tokens, model.max_output_tokens);
       const est = chatHold(model, body, maxOut);
-      const h = await holdFor(a, est.usd, 'chat');
+      const h = await holdFor(a, est.usd, 'chat', req.headers.get('x-keo-task') === 'continuing');
       if (h instanceof Response) return h;
       const upstreamBody = {
         ...withPromptCache(model.upstream, body),

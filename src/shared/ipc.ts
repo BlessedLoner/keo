@@ -29,6 +29,8 @@ export interface AiVideoStatus {
   via: 'own' | 'keo' | null;
   /** Studio credits left (through Keo Cloud), or null when unknown. */
   credits: { total: number; monthlyLeft: number; monthlyAllowance: number; bought: number; plan: string; ready: boolean } | null;
+  /** Why the credits could not be read just now (shown to the user). */
+  creditsError?: string | null;
 }
 import { Character, CharacterId, CharacterPatch } from './studioCharacters';
 import { AiVideoPlan, type AiShot } from './studioAiVideo';

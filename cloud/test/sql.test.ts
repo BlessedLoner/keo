@@ -60,7 +60,8 @@ describe('the migrations on a real Postgres', () => {
     expect(Number(by.pro!.monthly_cost_usd)).toBe(12);
     expect(Number(by.creator!.monthly_cost_usd)).toBe(12);
     expect(Number(by.max!.monthly_cost_usd)).toBe(28);
-    expect([Number(by.pro!.week_share), Number(by.pro!.day_share)]).toEqual([0.4, 0.15]);
+    // 011 raised the shares: 60% a week, 35% a day.
+    expect([Number(by.pro!.week_share), Number(by.pro!.day_share)]).toEqual([0.6, 0.35]);
     expect(by.free!.features.studio_credits).toBe(0);
     expect(by.pro!.features.studio_credits).toBe(200);
     expect(by.creator!.features.studio_credits).toBe(1500);

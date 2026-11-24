@@ -23,6 +23,14 @@ export class KeoCloudProvider extends OpenAICompatProvider {
     return m.map((x) => ({ id: x.id, label: x.label, capabilities: { tools: x.tools, vision: x.vision, streaming: true, contextTokens: x.contextTokens, maxOutputTokens: x.maxOutputTokens } }));
   }
 
+  /**
+   * A later step of a task already under way: Keo Cloud lets it finish within the month's allowance
+   * even when today's or this week's share runs out on the way (it never stops a task half-done for those).
+   */
+  protected override extraHeaders(req?: ChatRequest): Record<string, string> {
+    return req?.continuing ? { 'x-keo-task': 'continuing' } : {};
+  }
+
   override status(): ProviderStatus {
     if (!this.account.signedIn()) return { kind: 'unconfigured', reason: 'Sign in to your Keo account (Settings → Providers → Keo account).' };
     return super.status();
