@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 40 330 128" width="660" height="256">
+  <!-- "keo" with Keo's face as the "o" (Ink & White). Letters: Outfit Bold (SIL Open Font License), x-height 98. -->
+  <style>@font-face { font-family: 'Outfit'; src: url('../../src/renderer/public/fonts/outfit/outfit-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }</style>
+  <text x="0" y="160" font-family="Outfit, sans-serif" font-weight="700" font-size="200" letter-spacing="-9" fill="#121219">ke</text>
+  <g transform="translate(222 62)">
+    <rect width="98" height="98" rx="23.5" fill="#121219"/>
+    <rect x="30.4" y="35.6" width="13.4" height="22.2" rx="5.7" fill="#FFFFFF"/>
+    <rect x="54.2" y="35.6" width="13.4" height="22.2" rx="5.7" fill="#FFFFFF"/>
+  </g>
+</svg>

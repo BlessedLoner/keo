@@ -1,0 +1,146 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: 'Outfit'; src: url('../../src/renderer/public/fonts/outfit/outfit-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }
+@font-face { font-family: 'Manrope'; src: url('../../src/renderer/public/fonts/manrope/manrope-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }
+html, body { margin: 0; background: #F4F1EA; overflow: hidden; }
+canvas { display: block; }
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/*
+ * Keo's logo reveal (Ink & White), drawn frame by frame: draw(t) gives the same picture for the same
+ * time, so the video is exact. W×H come from the page address (?w=1920&h=1080).
+ */
+const q = new URLSearchParams(location.search);
+const W = +(q.get('w') || 1920), H = +(q.get('h') || 1080);
+const DURATION = 5.2;
+const c = document.getElementById('c');
+c.width = W; c.height = H;
+const x = c.getContext('2d');
+const INK = '#121219', PAPER = '#F4F1EA', WHITE = '#FFFFFF';
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const expo = (p) => (p >= 1 ? 1 : 1 - Math.pow(2, -10 * p));
+const inOut = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const back = (p) => { const s = 1.9; const y = p - 1; return 1 + (s + 1) * y * y * y + s * y * y; };
+const lerp = (a, b, p) => a + (b - a) * p;
+const U = Math.min(W, H) / 100;
+
+// Layout: the finished wordmark centred; the face starts in the middle of the frame.
+const FONT = 30 * U;               // letter size (x-height ≈ 0.49 of it)
+const XH = FONT * 0.49;
+let keWidth = FONT * 0.985;        // measured below once the font is in
+const GAP = FONT * 0.075;
+
+function roundRect(cx, cy, s, r) {
+  x.beginPath();
+  x.roundRect(cx - s / 2, cy - s / 2, s, s, r);
+}
+
+function face(cx, cy, size, eyeOpen, look, rot) {
+  x.save();
+  x.translate(cx, cy);
+  x.rotate(rot);
+  x.fillStyle = INK;
+  roundRect(0, 0, size, size * 0.242);
+  x.fill();
+  // Eyes: open = full height; a blink squashes them to a line. look moves them (fractions of the face).
+  const ew = size * 0.137, ehFull = size * 0.227;
+  const eh = Math.max(size * 0.02, ehFull * eyeOpen);
+  const ox = look * size * 0.06, oy = -Math.abs(look) * size * 0.025;
+  x.fillStyle = WHITE;
+  for (const ex of [-size * 0.121, size * 0.121]) {
+    x.beginPath();
+    x.roundRect(ex - ew / 2 + ox, -size * 0.023 - eh / 2 + oy, ew, eh, Math.min(ew, eh) * 0.42);
+    x.fill();
+  }
+  x.restore();
+}
+
+function draw(t) {
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.fillStyle = PAPER;
+  x.fillRect(0, 0, W, H);
+
+  // Where the finished wordmark sits (centred, slightly above the middle to leave room for the line).
+  const total = keWidth + GAP + XH;
+  const left = W / 2 - total / 2;
+  const base = H / 2 + XH * 0.42;               // baseline
+  const oX = left + keWidth + GAP + XH / 2;     // the face as the "o"
+  const oY = base - XH / 2;
+
+  // 1. The face pops in, big, in the middle (0 → 0.8 s).
+  const pop = back(seg(t, 0.05, 0.75));
+  // 3. It shrinks and slides to its place as the "o" (2.05 → 2.85 s).
+  const move = inOut(seg(t, 2.05, 2.85));
+  const bigSize = 34 * U;
+  const size = lerp(bigSize * pop, XH, move);
+  const cx = lerp(W / 2, oX, move), cy = lerp(H / 2, oY, move);
+  const rot = (1 - expo(seg(t, 0.05, 0.9))) * -0.22;
+
+  // 2. Eyes open (0.75 → 1.05), blink at 1.45 and 4.3, glance right at 1.75 → back at 2.0 (and as it moves).
+  let open = expo(seg(t, 0.72, 1.05));
+  const blink = (at) => { const p = seg(t, at, at + 0.2); return p > 0 && p < 1 ? 1 - Math.sin(p * Math.PI) * 0.95 : 1; };
+  open *= blink(1.45) * blink(4.3);
+  const look = Math.sin(seg(t, 1.7, 2.35) * Math.PI) * 1.0;
+
+  // 3b. "k" and "e" sweep in from the left, each rising out of a line (2.35 → 3.1 s).
+  if (t > 2.3) {
+    x.save();
+    x.font = `700 ${FONT}px Outfit`;
+    x.letterSpacing = `${-0.045 * FONT}px`;
+    x.textBaseline = 'alphabetic';
+    x.fillStyle = INK;
+    const letters = [['k', 0], ['e', 1]];
+    const kW = x.measureText('k').width + -0.045 * FONT;
+    for (const [ch, i] of letters) {
+      const p = expo(seg(t, 2.35 + i * 0.12, 3.0 + i * 0.12));
+      if (p <= 0) continue;
+      const lx = left + (i ? kW : 0);
+      x.save();
+      x.beginPath();
+      x.rect(lx - FONT * 0.1, base - FONT * 0.95, FONT * 0.8, FONT * 1.0); // the line it rises out of
+      x.clip();
+      x.globalAlpha = p;
+      x.fillText(ch, lx - (1 - p) * FONT * 0.05, base + (1 - p) * FONT * 0.55);
+      x.restore();
+    }
+    x.restore();
+  }
+
+  face(cx, cy, size, open, look * (1 - move * 0.6), rot);
+
+  // 4. The line: Know · Own · Execute (3.2 → 3.8 s), letters spaced wide, then settling.
+  const tag = expo(seg(t, 3.15, 3.9));
+  if (tag > 0) {
+    x.save();
+    x.globalAlpha = tag;
+    x.fillStyle = INK;
+    const ts = 3.1 * U;
+    x.font = `600 ${ts}px Manrope`;
+    x.letterSpacing = `${lerp(0.6, 0.32, tag) * ts}px`;
+    x.textAlign = 'center';
+    x.fillText('KNOW  ·  OWN  ·  EXECUTE', W / 2 + lerp(0.6, 0.32, tag) * ts / 2, base + FONT * 0.42 + (1 - tag) * 1.5 * U);
+    x.restore();
+  }
+
+  // A soft fade out at the very end (loops cleanly when used as a splash).
+  const out = seg(t, DURATION - 0.35, DURATION);
+  if (out > 0) { x.fillStyle = `rgba(244,241,234,${out})`; x.fillRect(0, 0, W, H); }
+}
+
+window.KEO = { W, H, DURATION, draw };
+document.fonts.load(`700 ${FONT}px Outfit`).then(() => document.fonts.load(`600 20px Manrope`)).then(() => {
+  x.font = `700 ${FONT}px Outfit`;
+  x.letterSpacing = `${-0.045 * FONT}px`;
+  keWidth = x.measureText('ke').width;
+  window.READY = true;
+  if (!q.get('record')) {
+    const t0 = performance.now();
+    (function loop(now) { draw(((now - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(t0);
+  }
+});
+</script>
+</body></html>

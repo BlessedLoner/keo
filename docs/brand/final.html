@@ -1,0 +1,105 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: 'Outfit'; src: url('../../src/renderer/public/fonts/outfit/outfit-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }
+@font-face { font-family: 'Manrope'; src: url('../../src/renderer/public/fonts/manrope/manrope-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }
+* { box-sizing: border-box; }
+body { margin: 0; width: 1600px; overflow: hidden; background: #F4F1EA; font-family: 'Manrope', sans-serif; color: #15151B; }
+.row { display: flex; gap: 0; border-bottom: 1px solid #ddd6c8; }
+.cell { flex: 1; padding: 44px 48px; position: relative; }
+.cell.dark { background: #0E0E13; color: #F4F1EA; }
+.label { font: 700 13px 'Manrope'; letter-spacing: .14em; text-transform: uppercase; opacity: .55; margin-bottom: 26px; }
+.big { display: flex; align-items: center; gap: 40px; }
+.word { display: inline-flex; align-items: baseline; font: 700 150px/1 'Outfit'; letter-spacing: -0.045em; }
+.word .o { display: inline-block; width: .5em; height: .5em; border-radius: .12em; position: relative; margin-left: .035em; }
+.word .o i { position: absolute; top: var(--ey, 36%); width: 13.7%; height: 22.7%; border-radius: 99px; }
+.word .o i:first-child { left: var(--ex1, 31%); } .word .o i:last-child { left: var(--ex2, 55.3%); }
+.sizes { display: flex; align-items: flex-end; gap: 34px; }
+.sizes div { text-align: center; font: 600 12px 'Manrope'; color: inherit; }
+.sizes img { display: block; margin: 0 auto 8px; }
+.phone { width: 300px; height: 560px; border-radius: 44px; background: linear-gradient(160deg,#3b2f6b,#c2557a 60%,#f0a35e); padding: 70px 26px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px 14px; align-content: start; box-shadow: 0 30px 60px rgba(0,0,0,.25); }
+.app { text-align: center; color: #fff; font: 600 10px 'Manrope'; }
+.app span { display: block; width: 52px; height: 52px; border-radius: 14px; margin: 0 auto 6px; }
+.taskbar { height: 56px; background: rgba(28,28,34,.92); border-radius: 12px; display: flex; align-items: center; gap: 18px; padding: 0 22px; }
+.taskbar span { width: 28px; height: 28px; border-radius: 7px; background: #3a3a46; }
+h1 { font: 800 38px 'Outfit'; letter-spacing: -0.02em; margin: 0 0 6px; }
+p { margin: 0; font-size: 16px; opacity: .7; max-width: 900px; line-height: 1.5; }
+.swatch { display: inline-flex; align-items: center; gap: 10px; margin-right: 26px; font: 600 14px 'Manrope'; }
+.swatch b { width: 26px; height: 26px; border-radius: 7px; display: inline-block; }
+</style></head>
+<body>
+<div class="row"><div class="cell">
+  <h1>Keo — the logo (Ink &amp; White)</h1>
+  <p>One bold shape: Keo's face, the two eyes it already has. The icon and the wordmark are the same thing — the face is the "o" of keo — so seeing either one says Keo. It reads at 16 px, in one colour, on light and dark.</p>
+</div></div>
+
+<!-- Three colour options -->
+<div class="row" id="options" style="flex-wrap:wrap"></div>
+<div class="row"><div class="cell"><div class="label">Wordmark file (keo-wordmark.svg)</div><img src="keo-wordmark.svg" style="height:120px"> <span style="display:inline-block;width:60px"></span> <img src="keo-icon.svg" style="height:120px"></div></div>
+
+<div class="row">
+  <div class="cell">
+    <div class="label">App icon at every size (recommended colours)</div>
+    <div class="sizes" id="sizes"></div>
+  </div>
+  <div class="cell dark">
+    <div class="label">On dark</div>
+    <div class="sizes" id="sizesDark"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="cell" style="display:flex;gap:60px;align-items:center">
+    <div>
+      <div class="label">On a phone</div>
+      <div class="phone" id="phone"></div>
+    </div>
+    <div style="flex:1">
+      <div class="label">On a desktop taskbar</div>
+      <div class="taskbar" id="taskbar"></div>
+      <div style="height:40px"></div>
+      <div class="label">Wordmark, small</div>
+      <div id="smallWords"></div>
+      <div style="height:30px"></div>
+      <div class="label">Single colour (stamps, engraving, one-colour print)</div>
+      <div id="mono" style="display:flex;gap:30px;align-items:center"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const OPTIONS = [
+  { name: 'Keo — Ink & White', face: '#121219', eye: '#FFFFFF', word: '#121219', glow: false, note: 'The chosen logo: Keo’s face, ink black with white eyes. The same face is the "o" of the wordmark.' },
+];
+const icon = (o, size, rounded = 0.242) => {
+  const r = Math.round(size * rounded);
+  const ew = size * 0.137, eh = size * 0.227, ex1 = size * (o.glance ? 0.365 : 0.31), ex2 = size * (o.glance ? 0.608 : 0.553), ey = size * (o.glance ? 0.318 : 0.363);
+  const glow = o.glow && size >= 40 ? `<filter id="g${size}${o.eye.slice(1)}" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="${size * 0.018}" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` : '';
+  const f = glow ? `filter="url(#g${size}${o.eye.slice(1)})"` : '';
+  // Tiny sizes: eyes become plain bars (crisp at 16 px).
+  const er = size < 40 ? ew * 0.3 : ew * 0.42;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><defs>${glow}</defs><rect width="${size}" height="${size}" rx="${r}" fill="${o.face}"/><g fill="${o.eye}" ${f}><rect x="${ex1}" y="${ey}" width="${ew}" height="${eh}" rx="${er}"/><rect x="${ex2}" y="${ey}" width="${ew}" height="${eh}" rx="${er}"/></g></svg>`;
+};
+const img = (svg) => `<img src="data:image/svg+xml;utf8,${encodeURIComponent(svg)}">`;
+const word = (o, px, color) => `<span class="word" style="font-size:${px}px;color:${color}">ke<span class="o" style="${o.glance ? '--ex1:36.5%;--ex2:60.8%;--ey:31.8%;' : ''}background:${o.face === '#121219' && color !== '#121219' ? color : o.face}"><i style="background:${o.eye}${o.glow ? `;box-shadow:0 0 ${px * 0.06}px ${o.eye}` : ''}"></i><i style="background:${o.eye}${o.glow ? `;box-shadow:0 0 ${px * 0.06}px ${o.eye}` : ''}"></i></span></span>`;
+
+document.getElementById('options').innerHTML = OPTIONS.map((o) => `
+  <div class="cell" style="flex:1 1 50%;max-width:50%">
+    <div class="label">${o.name}</div>
+    <div class="big">${img(icon(o, 190))}</div>
+    <div style="height:28px"></div>
+    ${word(o, 110, o.word)}
+    <p style="margin-top:22px;font-size:14px">${o.note}</p>
+  </div>`).join('');
+
+const A = OPTIONS[0];
+document.getElementById('sizes').innerHTML = [256, 128, 64, 48, 32, 24, 16].map((s) => `<div>${img(icon(A, s))}${s}px</div>`).join('');
+document.getElementById('sizesDark').innerHTML = [256, 128, 64, 32, 16].map((s) => `<div>${img(icon({ ...A, face: '#24242E' }, s))}${s}px</div>`).join('');
+const apps = ['#4CAF50', '#2196F3', '#FF5722', '#9C27B0', 'KEO', '#00BCD4', '#FFC107', '#795548', '#E91E63', '#3F51B5', '#8BC34A', '#607D8B'];
+document.getElementById('phone').innerHTML = apps.map((c) => c === 'KEO' ? `<div class="app">${icon(A, 52, 0.27)}<br>Keo</div>` : `<div class="app"><span style="background:${c}"></span>App</div>`).join('');
+document.getElementById('taskbar').innerHTML = `<span></span><span></span>${icon(A, 28, 0.25)}<span></span><span></span><span></span>`;
+document.getElementById('smallWords').innerHTML = `${word(A, 44, '#121219')}<span style="display:inline-block;width:40px"></span>${word(A, 24, '#121219')}<span style="display:inline-block;width:40px"></span><span style="background:#121219;padding:10px 18px;border-radius:12px;display:inline-block">${word({ ...A, face: '#F4F1EA' }, 30, '#F4F1EA')}</span>`;
+document.getElementById('mono').innerHTML = [icon({ face: '#121219', eye: '#F4F1EA' }, 90), icon({ face: '#F4F1EA', eye: '#121219' }, 90).replace('<rect width', '<rect stroke="#121219" stroke-width="6" width')].map(img).join('') + word({ face: '#121219', eye: '#F4F1EA' }, 70, '#121219');
+document.fonts.ready.then(() => (window.READY = true));
+</script>
+</body></html>

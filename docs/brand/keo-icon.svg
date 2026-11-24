@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Keo's face (Ink & White): a bold rounded square with two eyes. One shape, readable from 16 px up. -->
+  <rect width="1024" height="1024" rx="248" fill="#121219"/>
+  <g fill="#FFFFFF">
+    <rect x="317" y="372" width="140" height="232" rx="59"/>
+    <rect x="566" y="372" width="140" height="232" rx="59"/>
+  </g>
+</svg>
