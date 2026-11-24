@@ -215,7 +215,7 @@ export const invokeSchemas = {
   'account:signOut': empty,
   'account:resetPassword': z.object({ email: z.string().trim().email().max(254) }).strict(),
   'account:refresh': empty,
-  'account:upgrade': empty,
+  'account:upgrade': z.object({ go: z.enum(['topup']).optional() }).strict(),
   'account:useLocal': empty,
   'studio:list': empty,
   'studio:create': z.object({ name: z.string().trim().min(1).max(120), format: z.enum(['vertical', 'landscape', 'square', 'portrait']).default('vertical') }).strict(),

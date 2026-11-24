@@ -104,6 +104,19 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
 
   if (!a) return <div className="muted small">Loading…</div>;
 
+  const buyTopup = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke('account:upgrade', { go: 'topup' });
+      if (!r.opened) setNote({ ok: false, text: 'Keo could not open your browser.' });
+    } catch (e) {
+      setNote({ ok: false, text: errText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const upgrade = async () => {
     setBusy(true);
     setNote(null);
@@ -156,10 +169,15 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
                 {strongLeft.now < strongLeft.month ? ` (${strongLeft.now.toLocaleString()} today)` : ''}. Keo Best uses it about twice as fast.
               </div>
             )}
+            {u.topup && (
+              <div className="small muted">
+                <strong>AI top-up:</strong> about {(u.topup.buildsLeft['keo-strong'] ?? 0).toLocaleString()} builds on Keo Strong or {u.topup.tasksLeft.toLocaleString()} tasks on Keo Fast left. It is used only after your plan’s allowance and never expires.
+              </div>
+            )}
             {full && (
               <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>
                 {full.window === 'month' ? 'This month’s AI allowance is used up.' : full.window === 'week' ? 'This week’s share of your AI allowance is used up.' : 'Today’s share of your AI allowance is used up.'} Keo pauses tasks and keeps their work; they can carry on when it {full.window === 'month' ? 'renews' : 'resets'}
-                {full.resetsAt ? ` (${resetWords(full.resetsAt)})` : ''}.{plan.id !== 'max' ? ' Upgrading gives you more now.' : ''}
+                {full.resetsAt ? ` (${resetWords(full.resetsAt)})` : ''}.{u.topup ? ' Your AI top-up is being used now.' : ' An AI top-up lets you carry on now.'}
               </div>
             )}
             <div className="small muted">{extras(plan.features, u)}</div>
@@ -173,6 +191,11 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
           <button className={`btn sm ${plan?.id === 'free' ? 'primary' : ''}`} onClick={() => void upgrade()} disabled={busy} title="Opens Keo’s plans page in your browser">
             {plan?.id === 'free' || !plan ? 'Upgrade' : 'Manage plan'}
           </button>
+          {plan && (
+            <button className={`btn sm ${full && !u?.topup ? 'primary' : ''}`} onClick={() => void buyTopup()} disabled={busy} title="Opens Keo’s plans page at AI top-ups">
+              Buy AI top-up
+            </button>
+          )}
           {activeProvider !== 'keo' && onUseKeo && (
             <button className="btn primary sm" onClick={onUseKeo}>
               Use Keo’s AI

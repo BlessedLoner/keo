@@ -37,6 +37,22 @@ class World {
   disabled: string[] = [];
   packs = [{ id: 'medium', credits: 1500, currency: 'USD', amount: 1600 }];
   credits = new Map<string, number>();
+  topupPacks = [
+    { id: 'small', currency: 'USD', amount: 500, value_usd: 2.5 },
+    { id: 'medium', currency: 'USD', amount: 1000, value_usd: 5.5 },
+    { id: 'large', currency: 'USD', amount: 2000, value_usd: 12 },
+    { id: 'small', currency: 'NGN', amount: 700000, value_usd: 2.5 },
+  ];
+  topups = new Map<string, number>();
+  settings = [
+    { key: 'ngn_per_usd', value: 1380 },
+    { key: 'topup_custom_share', value: 0.5 },
+    { key: 'topup_min_usd', value: 5 },
+    { key: 'topup_max_usd', value: 100 },
+    { key: 'topup_min_ngn', value: 7000 },
+    { key: 'topup_max_ngn', value: 140000 },
+    { key: 'topup_month_cap_usd', value: 100 },
+  ];
 
   fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(input);
@@ -69,6 +85,12 @@ class World {
           { id: 'keo-best', tier: 3, price_in_per_m: 4, price_out_per_m: 20 },
         ]);
       if (table === 'credit_packs') return j(200, this.packs.filter((k) => (!q.has('id') || k.id === eq('id')) && (!q.has('currency') || k.currency === eq('currency'))));
+      if (table === 'topup_packs') return j(200, this.topupPacks.filter((k) => (!q.has('id') || k.id === eq('id')) && (!q.has('currency') || k.currency === eq('currency'))));
+      if (table === 'keo_settings') return j(200, this.settings);
+      if (table === 'rpc/add_topup') {
+        this.topups.set(String(body!.p_user), Math.round(((this.topups.get(String(body!.p_user)) ?? 0) + Number(body!.p_usd)) * 1e4) / 1e4);
+        return j(200, this.topups.get(String(body!.p_user)));
+      }
       if (table === 'rpc/add_credits') {
         this.credits.set(String(body!.p_user), (this.credits.get(String(body!.p_user)) ?? 0) + Number(body!.p_amount));
         return new Response(null, { status: 204 });
@@ -84,6 +106,7 @@ class World {
         return j(200, this.paystackPlans.filter((p) => p.plan === eq('plan') && p.currency === eq('currency') && String(p.amount) === eq('amount') && String(p.live) === eq('live')));
       }
       if (table === 'payments') {
+        if ((init.method ?? 'GET') === 'GET') return j(200, this.payments.filter((p) => p.user_id === eq('user_id') && (!q.has('topup_usd') || p.topup_usd != null) && String(p.created_at ?? p.paid_at ?? '') >= String(q.get('created_at') ?? '').replace('gte.', '')));
         if (this.payments.some((p) => p.reference === body!.reference)) return j(201, []);
         this.payments.push(body!);
         return j(201, [body]);
@@ -321,5 +344,62 @@ describe('Keo Cloud payments', () => {
     const req = new Request('https://keo-cloud.example.workers.dev/v1/billing/checkout', { method: 'POST', headers: { authorization: 'Bearer tok-ana' }, body: '{"plan":"pro","currency":"USD"}' });
     expect((await handle(req, off, { fetch: w.fetch, waitUntil: () => undefined, now: () => NOW })).status).toBe(503);
     expect(w.paystack).toHaveLength(0);
+  });
+
+  it('AI top-ups: packs and a typed amount from $5, priced on the server, added once, within $100 in 30 days', async () => {
+    const ticket = ((await (await w.call('/v1/billing/ticket', { token: 'tok-ana', body: {} })).json()) as { ticket: string }).ticket;
+    const buy = (b: Record<string, unknown>) => w.call('/v1/billing/topup', { token: ticket, body: b });
+    // A pack: the checkout is for its own price, whatever the app says.
+    expect((await buy({ pack: 'medium', currency: 'USD', amount: 1 })).status).toBe(200);
+    expect(w.paystack.at(-1)!.body).toMatchObject({ amount: 1000, currency: 'USD', metadata: { user_id: 'u-ana', topup: 'medium' } });
+    // Typed amounts: from $5 to $100, or ₦7,000 to ₦140,000.
+    const low = await buy({ amount: 499, currency: 'USD' });
+    expect(low.status).toBe(400);
+    expect(((await low.json()) as { error: { message: string } }).error.message).toBe('Choose an amount from $5 to $100.');
+    expect((await buy({ amount: 500, currency: 'USD' })).status).toBe(200);
+    expect(w.paystack.at(-1)!.body).toMatchObject({ amount: 500, metadata: { topup: 'custom' } });
+    expect((await buy({ amount: 10001, currency: 'USD' })).status).toBe(400);
+    const naira = await buy({ amount: 699900, currency: 'NGN' });
+    expect(((await naira.json()) as { error: { message: string } }).error.message).toBe('Choose an amount from ₦7,000 to ₦140,000.');
+    expect((await buy({ amount: 700000, currency: 'NGN' })).status).toBe(200);
+
+    // Paid: the allowance is added once per payment, worked out from what was paid.
+    const paid = (reference: string, amount: number, currency: string, topup: string) =>
+      w.webhook({ event: 'charge.success', data: { reference, status: 'success', amount, currency, paid_at: '2026-10-27T12:00:00.000Z', metadata: { user_id: 'u-ana', topup } } });
+    await paid('t1', 1000, 'USD', 'medium');
+    await paid('t1', 1000, 'USD', 'medium');
+    expect(w.topups.get('u-ana')).toBe(5.5);
+    // A typed $5 adds half of it; ₦7,000 adds half of its dollars.
+    await paid('t2', 500, 'USD', 'custom');
+    expect(w.topups.get('u-ana')).toBe(8);
+    await paid('t3', 700000, 'NGN', 'custom');
+    expect(w.topups.get('u-ana')).toBeCloseTo(8 + 2.5362, 4);
+    // The wrong amount for a pack, or a typed amount out of range: nothing is added.
+    await paid('t4', 900, 'USD', 'medium');
+    await paid('t5', 300, 'USD', 'custom');
+    expect(w.topups.get('u-ana')).toBeCloseTo(10.5362, 4);
+    // A top-up never changes the plan or the Studio credits.
+    expect(ana().plan).toBe('free');
+    expect(w.credits.get('u-ana')).toBeUndefined();
+
+    // At most $100 in 30 days: about $25.07 is paid so far, so $80 more is too much and $70 is fine.
+    for (const x of w.payments) x.created_at = '2026-10-26T00:00:00.000Z';
+    const over = await buy({ amount: 8000, currency: 'USD' });
+    expect(over.status).toBe(400);
+    expect(((await over.json()) as { error: { code: string } }).error.code).toBe('topup_cap');
+    expect((await buy({ amount: 7000, currency: 'USD' })).status).toBe(200);
+  });
+
+  it('the Upgrade page is told the top-up packs and the typed-amount limits, as builds and tasks', async () => {
+    const r = (await (await w.call('/v1/billing/prices', { country: 'NG' })).json()) as { topups: { packs: Array<{ id: string; prices: Record<string, number>; worth: { strongBuilds: number; fastTasks: number } }>; custom: { min: Record<string, number>; max: Record<string, number> }; monthCapUsd: number } };
+    expect(r.topups.packs.map((k) => k.id)).toEqual(['small', 'medium', 'large']);
+    expect(r.topups.packs[0]!.prices).toEqual({ USD: 500, NGN: 700000 });
+    // $2.50 of AI ≈ 5 builds on Keo Strong; $12 ≈ 25.
+    expect(r.topups.packs[0]!.worth.strongBuilds).toBe(5);
+    expect(r.topups.packs[2]!.worth.strongBuilds).toBe(25);
+    expect(r.topups.custom.min).toEqual({ USD: 500, NGN: 700000 });
+    expect(r.topups.custom.max).toEqual({ USD: 10000, NGN: 14000000 });
+    expect(r.topups.monthCapUsd).toBe(100);
+    expect(JSON.stringify(r.topups)).not.toContain('value_usd');
   });
 });

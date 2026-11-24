@@ -43,6 +43,7 @@ describe('a used-up AI allowance pauses the task (never a failure, never a silen
     expect(m.meta.ending?.why).toContain('Paused');
     expect(m.content).toContain('Keo paused here and kept your work');
     expect(m.content).toContain('Say “continue”');
+    expect(m.content).toContain('Buy AI top-up');
     // The step that ran is kept, and the same model was used throughout (no quiet switch).
     expect(m.meta.tools?.length).toBe(1);
     expect(new Set(models).size).toBe(1);

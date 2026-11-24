@@ -186,7 +186,8 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
         stat(usd(f.total.aiUsd), 'AI cost (OpenRouter)'), stat(usd(f.total.falUsd), 'Studio cost (fal.ai, about)'),
         stat(usd(f.total.marginUsd), 'Gross margin', tone(f.total.marginPct)), stat(pct(f.total.marginPct), 'Gross margin %', tone(f.total.marginPct)),
         stat(usd(f.liabilities.falCostUsd), 'Owed in Studio credits (fal.ai cost)'), stat(f.liabilities.boughtCredits.toLocaleString(), 'Bought and gift credits not used'),
-        stat(f.liabilities.monthlyCreditsLeft.toLocaleString(), 'Monthly credits left this month')),
+        stat(f.liabilities.monthlyCreditsLeft.toLocaleString(), 'Monthly credits left this month'),
+        stat(usd(f.liabilities.topupUsd), 'Owed in unused AI top-ups (AI cost)')),
       el('div', { class: 'card' }, el('h2', {}, 'By plan'), el('table', {},
         el('tr', {}, ['Plan', 'Users', 'Payments', 'Revenue', 'Fees', 'AI cost', 'Studio cost', 'Margin', 'Margin %'].map((h) => el('th', {}, h))),
         f.byPlan.map((r) => el('tr', {}, el('td', {}, r.plan), el('td', {}, r.users), el('td', {}, r.payers), el('td', {}, usd(r.revenueUsd)), el('td', {}, usd(r.feesUsd)),
@@ -225,6 +226,8 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
     const note = (msg) => { const n = el('p', { class: 'ok' }, msg); setTimeout(() => n.remove(), 4000); return n; };
     const credits = el('input', { type: 'number', min: 1, max: 100000, placeholder: 'Credits', style: 'width:110px' });
     const creditNote = el('input', { placeholder: 'Why (for the log)', style: 'flex:1;min-width:160px' });
+    const topupBuilds = el('input', { type: 'number', min: 1, max: 1000, placeholder: 'Builds', style: 'width:110px' });
+    const topupNote = el('input', { placeholder: 'Why (for the log)', style: 'flex:1;min-width:160px' });
     const planSel = el('select', {}, ['free', 'pro', 'creator', 'max'].map((x) => el('option', { value: x, selected: x === p.plan }, x)));
     const until = el('input', { type: 'date', value: p.plan_until ? p.plan_until.slice(0, 10) : '' });
     const actions = el('div', {});
@@ -236,6 +239,7 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
         el('p', { class: 'muted' }, 'Signed up ' + when(p.created_at) + ' · plan ' + p.plan + (p.plan_until ? ' until ' + when(p.plan_until) : '') + (p.blocked ? ' · BLOCKED' : '')),
         el('p', {}, 'Studio credits: ' + d.credits.usedThisMonth + ' used this month · ' + d.credits.bought + ' bought (left over)'),
         el('div', { class: 'row' }, credits, creditNote, el('button', { class: 'btn', onclick: () => act(() => post('users/' + id + '/credits', { amount: Number(credits.value), note: creditNote.value }), 'Credits given.') }, 'Give credits')),
+        el('div', { class: 'row', style: 'margin-top:10px' }, topupBuilds, topupNote, el('button', { class: 'btn', title: 'Extra AI allowance, measured in builds on Keo Strong; used after the plan’s allowance', onclick: () => act(() => post('users/' + id + '/topup', { builds: Number(topupBuilds.value), note: topupNote.value }), 'AI top-up given.') }, 'Give AI top-up')),
         el('div', { class: 'row', style: 'margin-top:10px' }, el('span', {}, 'Plan'), planSel, el('span', {}, 'until'), until,
           el('button', { class: 'btn ghost', onclick: () => act(() => post('users/' + id + '/plan', { plan: planSel.value, until: until.value ? until.value + 'T23:59:59Z' : null }), 'Plan changed.') }, 'Set plan')),
         el('div', { class: 'row', style: 'margin-top:10px' },

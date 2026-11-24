@@ -1104,7 +1104,7 @@ export class AgentService {
         // the task carries on when the allowance resets (or now, on another model the user picks).
         finalStatus = 'complete';
         meta.paused = { window: pe.paused.window, until: pe.paused.until };
-        const n = `${text ? '\n\n' : ''}_⏸ ${pe.message} Say “continue” then, or pick another model in Settings → Providers to carry on now._`;
+        const n = `${text ? '\n\n' : ''}_⏸ ${pe.message} Say “continue” when it resets, or buy an AI top-up (Settings → Providers → Keo account → Buy AI top-up) and say “continue” now._`;
         text += n;
         this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: n });
         cut = 'the rest (paused: the AI allowance is used up for now)';

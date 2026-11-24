@@ -875,10 +875,10 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       host.useLocal?.();
       return { ok: true as const };
     },
-    'account:upgrade': async () => {
+    'account:upgrade': async ({ go }) => {
       let url: string;
       try {
-        url = await s.account.upgradeUrl(abortAfter(20000));
+        url = await s.account.upgradeUrl(abortAfter(20000), go);
       } catch (e) {
         throw new KeoError('account', (e as Error).message);
       }

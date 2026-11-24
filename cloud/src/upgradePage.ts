@@ -15,7 +15,7 @@ export function upgradePage(): Response {
   :root { color-scheme: dark; --bg: #050505; --card: #0f0f0f; --line: #262626; --line2: #3a3a3a; --text: #f4f4f4; --muted: #9b9b9b; --ok: #7ee2a8; --bad: #ff8a8a; --warn: #ffcf70; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 "Segoe UI", system-ui, sans-serif; }
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 16px 48px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 16px 48px; }
   header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: 0.14em; }
   .eyes { width: 34px; height: 34px; border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; gap: 5px; }
@@ -29,6 +29,7 @@ export function upgradePage(): Response {
   .who { margin: 0 0 22px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); }
   .who strong { color: var(--text); }
   .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  #plans { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   .plan { position: relative; display: flex; flex-direction: column; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
   .plan.best { border-color: #fff; }
   .tag { position: absolute; top: -11px; left: 18px; padding: 2px 10px; border-radius: 999px; background: #fff; color: #000; font-size: 12px; font-weight: 700; }
@@ -46,6 +47,9 @@ export function upgradePage(): Response {
   .btn:disabled { opacity: 0.55; cursor: default; }
   .manage { margin-top: 22px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .manage .btn { width: auto; padding: 9px 14px; }
+  .custom { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .custom input { flex: 1; min-width: 140px; padding: 12px; border-radius: 10px; border: 1px solid var(--line2); background: transparent; color: var(--text); font: inherit; }
+  .custom .btn { width: auto; padding: 12px 18px; }
   .note { margin: 18px 0 0; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); }
   .note.ok { border-color: #2f6b4b; color: var(--ok); } .note.bad { border-color: #6b2f2f; color: var(--bad); } .note.warn { border-color: #6b5a2f; color: var(--warn); }
   .fine { margin-top: 26px; color: var(--muted); font-size: 13px; }
@@ -69,6 +73,16 @@ export function upgradePage(): Response {
     <span class="grow" id="manage-text"></span>
     <button class="btn" id="card">Update card</button>
     <button class="btn" id="cancel">Cancel renewal</button>
+  </div>
+  <div id="topup-wrap" hidden>
+    <h1 style="margin-top:36px" id="topup">AI top-up</h1>
+    <p class="lead">Used your AI allowance and want to keep going? Add more without changing plan. A top-up is used only after your plan’s allowance (today’s, this week’s or this month’s share), works with the models your plan includes, and never expires. It is separate from Studio credits.</p>
+    <div class="plans" id="topups"></div>
+    <section class="plan" style="margin-top:14px">
+      <h2>Your own amount</h2>
+      <div class="sub" id="custom-sub"></div>
+      <div class="custom"><input id="custom-amount" type="number" inputmode="decimal" aria-label="Top-up amount"><button class="btn primary" id="custom-buy">Top up</button></div>
+    </section>
   </div>
   <div id="packs-wrap" hidden>
     <h1 style="margin-top:36px">Studio credits</h1>
@@ -153,6 +167,49 @@ export function upgradePage(): Response {
       }
       el.appendChild(b); box.appendChild(el);
     });
+    // AI top-ups: three packs and an amount the user types.
+    var T = P.topups;
+    $('topup-wrap').hidden = !(T && T.packs && T.packs.length);
+    var worth = function (w) { return 'About ' + w.strongBuilds + ' builds on Keo Strong, or ' + w.fastTasks.toLocaleString() + ' tasks on Keo Fast'; };
+    var tbox = $('topups'); tbox.innerHTML = '';
+    ((T && T.packs) || []).forEach(function (k) {
+      var el = document.createElement('section'); el.className = 'plan';
+      el.innerHTML = '<h2></h2><div class="price"></div><div class="sub"></div>';
+      el.querySelector('h2').textContent = k.id.charAt(0).toUpperCase() + k.id.slice(1);
+      var amount = k.prices[state.currency];
+      el.querySelector('.price').textContent = amount ? money(amount, state.currency) : '—';
+      el.querySelector('.sub').textContent = worth(k.worth);
+      var b = document.createElement('button'); b.className = 'btn'; b.style.marginTop = '16px';
+      if (!amount) { b.textContent = 'Not available in ' + state.currency; b.disabled = true; }
+      else if (!ticket) { b.textContent = 'Top up from the Keo app'; b.disabled = true; }
+      else if (!P.payments) { b.textContent = 'Coming soon'; b.disabled = true; }
+      else { b.textContent = 'Top up ' + money(amount, state.currency); b.className = 'btn primary'; b.onclick = function () { topup({ pack: k.id }); }; }
+      el.appendChild(b); tbox.appendChild(el);
+    });
+    if (T && T.custom) {
+      var min = T.custom.min[state.currency], max = T.custom.max[state.currency];
+      var input = $('custom-amount');
+      input.min = min ? String(min / 100) : ''; input.max = max ? String(max / 100) : ''; input.step = state.currency === 'NGN' ? '500' : '1';
+      input.placeholder = min ? 'From ' + money(min, state.currency) + ' to ' + money(max, state.currency) : 'Not available';
+      var perUnit = function (minor) { var usd = state.currency === 'NGN' ? minor / 100 / T.custom.ngnPerUsd : minor / 100; return usd * T.custom.share; };
+      var say = function () {
+        var v = Math.round(Number(input.value) * 100);
+        $('custom-sub').textContent = v && min && v >= min && v <= max
+          ? 'About ' + Math.floor(perUnit(v) * T.custom.worthPerUsd.strongBuilds) + ' builds on Keo Strong, or ' + Math.floor(perUnit(v) * T.custom.worthPerUsd.fastTasks).toLocaleString() + ' tasks on Keo Fast'
+          : min ? 'Type any amount from ' + money(min, state.currency) + ' to ' + money(max, state.currency) + '. It adds AI at the Small pack’s rate.' : 'Not available in ' + state.currency + '.';
+      };
+      input.oninput = say; say();
+      var cb = $('custom-buy');
+      cb.disabled = !min || !ticket || !P.payments;
+      cb.textContent = !ticket ? 'Top up from the Keo app' : !P.payments ? 'Coming soon' : 'Top up';
+      cb.onclick = function () {
+        var v = Math.round(Number(input.value) * 100);
+        if (!(v >= min && v <= max)) { note('Choose an amount from ' + money(min, state.currency) + ' to ' + money(max, state.currency) + '.', 'bad'); return; }
+        topup({ amount: v });
+      };
+    }
+    // Opened from Keo's "Buy an AI top-up": go straight to it (once).
+    if (hash.get('go') === 'topup' && !state.wentToTopup && !$('topup-wrap').hidden) { state.wentToTopup = true; setTimeout(function () { $('topup').scrollIntoView({ behavior: 'smooth' }); }, 60); }
     // Studio credit packs: one payment each, the credits never expire.
     var packs = $('packs'); packs.innerHTML = '';
     $('packs-wrap').hidden = !(P.packs && P.packs.length);
@@ -238,6 +295,15 @@ export function upgradePage(): Response {
     if (state.busy) return;
     state.busy = true; note('Opening secure checkout…', '');
     api('POST', '/v1/billing/credits', { pack: k.id, currency: state.currency })
+      .then(function (c) { note('', ''); return popup(c); })
+      .catch(function (e) { note(e.message, 'bad'); })
+      .then(function () { state.busy = false; });
+  }
+
+  function topup(what) {
+    if (state.busy) return;
+    state.busy = true; note('Opening secure checkout…', '');
+    api('POST', '/v1/billing/topup', Object.assign({ currency: state.currency }, what))
       .then(function (c) { note('', ''); return popup(c); })
       .catch(function (e) { note(e.message, 'bad'); })
       .then(function () { state.busy = false; });

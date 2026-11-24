@@ -6,7 +6,7 @@ const env: Env = { SUPABASE_URL: 'https://db.test', SUPABASE_ANON_KEY: 'anon', S
 const NOW = Date.parse('2026-10-26T12:00:00Z');
 const DAY = today(NOW);
 
-type Hold = { user: string; amount: number; kind: string; status: 'open' | 'expired'; created: number };
+type Hold = { user: string; amount: number; kind: string; status: 'open' | 'expired'; created: number; source?: 'plan' | 'topup' };
 
 /**
  * Supabase and OpenRouter in memory. The database functions of 010_billing_v2.sql (reserve_ai,
@@ -34,6 +34,8 @@ class World {
   ];
   usage = new Map<string, Record<string, number>>();
   holds = new Map<string, Hold>();
+  /** AI top-up left per user (US$ of AI cost). */
+  topups = new Map<string, number>();
   spend = new Map<string, number>();
   alerts: Array<{ day: string; kind: string; message: string }> = [];
   settings: Record<string, number> = { breaker_openrouter_day_usd: 60, alert_share: 0.8, hold_minutes: 20 };
@@ -58,6 +60,7 @@ class World {
       input_tokens: plus('input_tokens', b.p_in),
       output_tokens: plus('output_tokens', b.p_out),
       cost_usd: Math.round(plus('cost_usd', b.p_cost) * 1e6) / 1e6,
+      topup_cost_usd: Math.round(plus('topup_cost_usd', b.p_topup_cost) * 1e6) / 1e6,
       web_searches: plus('web_searches', b.p_searches),
       images: plus('images', b.p_images),
       voice_seconds: plus('voice_seconds', b.p_voice_seconds),
@@ -79,8 +82,12 @@ class World {
     }
     return t;
   }
-  openHeld(user?: string) {
-    return [...this.holds.values()].filter((h) => h.status === 'open' && (!user || h.user === user)).reduce((t, h) => t + h.amount, 0);
+  openHeld(user?: string, source?: 'plan' | 'topup') {
+    return [...this.holds.values()].filter((h) => h.status === 'open' && (!user || h.user === user) && (!source || (h.source ?? 'plan') === source)).reduce((t, h) => t + h.amount, 0);
+  }
+  spendTopup(user: string, day: string, usd: number) {
+    this.topups.set(user, Math.max(0, (this.topups.get(user) ?? 0) - Math.max(0, usd)));
+    this.addUsage(user, day, { p_topup_cost: Math.max(0, usd) });
   }
 
   reserveAi(b: Record<string, unknown>): { ok: true; id: string } | { ok: false; why: string } {
@@ -90,7 +97,8 @@ class World {
       if (h.user === user && h.status === 'open' && h.created < this.clock - this.settings.hold_minutes! * 60_000) {
         h.status = 'expired';
         const d = new Date(h.created).toISOString().slice(0, 10);
-        this.addUsage(user, d, { p_cost: h.amount });
+        if (h.source === 'topup') this.spendTopup(user, d, h.amount);
+        else this.addUsage(user, d, { p_cost: h.amount });
         this.addSpend(d, 'openrouter', h.amount);
       }
     }
@@ -98,11 +106,15 @@ class World {
     const usedDay = this.spent(user, day, day);
     const usedWeek = this.spent(user, String(b.p_week_from));
     const usedMonth = this.spent(user, String(b.p_month_from));
-    const held = this.openHeld(user);
+    const held = this.openHeld(user, 'plan');
     const over = (cap: unknown, used: number) => Number(cap) > 0 && used + held + amount > Number(cap) + 1e-9;
-    if (over(b.p_month_cap, usedMonth)) return { ok: false, why: 'allowance_month' };
-    if (over(b.p_week_cap, usedWeek)) return { ok: false, why: 'allowance_week' };
-    if (over(b.p_day_cap, usedDay)) return { ok: false, why: 'allowance_day' };
+    const short = over(b.p_month_cap, usedMonth) ? 'allowance_month' : over(b.p_week_cap, usedWeek) ? 'allowance_week' : over(b.p_day_cap, usedDay) ? 'allowance_day' : null;
+    let source: 'plan' | 'topup' = 'plan';
+    if (short) {
+      // The plan's allowance is used up: the top-up pays, if there is enough of it.
+      if ((this.topups.get(user) ?? 0) - this.openHeld(user, 'topup') < amount) return { ok: false, why: short };
+      source = 'topup';
+    }
     const breaker = this.settings.breaker_openrouter_day_usd ?? 0;
     if (breaker > 0) {
       const total = (this.spend.get(`${day}|openrouter`) ?? 0) + this.openHeld() + amount;
@@ -113,8 +125,8 @@ class World {
       if (total > breaker * this.settings.alert_share!) this.raise(day, 'near_openrouter', 'Keo’s AI spend passed 80% of its limit.');
     }
     const id = `hold-${++this.holdNo}`;
-    this.holds.set(id, { user, amount, kind: String(b.p_kind), status: 'open', created: this.clock });
-    return { ok: true, id };
+    this.holds.set(id, { user, amount, kind: String(b.p_kind), status: 'open', created: this.clock, source });
+    return { ok: true, id: source === 'topup' ? `topup:${id}` : id };
   }
 
   settleAi(b: Record<string, unknown>): boolean {
@@ -123,7 +135,10 @@ class World {
     this.holds.delete(String(b.p_hold));
     const cost = Number(b.p_cost);
     const add = h.status === 'expired' ? Math.max(0, cost - h.amount) : Math.max(0, cost);
-    this.addUsage(String(b.p_user), String(b.p_day), { ...(b as Record<string, number>), p_cost: add });
+    if (h.source === 'topup') {
+      this.addUsage(String(b.p_user), String(b.p_day), { ...(b as Record<string, number>), p_cost: 0 });
+      this.spendTopup(String(b.p_user), String(b.p_day), add);
+    } else this.addUsage(String(b.p_user), String(b.p_day), { ...(b as Record<string, number>), p_cost: add });
     this.addSpend(String(b.p_day), 'openrouter', add);
     return true;
   }
@@ -158,6 +173,10 @@ class World {
         return j(200, r.ok ? r.id : r.why);
       }
       if (url.pathname === '/rest/v1/rpc/settle_ai') return j(200, this.settleAi(body));
+      if (url.pathname === '/rest/v1/ai_topups') {
+        const t = this.topups.get((q.get('user_id') ?? '').replace('eq.', ''));
+        return j(200, t === undefined ? [] : [{ balance_usd: t }]);
+      }
       return j(404, {});
     }
     if (url.host === 'or.test') {
@@ -684,5 +703,68 @@ describe('The deep health check', () => {
     const r = await w.call('/health?deep=1', { token: 'tok-owner' });
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ openrouter: { ok: true, limit: 100 } });
+  });
+});
+
+describe('AI top-ups: more allowance without changing plan', () => {
+  it('when the plan’s month is used up, the top-up pays — and the plan’s meters are not touched', async () => {
+    w.setPlan('pro');
+    w.usage.set('u-ana|2026-10-21', { cost_usd: 12 });
+    w.topups.set('u-ana', 2.5);
+    const r = await w.chat('keo-strong');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('x-keo-paid-with')).toBe('topup');
+    await w.settle();
+    expect(w.topups.get('u-ana')).toBeCloseTo(2.5 - 0.0003, 6);
+    expect(w.usage.get(`u-ana|${DAY}`)).toMatchObject({ requests: 1, cost_usd: 0, topup_cost_usd: 0.0003 });
+    expect(w.holds.size).toBe(0);
+  });
+
+  it('it also covers a used-up day or week; the next day the plan pays again', async () => {
+    w.setPlan('pro');
+    w.usage.set(`u-ana|${DAY}`, { cost_usd: 1.8 });
+    w.topups.set('u-ana', 1);
+    expect((await w.chat()).headers.get('x-keo-paid-with')).toBe('topup');
+    await w.settle();
+    w.clock = Date.parse('2026-10-27T08:00:00Z');
+    clearCache();
+    const next = await w.chat();
+    expect(next.status).toBe(200);
+    expect(next.headers.get('x-keo-paid-with')).toBeNull();
+  });
+
+  it('not enough top-up left: paused, with the offer of a top-up', async () => {
+    w.setPlan('pro');
+    w.usage.set('u-ana|2026-10-21', { cost_usd: 12 });
+    w.topups.set('u-ana', 0.01);
+    const r = await w.chat('keo-strong');
+    expect(r.status).toBe(429);
+    const e = await err(r);
+    expect(e).toMatchObject({ code: 'allowance_paused', window: 'month', topup: true });
+    expect(e.message).toContain('An AI top-up lets you carry on now');
+  });
+
+  it('calls at the same time share the top-up: no more is held than is left', async () => {
+    w.setPlan('pro');
+    w.usage.set('u-ana|2026-10-21', { cost_usd: 12 });
+    // Each Strong call holds about $0.082: $0.20 of top-up covers two at once.
+    w.topups.set('u-ana', 0.2);
+    w.upstreamDelayMs = 30;
+    const answers = await Promise.all(Array.from({ length: 4 }, () => w.chat('keo-strong')));
+    expect(answers.filter((r) => r.status === 200)).toHaveLength(2);
+    await w.settle();
+    expect(w.topups.get('u-ana')).toBeCloseTo(0.2 - 0.0006, 6);
+  });
+
+  it('the app is told about the top-up as builds and tasks, never dollars', async () => {
+    w.setPlan('pro');
+    w.topups.set('u-ana', 4.7);
+    const me = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { usage: { topup: { buildsLeft: Record<string, number>; tasksLeft: number } } };
+    expect(me.usage.topup.buildsLeft['keo-strong']).toBe(10);
+    expect(me.usage.topup.tasksLeft).toBeGreaterThan(100);
+    expect(JSON.stringify(me)).not.toMatch(/balance_usd|4\.7/);
+    w.topups.delete('u-ana');
+    const none = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { usage: { topup: unknown } };
+    expect(none.usage.topup).toBeNull();
   });
 });

@@ -34,6 +34,7 @@ function world() {
     spend: [] as Array<{ day: string; provider: string; cost_usd: number }>,
     settings: [{ key: 'ngn_per_usd', value: 1380 }, { key: 'breaker_openrouter_day_usd', value: 60 }, { key: 'breaker_fal_day_usd', value: 40 }],
     alerts: [] as Array<{ day: string; kind: string; message: string; created_at: string }>,
+    topups: new Map<string, number>(),
   };
   const j = (s: number, b: unknown) => new Response(JSON.stringify(b), { status: s, headers: { 'content-type': 'application/json' } });
   const fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
@@ -76,6 +77,13 @@ function world() {
         return j(200, db.settings);
       case '/rest/v1/alerts':
         return j(200, db.alerts);
+      case '/rest/v1/ai_topups':
+        return j(200, [...db.topups.entries()].map(([user_id, balance_usd]) => ({ user_id, balance_usd })));
+      case '/rest/v1/models':
+        return j(200, [{ id: 'keo-strong', price_in_per_m: 2, price_out_per_m: 10 }]);
+      case '/rest/v1/rpc/add_topup':
+        db.topups.set(String(body.p_user), (db.topups.get(String(body.p_user)) ?? 0) + Number(body.p_usd));
+        return j(200, db.topups.get(String(body.p_user)));
       case '/rest/v1/problem_reports': {
         if (method === 'PATCH') {
           Object.assign(db.reports.find((r) => r.id === eq('id'))!, body);
@@ -213,7 +221,7 @@ describe('Keo Cloud admin', () => {
     // ₦5,000 at ₦1,380 to $1; a local card's fee is 1.5% + ₦100.
     expect(packs).toMatchObject({ revenueUsd: 3.62, feesUsd: 0.14 });
     // Owed: 40 bought + 400 of Max's 500 monthly credits left = 440 credits = $2.20 at fal.ai.
-    expect(r.body.liabilities).toEqual({ boughtCredits: 40, monthlyCreditsLeft: 400, falCostUsd: 2.2 });
+    expect(r.body.liabilities).toEqual({ boughtCredits: 40, monthlyCreditsLeft: 400, falCostUsd: 2.2, topupUsd: 0 });
     expect(r.body.breakers).toEqual([
       { provider: 'openrouter', limitUsd: 60, todayUsd: 50 },
       { provider: 'fal', limitUsd: 40, todayUsd: 2.3 },
@@ -222,5 +230,23 @@ describe('Keo Cloud admin', () => {
     expect(r.body.total.revenueUsd).toBe(52.62);
     // Not for anyone else.
     expect((await call('GET', '/v1/admin/finance', undefined, 'tok-ana')).status).toBe(403);
+  });
+
+  it('gives an AI top-up (in builds on Keo Strong), logs it, and counts top-ups on the money page', async () => {
+    const r = await call('POST', `/v1/admin/users/${OWNER}/topup`, { builds: 100, note: 'owner testing' });
+    expect(r.status).toBe(200);
+    // 100 builds × about $0.465.
+    expect(w.db.topups.get(OWNER)).toBeCloseTo(46.53, 2);
+    expect(w.db.actions.at(-1)).toMatchObject({ action: 'topup.give', target_user: OWNER, detail: { builds: 100, note: 'owner testing' } });
+    expect((await call('POST', `/v1/admin/users/${OWNER}/topup`, { builds: 0 })).status).toBe(400);
+    expect((await call('POST', `/v1/admin/users/${ANA}/topup`, { builds: 5 }, 'tok-ana')).status).toBe(403);
+    // A bought top-up and AI it paid for.
+    (w.db.payments as Array<Record<string, unknown>>).push({ reference: 't1', user_id: ANA, plan: null, credits: null, topup_usd: 5.5, currency: 'USD', amount: 1000, status: 'success', paid_at: '2026-11-06T09:30:00Z', created_at: '2026-11-06T09:30:00Z' });
+    (w.db.usage as Array<Record<string, unknown>>).push({ user_id: ANA, day: '2026-11-06', requests: 3, input_tokens: 0, output_tokens: 0, cost_usd: 0, topup_cost_usd: 1.2, web_searches: 0, images: 0 });
+    const f = await call('GET', '/v1/admin/finance?month=2026-11');
+    const t = f.body.byPlan.find((x: { plan: string }) => x.plan === 'AI top-ups');
+    expect(t).toMatchObject({ revenueUsd: 10, aiUsd: 1.2, payers: 0 });
+    expect(t.marginUsd).toBeCloseTo(10 - t.feesUsd - 1.2, 2);
+    expect(f.body.liabilities.topupUsd).toBeCloseTo(46.53, 2);
   });
 });

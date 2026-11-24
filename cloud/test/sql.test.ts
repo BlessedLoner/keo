@@ -175,3 +175,59 @@ describe('Studio credits and the fal.ai breaker on a real Postgres', () => {
     expect(kinds).toContain('breaker_fal');
   });
 });
+
+describe('AI top-ups on a real Postgres', () => {
+  const CAR = '00000000-0000-0000-0000-00000000000c';
+  const topupLeft = async () => Number((await one<{ b: string }>('select coalesce((select balance_usd from public.ai_topups where user_id = $1), 0) as b', [CAR])).b);
+  const row = async () => (await db.query<{ cost_usd: string; topup_cost_usd: string; requests: number }>("select cost_usd, topup_cost_usd, requests from public.usage_daily where user_id = $1 and day = '2026-11-25'", [CAR])).rows[0];
+
+  beforeAll(async () => {
+    await db.query("insert into auth.users (id, email) values ($1, 'car@example.test')", [CAR]);
+    // Car's Free month ($0.60) is used up.
+    await db.query("insert into public.usage_daily (user_id, day, cost_usd) values ($1, '2026-11-02', 0.6)", [CAR]);
+  });
+
+  it('without a top-up the used-up month stops; with one, the top-up pays and the plan’s cost is untouched', async () => {
+    expect(await answer(CAR, 0.1, [0, 0, 0.6], '2026-11-25', '2026-11-23', '2026-11-01')).toBe('allowance_month');
+    expect(Number((await one<{ add_topup: string }>('select public.add_topup($1, 2.5)', [CAR])).add_topup)).toBe(2.5);
+    const id = await answer(CAR, 0.1, [0, 0, 0.6], '2026-11-25', '2026-11-23', '2026-11-01');
+    expect(id).toMatch(/^topup:[0-9a-f-]{36}$/);
+    await db.query('select public.settle_ai($1, $2, $3, 1, 100, 20, 0.04, 0, 0, 0)', [id.slice(6), CAR, '2026-11-25']);
+    expect(await topupLeft()).toBeCloseTo(2.46, 6);
+    expect(await row()).toMatchObject({ requests: 1 });
+    expect(Number((await row())!.cost_usd)).toBe(0);
+    expect(Number((await row())!.topup_cost_usd)).toBeCloseTo(0.04, 6);
+  });
+
+  it('calls at the same time cannot hold more top-up than is left', async () => {
+    const tries = await Promise.all(Array.from({ length: 8 }, () => answer(CAR, 0.5, [0, 0, 0.6], '2026-11-25', '2026-11-23', '2026-11-01')));
+    // 2.46 left: four holds of 0.5 fit.
+    expect(tries.filter((t) => t.startsWith('topup:'))).toHaveLength(4);
+    expect(tries.filter((t) => t === 'allowance_month')).toHaveLength(4);
+    for (const t of tries.filter((x) => x.startsWith('topup:'))) await db.query('select public.settle_ai($1, $2, $3, 1, 0, 0, 0, 0, 0, 0)', [t.slice(6), CAR, '2026-11-25']);
+    expect(await topupLeft()).toBeCloseTo(2.46, 6);
+  });
+
+  it('a top-up hold never settled is taken in full after 20 minutes', async () => {
+    const id = (await answer(CAR, 0.3, [0, 0, 0.6], '2026-11-25', '2026-11-23', '2026-11-01')).slice(6);
+    await db.query("update public.ai_holds set created_at = now() - interval '30 minutes' where id = $1", [id]);
+    const next = (await answer(CAR, 0.01, [0, 0, 0.6], '2026-11-25', '2026-11-23', '2026-11-01')).slice(6);
+    expect(await topupLeft()).toBeCloseTo(2.16, 6);
+    await db.query('select public.settle_ai($1, $2, $3, 1, 0, 0, 0, 0, 0, 0)', [next, CAR, '2026-11-25']);
+  });
+
+  it('a new month uses the plan’s allowance first again, not the top-up', async () => {
+    const id = await answer(CAR, 0.1, [0, 0, 0.6], '2026-12-02', '2026-11-30', '2026-12-01');
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await db.query('select public.settle_ai($1, $2, $3, 1, 0, 0, 0.05, 0, 0, 0)', [id, CAR, '2026-12-02']);
+    expect(await topupLeft()).toBeCloseTo(2.16, 6);
+  });
+
+  it('only the gateway may change top-ups; users may read only their own', async () => {
+    const acl = (await db.query<{ acl: string | null }>("select proacl::text as acl from pg_proc where proname in ('add_topup', 'spend_topup')")).rows;
+    expect(acl).toHaveLength(2);
+    for (const r of acl) expect(r.acl ?? '').not.toMatch(/(^|[{,])(anon|authenticated)=|(^|[{,])=X/);
+    const policies = (await db.query<{ policyname: string; cmd: string }>("select policyname, cmd from pg_policies where tablename = 'ai_topups'")).rows;
+    expect(policies).toEqual([{ policyname: 'read own top-up', cmd: 'SELECT' }]);
+  });
+});

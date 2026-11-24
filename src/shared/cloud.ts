@@ -46,6 +46,8 @@ export interface AccountStatus {
     windows?: AllowanceWindow[];
     /** About how many website or game builds are left on each model: now (today's share) and this month. */
     buildsLeft?: Record<string, { now: number; month: number }>;
+    /** AI top-up the user bought (used after the plan's allowance): about how many builds and tasks are left in it. */
+    topup?: { buildsLeft: Record<string, number>; tasksLeft: number };
   } | null;
   /** A paid plan: paid until when, and whether it renews ('active', 'non-renewing', 'attention', 'cancelled'). */
   billing: { until: string | null; status: string } | null;

@@ -9,7 +9,7 @@
  */
 
 import { adminPage } from './adminPage';
-import { fail, json, windowsFor, type Env, type Fetch, type Plan, type Supabase } from './gateway';
+import { buildCost, fail, json, windowsFor, type Env, type Fetch, type Plan, type Supabase } from './gateway';
 
 interface AdminDeps {
   fetch: Fetch;
@@ -139,18 +139,19 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
       const m = /^\d{4}-\d{2}$/.test(asked) ? asked : month(now);
       const [y, mo] = m.split('-').map(Number) as [number, number];
       const next = new Date(Date.UTC(y, mo, 1)).toISOString().slice(0, 10);
-      const [profiles, plans, payments, usage, jobs, credits, spend, settings, alerts] = await Promise.all([
+      const [profiles, plans, payments, usage, jobs, credits, spend, settings, alerts, topups] = await Promise.all([
         rest<Array<{ id: string; plan: string; plan_until: string | null; period_start?: string | null }>>('profiles?select=id,plan,plan_until,period_start&limit=100000'),
         rest<Array<{ id: string; name: string; features: Record<string, unknown> }>>('plans?select=*&order=sort'),
-        rest<Array<{ user_id: string | null; plan: string | null; credits: number | null; currency: string; amount: number; status: string }>>(
-          `payments?created_at=gte.${m}-01&created_at=lt.${next}&select=user_id,plan,credits,currency,amount,status&limit=100000`,
+        rest<Array<{ user_id: string | null; plan: string | null; credits: number | null; topup_usd?: number | null; currency: string; amount: number; status: string }>>(
+          `payments?created_at=gte.${m}-01&created_at=lt.${next}&select=*&limit=100000`,
         ),
-        rest<Array<{ user_id: string; cost_usd: number }>>(`usage_daily?day=gte.${m}-01&day=lt.${next}&select=user_id,cost_usd&limit=100000`),
+        rest<Array<{ user_id: string; cost_usd: number; topup_cost_usd?: number }>>(`usage_daily?day=gte.${m}-01&day=lt.${next}&select=*&limit=100000`),
         rest<Array<{ user_id: string; credits: number; status: string }>>(`studio_jobs?created_at=gte.${m}-01&created_at=lt.${next}&select=user_id,credits,status&limit=100000`),
         rest<Array<{ user_id: string; month: string; monthly_used: number; bought: number }>>('studio_credits?select=user_id,month,monthly_used,bought&limit=100000'),
         rest<Array<{ day: string; provider: string; cost_usd: number }>>(`spend_daily?day=gte.${m}-01&day=lt.${next}&select=day,provider,cost_usd`).catch(() => []),
         rest<Array<{ key: string; value: number }>>('keo_settings?select=key,value').catch(() => []),
         rest<Array<{ day: string; kind: string; message: string; created_at: string }>>('alerts?select=day,kind,message,created_at&order=created_at.desc&limit=30').catch(() => []),
+        rest<Array<{ balance_usd: number }>>('ai_topups?select=balance_usd&limit=100000').catch(() => []),
       ]);
       const setting = (k: string, d: number) => Number(settings.find((x) => x.key === k)?.value) || d;
       const rate = setting('ngn_per_usd', 1380);
@@ -160,14 +161,19 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
       const row = (id: string): Row => (rows[id] ??= { revenueUsd: 0, feesUsd: 0, aiUsd: 0, falUsd: 0, payers: 0, users: 0 });
       for (const p of plans) row(p.id);
       row('credit packs');
+      row('AI top-ups');
       for (const p of profiles) row(p.plan).users++;
       for (const p of payments.filter((x) => x.status === 'success')) {
-        const r = row(p.plan ?? 'credit packs');
+        const r = row(p.plan ?? (p.topup_usd ? 'AI top-ups' : 'credit packs'));
         r.revenueUsd += p.currency === 'NGN' ? Number(p.amount) / 100 / rate : Number(p.amount) / 100;
         r.feesUsd += paystackFeeUsd(p.currency, Number(p.amount), rate);
         if (p.plan) r.payers++;
       }
-      for (const u of usage) row(planOf.get(u.user_id) ?? 'free').aiUsd += Number(u.cost_usd) || 0;
+      for (const u of usage) {
+        row(planOf.get(u.user_id) ?? 'free').aiUsd += Number(u.cost_usd) || 0;
+        // AI paid from top-ups is the top-ups' cost.
+        row('AI top-ups').aiUsd += Number(u.topup_cost_usd) || 0;
+      }
       for (const j of jobs.filter((x) => x.status !== 'refunded')) row(planOf.get(j.user_id) ?? 'free').falUsd += (Number(j.credits) || 0) / 200;
       const marginOf = (r: { revenueUsd: number; feesUsd: number; aiUsd: number; falUsd: number }) => r.revenueUsd - r.feesUsd - r.aiUsd - r.falUsd;
       const pct = (margin: number, revenue: number) => (revenue > 0 ? Math.round((margin / revenue) * 100) : null);
@@ -203,7 +209,8 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
           openrouterUsd: round(sum(spend.filter((x) => x.provider === 'openrouter').map((x) => Number(x.cost_usd)))),
           falUsd: round(sum(spend.filter((x) => x.provider === 'fal').map((x) => Number(x.cost_usd)))),
         },
-        liabilities: { boughtCredits: bought, monthlyCreditsLeft: monthlyLeft, falCostUsd: round((bought + monthlyLeft) / 200) },
+        // Unused AI top-ups are owed at their AI cost (they never expire).
+        liabilities: { boughtCredits: bought, monthlyCreditsLeft: monthlyLeft, falCostUsd: round((bought + monthlyLeft) / 200), topupUsd: round(sum(topups.map((t) => Number(t.balance_usd) || 0))) },
         breakers: ['openrouter', 'fal'].map((pr) => ({
           provider: pr,
           limitUsd: setting(`breaker_${pr}_day_usd`, 0),
@@ -235,7 +242,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
     }
 
     // One user: everything about them.
-    const u = /^\/v1\/admin\/users\/([0-9a-f-]{36})(\/credits|\/plan|\/block)?$/i.exec(route);
+    const u = /^\/v1\/admin\/users\/([0-9a-f-]{36})(\/credits|\/plan|\/block|\/topup)?$/i.exec(route);
     if (u && UUID.test(u[1]!)) {
       const id = u[1]!;
       const profile = (await rest<Profile[]>(`profiles?id=eq.${id}&select=id,email,plan,plan_until,blocked,created_at`))[0];
@@ -259,6 +266,17 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
         await rest('rpc/add_credits', { method: 'POST', body: JSON.stringify({ p_user: id, p_amount: amount }) });
         await log('credits.give', id, { amount, note: String(b.note ?? '').slice(0, 300) });
         return json(200, { ok: true });
+      }
+      // AI top-up given by an admin (for example the owner's own testing): in builds on Keo Strong.
+      if (req.method === 'POST' && u[2] === '/topup') {
+        const b = await body();
+        const builds = Math.round(Number(b.builds));
+        if (!Number.isFinite(builds) || builds < 1 || builds > 1000) return fail(400, 'Give 1 to 1,000 builds.', 'bad_request', 'invalid_request_error');
+        const strong = (await rest<Array<{ price_in_per_m: number; price_out_per_m: number }>>('models?id=eq.keo-strong&select=price_in_per_m,price_out_per_m'))[0];
+        const usd = Math.round(builds * buildCost(strong ?? {}) * 10_000) / 10_000;
+        await rest('rpc/add_topup', { method: 'POST', body: JSON.stringify({ p_user: id, p_usd: usd }) });
+        await log('topup.give', id, { builds, usd, note: String(b.note ?? '').slice(0, 300) });
+        return json(200, { ok: true, usd });
       }
       if (req.method === 'POST' && u[2] === '/plan') {
         const b = await body();

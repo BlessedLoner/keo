@@ -326,11 +326,11 @@ export class KeoAccount {
    * The Upgrade page for this account: Keo's plans and payment page in the browser, signed in
    * with a 30-minute billing ticket (it allows billing only, never Keo's AI).
    */
-  async upgradeUrl(signal: AbortSignal): Promise<string> {
+  async upgradeUrl(signal: AbortSignal, go?: 'topup'): Promise<string> {
     const r = await this.post('/billing/ticket', {}, signal);
     const j = (await r.json().catch(() => ({}))) as { ticket?: string };
     if (!j.ticket) throw new AccountError('Keo Cloud did not open the Upgrade page. Please try again.');
-    return `${this.cfg.upgradePageUrl}#t=${encodeURIComponent(j.ticket)}`;
+    return `${this.cfg.upgradePageUrl}#t=${encodeURIComponent(j.ticket)}${go ? `&go=${go}` : ''}`;
   }
 
   /** A call to one of Keo Cloud's JSON endpoints (path after /v1), its answer as JSON. */
@@ -381,7 +381,7 @@ export class KeoAccount {
     try {
       const me = await this.gateway<{
         plan: { id: string; name: string; daily_requests: number; daily_tokens: number; features: Record<string, unknown> };
-        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number; allowanceUsed?: number; monthUsed?: number; windows?: AllowanceWindow[]; buildsLeft?: Record<string, { now: number; month: number }> };
+        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number; allowanceUsed?: number; monthUsed?: number; windows?: AllowanceWindow[]; buildsLeft?: Record<string, { now: number; month: number }>; topup?: { buildsLeft: Record<string, number>; tasksLeft: number } | null };
         billing?: { until: string | null; status: string } | null;
       }>('/me');
       this.me = {
@@ -398,6 +398,7 @@ export class KeoAccount {
           ...(typeof me.usage.monthUsed === 'number' ? { monthUsed: me.usage.monthUsed } : {}),
           ...(Array.isArray(me.usage.windows) ? { windows: me.usage.windows.filter((w) => w && (w.window === 'day' || w.window === 'week' || w.window === 'month')) } : {}),
           ...(me.usage.buildsLeft && typeof me.usage.buildsLeft === 'object' ? { buildsLeft: me.usage.buildsLeft } : {}),
+          ...(me.usage.topup && typeof me.usage.topup === 'object' ? { topup: me.usage.topup } : {}),
         },
         billing: me.billing ?? null,
         at: this.now(),

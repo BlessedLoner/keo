@@ -192,7 +192,7 @@ export class Supabase {
   }
 
   /** Holds what an AI call could cost (see reserve_ai in 010_billing_v2.sql); throws the database's reason. */
-  async reserve(userId: string, amount: number, kind: string, w: Windows, caps: Caps): Promise<string> {
+  async reserve(userId: string, amount: number, kind: string, w: Windows, caps: Caps): Promise<{ id: string; topup: boolean }> {
     const id = await this.rest<string>('rpc/reserve_ai', {
       method: 'POST',
       body: JSON.stringify({ p_user: userId, p_amount: round6(amount), p_kind: kind, p_day: w.day, p_week_from: w.weekFrom, p_month_from: w.monthFrom, p_day_cap: caps.day, p_week_cap: caps.week, p_month_cap: caps.month }),
@@ -200,7 +200,14 @@ export class Supabase {
     // A refusal comes back as a word (allowance_day/week/month, keo_breaker), not as an error.
     const answer = String(id);
     if (/^(allowance_(day|week|month)|keo_breaker)$/.test(answer)) throw new Error(answer);
-    return answer;
+    // "topup:<id>": the plan's allowance is used up and the user's AI top-up pays for this call.
+    return answer.startsWith('topup:') ? { id: answer.slice(6), topup: true } : { id: answer, topup: false };
+  }
+
+  /** The user's AI top-up left (US$ of AI cost; never shown to users as dollars). */
+  async topup(userId: string): Promise<number> {
+    const rows = await this.rest<Array<{ balance_usd: number }>>(`ai_topups?user_id=eq.${encodeURIComponent(userId)}&select=balance_usd`).catch(() => []);
+    return Number(rows[0]?.balance_usd) || 0;
   }
 
   /** Replaces a hold with the call's real cost and counts. */
@@ -383,9 +390,9 @@ const dateWords = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { d
 export function pausedAnswer(a: { plan: Plan; windows: Windows }, window: Window): Response {
   const when = window === 'day' ? 'at 00:00 UTC' : window === 'week' ? 'on Monday at 00:00 UTC' : `on ${dateWords(a.windows.resets.month)}`;
   const what = window === 'day' ? 'today’s share of your' : window === 'week' ? 'this week’s share of your' : 'all of this month’s';
-  const more = a.plan.id === 'max' ? '' : ' Upgrading your plan gives you more now.';
+  const more = a.plan.id === 'max' ? ' An AI top-up lets you carry on now.' : ' An AI top-up lets you carry on now, or upgrade your plan for more each month.';
   const message = `You’ve used ${what} ${a.plan.name} AI allowance. Keo paused here and kept your work; it can carry on when the allowance resets ${when}.${more}`;
-  return json(429, { error: { message, type: 'plan_limit', code: 'allowance_paused', window, resetsAt: a.windows.resets[window] } });
+  return json(429, { error: { message, type: 'plan_limit', code: 'allowance_paused', window, resetsAt: a.windows.resets[window], topup: true } });
 }
 
 /** Keo's own daily safety limit was reached: nothing is charged to the user. */
@@ -401,7 +408,7 @@ function overDailyCounts(a: Account): boolean {
  * Holds what a call could cost. Returns the hold's id, or the answer to send (a window used up, or
  * Keo's breaker).
  */
-async function hold(db: Supabase, a: Account, amount: number, kind: string): Promise<string | Response> {
+async function hold(db: Supabase, a: Account, amount: number, kind: string): Promise<{ id: string; topup: boolean } | Response> {
   if (overDailyCounts(a)) return pausedAnswer(a, 'day');
   try {
     return await db.reserve(a.user.id, amount, kind, a.windows, capsFor(a.plan));
@@ -684,10 +691,13 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
       const models = (await db.models()).filter((m) => m.tier <= a.plan.max_tier);
       const buildsLeft = Object.fromEntries(models.map((m) => [m.id, { now: Math.floor(left / buildCost(m)), month: Math.floor(monthLeft / buildCost(m)) }]));
       const windows = (['day', 'week', 'month'] as const).map((w) => ({ window: w, used: use[w], resetsAt: a.windows.resets[w] }));
+      // The AI top-up (used after the plan's allowance): about how many builds and tasks it is worth.
+      const topupUsd = await db.topup(a.user.id);
+      const topup = topupUsd > 0 ? { buildsLeft: Object.fromEntries(models.map((m) => [m.id, Math.floor(topupUsd / buildCost(m))])), tasksLeft: Math.floor(topupUsd / taskCost(models[0] ?? {})) } : null;
       return json(200, {
         user: a.user,
         plan,
-        usage: { day: a.day, ...usage, allowanceUsed: Math.max(use.day, use.week, use.month), monthUsed: use.month, windows, buildsLeft },
+        usage: { day: a.day, ...usage, allowanceUsed: Math.max(use.day, use.week, use.month), monthUsed: use.month, windows, buildsLeft, topup },
         billing: a.billing,
       });
     }
@@ -708,7 +718,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     // Before a paid call: hold what it could cost. After it: the real cost replaces the hold (zero
     // when the call failed, so a failure costs the user nothing).
     const holdFor = (a: Account, usd: number, kind: string) => hold(db, a, usd, kind);
-    const done = (a: Account, holdId: string, u: Added) => deps.waitUntil(db.settle(holdId, a.user.id, a.day, u).catch((e) => console.error('settle failed', (e as Error).message)));
+    const done = (a: Account, h: { id: string }, u: Added) => deps.waitUntil(db.settle(h.id, a.user.id, a.day, u).catch((e) => console.error('settle failed', (e as Error).message)));
 
     // Web search: results (title, link, snippet) found by OpenRouter's web search.
     if (req.method === 'POST' && route === '/v1/search') {
@@ -964,7 +974,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
         // No usage in the answer: counted at what was held.
         done(a, h, { requests: 1, ...u, cost: data?.usage && u.cost > 0 ? u.cost : est.usd });
         if (!data) return fail(502, 'The AI service sent an answer Keo could not read.', 'bad_answer', 'api_error');
-        return new Response(JSON.stringify({ ...data, model: model.id }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+        return new Response(JSON.stringify({ ...data, model: model.id }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...(h.topup ? { 'x-keo-paid-with': 'topup' } : {}) } });
       }
       // Streaming: pass every chunk straight through and read the usage from the last one. If the
       // answer is cut off or the app stops reading, the cost is worked out from what was sent —
@@ -1020,7 +1030,7 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
           return reader.cancel(reason).catch(() => undefined);
         },
       });
-      return new Response(out, { status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' } });
+      return new Response(out, { status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', ...(h.topup ? { 'x-keo-paid-with': 'topup' } : {}) } });
     }
 
     return fail(404, 'Not found.', 'not_found', 'invalid_request_error');

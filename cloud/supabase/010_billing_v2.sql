@@ -12,6 +12,8 @@
 --     replaces the hold. A hold the gateway never settled counts at its full amount.
 --   * A safety breaker on Keo's total AI spend per day, per provider, with alerts.
 --   * Studio credits stay separate: they never pay for AI chat or computer operation.
+--   * AI top-ups: extra AI allowance a user buys (packs, or an amount they type: $5 / ₦7,000 to
+--     $100 / ₦140,000), used only once the plan's allowance is used up, never for Studio.
 --
 -- Every number here can be changed later in Table Editor (plans, plan_prices, models, keo_settings)
 -- without touching code.
@@ -123,8 +125,72 @@ begin
   return coalesce(made, false);
 end $$;
 
--- Holds what an AI call could cost and answers with the hold's id, or (holding nothing) with:
---   allowance_day, allowance_week, allowance_month (the user's allowance is used up)
+-- ---------------------------------------------------------------- AI top-ups
+-- Extra AI allowance a user buys when theirs runs out (instead of moving to a bigger plan). Kept
+-- apart from Studio credits: it pays only for AI chat, building and computer operation, never Studio.
+-- Used only after the plan's own allowance (day, week or month) is used up; never expires. Stored in
+-- US$ of AI cost (users see it as builds and tasks, never dollars).
+create table if not exists public.ai_topups (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  balance_usd numeric(12,6) not null default 0 check (balance_usd >= 0),
+  updated_at timestamptz not null default now()
+);
+
+-- Top-up packs: price per currency (smallest unit) and the AI allowance it adds (US$ of AI cost).
+create table if not exists public.topup_packs (
+  id text not null,                     -- 'small', 'medium', 'large'
+  currency text not null check (currency in ('NGN', 'USD', 'GHS', 'KES', 'ZAR')),
+  amount bigint not null check (amount > 0),
+  value_usd numeric(10,4) not null check (value_usd > 0),
+  primary key (id, currency)
+);
+insert into public.topup_packs (id, currency, amount, value_usd) values
+  ('small', 'USD', 500, 2.50), ('medium', 'USD', 1000, 5.50), ('large', 'USD', 2000, 12.00),
+  ('small', 'NGN', 700000, 2.50), ('medium', 'NGN', 1400000, 5.50), ('large', 'NGN', 2800000, 12.00)
+on conflict (id, currency) do nothing;
+
+-- A top-up's receipt says how much AI allowance it added.
+alter table public.payments add column if not exists topup_usd numeric(10,4);
+-- What a day's AI cost was paid from top-ups (cost_usd stays the plan's own allowance).
+alter table public.usage_daily add column if not exists topup_cost_usd numeric(12,6) not null default 0;
+-- Which allowance a hold is taken from.
+alter table public.ai_holds add column if not exists source text not null default 'plan';   -- plan, topup
+
+insert into public.keo_settings (key, value, note) values
+  ('topup_custom_share', 0.5, 'A top-up of an amount the user types adds this share of what they paid as AI allowance (0.5 = the Small pack''s rate).'),
+  ('topup_min_usd', 5, 'Smallest top-up a user may type, in US$.'),
+  ('topup_max_usd', 100, 'Largest top-up a user may type, in US$.'),
+  ('topup_min_ngn', 7000, 'Smallest top-up a user may type, in Naira.'),
+  ('topup_max_ngn', 140000, 'Largest top-up a user may type, in Naira.'),
+  ('topup_month_cap_usd', 100, 'The most one account may spend on top-ups in 30 days (US$; Naira at ngn_per_usd).')
+on conflict (key) do nothing;
+
+-- Adds bought (or given) top-up; answers with the new balance.
+create or replace function public.add_topup(p_user uuid, p_usd numeric)
+returns numeric language plpgsql security definer set search_path = public as $$
+declare
+  b numeric;
+begin
+  if p_usd <= 0 then raise exception 'bad_amount'; end if;
+  insert into public.ai_topups (user_id, balance_usd) values (p_user, p_usd)
+    on conflict (user_id) do update set balance_usd = public.ai_topups.balance_usd + excluded.balance_usd, updated_at = now()
+    returning balance_usd into b;
+  return b;
+end $$;
+
+-- Takes a top-up's cost (never below zero) and records it on the day as paid from top-ups.
+create or replace function public.spend_topup(p_user uuid, p_day date, p_usd numeric)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.ai_topups set balance_usd = greatest(0, balance_usd - greatest(0, p_usd)), updated_at = now() where user_id = p_user;
+  insert into public.usage_daily (user_id, day, topup_cost_usd) values (p_user, p_day, greatest(0, p_usd))
+    on conflict (user_id, day) do update set topup_cost_usd = public.usage_daily.topup_cost_usd + excluded.topup_cost_usd;
+end $$;
+
+-- ---------------------------------------------------------------- reserve and settle
+-- Holds what an AI call could cost and answers with the hold's id: "<id>" from the plan's allowance,
+-- "topup:<id>" from the user's top-up once the plan's allowance is used up. Or, holding nothing:
+--   allowance_day, allowance_week, allowance_month (used up, and not enough top-up)
 --   keo_breaker (Keo's own daily safety limit)
 -- It answers instead of raising an error, so the alert it writes is kept.
 -- One user's calls queue on their profile row, so two at once can never both take the last of it.
@@ -140,10 +206,14 @@ declare
   used_week numeric;
   used_month numeric;
   held numeric;
+  held_topup numeric;
+  topup numeric;
   spent_today numeric;
   held_all numeric;
   breaker numeric;
   hold_id uuid;
+  src text := 'plan';
+  short text := null;
 begin
   if p_amount < 0 then raise exception 'bad_amount'; end if;
   perform 1 from public.profiles where id = p_user for update;
@@ -153,9 +223,13 @@ begin
   for stale in
     update public.ai_holds set status = 'expired'
       where user_id = p_user and status = 'open' and created_at < now() - make_interval(mins => public.keo_setting('hold_minutes', 20)::int)
-      returning amount, created_at
+      returning amount, created_at, source
   loop
-    perform public.add_usage(p_user, (stale.created_at at time zone 'utc')::date, 0, 0, 0, stale.amount, 0, 0, 0);
+    if stale.source = 'topup' then
+      perform public.spend_topup(p_user, (stale.created_at at time zone 'utc')::date, stale.amount);
+    else
+      perform public.add_usage(p_user, (stale.created_at at time zone 'utc')::date, 0, 0, 0, stale.amount, 0, 0, 0);
+    end if;
     insert into public.spend_daily (day, provider, cost_usd) values ((stale.created_at at time zone 'utc')::date, 'openrouter', stale.amount)
       on conflict (day, provider) do update set cost_usd = public.spend_daily.cost_usd + excluded.cost_usd;
   end loop;
@@ -165,11 +239,19 @@ begin
          coalesce(sum(cost_usd) filter (where day >= p_month_from), 0)
     into used_day, used_week, used_month
     from public.usage_daily where user_id = p_user and day >= least(p_week_from, p_month_from, p_day);
-  select coalesce(sum(amount), 0) into held from public.ai_holds where user_id = p_user and status = 'open';
+  select coalesce(sum(amount) filter (where source = 'plan'), 0), coalesce(sum(amount) filter (where source = 'topup'), 0)
+    into held, held_topup from public.ai_holds where user_id = p_user and status = 'open';
 
-  if p_month_cap > 0 and used_month + held + p_amount > p_month_cap then return 'allowance_month'; end if;
-  if p_week_cap > 0 and used_week + held + p_amount > p_week_cap then return 'allowance_week'; end if;
-  if p_day_cap > 0 and used_day + held + p_amount > p_day_cap then return 'allowance_day'; end if;
+  if p_month_cap > 0 and used_month + held + p_amount > p_month_cap then short := 'allowance_month';
+  elsif p_week_cap > 0 and used_week + held + p_amount > p_week_cap then short := 'allowance_week';
+  elsif p_day_cap > 0 and used_day + held + p_amount > p_day_cap then short := 'allowance_day';
+  end if;
+  -- The plan's allowance is used up: the top-up pays, if there is enough of it.
+  if short is not null then
+    select coalesce((select balance_usd from public.ai_topups where user_id = p_user), 0) into topup;
+    if topup - held_topup < p_amount then return short; end if;
+    src := 'topup';
+  end if;
 
   -- Keo's own safety breaker (all users together).
   breaker := public.keo_setting('breaker_openrouter_day_usd', 0);
@@ -185,12 +267,13 @@ begin
     end if;
   end if;
 
-  insert into public.ai_holds (user_id, amount, kind) values (p_user, p_amount, p_kind) returning id into hold_id;
-  return hold_id::text;
+  insert into public.ai_holds (user_id, amount, kind, source) values (p_user, p_amount, p_kind, src) returning id into hold_id;
+  return case when src = 'topup' then 'topup:' || hold_id::text else hold_id::text end;
 end $$;
 
--- Replaces a hold with what the call really cost (and its counts). An expired hold was already
--- counted at its full amount: only a cost above that is added.
+-- Replaces a hold with what the call really cost (and its counts), from the plan's allowance or the
+-- top-up it was held on. An expired hold was already counted at its full amount: only a cost above
+-- that is added.
 create or replace function public.settle_ai(
   p_hold uuid, p_user uuid, p_day date,
   p_requests integer, p_in bigint, p_out bigint, p_cost numeric,
@@ -203,7 +286,12 @@ begin
   delete from public.ai_holds where id = p_hold and user_id = p_user returning * into h;
   if not found then return false; end if;
   add_cost := case when h.status = 'expired' then greatest(0, p_cost - h.amount) else greatest(0, p_cost) end;
-  perform public.add_usage(p_user, p_day, p_requests, p_in, p_out, add_cost, p_searches, p_images, p_voice_seconds);
+  if h.source = 'topup' then
+    perform public.add_usage(p_user, p_day, p_requests, p_in, p_out, 0, p_searches, p_images, p_voice_seconds);
+    perform public.spend_topup(p_user, p_day, add_cost);
+  else
+    perform public.add_usage(p_user, p_day, p_requests, p_in, p_out, add_cost, p_searches, p_images, p_voice_seconds);
+  end if;
   insert into public.spend_daily (day, provider, cost_usd) values (p_day, 'openrouter', add_cost)
     on conflict (day, provider) do update set cost_usd = public.spend_daily.cost_usd + excluded.cost_usd;
   return true;
@@ -267,6 +355,8 @@ revoke all on function public.raise_alert(date, text, text) from public, anon, a
 revoke all on function public.reserve_ai(uuid, numeric, text, date, date, date, numeric, numeric, numeric) from public, anon, authenticated;
 revoke all on function public.settle_ai(uuid, uuid, date, integer, bigint, bigint, numeric, integer, integer, integer) from public, anon, authenticated;
 revoke all on function public.reserve_spend(text, date, numeric) from public, anon, authenticated;
+revoke all on function public.add_topup(uuid, numeric) from public, anon, authenticated;
+revoke all on function public.spend_topup(uuid, date, numeric) from public, anon, authenticated;
 revoke all on function public.return_credits(uuid, text, integer, integer) from public, anon, authenticated;
 revoke all on function public.refund_credits(text) from public, anon, authenticated;
 
@@ -275,6 +365,12 @@ alter table public.keo_settings enable row level security;
 alter table public.ai_holds enable row level security;
 alter table public.spend_daily enable row level security;
 alter table public.alerts enable row level security;
+alter table public.ai_topups enable row level security;
+alter table public.topup_packs enable row level security;
+drop policy if exists "read own top-up" on public.ai_topups;
+create policy "read own top-up" on public.ai_topups for select using (auth.uid() = user_id);
+drop policy if exists "top-up packs are public" on public.topup_packs;
+create policy "top-up packs are public" on public.topup_packs for select using (true);
 -- No policies: only the gateway (service_role) reads or writes these.
 
 notify pgrst, 'reload schema';

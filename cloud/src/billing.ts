@@ -132,7 +132,8 @@ async function paystackPlan(db: Supabase, ps: Paystack, price: Price, planName: 
 }
 
 /** Paystack sends metadata as an object or as a JSON string. */
-function metaOf(c: { metadata?: unknown }): { user_id?: string; plan?: string; pack?: string } {
+type Meta = { user_id?: string; plan?: string; pack?: string; topup?: string };
+function metaOf(c: { metadata?: unknown }): Meta {
   let m = c.metadata;
   if (typeof m === 'string') {
     try {
@@ -141,7 +142,7 @@ function metaOf(c: { metadata?: unknown }): { user_id?: string; plan?: string; p
       return {};
     }
   }
-  return m && typeof m === 'object' ? (m as { user_id?: string; plan?: string; pack?: string }) : {};
+  return m && typeof m === 'object' ? (m as Meta) : {};
 }
 
 interface Charge {
@@ -150,7 +151,7 @@ interface Charge {
   amount: number;
   currency: string;
   paid_at?: string | null;
-  metadata?: { user_id?: string; plan?: string; pack?: string } | string | null;
+  metadata?: Meta | string | null;
   customer?: { customer_code?: string; email?: string };
   plan?: { plan_code?: string } | string | null;
 }
@@ -163,6 +164,7 @@ async function applyCharge(db: Supabase, c: Charge, now: number): Promise<{ appl
   if (c.status !== 'success') return { applied: false, why: 'not successful' };
   const meta = metaOf(c);
   if (meta.pack && !c.plan) return applyCreditPack(db, c, meta, now);
+  if (meta.topup && !c.plan) return applyTopup(db, c, meta, now);
   const planCode = typeof c.plan === 'object' && c.plan ? c.plan.plan_code : typeof c.plan === 'string' ? c.plan : undefined;
   const known = planCode ? (await db.rest<Array<{ plan: string; currency: string; amount: number }>>(`paystack_plans?plan_code=eq.${encodeURIComponent(planCode)}&select=plan,currency,amount`))[0] : undefined;
   if (!known) return { applied: false, why: 'not a Keo plan' };
@@ -210,6 +212,66 @@ async function applyCreditPack(db: Supabase, c: Charge, meta: { user_id?: string
   if (!inserted?.length) return { applied: false, why: 'already recorded', userId: profile.id, credits: Number(pack.credits) };
   await db.rest('rpc/add_credits', { method: 'POST', body: JSON.stringify({ p_user: profile.id, p_amount: Number(pack.credits) }) });
   return { applied: true, userId: profile.id, credits: Number(pack.credits) };
+}
+
+// ---------------------------------------------------------------- AI top-ups
+
+/** Keo's settings (Table Editor → keo_settings), with defaults when a row is missing. */
+async function settingsOf(db: Supabase): Promise<(key: string, d: number) => number> {
+  const rows = await db.rest<Array<{ key: string; value: number }>>('keo_settings?select=key,value').catch(() => []);
+  return (key, d) => {
+    const v = Number(rows.find((r) => r.key === key)?.value);
+    return Number.isFinite(v) && v > 0 ? v : d;
+  };
+}
+
+/** The smallest and largest top-up a user may type (smallest unit: cents, kobo). */
+export function topupLimits(setting: (key: string, d: number) => number): { min: Record<string, number>; max: Record<string, number> } {
+  return {
+    min: { USD: Math.round(setting('topup_min_usd', 5) * 100), NGN: Math.round(setting('topup_min_ngn', 7000) * 100) },
+    max: { USD: Math.round(setting('topup_max_usd', 100) * 100), NGN: Math.round(setting('topup_max_ngn', 140000) * 100) },
+  };
+}
+
+/**
+ * What a top-up adds (US$ of AI allowance), worked out on the server from what was paid — never from
+ * what the app or the payment's metadata says. A pack: its own value. An amount the user typed: a
+ * share of it (the Small pack's rate), within the limits. Null when it is not a valid top-up.
+ */
+export async function topupValue(db: Supabase, pick: string, currency: string, amount: number): Promise<number | null> {
+  if (pick !== 'custom') {
+    const pack = (await db.rest<Array<{ amount: number; value_usd: number }>>(`topup_packs?id=eq.${encodeURIComponent(pick)}&currency=eq.${encodeURIComponent(currency)}&select=amount,value_usd`))[0];
+    return pack && Number(pack.amount) === Number(amount) ? Number(pack.value_usd) : null;
+  }
+  const setting = await settingsOf(db);
+  const { min, max } = topupLimits(setting);
+  if (min[currency] === undefined || amount < min[currency]! || amount > max[currency]!) return null;
+  const usd = currency === 'NGN' ? amount / 100 / setting('ngn_per_usd', 1380) : amount / 100;
+  return Math.floor(usd * setting('topup_custom_share', 0.5) * 10_000) / 10_000;
+}
+
+/** What an account paid for top-ups in the last 30 days (US$). */
+async function topupsLately(db: Supabase, userId: string, now: number): Promise<number> {
+  const setting = await settingsOf(db);
+  const since = new Date(now - 30 * 86_400_000).toISOString();
+  const rows = await db.rest<Array<{ currency: string; amount: number }>>(`payments?user_id=eq.${encodeURIComponent(userId)}&topup_usd=not.is.null&status=eq.success&created_at=gte.${encodeURIComponent(since)}&select=currency,amount`).catch(() => []);
+  return rows.reduce((t, r) => t + (r.currency === 'NGN' ? Number(r.amount) / 100 / setting('ngn_per_usd', 1380) : Number(r.amount) / 100), 0);
+}
+
+/** A paid AI top-up: its allowance is added once (recorded once per reference, like plans and packs). */
+async function applyTopup(db: Supabase, c: Charge, meta: Meta, now: number): Promise<{ applied: boolean; why?: string; userId?: string; topupUsd?: number }> {
+  const value = await topupValue(db, String(meta.topup), c.currency, Number(c.amount));
+  if (!value) return { applied: false, why: 'not a valid Keo top-up for this amount' };
+  const profile = meta.user_id ? await profileBy(db, 'id', meta.user_id) : null;
+  if (!profile) return { applied: false, why: 'no Keo account for this payment' };
+  const inserted = await db.rest<unknown[]>('payments?on_conflict=reference', {
+    method: 'POST',
+    body: JSON.stringify({ reference: c.reference, user_id: profile.id, plan: null, topup_usd: value, currency: c.currency, amount: c.amount, status: 'success', paid_at: c.paid_at ?? new Date(now).toISOString() }),
+    headers: { prefer: 'resolution=ignore-duplicates,return=representation' },
+  });
+  if (!inserted?.length) return { applied: false, why: 'already recorded', userId: profile.id, topupUsd: value };
+  await db.rest('rpc/add_topup', { method: 'POST', body: JSON.stringify({ p_user: profile.id, p_usd: value }) });
+  return { applied: true, userId: profile.id, topupUsd: value };
 }
 
 // ---------------------------------------------------------------- routes
@@ -301,6 +363,22 @@ export async function handleBilling(
         })(),
         prices: Object.fromEntries(list.filter((x) => x.plan === p.id).map((x) => [x.currency, x.amount])),
       })),
+      // AI top-ups: packs and an amount the user types (what each is about worth, never dollars).
+      topups: await (async () => {
+        const [rows, setting] = await Promise.all([db.rest<Array<{ id: string; currency: string; amount: number; value_usd: number }>>('topup_packs?select=id,currency,amount,value_usd&order=amount').catch(() => []), settingsOf(db)]);
+        const strong = model('keo-strong');
+        const fast = model('keo-fast');
+        const worth = (usd: number) => ({ strongBuilds: strong ? Math.floor(usd / buildCost(strong)) : 0, fastTasks: fast ? Math.floor(usd / taskCost(fast)) : 0 });
+        const ids = [...new Set(rows.map((r) => r.id))];
+        return {
+          packs: ids.map((id) => {
+            const these = rows.filter((r) => r.id === id);
+            return { id, prices: Object.fromEntries(these.map((r) => [r.currency, Number(r.amount)])), worth: worth(Number(these[0]!.value_usd)) };
+          }),
+          custom: { ...topupLimits(setting), share: setting('topup_custom_share', 0.5), ngnPerUsd: setting('ngn_per_usd', 1380), worthPerUsd: worth(1) },
+          monthCapUsd: setting('topup_month_cap_usd', 100),
+        };
+      })(),
       // Studio credit packs (bought credits never expire).
       packs: [...new Set(packs.map((k) => k.id))].map((id) => {
         const rows = packs.filter((k) => k.id === id);
@@ -372,6 +450,37 @@ export async function handleBilling(
       channels: ['card', 'bank', 'ussd', 'bank_transfer'],
       callback_url: new URL('/upgrade', req.url).toString(),
       metadata: { user_id: who.id, pack: pack.id, credits: pack.credits, keo: true },
+    });
+    return json(200, { accessCode: init.access_code, reference: init.reference, url: init.authorization_url });
+  }
+
+  // An AI top-up: a pack, or an amount the user types ($5 / ₦7,000 up to $100 / ₦140,000), priced on
+  // the server. At most topup_month_cap_usd in 30 days, so nobody is surprised by a bill.
+  if (req.method === 'POST' && route === '/v1/billing/topup') {
+    const body = (await req.json().catch(() => ({}))) as { pack?: unknown; amount?: unknown; currency?: unknown };
+    const currency = typeof body.currency === 'string' ? body.currency : 'USD';
+    const pick = typeof body.pack === 'string' && body.pack ? body.pack : 'custom';
+    let amount: number;
+    if (pick === 'custom') amount = Math.round(Number(body.amount));
+    else amount = Number((await db.rest<Array<{ amount: number }>>(`topup_packs?id=eq.${encodeURIComponent(pick)}&currency=eq.${encodeURIComponent(currency)}&select=amount`))[0]?.amount);
+    const value = Number.isFinite(amount) && amount > 0 ? await topupValue(db, pick, currency, amount) : null;
+    if (!value) {
+      const { min, max } = topupLimits(await settingsOf(db));
+      const money = (n: number) => (currency === 'NGN' ? `₦${(n / 100).toLocaleString('en-US')}` : `$${(n / 100).toLocaleString('en-US')}`);
+      return fail(400, pick === 'custom' && min[currency] !== undefined ? `Choose an amount from ${money(min[currency]!)} to ${money(max[currency]!)}.` : 'Choose a top-up.', 'bad_topup', 'invalid_request_error');
+    }
+    const setting = await settingsOf(db);
+    const usd = currency === 'NGN' ? amount / 100 / setting('ngn_per_usd', 1380) : amount / 100;
+    const cap = setting('topup_month_cap_usd', 100);
+    if ((await topupsLately(db, who.id, now)) + usd > cap + 0.01) return fail(400, `Top-ups are limited to $${cap} in 30 days for each account. Try a smaller amount, or a bigger plan.`, 'topup_cap', 'invalid_request_error');
+    if (!who.email) return fail(400, 'Your Keo account has no email address.', 'no_email');
+    const init = await ps.call<{ access_code: string; reference: string; authorization_url: string }>('POST', '/transaction/initialize', {
+      email: who.email,
+      amount,
+      currency,
+      channels: ['card', 'bank', 'ussd', 'bank_transfer'],
+      callback_url: new URL('/upgrade', req.url).toString(),
+      metadata: { user_id: who.id, topup: pick, keo: true },
     });
     return json(200, { accessCode: init.access_code, reference: init.reference, url: init.authorization_url });
   }
