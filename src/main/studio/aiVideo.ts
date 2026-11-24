@@ -330,6 +330,101 @@ export class FalVideo {
     return { file: made.file, picture: pictureOf.file, cached: made.cached && pictureOf.cached };
   }
 
+  /**
+   * A creative asset for a build or a Studio project (see ASSET_MODELS): a cut-out (background
+   * removed), an illustration, a vector (an illustration in a vector style, then made into an SVG),
+   * styled lettering, or an element on a transparent background. The same request gives the same
+   * file (never paid twice); again: a fresh take (paid).
+   */
+  async asset(r: AssetRequest, signal: AbortSignal): Promise<{ file: string; cached: boolean }> {
+    const h = (x: unknown) => crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex').slice(0, 24);
+    const take = r.take ? [r.take] : [];
+    switch (r.kind) {
+      case 'cutout': {
+        if (!r.image) throw new AiVideoError('Give the picture to cut out.');
+        const pic = r.image;
+        const keep = r.keep?.trim() || '';
+        const made = await this.run(
+          {
+            hash: h(['cutout', crypto.createHash('sha256').update(pic.bytes).digest('hex'), keep]),
+            model: 'bria-cutout',
+            seconds: 0,
+            ext: 'png',
+            endpoint: ASSET_MODELS.cutout,
+            uploads: [{ bytes: pic.bytes, type: pic.type, name: `keo-cutout.${pic.type === 'image/png' ? 'png' : 'jpg'}` }],
+            input: ([url]) => ({ image_url: url, ...(keep ? { prompt: keep } : {}) }),
+          },
+          signal,
+          { waitMs: 3 * 60_000 },
+        );
+        return { file: made.file, cached: made.cached };
+      }
+      case 'illustration':
+      case 'vector': {
+        const style = r.kind === 'vector' ? (r.style?.startsWith('vector_illustration') ? r.style : 'vector_illustration') : r.style && !r.style.startsWith('vector_illustration') ? r.style : 'digital_illustration';
+        const picture = await this.run(
+          {
+            hash: h(['recraft', r.prompt, style, r.size ?? 'square_hd', r.colors ?? [], ...take]),
+            model: 'recraft',
+            seconds: 0,
+            ext: 'webp',
+            endpoint: ASSET_MODELS.illustration,
+            uploads: [],
+            input: () => ({ prompt: r.prompt, style, image_size: r.size ?? 'square_hd', ...(r.colors?.length ? { colors: r.colors } : {}) }),
+          },
+          signal,
+          { waitMs: 3 * 60_000 },
+        );
+        if (r.kind === 'illustration') return { file: picture.file, cached: picture.cached };
+        // Then made into a real SVG (scales to any size, editable colours).
+        const bytes = fs.readFileSync(picture.file);
+        const svg = await this.run(
+          {
+            hash: h(['vectorize', crypto.createHash('sha256').update(bytes).digest('hex')]),
+            model: 'recraft-vectorize',
+            seconds: 0,
+            ext: 'svg',
+            endpoint: ASSET_MODELS.vectorize,
+            uploads: [{ bytes, type: 'image/webp', name: 'keo-vector.webp' }],
+            input: ([url]) => ({ image_url: url }),
+          },
+          signal,
+          { waitMs: 3 * 60_000 },
+        );
+        return { file: svg.file, cached: picture.cached && svg.cached };
+      }
+      case 'lettering':
+      case 'element': {
+        const transparent = r.kind === 'element' || r.transparent === true;
+        const speed = r.quality === 'draft' ? 'TURBO' : r.quality === 'best' ? 'QUALITY' : 'BALANCED';
+        const made = await this.run(
+          transparent
+            ? {
+                hash: h(['ideogram-t', r.prompt, speed, r.aspect ?? '1:1', ...take]),
+                model: 'ideogram-transparent',
+                seconds: 0,
+                ext: 'png',
+                endpoint: ASSET_MODELS.element,
+                uploads: [],
+                input: () => ({ prompt: r.prompt, rendering_speed: speed, aspect_ratio: r.aspect ?? '1:1', num_images: 1, enable_prompt_expansion: false }),
+              }
+            : {
+                hash: h(['ideogram', r.prompt, speed, r.size ?? 'square_hd', ...take]),
+                model: 'ideogram',
+                seconds: 0,
+                ext: 'png',
+                endpoint: ASSET_MODELS.lettering,
+                uploads: [],
+                input: () => ({ prompt: r.prompt, rendering_speed: speed, image_size: r.size ?? 'square_hd', style: 'DESIGN', num_images: 1, enable_prompt_expansion: false }),
+              },
+          signal,
+          { waitMs: 3 * 60_000 },
+        );
+        return { file: made.file, cached: made.cached };
+      }
+    }
+  }
+
   /** The same stable clone (video, picture) gives the same id. */
   motionHash(r: { video: Buffer; image: Buffer }): string {
     return crypto.createHash('sha256').update(JSON.stringify([MOTION_CLONE_MODEL.endpoint, crypto.createHash('sha256').update(r.video).digest('hex'), crypto.createHash('sha256').update(r.image).digest('hex')])).digest('hex').slice(0, 24);
@@ -564,7 +659,9 @@ export class FalVideo {
         (result.images as Array<{ url?: unknown }> | undefined)?.[0]?.url ??
         (result.audio as { url?: unknown } | undefined)?.url ??
         // A 3D model (Trellis 2).
-        (result.model_glb as { url?: unknown } | undefined)?.url;
+        (result.model_glb as { url?: unknown } | undefined)?.url ??
+        // A cut-out or an SVG (one image object).
+        (result.image as { url?: unknown } | undefined)?.url;
       if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new AiVideoError('fal.ai finished but sent nothing to download.');
       o.progress?.('saving');
       const video = await this.d.fetch(url, { signal });
@@ -694,7 +791,37 @@ class NoRoute extends Error {
 }
 
 /** What a finished request is saved as. */
-export type ShotExt = 'mp4' | 'png' | 'wav' | 'mp3' | 'glb';
+export type ShotExt = 'mp4' | 'png' | 'wav' | 'mp3' | 'glb' | 'webp' | 'svg';
+
+/** The creative-asset models (fal.ai; Keo Cloud prices them in cloud/src/studio.ts). */
+export const ASSET_MODELS = {
+  cutout: 'fal-ai/bria/background/remove',
+  illustration: 'fal-ai/recraft/v3/text-to-image',
+  vectorize: 'fal-ai/recraft/vectorize',
+  lettering: 'fal-ai/ideogram/v3',
+  element: 'fal-ai/ideogram/v3/generate-transparent',
+} as const;
+
+export type AssetKind = 'cutout' | 'illustration' | 'vector' | 'lettering' | 'element';
+export interface AssetRequest {
+  kind: AssetKind;
+  /** What to make (illustration, vector, lettering, element). */
+  prompt: string;
+  /** cutout: the picture, and what to keep when it is not obvious ("the cup"). */
+  image?: { bytes: Buffer; type: 'image/png' | 'image/jpeg' | 'image/webp' };
+  keep?: string;
+  /** illustration / vector: a Recraft style (e.g. "digital_illustration/hand_drawn", "vector_illustration/line_art"). */
+  style?: string;
+  size?: 'square_hd' | 'square' | 'portrait_4_3' | 'portrait_16_9' | 'landscape_4_3' | 'landscape_16_9';
+  /** illustration / vector: brand colours, as RGB. */
+  colors?: Array<{ r: number; g: number; b: number }>;
+  /** lettering / element. */
+  quality?: 'draft' | 'standard' | 'best';
+  aspect?: '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3' | '4:5' | '5:4' | '3:1' | '1:3';
+  /** lettering on a transparent background (an element always is). */
+  transparent?: boolean;
+  take?: number;
+}
 
 /** Speaking like a voice sample (fal.ai's Chatterbox: any voice from 5 to 30 seconds of it). */
 export const OWN_VOICE_MODEL = { label: 'Chatterbox', endpoint: 'fal-ai/chatterbox/text-to-speech' } as const;
@@ -711,7 +838,7 @@ export interface OwnVoiceRequest {
 /** A request fal.ai accepted, remembered until its clip is downloaded. */
 export interface PendingShot {
   hash: string;
-  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'elevenlabs-music' | 'elevenlabs-sfx' | 'chatterbox' | 'minimax-voice-design' | 'trellis-2';
+  model: AiVideoModelId | 'wan-animate-replace' | 'nano-banana-edit' | 'nano-banana' | 'nano-banana-pro-edit' | 'nano-banana-pro' | 'kling-motion-control' | 'kling-avatar' | 'elevenlabs-music' | 'elevenlabs-sfx' | 'chatterbox' | 'minimax-voice-design' | 'trellis-2' | 'bria-cutout' | 'recraft' | 'recraft-vectorize' | 'ideogram' | 'ideogram-transparent';
   /** What the result is saved as (a video unless said). */
   ext?: ShotExt;
   seconds: number;

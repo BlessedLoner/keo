@@ -47,6 +47,7 @@ import { CapabilityError } from './capabilities/types';
 import { ControlSession, type ControlUi } from './desktop/fullControl';
 import { videoCapabilities } from './capabilities/video';
 import { studioCapabilities } from './capabilities/studio';
+import { assetCapabilities } from './capabilities/assets';
 import { emailCapabilities } from './capabilities/email';
 import { calendarCapabilities } from './capabilities/calendar';
 import { EmailService } from './email/emailService';
@@ -985,6 +986,22 @@ export class Services {
         outputRoot: () => this.videoOutputRoot(),
         visionDestination: () => this.providers.active().destination(),
         userTexts: (conversationId) => this.conversations.recentMessages(this.jobs.userConversation(conversationId), 40).filter((m) => m.role === 'user').map((m) => m.content),
+      }),
+      // The creative toolkit (real photos, cut-outs, illustrations, vectors, lettering, elements) for builds and Studio.
+      ...assetCapabilities({
+        fetch: (url, init) => fetch(url, init) as never,
+        make: (r, signal) => this.aiVideo.asset(r, signal),
+        via: () => (this.secrets.has('fal') ? 'own' : this.account.signedIn() ? 'keo' : null),
+        blocked: () => (this.studioAiReady() ? null : 'Making assets needs the user’s Keo account: they sign in (Settings → Providers → Keo account) and it is paid with Studio credits. (Or their own fal.ai key under Settings → Advanced.) Finding and saving free photos works without it.'),
+        assetsDir: () => path.join(this.picturesDir ? path.join(this.picturesDir, 'Keo') : this.videoOutputRoot(), 'Assets'),
+        builds: this.builds,
+        studio: {
+          importFile: async (projectId, file) => {
+            const added = (await this.studio.importFiles(projectId, [file])).added[0];
+            return added ? { assetId: added.id } : null;
+          },
+          assetFile: (projectId, assetId) => this.studio.get(projectId).assets.find((a) => a.id === assetId)?.path ?? null,
+        },
       }),
       ...studioCapabilities({
         studio: this.studio,

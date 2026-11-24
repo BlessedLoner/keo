@@ -8,7 +8,7 @@ import type { ToolSpec } from '../providers/types';
  * few turns, and on request: the model can load any group with tools__load in the same turn.
  * Any registered tool still runs if the model calls it by name.
  */
-export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected', 'explain', 'studio_more'] as const;
+export const TOOL_GROUPS = ['desktop', 'screen', 'whatsapp', 'email', 'calendar', 'webapps', 'research', 'files', 'create', 'pictures', 'video', 'studio', 'projects', 'connected', 'explain', 'studio_more', 'assets'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number] | 'core';
 
 /** Which group a tool belongs to (by its name: "desktop__click" → desktop). */
@@ -54,6 +54,8 @@ export function groupOf(toolName: string): ToolGroup {
     case 'project':
     case 'workflows':
       return 'projects';
+    case 'assets':
+      return 'assets';
     case 'visual':
       // 3D explanations, website guides and realistic models: big tools, needed only when asked.
       return 'explain';
@@ -92,6 +94,7 @@ export const GROUP_LABEL: Record<(typeof TOOL_GROUPS)[number], string> = {
   studio: 'Keo Studio, the video editor: timeline edits, captions, effects, motion graphics, faceless videos, export',
   projects: 'projects and saved workflows',
   studio_more: 'Keo Studio specialist tools: templates and viral templates, Edit DNA (copy a reference video’s style), brand kit, screen showcases, Shorts from a long video, series, tracking, AI shots, characters and talking characters, AI music and sounds, reframe, stabilise, faceless videos, read aloud, posts and YouTube, versions',
+  assets: 'creative assets for builds and videos: real free-to-use photos (with credits), cut-outs (background removed), illustrations, vector icons and art (SVG), designed lettering, transparent elements and stickers',
   explain: '3D explanations of how something works (step by step, labels, x-ray, exploded views), step-by-step guides on a website, realistic 3D models in parts',
   connected: 'connected apps: Telegram (the user’s bot and its live chats; the user’s own Telegram is chat__background_start), Notion pages, Slack channels, Google Drive (files Keo saves there)',
 };
@@ -114,6 +117,7 @@ const TRIGGERS: Record<(typeof TOOL_GROUPS)[number], RegExp> = {
   projects: /\b(projects?|workflows?|workspace|milestone|backlog)\b/,
   connected: /\b(telegram|notion|slack|google drive|my drive|to drive|in drive)\b/,
   studio_more: /\b(templates?|dna|reference|in the style of|style of|brand|logo|intro|outro|showcase|screenshots?|shorts|series|episodes?|track|follow|characters?|avatar|talking|ai (shot|clip|video|music|sound)|music|soundtrack|sound effects?|faceless|narrat\w*|voice-?over|read (it )?aloud|reframe|stabili[sz]e|shaky|post (it|this)|youtube|caption for|write a post|versions?|viral)\b/,
+  assets: /\b(photos?|stock|illustrations?|icons?|vectors?|svg|cut ?out|remove (the )?background|transparent|stickers?|lettering|typography|badge|elements?)\b/,
   explain: /\b(explain|explanation|how (does|do|did|is|are|can|would)|why (does|do|is|are)|teach|show me how|walk me through|step by step|diagram|3d|cutaway|x-?ray|exploded|guide|how it works|works inside|what is this|what's this)\b/,
 };
 
@@ -157,6 +161,8 @@ export function chooseGroups(h: GroupHints): Set<ToolGroup> {
   }
   // The specialist Studio tools always come with the everyday ones.
   if (out.has('studio_more')) out.add('studio');
+  // Building something or editing a video: the creative toolkit comes along (three small tools).
+  if (out.has('create') || out.has('studio')) out.add('assets');
   // Focus: building something, or editing in Studio, does not bring in groups that only matched an
   // everyday word (the old video pipeline never comes with Studio unless asked by name).
   const focused = (out.has('create') && TRIGGERS.create.test(text)) || out.has('studio');

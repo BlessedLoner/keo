@@ -499,3 +499,37 @@ describe('Trial credits, history and referrals', () => {
     expect((await call('POST', '/v1/studio/referral/redeem', { code: 'BOBCODE2' })).status).toBe(409);
   });
 });
+
+describe('Creative assets through Keo Cloud (cut-outs, vectors, styled words, elements)', () => {
+  const run = (endpoint: string, input: Record<string, unknown>) => call('POST', '/v1/studio/run', { endpoint, input });
+  const pic = 'https://v3.fal.media/files/a.png';
+
+  it('prices each one on the server at twice fal.ai’s price, sending only known fields', async () => {
+    // Background removal: $0.018 → 4 credits; with "what to keep", $0.03 → 6.
+    expect((await run('fal-ai/bria/background/remove', { image_url: pic, sync_mode: true })).body.credits).toBe(4);
+    expect(w.fal.at(-1)!.body).toEqual({ image_url: pic });
+    expect((await run('fal-ai/bria/background/remove', { image_url: pic, prompt: 'the cup' })).body.credits).toBe(6);
+    // Recraft: $0.04 raster → 8; a vector style $0.08 → 16; brand colours become RGB.
+    expect((await run('fal-ai/recraft/v3/text-to-image', { prompt: 'a fox', style: 'digital_illustration/hand_drawn' })).body.credits).toBe(8);
+    const vec = await run('fal-ai/recraft/v3/text-to-image', { prompt: 'a rocket icon', style: 'vector_illustration/line_art', colors: ['#FF5500', 'nope'], enable_safety_checker: false });
+    expect(vec.body.credits).toBe(16);
+    expect(w.fal.at(-1)!.body).toEqual({ prompt: 'a rocket icon', style: 'vector_illustration/line_art', image_size: 'square_hd', colors: [{ r: 255, g: 85, b: 0 }] });
+    // An unknown style falls back to an illustration (never a free vector).
+    expect((await run('fal-ai/recraft/v3/text-to-image', { prompt: 'x', style: 'vector_illustration; drop table' })).body.credits).toBe(8);
+    // Vectorize: $0.01 → 2.
+    expect((await run('fal-ai/recraft/vectorize', { image_url: pic })).body.credits).toBe(2);
+    // Ideogram: TURBO $0.03 → 6, BALANCED $0.06 → 12, QUALITY $0.09 → 18; anything else is BALANCED.
+    expect((await run('fal-ai/ideogram/v3', { prompt: 'SALE in neon letters', rendering_speed: 'TURBO' })).body.credits).toBe(6);
+    expect((await run('fal-ai/ideogram/v3', { prompt: 'SALE', rendering_speed: 'ULTRA' })).body.credits).toBe(12);
+    expect((await run('fal-ai/ideogram/v3/generate-transparent', { prompt: 'a gold star sticker', rendering_speed: 'QUALITY', aspect_ratio: '7:7' })).body.credits).toBe(18);
+    expect(w.fal.at(-1)!.body).toEqual({ prompt: 'a gold star sticker', rendering_speed: 'QUALITY', aspect_ratio: '1:1', num_images: 1, enable_prompt_expansion: false });
+  });
+
+  it('refuses links that are not fal.ai uploads and empty descriptions, before anything is paid', async () => {
+    expect((await run('fal-ai/bria/background/remove', { image_url: 'https://evil.test/a.png' })).status).toBe(400);
+    expect((await run('fal-ai/recraft/vectorize', { image_url: 'file:///C:/secret.png' })).status).toBe(400);
+    expect((await run('fal-ai/ideogram/v3', { prompt: '   ' })).status).toBe(400);
+    expect(w.fal).toHaveLength(0);
+    expect(w.credits.get('u-ana')?.monthly_used ?? 0).toBe(0);
+  });
+});

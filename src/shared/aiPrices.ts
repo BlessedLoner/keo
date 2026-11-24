@@ -26,6 +26,24 @@ export const VOICE_DESIGN_PER_1M_CHARS = 30;
 /** A new picture of a character with the same face (Nano Banana edit), US dollars. */
 export const CHARACTER_PICTURE_USD = 0.0398;
 
+/**
+ * Creative assets (fal.ai list prices, November 2026): a cut-out (Bria, $0.018; $0.03 with what to
+ * keep), an illustration (Recraft V3, $0.04), a vector (Recraft in a vector style $0.08 + to SVG $0.01),
+ * lettering or a transparent element (Ideogram V3: $0.03 draft, $0.06 standard, $0.09 best).
+ */
+export function assetCost(kind: 'cutout' | 'illustration' | 'vector' | 'lettering' | 'element', o: { keep?: boolean; quality?: 'draft' | 'standard' | 'best' } = {}): number {
+  switch (kind) {
+    case 'cutout':
+      return o.keep ? 0.03 : 0.018;
+    case 'illustration':
+      return 0.04;
+    case 'vector':
+      return 0.09;
+    default:
+      return o.quality === 'draft' ? 0.03 : o.quality === 'best' ? 0.09 : 0.06;
+  }
+}
+
 /** Keo Cloud's Studio credits: 1 credit is 1 US cent and covers half a cent of fal.ai's price. */
 export const CREDITS_PER_USD = 200;
 

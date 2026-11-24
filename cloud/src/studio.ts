@@ -52,6 +52,10 @@ function talking(perSecond: number): Pricer {
   };
 }
 
+/** Ideogram V3's price per picture by quality (fal.ai, November 2026). */
+const IDEOGRAM_USD = { TURBO: 0.03, BALANCED: 0.06, QUALITY: 0.09 } as const;
+const ideogramSpeed = (v: unknown): keyof typeof IDEOGRAM_USD => (v === 'TURBO' || v === 'QUALITY' ? v : 'BALANCED');
+
 const ENDPOINTS: Record<string, Pricer> = {
   // AI shots: a picture brought to life.
   'fal-ai/kling-video/v3/pro/image-to-video': (i) => {
@@ -152,6 +156,50 @@ const ENDPOINTS: Record<string, Pricer> = {
       input: { text, audio_url: i.audio_url, exaggeration: clamp(i.exaggeration, 0, 1, 0.35), temperature: clamp(i.temperature, 0.05, 2, 0.7), cfg: clamp(i.cfg, 0, 1, 0.5) },
       credits: credits((text.length / 1000) * 0.025),
     };
+  },
+  // ---- Creative assets (builds and Studio): cut-outs, vector art, styled words, transparent elements.
+  // A picture's background removed: a PNG with transparency ($0.018; with a prompt saying what to keep, $0.03).
+  'fal-ai/bria/background/remove': (i) => {
+    if (!falFile(i.image_url)) return 'Upload the picture first.';
+    const keep = String(i.prompt ?? '').trim().slice(0, 300);
+    return { input: { image_url: i.image_url, ...(keep ? { prompt: keep } : {}) }, credits: credits(keep ? 0.03 : 0.018) };
+  },
+  // Illustrations and icons in a chosen style (Recraft V3): $0.04, or $0.08 for a vector style.
+  'fal-ai/recraft/v3/text-to-image': (i) => {
+    const prompt = String(i.prompt ?? '').trim().slice(0, 1000);
+    if (!prompt) return 'Describe the picture.';
+    const style = typeof i.style === 'string' && /^(any|realistic_image|digital_illustration|vector_illustration)(\/[a-z0-9_]{2,40})?$/.test(i.style) ? i.style : 'digital_illustration';
+    const size = ['square_hd', 'square', 'portrait_4_3', 'portrait_16_9', 'landscape_4_3', 'landscape_16_9'].includes(String(i.image_size)) ? String(i.image_size) : 'square_hd';
+    const colors = Array.isArray(i.colors)
+      ? i.colors
+          .map((c) => (typeof c === 'string' && /^#?[0-9a-f]{6}$/i.test(c) ? c.replace('#', '') : null))
+          .filter((c): c is string => !!c)
+          .slice(0, 5)
+          .map((hex) => ({ r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16) }))
+      : [];
+    return { input: { prompt, style, image_size: size, ...(colors.length ? { colors } : {}) }, credits: credits(style.startsWith('vector_illustration') ? 0.08 : 0.04) };
+  },
+  // A picture turned into an SVG (Recraft vectorize): $0.01.
+  'fal-ai/recraft/vectorize': (i) => {
+    if (!falFile(i.image_url)) return 'Upload the picture first.';
+    return { input: { image_url: i.image_url }, credits: credits(0.01) };
+  },
+  // Words drawn into a picture with real lettering (Ideogram V3): $0.03 / $0.06 / $0.09 by quality.
+  'fal-ai/ideogram/v3': (i) => {
+    const prompt = String(i.prompt ?? '').trim().slice(0, 2000);
+    if (!prompt) return 'Describe the picture and its words.';
+    const speed = ideogramSpeed(i.rendering_speed);
+    const size = ['square_hd', 'square', 'portrait_4_3', 'portrait_16_9', 'landscape_4_3', 'landscape_16_9'].includes(String(i.image_size)) ? String(i.image_size) : 'square_hd';
+    const style = ['AUTO', 'GENERAL', 'REALISTIC', 'DESIGN'].includes(String(i.style)) ? String(i.style) : 'DESIGN';
+    return { input: { prompt, rendering_speed: speed, image_size: size, style, num_images: 1, enable_prompt_expansion: false }, credits: credits(IDEOGRAM_USD[speed]) };
+  },
+  // An element on a transparent background (a sticker, a shape, a word): Ideogram V3 Transparent, same prices.
+  'fal-ai/ideogram/v3/generate-transparent': (i) => {
+    const prompt = String(i.prompt ?? '').trim().slice(0, 2000);
+    if (!prompt) return 'Describe the element.';
+    const speed = ideogramSpeed(i.rendering_speed);
+    const aspect = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '1:3', '3:1', '1:2', '2:1', '10:16', '16:10'].includes(String(i.aspect_ratio)) ? String(i.aspect_ratio) : '1:1';
+    return { input: { prompt, rendering_speed: speed, aspect_ratio: aspect, num_images: 1, enable_prompt_expansion: false }, credits: credits(IDEOGRAM_USD[speed]) };
   },
   // A voice made from a description.
   'fal-ai/minimax/voice-design': (i) => {
@@ -512,5 +560,10 @@ export function jobLabel(endpoint: string): string {
   if (endpoint.includes('sound-effects')) return 'Sound effect';
   if (endpoint.includes('chatterbox') || endpoint.includes('voice')) return 'Character voice';
   if (endpoint.includes('trellis')) return '3D model (games)';
+  if (endpoint.includes('background/remove')) return 'Cut-out (background removed)';
+  if (endpoint.includes('vectorize')) return 'Vector (SVG)';
+  if (endpoint.includes('recraft')) return 'Illustration or icon';
+  if (endpoint.includes('generate-transparent')) return 'Element (transparent)';
+  if (endpoint.includes('ideogram')) return 'Styled words';
   return 'AI request';
 }

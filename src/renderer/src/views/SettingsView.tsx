@@ -315,20 +315,59 @@ function Video({ s, patch }: { s: Settings; patch: Patch }) {
   const act = (ch: 'video:setupStart' | 'video:setupCancel' | 'video:setupRemove') => void invoke(ch, {}).then(setSetup).catch((e) => ui.error(errText(e)));
   return (
     <>
-      <section className="card">
-        <h2>ffmpeg</h2>
-        <p className="muted small">Keo edits videos with ffmpeg on this PC: fast and exact, nothing is uploaded. Keo can set it up for you (one download into its own folder, only when you click), or use your own: add it to PATH, or choose ffmpeg.exe here (ffprobe.exe must be in the same folder).</p>
+      <section className="card" aria-label="Video tools">
+        <h2>Video tools</h2>
+        <p className="muted small">Keo edits and prepares videos with ffmpeg on this PC: fast and exact, nothing is uploaded.</p>
         <p className="small">
           {st ? (
             <>
-              <Icon name={st.found ? 'check' : 'warn'} size={13} /> {st.message}
+              <Icon name={st.found ? 'check' : 'warn'} size={13} /> {st.found ? st.message : 'Not set up yet: Keo cannot edit videos until it is.'}
             </>
           ) : (
             <span className="muted">Checking…</span>
           )}
         </p>
-        <p className="small muted">{s.video.ffmpegPath ? `Using ${s.video.ffmpegPath}` : setup?.installed ? `Using Keo’s own copy (ffmpeg ${setup.installed.version}).` : 'Looking for ffmpeg on PATH.'}</p>
+        {setup?.message && (
+          <p className="small">
+            {setup.phase === 'failed' && <Icon name="warn" size={13} />} {setup.message}
+          </p>
+        )}
+        {setup && busy && <progress max={setup.totalBytes} value={setup.phase === 'downloading' ? setup.receivedBytes : undefined} style={{ width: '100%' }} aria-label="Download progress" />}
         <div className="row">
+          {s.video.ffmpegPath ? (
+            <>
+              <span className="chip">Using your own: {s.video.ffmpegPath}</span>
+              <button className="btn ghost sm" onClick={() => void patch({ video: { ffmpegPath: null } })}>
+                {setup?.installed ? 'Use Keo’s copy instead' : 'Stop using it'}
+              </button>
+            </>
+          ) : !setup ? null : busy ? (
+            <button className="btn ghost sm" onClick={() => act('video:setupCancel')}>
+              Cancel
+            </button>
+          ) : setup.installed ? (
+            <>
+              <span className="chip accent">Ready · ffmpeg {setup.installed.version}</span>
+              <button className="btn ghost sm" onClick={() => act('video:setupRemove')}>
+                Remove
+              </button>
+            </>
+          ) : st?.found ? (
+            <span className="chip accent">Ready · ffmpeg from this PC</span>
+          ) : (
+            <button className="btn primary sm" onClick={() => act('video:setupStart')}>
+              {setup.canResume ? `Try again (continue at ${mb(setup.receivedBytes)})` : `Set up video tools (${mb(setup.build.sizeBytes)} download)`}
+            </button>
+          )}
+        </div>
+        {setup && !setup.installed && !s.video.ffmpegPath && !st?.found && (
+          <p className="muted small">
+            One download of ffmpeg {setup.build.version} for Windows (built by {setup.build.publisher}) into Keo’s own folder, checked against its published SHA-256 checksum. No installer, no administrator rights, no change to PATH. Nothing is downloaded until you click.
+          </p>
+        )}
+        <details>
+          <summary className="small">Advanced: use your own ffmpeg</summary>
+          <p className="muted small">If ffmpeg is already on this PC, choose its ffmpeg.exe (ffprobe.exe must be in the same folder). Keo also finds it on PATH by itself.</p>
           <button
             className="btn sm"
             onClick={() =>
@@ -342,43 +381,8 @@ function Video({ s, patch }: { s: Settings; patch: Patch }) {
           >
             <Icon name="folder" size={13} /> Choose ffmpeg.exe…
           </button>
-          {s.video.ffmpegPath && (
-            <button className="btn ghost sm" onClick={() => void patch({ video: { ffmpegPath: null } })}>
-              {setup?.installed ? 'Use Keo’s copy instead' : 'Use PATH instead'}
-            </button>
-          )}
-        </div>
-      </section>
-      {setup && (
-        <section className="card" aria-label="Video tools">
-          <h2>Set up video tools</h2>
-          <p className="muted small">
-            Downloads ffmpeg {setup.build.version} for Windows ({mb(setup.build.sizeBytes)}, built by {setup.build.publisher}) into Keo’s own folder. Keo checks the download against its published SHA-256 checksum and refuses it if it differs. No installer, no administrator rights, no change to PATH. Nothing is downloaded until you click.
-          </p>
-          {setup.message && (
-            <p className="small">
-              {setup.phase === 'failed' && <Icon name="warn" size={13} />} {setup.message}
-            </p>
-          )}
-          {busy && <progress max={setup.totalBytes} value={setup.phase === 'downloading' ? setup.receivedBytes : undefined} style={{ width: '100%' }} aria-label="Download progress" />}
-          <div className="row">
-            {busy ? (
-              <button className="btn ghost sm" onClick={() => act('video:setupCancel')}>
-                Cancel
-              </button>
-            ) : setup.installed ? (
-              <>
-                <span className="chip accent">ffmpeg {setup.installed.version} installed</span>
-                <button className="btn ghost sm" onClick={() => act('video:setupRemove')}>
-                  Remove Keo’s copy
-                </button>
-              </>
-            ) : (
-              <button className="btn sm" onClick={() => act('video:setupStart')}>
-                {setup.canResume ? `Try again (continue at ${mb(setup.receivedBytes)})` : `Set up video tools (${mb(setup.build.sizeBytes)} download)`}
-              </button>
-            )}
-          </div>
+        </details>
+        {setup && (
           <p className="muted small">
             FFmpeg is free software under the {setup.build.licence}; Keo keeps its licence (LICENSE.txt and NOTICE.txt) next to the programs.{' '}
             <button className="btn ghost sm" onClick={() => void invoke('app:openLink', { id: 'ffmpegSource' })}>
@@ -388,8 +392,8 @@ function Video({ s, patch }: { s: Settings; patch: Patch }) {
               About this build
             </button>
           </p>
-        </section>
-      )}
+        )}
+      </section>
       <section className="card">
         <h2>Finished videos</h2>
         <p className="muted small">Saved as new MP4 files in {s.video.outputDir ?? 'your Videos\\Keo folder'}; existing files are never replaced. Previews stay in Keo’s own data folder.</p>
