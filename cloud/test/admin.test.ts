@@ -25,7 +25,15 @@ function world() {
     reports: [{ id: REPORT, user_id: ANA, created_at: '2026-11-06T08:00:00Z', version: '1.18.1', message: 'Captions stopped', report: 'Keo problem report…', status: 'new' }],
     credits: [{ user_id: ANA, month: '2026-11', monthly_used: 0, bought: 40 }],
     actions: [] as Array<Record<string, unknown>>,
-    plans: [{ id: 'free', name: 'Free' }, { id: 'pro', name: 'Pro' }, { id: 'creator', name: 'Creator' }, { id: 'max', name: 'Max' }],
+    plans: [
+      { id: 'free', name: 'Free', features: { studio_credits: 0 } },
+      { id: 'pro', name: 'Pro', features: { studio_credits: 200 } },
+      { id: 'creator', name: 'Creator', features: { studio_credits: 1500 } },
+      { id: 'max', name: 'Max', features: { studio_credits: 500 } },
+    ],
+    spend: [] as Array<{ day: string; provider: string; cost_usd: number }>,
+    settings: [{ key: 'ngn_per_usd', value: 1380 }, { key: 'breaker_openrouter_day_usd', value: 60 }, { key: 'breaker_fal_day_usd', value: 40 }],
+    alerts: [] as Array<{ day: string; kind: string; message: string; created_at: string }>,
   };
   const j = (s: number, b: unknown) => new Response(JSON.stringify(b), { status: s, headers: { 'content-type': 'application/json' } });
   const fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
@@ -62,6 +70,12 @@ function world() {
         return j(200, db.credits.filter((c) => !q.get('user_id') || q.get('user_id')!.includes(c.user_id)));
       case '/rest/v1/plans':
         return j(200, db.plans);
+      case '/rest/v1/spend_daily':
+        return j(200, db.spend);
+      case '/rest/v1/keo_settings':
+        return j(200, db.settings);
+      case '/rest/v1/alerts':
+        return j(200, db.alerts);
       case '/rest/v1/problem_reports': {
         if (method === 'PATCH') {
           Object.assign(db.reports.find((r) => r.id === eq('id'))!, body);
@@ -177,5 +191,36 @@ describe('Keo Cloud admin', () => {
     expect((await call('POST', `/v1/admin/reports/${REPORT}`, { status: 'fixed' })).status).toBe(200);
     expect(w.db.reports[0]!.status).toBe('fixed');
     expect((await call('POST', `/v1/admin/reports/${REPORT}`, { status: 'deleted' })).status).toBe(400);
+  });
+
+  it('shows the month’s money: revenue, fees, AI and Studio costs and gross margin per plan, what Keo owes in credits, safety limits and alerts', async () => {
+    const owner = w.db.profiles[0]! as Record<string, unknown>;
+    owner.period_start = '2026-11-02T00:00:00Z';
+    (w.db.payments as Array<Record<string, unknown>>).push({ reference: 'p2', user_id: OWNER, plan: 'max', credits: null as unknown as number, currency: 'USD', amount: 4900, status: 'success', paid_at: '2026-11-02T00:00:00Z', created_at: '2026-11-02T00:00:00Z' });
+    w.db.usage.push({ user_id: OWNER, day: '2026-11-03', requests: 400, input_tokens: 9e6, output_tokens: 3e5, cost_usd: 10, web_searches: 0, images: 0 });
+    w.db.credits.push({ user_id: OWNER, month: 'p2026-11-02T00:00:00', monthly_used: 100, bought: 0 });
+    w.db.spend.push({ day: '2026-11-06', provider: 'openrouter', cost_usd: 50 }, { day: '2026-11-06', provider: 'fal', cost_usd: 2.3 });
+    w.db.alerts.push({ day: '2026-11-06', kind: 'near_openrouter', message: 'Keo’s AI spend today passed 80% of its $60 safety limit.', created_at: '2026-11-06T11:00:00Z' });
+    const r = await call('GET', '/v1/admin/finance?month=2026-11');
+    expect(r.status).toBe(200);
+    const max = r.body.byPlan.find((x: { plan: string }) => x.plan === 'max');
+    // $49 in, Paystack about $2.13, $10 of AI: about $36.87 (75%).
+    expect(max).toMatchObject({ revenueUsd: 49, feesUsd: 2.13, aiUsd: 10, falUsd: 0, marginUsd: 36.87, marginPct: 75, payers: 1 });
+    const free = r.body.byPlan.find((x: { plan: string }) => x.plan === 'free');
+    // A refunded Studio job costs nothing; the done one is 460 credits = $2.30 at fal.ai.
+    expect(free).toMatchObject({ revenueUsd: 0, aiUsd: 0.04, falUsd: 2.3, marginPct: null });
+    const packs = r.body.byPlan.find((x: { plan: string }) => x.plan === 'credit packs');
+    // ₦5,000 at ₦1,380 to $1; a local card's fee is 1.5% + ₦100.
+    expect(packs).toMatchObject({ revenueUsd: 3.62, feesUsd: 0.14 });
+    // Owed: 40 bought + 400 of Max's 500 monthly credits left = 440 credits = $2.20 at fal.ai.
+    expect(r.body.liabilities).toEqual({ boughtCredits: 40, monthlyCreditsLeft: 400, falCostUsd: 2.2 });
+    expect(r.body.breakers).toEqual([
+      { provider: 'openrouter', limitUsd: 60, todayUsd: 50 },
+      { provider: 'fal', limitUsd: 40, todayUsd: 2.3 },
+    ]);
+    expect(r.body.alerts).toHaveLength(1);
+    expect(r.body.total.revenueUsd).toBe(52.62);
+    // Not for anyone else.
+    expect((await call('GET', '/v1/admin/finance', undefined, 'tok-ana')).status).toBe(403);
   });
 });

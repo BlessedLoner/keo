@@ -73,6 +73,11 @@ export interface BackgroundJobDeps {
   store?: { load(): { jobs: BackgroundJob[]; hidden: string[] } | null; save(all: { jobs: BackgroundJob[]; hidden: string[] }): void };
   /** How long after start interrupted jobs carry on (tests: 0). */
   resumeDelayMs?: number;
+  /** The most jobs the user's plan allows at once (Keo plans); undefined when there is no such limit. */
+  planJobs?: () => number | undefined;
+  /** Timers (tests replace them). */
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (t: unknown) => void;
   /** A job finished, failed or was cancelled; its report is already in the parent conversation. */
   finished(job: BackgroundJob, report: Message | null): void;
   changed(): void;
@@ -206,7 +211,8 @@ export class BackgroundJobs {
   }
 
   private pump(): void {
-    const max = this.d.getSettings().agent.maxBackgroundJobs;
+    const plan = this.d.planJobs?.();
+    const max = Math.min(this.d.getSettings().agent.maxBackgroundJobs, plan !== undefined && plan > 0 ? plan : Infinity);
     for (let next = this.jobs.find((j) => j.state === 'queued'); next && this.running() < max && !this.closing; next = this.jobs.find((j) => j.state === 'queued')) {
       this.run(next);
     }
@@ -245,7 +251,15 @@ export class BackgroundJobs {
     job.finishedAt = nowIso();
     if (this.closing) job.state = 'interrupted';
     else if (job.state !== 'cancelled') {
-      if (m?.status === 'complete' && m.meta.ending?.kind !== 'failed') {
+      if (m?.status === 'complete' && m.meta.paused) {
+        // The AI allowance ran out: the job waits (its work kept) and carries on when it resets.
+        job.state = 'paused';
+        job.resumeAt = m.meta.paused.until;
+        job.result = m.content.trim().slice(0, 20_000) || null;
+        job.ending = m.meta.ending ?? null;
+        job.finishedAt = null;
+        this.wakeAt(job);
+      } else if (m?.status === 'complete' && m.meta.ending?.kind !== 'failed') {
         job.state = 'completed';
         job.result = m.content.trim().slice(0, 20_000) || 'Done.';
         job.ending = m.meta.ending ?? null;
@@ -256,6 +270,7 @@ export class BackgroundJobs {
         job.ending = m?.meta.ending ?? { kind: 'failed', why: job.error };
       }
     }
+    if (job.state === 'paused') this.settled.delete(job.id);
     this.d.log.info('jobs.finished', { jobId: job.id, state: job.state, ending: job.ending?.kind ?? null });
     this.d.audit.record({ kind: 'jobs.finished', decision: job.state, detail: { jobId: job.id, ending: job.ending?.kind ?? null } });
     this.save();
@@ -269,7 +284,9 @@ export class BackgroundJobs {
     // The heading says how it really ended: a job is "done" only when its work was done.
     const heading = !job.ending || job.ending.kind === 'done_checked' ? 'done' : job.ending.kind === 'done_unchecked' ? 'done (not checked)' : job.ending.kind === 'partly_done' ? 'partly done' : 'waiting on you';
     const content =
-      job.state === 'completed'
+      job.state === 'paused'
+        ? `**Background job paused — ${job.title}.** Your Keo AI allowance is used up for now, so Keo paused it and kept its work.${job.resumeAt ? ` It carries on by itself around ${new Date(job.resumeAt).toLocaleString()}.` : ''} You can stop it from the jobs list.`
+        : job.state === 'completed'
         ? `**Background job ${heading} — ${job.title}**\n\n${job.result ?? ''}`
         : job.state === 'cancelled'
           ? `**Background job stopped — ${job.title}.** Nothing more will run for it.`
@@ -283,10 +300,39 @@ export class BackgroundJobs {
     }
   }
 
+  private readonly wakers = new Map<string, unknown>();
+
+  /** A paused job is queued again (carrying on where it stopped) when its allowance resets. */
+  private wakeAt(job: BackgroundJob, now = Date.now()): void {
+    const prev = this.wakers.get(job.id);
+    if (prev !== undefined) (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(prev);
+    const at = job.resumeAt ? Date.parse(job.resumeAt) : NaN;
+    // A minute after the reset; unknown times are tried again in an hour. Timers cannot wait longer than ~24 days.
+    const wait = Math.min(Number.isFinite(at) ? Math.max(0, at - now) + 60_000 : 60 * 60_000, 2 ** 31 - 1);
+    const wake = () => {
+      this.wakers.delete(job.id);
+      if (job.state !== 'paused' || this.closing) return;
+      job.state = 'queued';
+      job.resume = true;
+      job.resumeAt = null;
+      this.d.log.info('jobs.resuming_after_pause', { jobId: job.id });
+      this.save();
+      this.d.changed?.();
+      this.pump();
+    };
+    const t = (this.d.setTimer ?? ((fn, ms) => setTimeout(fn, ms).unref?.()))(wake, wait);
+    this.wakers.set(job.id, t);
+  }
+
   cancel(id: string): boolean {
     this.load();
     const job = this.jobs.find((j) => j.id === id);
     if (!job || TERMINAL.has(job.state)) return false;
+    const waker = this.wakers.get(id);
+    if (waker !== undefined) {
+      (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(waker);
+      this.wakers.delete(id);
+    }
     const wasRunning = job.state === 'running';
     job.state = 'cancelled';
     this.d.audit.record({ kind: 'jobs.cancelled', decision: 'cancelled', detail: { jobId: job.id } });
@@ -373,7 +419,9 @@ export class BackgroundJobs {
       resumed++;
       this.d.log.info('jobs.resuming', { jobId: j.id });
     }
-    const stale = this.jobs.filter((j) => !TERMINAL.has(j.state) && !j.resume);
+    // Paused jobs keep waiting for their allowance (or carry on now, if it has reset).
+    for (const j of this.jobs) if (j.state === 'paused') this.wakeAt(j, now);
+    const stale = this.jobs.filter((j) => !TERMINAL.has(j.state) && !j.resume && j.state !== 'paused');
     if (resumed) {
       this.save();
       // Once the rest of Keo has started.

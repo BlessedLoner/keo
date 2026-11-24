@@ -4,7 +4,7 @@
  * webhook. A plan is a monthly Paystack subscription; each successful charge keeps the plan
  * active for another month (plus a few days' grace), and a stopped subscription simply runs out.
  */
-import { fail, json, type Env, type Fetch, type Supabase } from './gateway';
+import { buildCost, capsFor, fail, json, taskCost, type Env, type Fetch, type Supabase } from './gateway';
 
 export const CURRENCIES = ['NGN', 'USD', 'GHS', 'KES', 'ZAR'] as const;
 export type Currency = (typeof CURRENCIES)[number];
@@ -99,6 +99,8 @@ interface Price {
 export interface BillingProfile {
   plan: string;
   plan_until: string | null;
+  /** When the current paid month started: the AI allowance and monthly Studio credits follow it. */
+  period_start?: string | null;
   billing_status: string | null;
   billing_currency: string | null;
   paystack_customer: string | null;
@@ -181,6 +183,8 @@ async function applyCharge(db: Supabase, c: Charge, now: number): Promise<{ appl
   await patchProfile(db, profile.id, {
     plan: known.plan,
     plan_until: keep,
+    // Each payment starts a new billing month: one payment is one month's allowance and credits.
+    period_start: from.toISOString(),
     billing_status: 'active',
     billing_currency: c.currency,
     ...(c.customer?.customer_code ? { paystack_customer: c.customer.customer_code } : {}),
@@ -267,18 +271,34 @@ export async function handleBilling(
   // Public: plans and prices, in the visitor's currency first.
   if (req.method === 'GET' && route === '/v1/billing/prices') {
     const country = (req as Request & { cf?: { country?: string } }).cf?.country ?? null;
-    const [plans, list, packs] = await Promise.all([db.plans(), prices(db), db.rest<Array<{ id: string; credits: number; currency: string; amount: number }>>('credit_packs?select=id,credits,currency,amount&order=credits').catch(() => [])]);
+    const [plans, list, packs, models] = await Promise.all([db.plans(), prices(db), db.rest<Array<{ id: string; credits: number; currency: string; amount: number }>>('credit_packs?select=id,credits,currency,amount&order=credits').catch(() => []), db.models()]);
+    const model = (id: string) => models.find((m) => m.id === id);
     return json(200, {
       country,
       currency: currencyFor(country),
       currencies: [...new Set(list.map((p) => p.currency))],
       payments: configured,
+      trialCredits: Math.max(0, Math.floor(Number(env.TRIAL_CREDITS ?? 150) || 0)),
       plans: plans.map((p) => ({
         id: p.id,
         name: p.name,
         dailyRequests: p.daily_requests,
         dailyTokens: p.daily_tokens,
         features: p.features,
+        // What the monthly AI allowance is about worth (the dollars stay inside Keo Cloud).
+        allowance: (() => {
+          const c = capsFor(p);
+          const fast = model('keo-fast');
+          const strong = p.max_tier >= 2 ? model('keo-strong') : undefined;
+          const best = p.max_tier >= 3 ? model('keo-best') : undefined;
+          return {
+            fastTasks: fast ? Math.floor(c.month / taskCost(fast)) : 0,
+            strongBuilds: strong ? Math.floor(c.month / buildCost(strong)) : 0,
+            bestBuilds: best ? Math.floor(c.month / buildCost(best)) : 0,
+            dayShare: c.month ? Math.round((c.day / c.month) * 1000) / 1000 : 0.15,
+            weekShare: c.month ? Math.round((c.week / c.month) * 1000) / 1000 : 0.4,
+          };
+        })(),
         prices: Object.fromEntries(list.filter((x) => x.plan === p.id).map((x) => [x.currency, x.amount])),
       })),
       // Studio credit packs (bought credits never expire).

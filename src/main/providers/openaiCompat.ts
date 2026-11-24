@@ -413,9 +413,12 @@ export function describeReportedCapabilities(raw: unknown): string {
 export function mapOpenAIError(err: unknown, signal: AbortSignal | undefined, label: string): ProviderError {
   // Keo Cloud explains itself (plan limits, sign-in): show its own message.
   if (label === 'Keo' && err instanceof OpenAI.APIError && err.status) {
-    const m = (err.error as { message?: string } | undefined)?.message ?? err.message;
+    const body = (err.error as { message?: string; code?: string; window?: string; resetsAt?: string } | undefined) ?? {};
+    const m = body.message ?? err.message;
     const kind = err.status === 401 ? 'auth' : err.status === 403 || err.status === 429 || err.status === 402 ? 'quota' : err.status >= 500 ? 'server' : 'bad_request';
-    return new ProviderError(kind, m, { status: err.status, retryable: err.status >= 500 });
+    const code = typeof body.code === 'string' ? body.code : null;
+    const paused = code === 'allowance_paused' ? { window: typeof body.window === 'string' ? body.window : 'day', until: typeof body.resetsAt === 'string' ? body.resetsAt : null } : null;
+    return new ProviderError(kind, m, { status: err.status, retryable: err.status >= 500, cloudCode: code, paused });
   }
   if (err instanceof ProviderError) return err;
   if (signal?.aborted || err instanceof OpenAI.APIUserAbortError) return new ProviderError('cancelled', 'Request cancelled.');

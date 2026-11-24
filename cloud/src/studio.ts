@@ -169,40 +169,19 @@ export function monthlyCredits(plan: Plan): number {
 }
 
 const month = (now: number) => new Date(now).toISOString().slice(0, 7);
+/** fal.ai's cost of a number of credits (US$). */
+export const falUsd = (credits: number) => credits / CREDITS_PER_USD;
 
 interface CreditsRow {
   month: string;
   monthly_used: number;
   bought: number;
 }
-/**
- * Pays for AI steps made after the day's allowance ran out, from the user's Studio credits (the
- * month's first, then bought ones). Takes what is left when the step cost more than that.
- */
-export async function payWithCredits(db: Supabase, userId: string, plan: Plan, now: number, usd: number): Promise<number> {
-  if (!(usd > 0)) return 0;
-  const want = credits(usd);
-  const spend = (amount: number) => db.rest('rpc/spend_credits', { method: 'POST', body: JSON.stringify({ p_user: userId, p_month: month(now), p_allowance: monthlyCredits(plan), p_amount: amount }) });
-  try {
-    await spend(want);
-    return want;
-  } catch {
-    const left = (await balance(db, userId, plan, now)).total;
-    if (left <= 0) return 0;
-    await spend(Math.min(left, want)).catch(() => undefined);
-    return Math.min(left, want);
-  }
-}
-
 /** How many Studio credits the user has (the month's and bought ones). */
-export async function creditsLeft(db: Supabase, userId: string, plan: Plan, now: number): Promise<number> {
-  return (await balance(db, userId, plan, now).catch(() => ({ total: 0 }))).total;
-}
-
-async function balance(db: Supabase, userId: string, plan: Plan, now: number): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number }> {
+export async function balance(db: Supabase, userId: string, plan: Plan, key: string): Promise<{ monthlyAllowance: number; monthlyLeft: number; bought: number; total: number }> {
   const row = (await db.rest<CreditsRow[]>(`studio_credits?user_id=eq.${encodeURIComponent(userId)}&select=month,monthly_used,bought`))[0];
   const allowance = monthlyCredits(plan);
-  const used = row && row.month === month(now) ? Number(row.monthly_used) || 0 : 0;
+  const used = row && row.month === key ? Number(row.monthly_used) || 0 : 0;
   const monthlyLeft = Math.max(0, allowance - used);
   const bought = Number(row?.bought) || 0;
   return { monthlyAllowance: allowance, monthlyLeft, bought, total: monthlyLeft + bought };
@@ -297,6 +276,8 @@ async function videoOf(url: string, fetch: Fetch): Promise<{ seconds: number; fr
 interface StudioAccount {
   user: { id: string };
   plan: Plan;
+  /** The billing month: monthly credits follow it (one payment is one month's credits). */
+  windows?: { periodKey: string };
 }
 
 /** Handles /v1/studio/*; null for other paths. */
@@ -310,12 +291,20 @@ export async function handleStudio(
   const { db, now } = deps;
   const a = await deps.account();
   if (a instanceof Response) return a;
+  const key = a.windows?.periodKey ?? month(now);
+  const day = new Date(now).toISOString().slice(0, 10);
+  // Keo's own daily fal.ai safety breaker (negative to give back a job that was refunded).
+  const spend = async (usd: number) => {
+    const total = await db.rest<string>('rpc/reserve_spend', { method: 'POST', body: JSON.stringify({ p_provider: 'fal', p_day: day, p_amount: Math.round(usd * 1e6) / 1e6 }) });
+    if (String(total) === 'keo_breaker') throw new Error('keo_breaker');
+    return total;
+  };
   const fal = (url: string, init: RequestInit = {}) => deps.fetch(url, { ...init, headers: { authorization: `Key ${env.FAL_KEY}`, 'content-type': 'application/json', ...(init.headers ?? {}) } });
 
   if (req.method === 'GET' && route === '/v1/studio/credits') {
     // The one-time trial: given the first time the account looks at its credits.
     const trial = await giveTrial(db, a.user.id, env);
-    const b = await balance(db, a.user.id, a.plan, now);
+    const b = await balance(db, a.user.id, a.plan, key);
     const packs = await db.rest<Array<{ id: string; credits: number; currency: string; amount: number }>>('credit_packs?select=id,credits,currency,amount&order=credits').catch(() => []);
     return json(200, { ...b, ready: !!env.FAL_KEY, plan: a.plan.id, packs, creditsPerUsd: CREDITS_PER_USD, ...(trial ? { trialGiven: trial } : {}) });
   }
@@ -356,7 +345,7 @@ export async function handleStudio(
 
   // An upload link for a picture, video or voice sample the request will use.
   if (req.method === 'POST' && route === '/v1/studio/upload') {
-    const b = await balance(db, a.user.id, a.plan, now);
+    const b = await balance(db, a.user.id, a.plan, key);
     if (b.total <= 0) return noCredits(a.plan);
     const body = (await req.json().catch(() => ({}))) as { content_type?: unknown; file_name?: unknown };
     const type = String(body.content_type ?? '');
@@ -386,24 +375,36 @@ export async function handleStudio(
     if (typeof priced === 'string') return fail(400, priced, 'bad_request', 'invalid_request_error');
     let spent: { from_monthly: number; from_bought: number; left: number };
     try {
-      spent = await db.rest('rpc/spend_credits', { method: 'POST', body: JSON.stringify({ p_user: a.user.id, p_month: month(now), p_allowance: monthlyCredits(a.plan), p_amount: priced.credits }) });
+      spent = await db.rest('rpc/spend_credits', { method: 'POST', body: JSON.stringify({ p_user: a.user.id, p_month: key, p_allowance: monthlyCredits(a.plan), p_amount: priced.credits }) });
     } catch {
-      const b = await balance(db, a.user.id, a.plan, now).catch(() => null);
+      const b = await balance(db, a.user.id, a.plan, key).catch(() => null);
       return noCredits(a.plan, priced.credits, b?.total);
     }
+    // Exactly what was taken comes back (the month's credits stay the month's).
     const giveBack = async () => {
-      await db.rest('rpc/add_credits', { method: 'POST', body: JSON.stringify({ p_user: a.user.id, p_amount: priced.credits }) }).catch(() => undefined);
+      await db.rest('rpc/return_credits', { method: 'POST', body: JSON.stringify({ p_user: a.user.id, p_month: key, p_from_monthly: spent.from_monthly, p_from_bought: spent.from_bought }) }).catch(() => undefined);
+    };
+    try {
+      await spend(falUsd(priced.credits));
+    } catch (e) {
+      await giveBack();
+      if (/keo_breaker/.test((e as Error).message)) return fail(503, 'Keo Studio’s AI is paused for a short while for safety. Nothing was charged; please try again later.', 'keo_paused', 'api_error');
+      throw e;
+    }
+    const giveAllBack = async () => {
+      await giveBack();
+      await spend(-falUsd(priced.credits)).catch(() => undefined);
     };
     let sent: Response;
     try {
       sent = await fal(`${FAL_QUEUE}${endpoint}`, { method: 'POST', body: JSON.stringify(priced.input) });
     } catch {
-      await giveBack();
+      await giveAllBack();
       return fail(502, 'Keo could not reach the AI service. Nothing was charged: try again.', 'upstream_unreachable', 'api_error');
     }
     const q = (await sent.json().catch(() => ({}))) as { request_id?: unknown; status_url?: unknown; response_url?: unknown; cancel_url?: unknown; detail?: unknown };
     if (!sent.ok || typeof q.request_id !== 'string' || typeof q.status_url !== 'string' || typeof q.response_url !== 'string') {
-      await giveBack();
+      await giveAllBack();
       return fail(sent.status === 422 ? 422 : 502, `The AI service could not take this request${typeof q.detail === 'string' ? `: ${q.detail.slice(0, 200)}` : ''}. Nothing was charged.`, 'upstream_refused', 'api_error');
     }
     await db.rest('studio_jobs', {
@@ -416,7 +417,7 @@ export async function handleStudio(
         credits: priced.credits,
         from_monthly: spent.from_monthly,
         from_bought: spent.from_bought,
-        month: month(now),
+        month: key,
         status_url: q.status_url,
         response_url: q.response_url,
         cancel_url: typeof q.cancel_url === 'string' ? q.cancel_url : null,
@@ -429,9 +430,13 @@ export async function handleStudio(
   // A request's progress, result or cancelling: only the account that paid for it.
   const m = /^\/v1\/studio\/requests\/([\w-]{3,100})(\/status|\/cancel)?$/.exec(route);
   if (m) {
-    const job = (await db.rest<Array<{ request_id: string; status_url: string; response_url: string; cancel_url: string | null; status: string }>>(`studio_jobs?request_id=eq.${encodeURIComponent(m[1]!)}&user_id=eq.${encodeURIComponent(a.user.id)}&select=request_id,status_url,response_url,cancel_url,status`))[0];
+    const job = (await db.rest<Array<{ request_id: string; status_url: string; response_url: string; cancel_url: string | null; status: string; credits?: number }>>(`studio_jobs?request_id=eq.${encodeURIComponent(m[1]!)}&user_id=eq.${encodeURIComponent(a.user.id)}&select=request_id,status_url,response_url,cancel_url,status,credits`))[0];
     if (!job) return fail(404, 'Keo has no such request for this account.', 'not_found', 'invalid_request_error');
-    const refund = () => db.rest('rpc/refund_credits', { method: 'POST', body: JSON.stringify({ p_request: job.request_id }) }).catch(() => undefined);
+    // A failed or cancelled job: the credits come back once, and fal.ai's spend with them.
+    const refund = async () => {
+      const given = await db.rest<boolean>('rpc/refund_credits', { method: 'POST', body: JSON.stringify({ p_request: job.request_id }) }).catch(() => false);
+      if (given === true) await spend(-falUsd(Number(job.credits) || 0)).catch(() => undefined);
+    };
     const pass = async (r: Response) => new Response(await r.text(), { status: r.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     if (m[2] === '/status' && req.method === 'GET') {
       const r = await fal(job.status_url);

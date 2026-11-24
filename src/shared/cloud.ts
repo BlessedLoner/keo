@@ -14,6 +14,13 @@ export const KEO_CLOUD = {
   upgradePageUrl: 'https://keo-cloud.blessednoble90.workers.dev/upgrade',
 } as const;
 
+/** One window of the AI allowance (a day, a week, the billing month). */
+export interface AllowanceWindow {
+  window: 'day' | 'week' | 'month';
+  used: number;
+  resetsAt: string;
+}
+
 /** What the app shows about the signed-in Keo account. */
 export interface AccountStatus {
   signedIn: boolean;
@@ -23,7 +30,23 @@ export interface AccountStatus {
   /** Keo signs in by itself as soon as that email is confirmed. */
   waitingForConfirmation: boolean;
   plan: { id: string; name: string; dailyRequests: number; dailyTokens: number; features: Record<string, unknown> } | null;
-  usage: { day: string; requests: number; inputTokens: number; outputTokens: number; webSearches: number; images: number; voiceSeconds: number; /** How much of the day's AI allowance is used, 0–100 (its fullest meter; the strongest models use it fastest). */ allowanceUsed?: number; /** How much of this month's AI allowance is used, 0–100 (a month's pool: a heavy day does not stop the user). */ monthUsed?: number } | null;
+  usage: {
+    day: string;
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    webSearches: number;
+    images: number;
+    voiceSeconds: number;
+    /** The fullest of the day, week and month meters, 0–100. */
+    allowanceUsed?: number;
+    /** How much of this billing month's AI allowance is used, 0–100. */
+    monthUsed?: number;
+    /** The AI allowance's three windows: how much is used (0–100) and when each resets. */
+    windows?: AllowanceWindow[];
+    /** About how many website or game builds are left on each model: now (today's share) and this month. */
+    buildsLeft?: Record<string, { now: number; month: number }>;
+  } | null;
   /** A paid plan: paid until when, and whether it renews ('active', 'non-renewing', 'attention', 'cancelled'). */
   billing: { until: string | null; status: string } | null;
   /** Why plan/usage could not be read just now (offline, gateway not deployed yet…). */

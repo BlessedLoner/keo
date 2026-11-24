@@ -20,9 +20,9 @@ class World {
   users = new Map<string, { id: string; email: string }>([['tok-ana', { id: 'u-ana', email: 'ana@example.test' }]]);
   profiles: Profile[] = [{ id: 'u-ana', email: 'ana@example.test', plan: 'free', plan_until: null, blocked: false }];
   plans = [
-    { id: 'free', name: 'Free', daily_requests: 60, daily_tokens: 300000, max_tier: 1, features: { web_search: 3 } },
-    { id: 'pro', name: 'Pro', daily_requests: 600, daily_tokens: 4000000, max_tier: 2, features: { web_search: 150, images: 10 } },
-    { id: 'max', name: 'Max', daily_requests: 2000, daily_tokens: 15000000, max_tier: 3, features: { web_search: 600, images: 60 } },
+    { id: 'free', name: 'Free', daily_requests: 60, daily_tokens: 300000, max_tier: 1, monthly_cost_usd: 0.6, features: { web_search: 3 } },
+    { id: 'pro', name: 'Pro', daily_requests: 600, daily_tokens: 4000000, max_tier: 2, monthly_cost_usd: 12, features: { web_search: 50, images: 10, studio_credits: 200 } },
+    { id: 'max', name: 'Max', daily_requests: 2000, daily_tokens: 15000000, max_tier: 3, monthly_cost_usd: 28, features: { web_search: 200, images: 60, studio_credits: 500 } },
   ];
   prices = [
     { plan: 'pro', currency: 'USD', amount: 1500 },
@@ -35,6 +35,8 @@ class World {
   paystack: Array<{ method: string; path: string; body: Record<string, unknown> | null; auth: string | null }> = [];
   verify: Record<string, unknown> = {};
   disabled: string[] = [];
+  packs = [{ id: 'medium', credits: 1500, currency: 'USD', amount: 1600 }];
+  credits = new Map<string, number>();
 
   fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(input);
@@ -60,7 +62,17 @@ class World {
         return j(200, rows);
       }
       if (table === 'plans') return j(200, this.plans);
-      if (table === 'models') return j(200, []);
+      if (table === 'models')
+        return j(200, [
+          { id: 'keo-fast', tier: 1, price_in_per_m: 0.1, price_out_per_m: 0.5 },
+          { id: 'keo-strong', tier: 2, price_in_per_m: 2, price_out_per_m: 10 },
+          { id: 'keo-best', tier: 3, price_in_per_m: 4, price_out_per_m: 20 },
+        ]);
+      if (table === 'credit_packs') return j(200, this.packs.filter((k) => (!q.has('id') || k.id === eq('id')) && (!q.has('currency') || k.currency === eq('currency'))));
+      if (table === 'rpc/add_credits') {
+        this.credits.set(String(body!.p_user), (this.credits.get(String(body!.p_user)) ?? 0) + Number(body!.p_amount));
+        return new Response(null, { status: 204 });
+      }
       if (table === 'plan_prices') return j(200, this.prices);
       if (table === 'usage_daily') return j(200, []);
       if (table === 'paystack_plans') {
@@ -131,6 +143,19 @@ describe('Keo Cloud payments', () => {
     expect(currencyFor(undefined)).toBe('USD');
   });
 
+  it('tells the Upgrade page what each plan’s monthly AI allowance is about worth — never the dollars', async () => {
+    const r = (await (await w.call('/v1/billing/prices', { country: 'US' })).json()) as { plans: Array<{ id: string; allowance: Record<string, number> }> };
+    const pro = r.plans.find((p) => p.id === 'pro')!.allowance;
+    const max = r.plans.find((p) => p.id === 'max')!.allowance;
+    const free = r.plans.find((p) => p.id === 'free')!.allowance;
+    // $12 ÷ ~$0.465 a Strong build; $28 ÷ ~$0.93 a Best build.
+    expect(pro).toMatchObject({ strongBuilds: 25, bestBuilds: 0, dayShare: 0.15, weekShare: 0.4 });
+    expect(max).toMatchObject({ strongBuilds: 60, bestBuilds: 30 });
+    expect(free.strongBuilds).toBe(0);
+    expect(free.fastTasks).toBeGreaterThan(20);
+    expect(JSON.stringify(r)).not.toMatch(/monthly_cost_usd|price_in_per_m/);
+  });
+
   it('gives the app a short-lived Upgrade-page ticket that cannot be forged', async () => {
     const r = (await (await w.call('/v1/billing/ticket', { token: 'tok-ana', method: 'POST' })).json()) as { ticket: string };
     expect(await readTicket(env, r.ticket, NOW)).toEqual({ id: 'u-ana', email: 'ana@example.test' });
@@ -184,6 +209,49 @@ describe('Keo Cloud payments', () => {
     const me = (await (await w.call('/v1/me', { token: 'tok-ana' })).json()) as { plan: { id: string }; billing: { until: string; status: string } };
     expect(me.plan.id).toBe('pro');
     expect(me.billing).toEqual({ until: '2026-11-30T12:00:00.000Z', status: 'active' });
+  });
+
+  it('each payment starts a new billing month: subscribing, renewing, upgrading and downgrading', async () => {
+    w.paystackPlans.push(
+      { plan_code: 'PLN_pro', plan: 'pro', currency: 'USD', amount: 2000, live: false },
+      { plan_code: 'PLN_pro_old', plan: 'pro', currency: 'USD', amount: 1500, live: false },
+      { plan_code: 'PLN_max', plan: 'max', currency: 'USD', amount: 4900, live: false },
+    );
+    const pay = (ref: string, code: string, amount: number, paidAt: string) =>
+      w.webhook({ event: 'charge.success', data: { reference: ref, status: 'success', amount, currency: 'USD', paid_at: paidAt, metadata: { user_id: 'u-ana' }, customer: { customer_code: 'CUS_ana' }, plan: { plan_code: code } } });
+    await pay('r1', 'PLN_pro', 2000, '2026-10-28T09:00:00.000Z');
+    expect(ana()).toMatchObject({ plan: 'pro', period_start: '2026-10-28T09:00:00.000Z' });
+    // Renewed a month later: the next billing month starts.
+    await pay('r2', 'PLN_pro', 2000, '2026-11-28T09:05:00.000Z');
+    expect(ana()).toMatchObject({ plan: 'pro', period_start: '2026-11-28T09:05:00.000Z' });
+    // Upgrade to Max mid-month: a Max month starts at once.
+    await pay('r3', 'PLN_max', 4900, '2026-12-05T14:00:00.000Z');
+    expect(ana()).toMatchObject({ plan: 'max', period_start: '2026-12-05T14:00:00.000Z', plan_until: '2027-01-08T14:00:00.000Z' });
+    // Back down to Pro on its own payment: a Pro month starts then.
+    await pay('r4', 'PLN_pro', 2000, '2027-01-05T14:00:00.000Z');
+    expect(ana()).toMatchObject({ plan: 'pro', period_start: '2027-01-05T14:00:00.000Z' });
+    // Someone still on the old $15 Pro subscription keeps getting Pro for it.
+    await pay('r5', 'PLN_pro_old', 1500, '2027-02-05T14:00:00.000Z');
+    expect(ana()).toMatchObject({ plan: 'pro', period_start: '2027-02-05T14:00:00.000Z' });
+    // A charge for the wrong amount changes nothing.
+    await pay('r6', 'PLN_max', 100, '2027-02-06T14:00:00.000Z');
+    expect(ana().plan).toBe('pro');
+  });
+
+  it('buys a Studio credit pack: checkout for the right price, credits added once, the wrong amount ignored', async () => {
+    const ticket = ((await (await w.call('/v1/billing/ticket', { token: 'tok-ana', body: {} })).json()) as { ticket: string }).ticket;
+    const r = await w.call('/v1/billing/credits', { token: ticket, body: { pack: 'medium', currency: 'USD' } });
+    expect(r.status).toBe(200);
+    const init = w.paystack.find((x) => x.path === '/transaction/initialize')!;
+    expect(init.body).toMatchObject({ amount: 1600, currency: 'USD', metadata: { user_id: 'u-ana', pack: 'medium', credits: 1500 } });
+    const charge = { reference: 'ref_pack', status: 'success', amount: 1600, currency: 'USD', metadata: { user_id: 'u-ana', pack: 'medium' } };
+    await w.webhook({ event: 'charge.success', data: charge });
+    await w.webhook({ event: 'charge.success', data: charge });
+    expect(w.credits.get('u-ana')).toBe(1500);
+    await w.webhook({ event: 'charge.success', data: { ...charge, reference: 'ref_cheap', amount: 100 } });
+    expect(w.credits.get('u-ana')).toBe(1500);
+    // A pack never changes the plan.
+    expect(ana().plan).toBe('free');
   });
 
   it('follows the subscription: renewals by customer, not renewing, failed payments, plan switches', async () => {

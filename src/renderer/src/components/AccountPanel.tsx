@@ -70,7 +70,6 @@ function billingLine(b: NonNullable<AccountStatus['billing']>): string {
   return day ? `Renews around ${day}.` : 'Renews monthly.';
 }
 
-const pct = (used: number, limit: number) => (limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0);
 
 /** Today's web searches, pictures and voice minutes against the plan ("not in plan" when it has none). */
 function extras(features: Record<string, unknown>, u: NonNullable<AccountStatus['usage']>): string {
@@ -83,6 +82,20 @@ function extras(features: Record<string, unknown>, u: NonNullable<AccountStatus[
  * Sign up / sign in to Keo, or (signed in) the plan and today's allowance. Keo's own AI needs no
  * API key: requests go through Keo Cloud with this sign-in.
  */
+const WINDOW_NAME = { day: 'Today', week: 'This week', month: 'This month' } as const;
+
+/** When an allowance window resets, in the user's own time ("today at 01:00", "Monday at 01:00", "on 28 December"). */
+function resetWords(iso: string): string {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return '';
+  const time = t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((new Date(t.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
+  if (days <= 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  if (days < 7) return `${t.toLocaleDateString(undefined, { weekday: 'long' })} at ${time}`;
+  return `on ${t.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`;
+}
+
 export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSignedIn?: () => void; activeProvider?: string | null; onUseKeo?: () => void }) {
   const a = useAccount();
   const f = useAuthForm(onSignedIn);
@@ -107,11 +120,11 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
   if (a.signedIn) {
     const u = a.usage;
     const plan = a.plan;
-    // The fullest meter: Keo Cloud's own figure when it sends one (it also counts the day's AI budget).
-    const today = plan && u ? Math.max(pct(u.requests, plan.dailyRequests), pct(u.inputTokens + u.outputTokens, plan.dailyTokens)) : 0;
-    // The month's AI allowance (Keo Cloud's figure; older servers send only the fullest meter).
-    const month = u ? (u.monthUsed ?? u.allowanceUsed ?? 0) : 0;
-    const used = Math.max(today, month);
+    // The AI allowance's three windows (older servers send only the month's figure).
+    const windows = u?.windows?.length ? u.windows : u ? [{ window: 'month' as const, used: u.monthUsed ?? u.allowanceUsed ?? 0, resetsAt: '' }] : [];
+    const used = Math.max(0, ...windows.map((w) => w.used));
+    const full = windows.find((w) => w.used >= 100);
+    const strongLeft = u?.buildsLeft?.['keo-strong'] ?? u?.buildsLeft?.['keo-fast'];
     return (
       <div className="account-panel">
         <div className="row">
@@ -124,23 +137,33 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
         {plan && u && (
           <div className="account-usage">
             <div className="small muted">
-              <strong>{month}% of this month’s AI allowance used</strong> · Today: {u.requests.toLocaleString()} of {plan.dailyRequests.toLocaleString()} AI steps · {(u.inputTokens + u.outputTokens).toLocaleString()} of {plan.dailyTokens.toLocaleString()} tokens
+              <strong>AI allowance</strong> (chat, building and operating your computer)
             </div>
-            <div className="usage-bar" role="progressbar" aria-valuenow={used} aria-valuemin={0} aria-valuemax={100}>
-              <span style={{ width: `${used}%` }} />
-            </div>
-            <div className="small muted">The month’s allowance is one pool: use a lot on a building day and little on others. Big jobs on the strongest model use it fastest.</div>
-            {used >= 100 && (
+            {windows.map((w) => (
+              <div key={w.window} className="allowance-window">
+                <div className="small muted">
+                  {WINDOW_NAME[w.window]}: <strong>{w.used}% used</strong>
+                  {w.resetsAt ? ` · ${w.window === 'month' ? 'renews' : 'resets'} ${resetWords(w.resetsAt)}` : ''}
+                </div>
+                <div className="usage-bar" role="progressbar" aria-label={`${WINDOW_NAME[w.window]} AI allowance used`} aria-valuenow={w.used} aria-valuemin={0} aria-valuemax={100}>
+                  <span style={{ width: `${w.used}%` }} />
+                </div>
+              </div>
+            ))}
+            {strongLeft && used < 100 && (
+              <div className="small muted">
+                About {strongLeft.month.toLocaleString()} more {strongLeft.month === 1 ? 'build' : 'builds'} this month on {u.buildsLeft?.['keo-strong'] ? 'Keo Strong' : 'Keo Fast'}
+                {strongLeft.now < strongLeft.month ? ` (${strongLeft.now.toLocaleString()} today)` : ''}. Keo Best uses it about twice as fast.
+              </div>
+            )}
+            {full && (
               <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>
-                {month >= 100
-                  ? plan.id === 'free'
-                    ? 'This month’s allowance is used up. With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.'
-                    : 'This month’s full-power allowance is used. Keo keeps working on its standard model at no extra cost; with “Keep going with my credits” on, it stays on the strongest model and pays with your Studio credits.'
-                  : 'Today’s steps or tokens are used up. With “Keep going with my credits” on, Keo carries on and pays with your Studio credits.'}
+                {full.window === 'month' ? 'This month’s AI allowance is used up.' : full.window === 'week' ? 'This week’s share of your AI allowance is used up.' : 'Today’s share of your AI allowance is used up.'} Keo pauses tasks and keeps their work; they can carry on when it {full.window === 'month' ? 'renews' : 'resets'}
+                {full.resetsAt ? ` (${resetWords(full.resetsAt)})` : ''}.{plan.id !== 'max' ? ' Upgrading gives you more now.' : ''}
               </div>
             )}
             <div className="small muted">{extras(plan.features, u)}</div>
-            <div className="small muted">Steps, tokens, searches, pictures and voice reset every day at midnight UTC; the month’s allowance renews on the 1st.</div>
+            <div className="small muted">The day and week are shares of the month, so the allowance lasts the whole month. Studio credits are separate and never pay for chat.</div>
           </div>
         )}
         {a.billing && <div className="small muted">{billingLine(a.billing)}</div>}

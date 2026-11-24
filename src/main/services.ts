@@ -270,6 +270,11 @@ const REAL_PHOTO =
 const REAL_MOTION =
   'Filmed like real footage: natural speed (not slow motion), a handheld camera with very subtle sway, natural blinking and breathing, real weight and physics, the face and clothes stay exactly the same, no morphing, no cuts.';
 
+/** The user asks for Keo's strongest model in their own words ("use Keo Best", "with the best model"). */
+export function wantsBestModel(text: string): boolean {
+  return /\b(keo[ -]?best|best model|strongest model|most powerful model|use (the )?best|opus)\b/i.test(text);
+}
+
 export class Services {
   readonly log: Logger;
   readonly db: Database;
@@ -611,6 +616,12 @@ export class Services {
       },
       finished: (job, report) => this.jobFinished(job, report),
       changed: () => this.push('jobs:changed', {}),
+      // On Keo's own AI, the plan sets how many background jobs run at once.
+      planJobs: () => {
+        if (getSettings().activeProvider !== 'keo') return undefined;
+        const n = Number(this.account.status().plan?.features?.background_jobs);
+        return n > 0 ? n : undefined;
+      },
     });
     this.schedule = new Scheduler({
       db: this.db,
@@ -1157,11 +1168,14 @@ export class Services {
     this.agent.excludeGroups = (conversationId) => (this.studioConversations.has(conversationId) ? ['video', 'desktop', 'screen'] : []);
     // A whole edit (transcribe, look at the clips, plan, style, moments, review) takes many steps.
     // Full control works in small look → act steps: a whole task takes many of them.
-    // Building a site, app or game: the best model the Keo plan includes (Keo Best, then Keo Strong).
-    this.agent.heavyModel = (provider) => {
-      if (provider.id !== 'keo') return null;
+    // Building a site, app or game: Keo Strong when the plan includes it. Keo Best (about twice the
+    // allowance) only when the user chose it as their model or asks for it; a user's own choice of
+    // Keo Best is never replaced.
+    this.agent.heavyModel = (provider, current, text) => {
+      if (provider.id !== 'keo' || current === 'keo-best') return null;
       const have = new Set(this.account.models().map((m) => m.id));
-      return ['keo-best', 'keo-strong'].find((id) => have.has(id)) ?? null;
+      if (have.has('keo-best') && wantsBestModel(text)) return 'keo-best';
+      return have.has('keo-strong') && current !== 'keo-strong' ? 'keo-strong' : null;
     };
     this.agent.isBuildWork = (conversationId, text) =>
       !!this.builds.forConversation(conversationId) ||

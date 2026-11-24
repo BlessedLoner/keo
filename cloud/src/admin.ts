@@ -9,7 +9,7 @@
  */
 
 import { adminPage } from './adminPage';
-import { fail, json, type Env, type Fetch, type Supabase } from './gateway';
+import { fail, json, windowsFor, type Env, type Fetch, type Plan, type Supabase } from './gateway';
 
 interface AdminDeps {
   fetch: Fetch;
@@ -23,6 +23,32 @@ export function adminEmails(env: { ADMIN_EMAILS?: string }): string[] {
     .split(/[,\s;]+/)
     .map((e) => e.trim().toLowerCase())
     .filter((e) => e.includes('@'));
+}
+
+/** Paystack's fee for a payment in US$ (with 7.5% VAT on the fee): local Naira cards 1.5% + ₦100 (capped at ₦2,000), others 3.9% + ₦100. */
+export function paystackFeeUsd(currency: string, amount: number, ngnPerUsd: number): number {
+  if (currency === 'NGN') {
+    const naira = amount / 100;
+    return (Math.min(0.015 * naira + (naira >= 2500 ? 100 : 0), 2000) * 1.075) / ngnPerUsd;
+  }
+  return (0.039 * (amount / 100) + 100 / ngnPerUsd) * 1.075;
+}
+
+/** The key of a profile's current billing month (as Studio's monthly credits use it). */
+function periodKey(p: { plan: string; plan_until: string | null; period_start?: string | null }, now: number): string {
+  return windowsFor(now, { id: p.plan } as Plan, p).periodKey;
+}
+
+/** null when the request carries an admin's sign-in; otherwise the answer to send (404 without admins). */
+export async function adminOnly(req: Request, env: Env, db: Supabase): Promise<Response | null> {
+  const allowed = adminEmails(env);
+  if (!allowed.length) return fail(404, 'Not found.', 'not_found', 'invalid_request_error');
+  const token = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')?.[1]?.trim();
+  if (!token) return fail(401, 'Sign in first.', 'not_signed_in', 'authentication_error');
+  const who = await db.user(token);
+  if (!who) return fail(401, 'Your sign-in has expired. Sign in again.', 'sign_in_expired', 'authentication_error');
+  if (!who.email || !allowed.includes(who.email.toLowerCase())) return fail(403, 'This account is not a Keo admin.', 'not_admin', 'permission_error');
+  return null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,7 +101,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
         rest<Array<{ plan: string; blocked: boolean; created_at: string }>>('profiles?select=plan,blocked,created_at&limit=100000'),
         rest<Array<{ user_id: string; requests: number; cost_usd: number }>>(`usage_daily?day=eq.${day(now)}&select=user_id,requests,cost_usd&limit=100000`),
         rest<Array<{ requests: number; cost_usd: number }>>(`usage_daily?day=gte.${month(now)}-01&select=requests,cost_usd&limit=100000`),
-        rest<Array<{ credits: number; status: string }>>(`studio_jobs?month=eq.${month(now)}&select=credits,status&limit=100000`),
+        rest<Array<{ credits: number; status: string }>>(`studio_jobs?created_at=gte.${month(now)}-01&select=credits,status&limit=100000`),
         rest<Array<{ currency: string; amount: number; status: string }>>(`payments?created_at=gte.${month(now)}-01&select=currency,amount,status&limit=100000`),
         rest<Array<{ status: string }>>('problem_reports?status=eq.new&select=status&limit=10000').catch(() => []),
         rest<Array<{ id: string; name: string }>>('plans?select=id,name&order=sort'),
@@ -97,12 +123,93 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
           aiCostUsd: round(sum(usageMonth.map((u) => Number(u.cost_usd)))),
           studioJobs: spent.length,
           studioCredits: sum(spent.map((j) => j.credits)),
-          // 200 credits are a dollar to users and cover a dollar of fal.ai (half the price), so fal.ai costs about credits / 200.
+          // 200 credits are $2 to users and cover $1 of fal.ai, so fal.ai costs about credits / 200.
           falCostUsd: round(sum(spent.map((j) => j.credits)) / 200),
           payments: paid.length,
           revenue,
         },
         reportsNew: reports.length,
+      });
+    }
+
+    // Money: revenue, provider costs and gross margin per plan for a calendar month, what Keo still
+    // owes in Studio credits, Keo's spend against its safety limits, and alerts.
+    if (req.method === 'GET' && route === '/v1/admin/finance') {
+      const asked = new URL(req.url).searchParams.get('month') ?? '';
+      const m = /^\d{4}-\d{2}$/.test(asked) ? asked : month(now);
+      const [y, mo] = m.split('-').map(Number) as [number, number];
+      const next = new Date(Date.UTC(y, mo, 1)).toISOString().slice(0, 10);
+      const [profiles, plans, payments, usage, jobs, credits, spend, settings, alerts] = await Promise.all([
+        rest<Array<{ id: string; plan: string; plan_until: string | null; period_start?: string | null }>>('profiles?select=id,plan,plan_until,period_start&limit=100000'),
+        rest<Array<{ id: string; name: string; features: Record<string, unknown> }>>('plans?select=*&order=sort'),
+        rest<Array<{ user_id: string | null; plan: string | null; credits: number | null; currency: string; amount: number; status: string }>>(
+          `payments?created_at=gte.${m}-01&created_at=lt.${next}&select=user_id,plan,credits,currency,amount,status&limit=100000`,
+        ),
+        rest<Array<{ user_id: string; cost_usd: number }>>(`usage_daily?day=gte.${m}-01&day=lt.${next}&select=user_id,cost_usd&limit=100000`),
+        rest<Array<{ user_id: string; credits: number; status: string }>>(`studio_jobs?created_at=gte.${m}-01&created_at=lt.${next}&select=user_id,credits,status&limit=100000`),
+        rest<Array<{ user_id: string; month: string; monthly_used: number; bought: number }>>('studio_credits?select=user_id,month,monthly_used,bought&limit=100000'),
+        rest<Array<{ day: string; provider: string; cost_usd: number }>>(`spend_daily?day=gte.${m}-01&day=lt.${next}&select=day,provider,cost_usd`).catch(() => []),
+        rest<Array<{ key: string; value: number }>>('keo_settings?select=key,value').catch(() => []),
+        rest<Array<{ day: string; kind: string; message: string; created_at: string }>>('alerts?select=day,kind,message,created_at&order=created_at.desc&limit=30').catch(() => []),
+      ]);
+      const setting = (k: string, d: number) => Number(settings.find((x) => x.key === k)?.value) || d;
+      const rate = setting('ngn_per_usd', 1380);
+      const planOf = new Map(profiles.map((p) => [p.id, p.plan]));
+      type Row = { revenueUsd: number; feesUsd: number; aiUsd: number; falUsd: number; payers: number; users: number };
+      const rows: Record<string, Row> = {};
+      const row = (id: string): Row => (rows[id] ??= { revenueUsd: 0, feesUsd: 0, aiUsd: 0, falUsd: 0, payers: 0, users: 0 });
+      for (const p of plans) row(p.id);
+      row('credit packs');
+      for (const p of profiles) row(p.plan).users++;
+      for (const p of payments.filter((x) => x.status === 'success')) {
+        const r = row(p.plan ?? 'credit packs');
+        r.revenueUsd += p.currency === 'NGN' ? Number(p.amount) / 100 / rate : Number(p.amount) / 100;
+        r.feesUsd += paystackFeeUsd(p.currency, Number(p.amount), rate);
+        if (p.plan) r.payers++;
+      }
+      for (const u of usage) row(planOf.get(u.user_id) ?? 'free').aiUsd += Number(u.cost_usd) || 0;
+      for (const j of jobs.filter((x) => x.status !== 'refunded')) row(planOf.get(j.user_id) ?? 'free').falUsd += (Number(j.credits) || 0) / 200;
+      const marginOf = (r: { revenueUsd: number; feesUsd: number; aiUsd: number; falUsd: number }) => r.revenueUsd - r.feesUsd - r.aiUsd - r.falUsd;
+      const pct = (margin: number, revenue: number) => (revenue > 0 ? Math.round((margin / revenue) * 100) : null);
+      const byPlan = Object.entries(rows).map(([id, r]) => ({
+        plan: id,
+        revenueUsd: round(r.revenueUsd),
+        feesUsd: round(r.feesUsd),
+        aiUsd: round(r.aiUsd),
+        falUsd: round(r.falUsd),
+        payers: r.payers,
+        users: r.users,
+        marginUsd: round(marginOf(r)),
+        marginPct: pct(marginOf(r), r.revenueUsd),
+      }));
+      const t = Object.values(rows).reduce((a, r) => ({ revenueUsd: a.revenueUsd + r.revenueUsd, feesUsd: a.feesUsd + r.feesUsd, aiUsd: a.aiUsd + r.aiUsd, falUsd: a.falUsd + r.falUsd }), { revenueUsd: 0, feesUsd: 0, aiUsd: 0, falUsd: 0 });
+      // What Keo still owes in Studio credits, at fal.ai's cost (a credit covers $0.005).
+      const bought = sum(credits.map((c) => Number(c.bought) || 0));
+      let monthlyLeft = 0;
+      for (const p of profiles) {
+        if (p.plan === 'free' || !p.plan_until || Date.parse(p.plan_until) < now) continue;
+        const allowance = Number(plans.find((x) => x.id === p.plan)?.features?.studio_credits) || 0;
+        const c = credits.find((x) => x.user_id === p.id);
+        const key = periodKey(p, now);
+        monthlyLeft += Math.max(0, allowance - (c && c.month === key ? Number(c.monthly_used) || 0 : 0));
+      }
+      const today = day(now);
+      return json(200, {
+        month: m,
+        ngnPerUsd: rate,
+        byPlan,
+        total: { revenueUsd: round(t.revenueUsd), feesUsd: round(t.feesUsd), aiUsd: round(t.aiUsd), falUsd: round(t.falUsd), marginUsd: round(marginOf(t)), marginPct: pct(marginOf(t), t.revenueUsd) },
+        providerSpend: {
+          openrouterUsd: round(sum(spend.filter((x) => x.provider === 'openrouter').map((x) => Number(x.cost_usd)))),
+          falUsd: round(sum(spend.filter((x) => x.provider === 'fal').map((x) => Number(x.cost_usd)))),
+        },
+        liabilities: { boughtCredits: bought, monthlyCreditsLeft: monthlyLeft, falCostUsd: round((bought + monthlyLeft) / 200) },
+        breakers: ['openrouter', 'fal'].map((pr) => ({
+          provider: pr,
+          limitUsd: setting(`breaker_${pr}_day_usd`, 0),
+          todayUsd: round(Number(spend.find((x) => x.day === today && x.provider === pr)?.cost_usd) || 0),
+        })),
+        alerts,
       });
     }
 
@@ -161,7 +268,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
         const until = b.until === null || b.until === '' || b.until === undefined ? null : new Date(String(b.until));
         if (until && (Number.isNaN(until.getTime()) || until.getTime() < now)) return fail(400, 'The end date must be in the future.', 'bad_request', 'invalid_request_error');
         if (plan !== 'free' && !until) return fail(400, 'A paid plan needs an end date (when it stops).', 'bad_request', 'invalid_request_error');
-        await rest(`profiles?id=eq.${id}`, { method: 'PATCH', headers: { prefer: 'return=minimal' }, body: JSON.stringify({ plan, plan_until: until ? until.toISOString() : null }) });
+        await rest(`profiles?id=eq.${id}`, { method: 'PATCH', headers: { prefer: 'return=minimal' }, body: JSON.stringify({ plan, plan_until: until ? until.toISOString() : null, period_start: plan === 'free' ? null : new Date(now).toISOString() }) });
         await log('plan.set', id, { from: profile.plan, to: plan, until: until?.toISOString() ?? null, note: String(b.note ?? '').slice(0, 300) });
         return json(200, { ok: true });
       }

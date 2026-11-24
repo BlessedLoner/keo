@@ -203,6 +203,8 @@ export interface TurnEnding {
 }
 
 export interface MessageMeta {
+  /** The task paused because the Keo AI allowance ran out (its work is kept); when it can carry on. */
+  paused?: { window: string; until: string | null };
   providerId?: ProviderId;
   model?: string;
   /** Smart routing chose the fast or the strong model for this reply (absent when routing is off). */
@@ -255,7 +257,9 @@ export interface BackgroundJob {
   parentConversationId: string;
   /** The job's own hidden conversation. */
   conversationId: string;
-  state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  state: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  /** A paused job carries on by itself at this time (when the AI allowance resets). */
+  resumeAt?: ISODate | null;
   /** True while the job waits for another job to finish using the mouse and keyboard. */
   waitingForDesktop: boolean;
   createdAt: ISODate;

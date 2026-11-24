@@ -186,8 +186,8 @@ function LiveChats() {
   );
 }
 
-const JOB_LABEL: Record<BackgroundJob['state'], string> = { queued: 'Queued', running: 'Working', completed: 'Done', failed: 'Failed', cancelled: 'Stopped', interrupted: 'Interrupted' };
-const JOB_CHIP: Record<BackgroundJob['state'], string> = { queued: 'info', running: 'accent', completed: 'ok', failed: 'danger', cancelled: '', interrupted: 'warn' };
+const JOB_LABEL: Record<BackgroundJob['state'], string> = { queued: 'Queued', running: 'Working', paused: 'Paused (allowance)', completed: 'Done', failed: 'Failed', cancelled: 'Stopped', interrupted: 'Interrupted' };
+const JOB_CHIP: Record<BackgroundJob['state'], string> = { queued: 'info', running: 'accent', paused: 'warn', completed: 'ok', failed: 'danger', cancelled: '', interrupted: 'warn' };
 
 /** The helpers' shared board: short notes live chats, background jobs and the user's chat leave for each other. */
 function HelperBoardList() {
@@ -215,7 +215,7 @@ function HelperBoardList() {
 function BackgroundJobs() {
   const q = useInvoke('jobs:list', {}, { refreshOn: ['jobs:changed'], pollMs: 15000 });
   const list = q.data ?? [];
-  const active = list.filter((j) => j.state === 'running' || j.state === 'queued');
+  const active = list.filter((j) => j.state === 'running' || j.state === 'queued' || j.state === 'paused');
   const recent = list.filter((j) => j.state !== 'running' && j.state !== 'queued' && j.finishedAt && Date.now() - Date.parse(j.finishedAt) < 2 * 3600_000).slice(0, 3);
   if (!active.length && !recent.length) return null;
   return (
@@ -227,7 +227,7 @@ function BackgroundJobs() {
             <Icon name="tasks" size={16} />
             <strong className="grow">{j.title}</strong>
             <span className={`chip ${JOB_CHIP[j.state]}`}>{j.waitingForDesktop ? 'Waiting for the desktop' : JOB_LABEL[j.state]}</span>
-            {(j.state === 'running' || j.state === 'queued') && (
+            {(j.state === 'running' || j.state === 'queued' || j.state === 'paused') && (
               <button className="btn sm danger" onClick={() => void invoke('jobs:cancel', { id: j.id })}>
                 Stop
               </button>
@@ -237,6 +237,7 @@ function BackgroundJobs() {
             {j.kind} · started {new Date(j.startedAt ?? j.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             {j.finishedAt ? ` · ended ${new Date(j.finishedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
             {j.error ? ` · ${j.error}` : ''}
+            {j.state === 'paused' && j.resumeAt ? ` · carries on around ${new Date(j.resumeAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
           </div>
         </div>
       ))}

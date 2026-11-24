@@ -42,18 +42,29 @@ describe('the strongest model for building', () => {
     expect(models[1]).toBe('keo-test-heavy');
   });
 
-  it('a Keo account uses the best model its plan includes', () => {
+  it('a Keo build uses Keo Strong; Keo Best only when the user chose it or asks for it', () => {
     h = makeHarness();
     const pick = h.services.agent.heavyModel!;
     const keo = { id: 'keo' } as never;
     const set = (ids: string[]) => ((h.services.account as unknown as { modelList: Array<{ id: string }> }).modelList = ids.map((id) => ({ id })));
+    const build = 'build me a landing page for my bakery';
+    // Max: Strong by default, even though Best is in the plan.
     set(['keo-fast', 'keo-strong', 'keo-best']);
-    expect(pick(keo)).toBe('keo-best');
+    expect(pick(keo, 'keo-fast', build)).toBe('keo-strong');
+    // Asked for in the user's own words.
+    expect(pick(keo, 'keo-fast', 'build me a game with Keo Best')).toBe('keo-best');
+    expect(pick(keo, 'keo-fast', 'use the best model to build my portfolio site')).toBe('keo-best');
+    // The user picked Best as their model: never replaced by Strong.
+    expect(pick(keo, 'keo-best', build)).toBeNull();
+    // Already on Strong: nothing to change.
+    expect(pick(keo, 'keo-strong', build)).toBeNull();
+    // Pro and Creator: no Best, so asking for it still gives Strong.
     set(['keo-fast', 'keo-strong']);
-    expect(pick(keo)).toBe('keo-strong');
+    expect(pick(keo, 'keo-fast', 'build it with Keo Best')).toBe('keo-strong');
+    // Free: nothing stronger to move to.
     set(['keo-fast']);
-    expect(pick(keo)).toBeNull();
+    expect(pick(keo, 'keo-fast', build)).toBeNull();
     // Another provider: the user's own model choice stands.
-    expect(pick({ id: 'openrouter' } as never)).toBeNull();
+    expect(pick({ id: 'openrouter' } as never, 'x', build)).toBeNull();
   });
 });

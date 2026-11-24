@@ -66,6 +66,7 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
   <span class="logo">KEO ADMIN</span>
   <nav id="tabs" hidden>
     <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="finance">Money</button>
     <button data-tab="users">Users</button>
     <button data-tab="reports">Problem reports</button>
     <button data-tab="jobs">Studio jobs</button>
@@ -153,7 +154,7 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
   function show(tab, arg) {
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
     view(el('p', { class: 'muted' }, 'Loading…'));
-    ({ overview, users, user, reports, report, jobs, actions })[tab](arg).catch(failed);
+    ({ overview, finance, users, user, reports, report, jobs, actions })[tab](arg).catch(failed);
   }
   const stat = (n, l, cls) => el('div', { class: 'card stat' }, el('div', { class: 'n ' + (cls || '') }, n), el('div', { class: 'l' }, l));
 
@@ -167,6 +168,36 @@ export function adminPage(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string
         stat(o.month.payments, 'Payments this month'), stat(money(o.month.revenue), 'Revenue this month'),
         stat(o.reportsNew, 'New problem reports', o.reportsNew ? 'warn' : ''), stat(o.blocked, 'Blocked accounts')),
       el('div', { class: 'card' }, el('h2', {}, 'Plans'), el('table', {}, el('tr', {}, el('th', {}, 'Plan'), el('th', {}, 'Users')), o.plans.map((p) => el('tr', {}, el('td', {}, p.name), el('td', {}, p.users))))),
+    );
+  }
+
+  // Money: revenue, provider costs and gross margin per plan; what Keo owes in credits; safety limits; alerts.
+  async function finance(m) {
+    const f = await api('finance' + (m ? '?month=' + encodeURIComponent(m) : ''));
+    const usd = (n) => '$' + Number(n || 0).toFixed(2);
+    const pct = (n) => (n === null || n === undefined ? '—' : n + '%');
+    const tone = (n) => (n === null || n === undefined ? '' : n < 20 ? 'bad' : n < 35 ? 'warn' : 'ok');
+    const pick = el('input', { type: 'month', value: f.month });
+    pick.addEventListener('change', () => finance(pick.value).catch(failed));
+    view(
+      el('div', { class: 'card row' }, el('span', { class: 'muted' }, 'Month'), pick, el('span', { class: 'muted' }, 'Naira converted at ₦' + f.ngnPerUsd + ' to $1 (keo_settings → ngn_per_usd)')),
+      el('div', { class: 'grid' },
+        stat(usd(f.total.revenueUsd), 'Revenue'), stat(usd(f.total.feesUsd), 'Payment fees (about)'),
+        stat(usd(f.total.aiUsd), 'AI cost (OpenRouter)'), stat(usd(f.total.falUsd), 'Studio cost (fal.ai, about)'),
+        stat(usd(f.total.marginUsd), 'Gross margin', tone(f.total.marginPct)), stat(pct(f.total.marginPct), 'Gross margin %', tone(f.total.marginPct)),
+        stat(usd(f.liabilities.falCostUsd), 'Owed in Studio credits (fal.ai cost)'), stat(f.liabilities.boughtCredits.toLocaleString(), 'Bought and gift credits not used'),
+        stat(f.liabilities.monthlyCreditsLeft.toLocaleString(), 'Monthly credits left this month')),
+      el('div', { class: 'card' }, el('h2', {}, 'By plan'), el('table', {},
+        el('tr', {}, ['Plan', 'Users', 'Payments', 'Revenue', 'Fees', 'AI cost', 'Studio cost', 'Margin', 'Margin %'].map((h) => el('th', {}, h))),
+        f.byPlan.map((r) => el('tr', {}, el('td', {}, r.plan), el('td', {}, r.users), el('td', {}, r.payers), el('td', {}, usd(r.revenueUsd)), el('td', {}, usd(r.feesUsd)),
+          el('td', {}, usd(r.aiUsd)), el('td', {}, usd(r.falUsd)), el('td', {}, usd(r.marginUsd)), el('td', { class: tone(r.marginPct) }, pct(r.marginPct)))))),
+      el('div', { class: 'card' }, el('h2', {}, 'Safety limits today'), el('table', {},
+        el('tr', {}, ['Provider', 'Spent today', 'Daily limit'].map((h) => el('th', {}, h))),
+        f.breakers.map((b) => el('tr', {}, el('td', {}, b.provider), el('td', { class: b.limitUsd && b.todayUsd >= b.limitUsd * 0.8 ? 'warn' : '' }, usd(b.todayUsd)), el('td', {}, b.limitUsd ? usd(b.limitUsd) : 'not set')))),
+        el('p', { class: 'muted' }, 'Provider spend this month: OpenRouter ' + usd(f.providerSpend.openrouterUsd) + ', fal.ai ' + usd(f.providerSpend.falUsd) + '. Change the limits in Table Editor → keo_settings.')),
+      el('div', { class: 'card' }, el('h2', {}, 'Alerts'), f.alerts.length
+        ? el('table', {}, f.alerts.map((a) => el('tr', {}, el('td', { class: 'muted' }, new Date(a.created_at).toLocaleString()), el('td', { class: a.kind.startsWith('breaker') ? 'bad' : 'warn' }, a.message))))
+        : el('p', { class: 'muted' }, 'No alerts.')),
     );
   }
 

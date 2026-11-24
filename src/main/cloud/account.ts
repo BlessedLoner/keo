@@ -1,5 +1,5 @@
 import { userIdOfToken } from '../env/accounts';
-import type { AccountStatus } from '../../shared/cloud';
+import type { AllowanceWindow, AccountStatus } from '../../shared/cloud';
 import { KEO_CLOUD } from '../../shared/cloud';
 import type { Logger } from '../logging/logger';
 import type { SecretStore } from '../secrets/secretStore';
@@ -381,7 +381,7 @@ export class KeoAccount {
     try {
       const me = await this.gateway<{
         plan: { id: string; name: string; daily_requests: number; daily_tokens: number; features: Record<string, unknown> };
-        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number; allowanceUsed?: number; monthUsed?: number };
+        usage: { day: string; requests: number; input_tokens: number; output_tokens: number; web_searches?: number; images?: number; voice_seconds?: number; allowanceUsed?: number; monthUsed?: number; windows?: AllowanceWindow[]; buildsLeft?: Record<string, { now: number; month: number }> };
         billing?: { until: string | null; status: string } | null;
       }>('/me');
       this.me = {
@@ -396,6 +396,8 @@ export class KeoAccount {
           voiceSeconds: me.usage.voice_seconds ?? 0,
           ...(typeof me.usage.allowanceUsed === 'number' ? { allowanceUsed: me.usage.allowanceUsed } : {}),
           ...(typeof me.usage.monthUsed === 'number' ? { monthUsed: me.usage.monthUsed } : {}),
+          ...(Array.isArray(me.usage.windows) ? { windows: me.usage.windows.filter((w) => w && (w.window === 'day' || w.window === 'week' || w.window === 'month')) } : {}),
+          ...(me.usage.buildsLeft && typeof me.usage.buildsLeft === 'object' ? { buildsLeft: me.usage.buildsLeft } : {}),
         },
         billing: me.billing ?? null,
         at: this.now(),

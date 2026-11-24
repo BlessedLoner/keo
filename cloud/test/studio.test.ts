@@ -4,11 +4,16 @@ import { mp4Video } from '../src/studio';
 
 const env: Env = { SUPABASE_URL: 'https://db.test', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'service-secret', OPENROUTER_API_KEY: 'or-secret', FAL_KEY: 'fal-secret' };
 const NOW = Date.parse('2026-11-03T12:00:00Z');
-const MONTH = '2026-11';
+// Creator paid on 1 November: its billing month (and monthly credits) run from then.
+const MONTH = 'p2026-11-01T00:00:00';
 
 /** Supabase (with the credit functions) and fal.ai in memory. */
 class World {
-  profiles = new Map<string, { plan: string; plan_until: string | null; blocked: boolean }>([['u-ana', { plan: 'creator', plan_until: '2026-12-01T00:00:00Z', blocked: false }]]);
+  profiles = new Map<string, { plan: string; plan_until: string | null; blocked: boolean; period_start?: string | null }>([['u-ana', { plan: 'creator', plan_until: '2026-12-04T00:00:00Z', blocked: false, period_start: '2026-11-01T00:00:00Z' }]]);
+  /** Keo's fal.ai spend per day (the safety breaker), and its daily limit. */
+  spend = new Map<string, number>();
+  falBreaker = 60;
+  alerts: string[] = [];
   plans = [
     { id: 'free', name: 'Free', daily_requests: 3, daily_tokens: 1000, max_tier: 1, features: { studio_credits: 0 } },
     { id: 'creator', name: 'Creator', daily_requests: 800, daily_tokens: 6e6, max_tier: 2, features: { studio_credits: 1500 } },
@@ -71,9 +76,28 @@ class World {
           if (!job || job.status === 'refunded') return j(200, false);
           job.status = 'refunded';
           const r = this.credits.get(String(job.user_id))!;
-          r.monthly_used -= Number(job.from_monthly);
+          if (r.month === job.month) r.monthly_used = Math.max(0, r.monthly_used - Number(job.from_monthly));
           r.bought += Number(job.from_bought);
           return j(200, true);
+        }
+        case '/rest/v1/rpc/return_credits': {
+          const r = this.credits.get(String(body.p_user));
+          if (r) {
+            if (r.month === body.p_month) r.monthly_used = Math.max(0, r.monthly_used - Number(body.p_from_monthly));
+            r.bought += Number(body.p_from_bought);
+          }
+          return new Response(null, { status: 204 });
+        }
+        case '/rest/v1/rpc/reserve_spend': {
+          const k = `${body.p_day}|${body.p_provider}`;
+          const cur = this.spend.get(k) ?? 0;
+          const amount = Number(body.p_amount);
+          if (amount > 0 && cur + amount > this.falBreaker) {
+            this.alerts.push(`breaker_${body.p_provider}`);
+            return j(200, 'keo_breaker');
+          }
+          this.spend.set(k, Math.max(0, Math.round((cur + amount) * 1e6) / 1e6));
+          return j(200, String(this.spend.get(k)));
         }
         case '/rest/v1/rpc/add_credits': {
           const r = this.credits.get(String(body.p_user)) ?? { month: '', monthly_used: 0, bought: 0 };
@@ -202,6 +226,47 @@ describe('Studio credits (Keo’s fal.ai key, a fake fal.ai: nothing is paid)', 
     // Not a picture, or not inline-able: refused before anything is paid.
     expect((await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/nano-banana-pro/edit', input: { prompt: 'p', image_urls: ['data:text/html;base64,PGI+'] } })).status).toBe(400);
     expect((await call('POST', '/v1/studio/run', { endpoint: 'fal-ai/wan/v2.2-14b/animate/replace', input: { video_url: 'data:image/jpeg;base64,AAAA', image_url: inline } })).status).toBe(400);
+  });
+
+  it('monthly credits follow the billing month: paid on 28 October, 3 November is the same month', async () => {
+    w.profiles.set('u-ana', { plan: 'creator', plan_until: '2026-12-01T00:00:00Z', blocked: false, period_start: '2026-10-28T10:00:00Z' });
+    clearCache();
+    w.credits.set('u-ana', { month: 'p2026-10-28T10:00:00', monthly_used: 1400, bought: 0 });
+    const r = await call('GET', '/v1/studio/credits');
+    // Not a fresh 1,500 on 1 November: 100 are left of the month paid for.
+    expect(r.body).toMatchObject({ monthlyAllowance: 1500, monthlyLeft: 100, total: 100 });
+    expect((await call('POST', '/v1/studio/run', kling)).status).toBe(402);
+  });
+
+  it('a request fal.ai refuses at once gives back exactly what it took: monthly credits stay monthly', async () => {
+    w.credits.set('u-ana', { month: MONTH, monthly_used: 1450, bought: 200 });
+    const base = w.fetch;
+    w.fetch = async (input, init = {}) => (new URL(input).host === 'queue.fal.run' && init.method === 'POST' ? new Response(JSON.stringify({ detail: 'Invalid image' }), { status: 422 }) : base(input, init));
+    const r = await call('POST', '/v1/studio/run', kling);
+    expect(r.status).toBe(422);
+    expect(r.body.error.message).toContain('Nothing was charged');
+    // 50 monthly + 62 bought were taken, and the same came back to each.
+    expect(w.credits.get('u-ana')).toMatchObject({ monthly_used: 1450, bought: 200 });
+    // fal.ai's spend for the day is back where it was.
+    expect([...w.spend.values()]).toEqual([0]);
+  });
+
+  it('Keo’s daily fal.ai safety limit stops Studio AI before anything is sent, and costs the user nothing', async () => {
+    w.falBreaker = 0.5;
+    const r = await call('POST', '/v1/studio/run', kling);
+    expect(r.status).toBe(503);
+    expect(r.body.error.code).toBe('keo_paused');
+    expect(w.fal).toHaveLength(0);
+    expect(w.credits.get('u-ana')!.monthly_used).toBe(0);
+    expect(w.alerts).toEqual(['breaker_fal']);
+  });
+
+  it('what Studio spends at fal.ai is counted, and a refunded job takes it off again', async () => {
+    const run = await call('POST', '/v1/studio/run', kling);
+    expect([...w.spend.values()]).toEqual([0.56]);
+    w.falResult = 422;
+    await call('GET', `/v1/studio/requests/${run.body.request_id}`);
+    expect([...w.spend.values()]).toEqual([0]);
   });
 
   it('without Keo’s fal.ai key, Studio AI says it is off', async () => {

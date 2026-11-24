@@ -60,11 +60,17 @@ export class ProviderError extends KeoError {
   readonly kind: ProviderErrorKind;
   readonly retryable: boolean;
   readonly status: number | null;
-  constructor(kind: ProviderErrorKind, message: string, opts: { retryable?: boolean; status?: number | null } = {}) {
+  /** Keo Cloud's own reason (e.g. allowance_paused). */
+  readonly cloudCode: string | null;
+  /** allowance_paused: which window ran out and when it resets. */
+  readonly paused: { window: string; until: string | null } | null;
+  constructor(kind: ProviderErrorKind, message: string, opts: { retryable?: boolean; status?: number | null; cloudCode?: string | null; paused?: { window: string; until: string | null } | null } = {}) {
     super(`provider_${kind}`, message);
     this.kind = kind;
     this.retryable = opts.retryable ?? false;
     this.status = opts.status ?? null;
+    this.cloudCode = opts.cloudCode ?? null;
+    this.paused = opts.paused ?? null;
   }
 }
 

@@ -62,7 +62,7 @@ export function upgradePage(): Response {
     <div class="seg" id="currencies" role="group" aria-label="Currency"></div>
   </header>
   <h1>Choose your plan</h1>
-  <p class="lead">More AI steps, stronger models, pictures and longer voice — on your own computer.</p>
+  <p class="lead">A monthly AI allowance for chat, building and operating your computer, stronger models, pictures and voice — plus Studio credits for AI video.</p>
   <p class="who" id="who" hidden></p>
   <div class="plans" id="plans"><p class="lead">Loading plans…</p></div>
   <div class="manage" id="manage" hidden>
@@ -76,7 +76,7 @@ export function upgradePage(): Response {
     <div class="plans" id="packs"></div>
   </div>
   <p class="note" id="note" hidden></p>
-  <p class="fine"><span class="lock"></span>Payments are made securely with Paystack. Keo never sees or stores your card details. Plans renew every month; cancel any time and keep your plan until the end of the month you paid for. Daily allowances reset at midnight UTC. Payments are not refunded. By upgrading you agree to Keo’s <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refunds">Refund Policy</a>.</p>
+  <p class="fine"><span class="lock"></span>Payments are made securely with Paystack. Keo never sees or stores your card details. Plans renew every month; cancel any time and keep your plan until the end of the month you paid for. Your AI allowance renews each month from the day you paid; its daily and weekly shares reset at 00:00 UTC (weeks on Monday). When an allowance is used up, Keo pauses and keeps your work. Studio credits are separate and never pay for chat. Payments are not refunded. By upgrading you agree to Keo’s <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refunds">Refund Policy</a>.</p>
 </div>
 <script>
 (function () {
@@ -88,7 +88,7 @@ export function upgradePage(): Response {
   history.replaceState(null, '', location.pathname);
   var $ = function (id) { return document.getElementById(id); };
   var state = { prices: null, me: null, currency: 'USD', busy: false };
-  var tier = { free: 'Keo Fast model', pro: 'Keo Fast and Keo Strong models', creator: 'Keo Fast and Keo Strong models', max: 'All models, including Keo Best' };
+  var tier = { free: 'Keo Fast model', pro: 'Keo Fast and Keo Strong models', creator: 'Keo Fast and Keo Strong models', max: 'Keo Fast and Keo Strong, and Keo Best when you choose it' };
 
   function note(text, kind) { var n = $('note'); n.hidden = !text; n.className = 'note ' + (kind || ''); n.textContent = text || ''; }
   function api(method, path, body) {
@@ -101,20 +101,26 @@ export function upgradePage(): Response {
   }
   function day(iso) { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return iso; } }
   function features(p) {
-    var f = p.features || {}, out = [];
-    out.push([true, p.dailyRequests.toLocaleString() + ' AI steps a day']);
+    var f = p.features || {}, al = p.allowance || {}, out = [];
+    var n = function (x) { return Number(x || 0).toLocaleString(); };
+    if (al.strongBuilds) out.push([true, 'Monthly AI allowance: about ' + n(al.strongBuilds) + ' website or game builds on Keo Strong, or ' + n(al.fastTasks) + ' tasks on Keo Fast']);
+    else if (al.fastTasks) out.push([true, 'Monthly AI allowance: about ' + n(al.fastTasks) + ' tasks on Keo Fast']);
     out.push([true, tier[p.id] || 'Keo models']);
-    out.push([f.web_search > 0, f.web_search > 0 ? f.web_search + ' Keo web searches a day' : 'Keo web search']);
-    out.push([f.images > 0, f.images > 0 ? f.images + ' AI pictures a day' : 'AI pictures']);
-    out.push([f.voice_minutes > 0, f.voice_minutes > 0 ? f.voice_minutes + ' minutes of Keo’s voice a day' : 'Keo’s voice']);
-    out.push([!!f.video, 'Video making']);
-    out.push([f.studio_credits > 0, f.studio_credits > 0 ? f.studio_credits.toLocaleString() + ' Studio credits a month (AI clips, Clone a video, character voices)' : 'Studio credits included']);
+    if (al.bestBuilds) out.push([true, 'Keo Best uses the allowance about twice as fast as Keo Strong (about ' + n(al.bestBuilds) + ' builds)']);
+    out.push([true, 'Up to ' + Math.round((al.dayShare || 0.15) * 100) + '% of it a day and ' + Math.round((al.weekShare || 0.4) * 100) + '% a week, so it lasts the month']);
+    out.push([f.web_search > 0, f.web_search > 0 ? 'Up to ' + f.web_search + ' web searches a day' : 'Keo web search']);
+    out.push([f.images > 0, f.images > 0 ? 'Up to ' + f.images + ' AI pictures a day' : 'AI pictures']);
+    out.push([f.voice_minutes > 0, f.voice_minutes > 0 ? 'Up to ' + f.voice_minutes + ' minutes of Keo’s voice a day' : 'Keo’s voice']);
+    out.push([true, (f.background_jobs || 1) + ' background job' + ((f.background_jobs || 1) > 1 ? 's' : '') + ' at once']);
+    out.push([true, f.studio_credits > 0 ? n(f.studio_credits) + ' Studio credits a month (AI clips, Clone a video, character voices)' : n(P_trial) + ' Studio credits to try, once']);
     return out;
   }
+  var P_trial = 150;
 
   function render() {
     var P = state.prices, me = state.me;
     if (!P) return;
+    if (P.trialCredits !== undefined) P_trial = P.trialCredits;
     var cur = $('currencies'); cur.innerHTML = '';
     P.currencies.forEach(function (c) {
       var b = document.createElement('button'); b.textContent = c; b.className = c === state.currency ? 'on' : '';
@@ -126,12 +132,12 @@ export function upgradePage(): Response {
     P.plans.forEach(function (p) {
       var el = document.createElement('section'); el.className = 'plan' + (p.id === 'pro' ? ' best' : '');
       var amount = p.prices[state.currency];
-      el.innerHTML = (p.id === 'pro' ? '<span class="tag">Most popular</span>' : p.id === 'creator' ? '<span class="tag">For creators</span>' : '') + '<h2></h2><div class="price"></div><div class="sub"></div><ul></ul>';
+      el.innerHTML = (p.id === 'pro' ? '<span class="tag">Most popular</span>' : p.id === 'creator' ? '<span class="tag">Studio path</span>' : p.id === 'max' ? '<span class="tag">AI path</span>' : '') + '<h2></h2><div class="price"></div><div class="sub"></div><ul></ul>';
       el.querySelector('h2').textContent = p.name;
       var priceEl = el.querySelector('.price');
       priceEl.appendChild(document.createTextNode(p.id === 'free' ? money(0, state.currency) : amount ? money(amount, state.currency) : '—'));
       if (p.id !== 'free') { var s = document.createElement('small'); s.textContent = ' / month'; priceEl.appendChild(s); }
-      el.querySelector('.sub').textContent = p.id === 'free' ? 'For trying Keo' : p.id === 'pro' ? 'For everyday work' : p.id === 'creator' ? 'For faceless videos and Keo Studio' : 'For heavy use';
+      el.querySelector('.sub').textContent = p.id === 'free' ? 'For trying Keo' : p.id === 'pro' ? 'For everyday work' : p.id === 'creator' ? 'The Studio path: the most Studio credits, for AI video' : 'The AI path: the biggest AI allowance, and Keo Best';
       var ul = el.querySelector('ul');
       features(p).forEach(function (f) { var li = document.createElement('li'); li.textContent = f[1]; if (!f[0]) li.className = 'no'; ul.appendChild(li); });
       var b = document.createElement('button'); b.className = 'btn';
@@ -156,7 +162,7 @@ export function upgradePage(): Response {
       el.querySelector('h2').textContent = k.credits.toLocaleString() + ' credits';
       var amount = k.prices[state.currency];
       el.querySelector('.price').textContent = amount ? money(amount, state.currency) : '—';
-      el.querySelector('.sub').textContent = 'About ' + Math.round(k.credits / 120) + ' clips of 15 seconds, or ' + Math.round(k.credits / 112) + ' AI shots';
+      el.querySelector('.sub').textContent = 'About ' + Math.floor(k.credits / 168) + ' AI clips of 5 seconds with sound, or ' + Math.floor(k.credits / 30) + ' realistic pictures';
       var b = document.createElement('button'); b.className = 'btn'; b.style.marginTop = '16px';
       if (!amount) { b.textContent = 'Not available in ' + state.currency; b.disabled = true; }
       else if (!ticket) { b.textContent = 'Buy from the Keo app'; b.disabled = true; }

@@ -116,7 +116,7 @@ export class AgentService {
    * Big creative work (building a website, app or game) gets the strongest model the user can use
    * on this provider (the Keo account's best model in its plan); null = keep the chosen model.
    */
-  heavyModel: ((provider: ChatProvider) => string | null) | null = null;
+  heavyModel: ((provider: ChatProvider, currentModel: string, text: string) => string | null) | null = null;
   /** This turn is building something (a build already in this chat, or a request to make one). */
   isBuildWork: ((conversationId: string, text: string) => boolean) | null = null;
   /**
@@ -355,6 +355,8 @@ export class AgentService {
     return { userMessageId: user.id, done: this.runTurn(conversationId, user.id) };
   }
   private readonly resumedTurns = new Set<string>();
+  /** Conversations already told that a build on Keo Best uses the allowance faster. */
+  private readonly warnedBest = new Set<string>();
 
   /** Regenerates the reply to the latest user message. */
   retry(conversationId: string): Promise<Message> {
@@ -491,7 +493,7 @@ export class AgentService {
       const modelInfo = (p: ChatProvider, id: string, routed: boolean) => p.models().find((m) => m.id === id) ?? (routed ? p.models()[0] : undefined);
       // Building a site, app or game: the strongest model available, from the first word on.
       const toHeavy = () => {
-        const heavy = this.heavyModel?.(provider) ?? null;
+        const heavy = this.heavyModel?.(provider, model, latestText) ?? null;
         if (!heavy || heavy === model) return false;
         model = heavy;
         meta.model = model;
@@ -507,6 +509,21 @@ export class AgentService {
         heavyOn = false;
       }
       let info = modelInfo(provider, model, !!route || heavyOn);
+      // A build on Keo Best: say once per conversation that it uses the allowance about twice as fast.
+      if (provider.id === 'keo' && model === 'keo-best' && !this.warnedBest.has(conversationId)) {
+        let building = false;
+        try {
+          building = !!this.isBuildWork?.(conversationId, latestText);
+        } catch {
+          building = false;
+        }
+        if (building) {
+          this.warnedBest.add(conversationId);
+          const n = '_Building on Keo Best: it uses your AI allowance about twice as fast as Keo Strong. Say “use Keo Strong” to switch._\n\n';
+          text += n;
+          this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: n });
+        }
+      }
       meta.providerId = provider.id;
       meta.model = model;
       if (route) meta.route = route.route;
@@ -1082,6 +1099,16 @@ export class AgentService {
             : new ProviderError('unknown', `Unexpected error: ${errorMessage(err)}`);
       if (pe.kind === 'cancelled' || signal.aborted) {
         finalStatus = 'cancelled';
+      } else if (pe.paused) {
+        // The Keo AI allowance ran out mid-task: a pause, not a failure. Everything done so far stays;
+        // the task carries on when the allowance resets (or now, on another model the user picks).
+        finalStatus = 'complete';
+        meta.paused = { window: pe.paused.window, until: pe.paused.until };
+        const n = `${text ? '\n\n' : ''}_⏸ ${pe.message} Say “continue” then, or pick another model in Settings → Providers to carry on now._`;
+        text += n;
+        this.emit({ type: 'text_delta', conversationId, messageId: assistant.id, delta: n });
+        cut = 'the rest (paused: the AI allowance is used up for now)';
+        this.log.info('agent.paused_allowance', { conversationId, window: pe.paused.window, until: pe.paused.until }, correlationId);
       } else {
         finalStatus = 'error';
         meta.error = pe.message;
@@ -1105,7 +1132,9 @@ export class AgentService {
       }
     }
     // How it really ended, from what ran and was checked (never from what the reply says).
-    const ending = turnEnding(finalStatus, meta, leftProblems, cut);
+    const ending = meta.paused
+      ? { kind: 'blocked' as const, why: `Paused: the AI allowance is used up${meta.paused.until ? ` until ${new Date(meta.paused.until).toLocaleString()}` : ''}. The work so far is kept.` }
+      : turnEnding(finalStatus, meta, leftProblems, cut);
     if (ending) meta.ending = ending;
     const final = this.conversations.updateMessage(assistant.id, { content: text, status: finalStatus, meta });
     this.conversations.touch(conversationId);
