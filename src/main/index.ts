@@ -1,5 +1,5 @@
 import { Mp4Reader } from './studio/mp4';
-import { BUILD_SCHEMES, BuildHost, isBuildPageNavigation } from './build/host';
+import { BUILD_SCHEMES, BuildHost, isBuildPageNavigation, isStudyNavigation } from './build/host';
 import { CANVAS_EDIT_JS, CANVAS_FONTS } from './pictures/canvasEdit';
 import { voicedSpans, wavOf } from './studio/captions';
 import { LOOKS, projectDuration, type EditOp } from '../shared/studio';
@@ -232,6 +232,8 @@ app.on('web-contents-created', (_e, contents) => {
     // A build's own pages link to each other: allowed only inside the sandboxed build preview and
     // check windows (their own guard keeps each window inside its own build).
     if (isBuildPageNavigation(contents.session, url)) return;
+    // A website Keo studies may follow its own links and redirects, only in its throwaway session.
+    if (isStudyNavigation(contents.session, url)) return;
     if (originOf(url) !== TRUSTED_ORIGIN) {
       ev.preventDefault();
       log.warn('navigation.blocked', { scheme: url.split(':')[0] });

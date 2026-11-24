@@ -5,6 +5,7 @@ import { BuildError, type BuildProjects } from './projects';
 import { libraryAlias } from './libraries';
 import { RUNNER_HTML } from './runner';
 import { OPENS, actionLabel, actionScript, type CheckAction } from './checkActions';
+import { STUDY_SCRIPT, studyableUrl, summarizeStudy, type RawStudy, type SiteStudy } from './study';
 
 /**
  * Where Keo's builds run: the preview window and the backend sandbox.
@@ -19,6 +20,14 @@ export const BUILD_SCHEMES = [
   { scheme: 'keobuild', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
   { scheme: 'keoapi', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ] as const;
+
+/** The throwaway session where Keo studies a real website the user loves (see study.ts). */
+export const STUDY_PARTITION = 'keo-study';
+
+/** A studied site may move between its own web pages (redirects, links): only in the study session. */
+export function isStudyNavigation(ses: Session, url: string, partitionSession: (p: string) => Session = (p) => session.fromPartition(p)): boolean {
+  return /^https?:\/\//i.test(url) && !!studyableUrl(url) && partitionSession(STUDY_PARTITION) === ses;
+}
 
 /** The sessions build pages run in (the preview the user sees, and Keo's checks). */
 export const BUILD_PARTITIONS = ['persist:keo-build', 'keo-build-check'] as const;
@@ -74,6 +83,8 @@ export interface BuildCheck {
   text: string;
   /** A picture of the page after it ran for a moment (and after the actions, when there were any). */
   screenshot: Buffer | null;
+  /** When the look is judged (settle): further down the page, and the phone width. */
+  more?: Buffer[];
   /** What each action did, in order ("click “Play”: clicked play"). */
   steps: string[];
 }
@@ -453,10 +464,96 @@ export class BuildHost {
       const title = win.isDestroyed() ? '' : win.webContents.getTitle();
       const text = win.isDestroyed() ? '' : String(await win.webContents.executeJavaScript('(document.body && document.body.innerText || "").slice(0, 1500)').catch(() => ''));
       const shot = win.isDestroyed() ? null : await win.webContents.capturePage().then((img) => img.resize({ width: o.shotWidth ?? 960 }).toPNG()).catch(() => null);
+      // Judging the look: the art director also sees the page further down (one screen lower).
+      const more: Buffer[] = [];
+      if (o.settle && !win.isDestroyed()) {
+        await win.webContents.executeJavaScript('window.scrollTo({ top: innerHeight, behavior: "instant" }); true').catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 1500));
+        const lower = win.isDestroyed() ? null : await win.webContents.capturePage().then((img) => img.resize({ width: o.shotWidth ?? 960 }).toPNG()).catch(() => null);
+        if (lower) more.push(lower);
+      }
       const l = this.logOf(id);
-      return { page: page || 'index.html', title, errors: [...l.errors], warnings: [...l.warnings].slice(-12), missing: [...l.missing], text, screenshot: shot, steps };
+      return { page: page || 'index.html', title, errors: [...l.errors], warnings: [...l.warnings].slice(-12), missing: [...l.missing], text, screenshot: shot, steps, ...(more.length ? { more } : {}) };
     } finally {
       if (!win.isDestroyed()) win.destroy();
+    }
+  }
+
+  /**
+   * Studies a real website ("learn from a site you love"): loads it in a hidden window of a throwaway
+   * session (no Keo data, no pop-ups, no downloads, no permissions, only public web addresses), lets it
+   * play, scrolls through it, reads the design it really uses and takes screenshots (desktop and phone).
+   */
+  async study(input: string, signal?: AbortSignal): Promise<SiteStudy> {
+    const url = studyableUrl(input);
+    if (!url) throw new BuildError('Give the address of a public website (https://…).');
+    const ses = session.fromPartition(STUDY_PARTITION);
+    await ses.clearStorageData().catch(() => undefined);
+    ses.webRequest.onBeforeRequest((details, cb) => {
+      const u = details.url;
+      // Only the public web (never this PC or the local network), and data: and blob: parts of the page.
+      cb({ cancel: !(u.startsWith('data:') || u.startsWith('blob:') || studyableUrl(u)) });
+    });
+    ses.setPermissionRequestHandler((_wc, _p, cb) => cb(false));
+    ses.setPermissionCheckHandler(() => false);
+    ses.setDevicePermissionHandler(() => false);
+    ses.on('will-download', (e) => e.preventDefault());
+    const open = async (width: number, height: number) => {
+      const win = new BrowserWindow({ show: false, width, height, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: STUDY_PARTITION, offscreen: true, backgroundThrottling: false } });
+      win.webContents.setFrameRate(30);
+      win.webContents.setAudioMuted(true);
+      // Never opens anything else (the app-wide handler would open links in the user's browser).
+      win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      signal?.addEventListener(
+        'abort',
+        () => {
+          if (!win.isDestroyed()) win.destroy();
+        },
+        { once: true },
+      );
+      await Promise.race([win.loadURL(url.toString()), new Promise((r) => setTimeout(r, 25_000))]).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 3500));
+      return win;
+    };
+    const shot = async (win: BrowserWindow) =>
+      win.isDestroyed()
+        ? null
+        : await win.webContents
+            .capturePage()
+            .then((img) => img.resize({ width: Math.min(960, img.getSize().width) }).toPNG())
+            .catch(() => null);
+    const desk = await open(1440, 900);
+    try {
+      if (desk.isDestroyed()) throw new BuildError('Stopped.');
+      const at = desk.webContents.getURL();
+      if (!at || at === 'about:blank') throw new BuildError(url.hostname + ' did not open: check the address, or try another site.');
+      const shots: Buffer[] = [];
+      const first = await shot(desk);
+      if (first) shots.push(first);
+      // Further down the page (scroll-driven animations play as it scrolls).
+      for (const y of [1, 2.2]) {
+        await desk.webContents.executeJavaScript('window.scrollTo({ top: Math.round(innerHeight * ' + y + '), behavior: "instant" }); true').catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 1600));
+        const s = await shot(desk);
+        if (s) shots.push(s);
+      }
+      await desk.webContents.executeJavaScript('window.scrollTo(0, 0); true').catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 500));
+      const raw = (await Promise.race([desk.webContents.executeJavaScript(STUDY_SCRIPT, true), new Promise((r) => setTimeout(() => r(null), 15_000))]).catch(() => null)) as RawStudy | null;
+      if (!raw) throw new BuildError('Keo could not read the design of ' + url.hostname + '.');
+      const finalUrl = desk.webContents.getURL();
+      desk.destroy();
+      const phone = await open(390, 844);
+      try {
+        const p = await shot(phone);
+        if (p) shots.push(p);
+      } finally {
+        if (!phone.isDestroyed()) phone.destroy();
+      }
+      return { url: finalUrl, title: raw.title || url.hostname, measured: summarizeStudy(raw), outline: raw.outline.slice(0, 24), shots };
+    } finally {
+      if (!desk.isDestroyed()) desk.destroy();
+      await ses.clearStorageData().catch(() => undefined);
     }
   }
 

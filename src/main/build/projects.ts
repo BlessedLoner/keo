@@ -52,6 +52,11 @@ export const BuildManifest = z
     direction: z.string().max(40).optional(),
     /** The chat it was made in: asking again there (Retry, continue) carries on with it. */
     conversationId: z.string().max(80).optional(),
+    /** A website the user loves that Keo studied: its design DNA guides this build (never copied). */
+    reference: z
+      .object({ url: z.string().max(500), title: z.string().max(200), studiedAt: z.string(), measured: z.string().max(4000), dna: z.string().max(8000) })
+      .strict()
+      .optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -222,7 +227,7 @@ export class BuildProjects {
   }
 
   /** Changes the project's settings; libraries newly listed are copied in. */
-  update(id: string, patch: Partial<Pick<BuildManifest, 'title' | 'brief' | 'libraries' | 'backend' | 'vars' | 'todo' | 'direction'>>): BuildManifest {
+  update(id: string, patch: Partial<Pick<BuildManifest, 'title' | 'brief' | 'libraries' | 'backend' | 'vars' | 'todo' | 'direction' | 'reference'>>): BuildManifest {
     const m = this.manifest(id);
     const next = BuildManifest.parse({ ...m, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)), updatedAt: new Date().toISOString() });
     // A library brings what it needs (the drive kit: three.js, Rapier, the fonts).
