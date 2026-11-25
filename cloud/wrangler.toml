@@ -22,3 +22,9 @@ KEO_TTS_MODEL = "openai/gpt-audio-mini"
 KEO_STT_MODEL = "google/gemini-2.5-flash"
 KEO_VOICE_FEMALE = "shimmer"
 KEO_VOICE_MALE = "echo"
+KEO_SUPPORT_EMAIL = "support@heykeo.com"
+ALERT_FROM = "Keo Cloud <alerts@heykeo.com>"
+
+# Every 10 minutes: email the owner any new alerts (needs the RESEND_API_KEY and ALERT_EMAIL secrets).
+[triggers]
+crons = ["*/10 * * * *"]

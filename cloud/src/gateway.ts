@@ -32,6 +32,12 @@ export interface Env {
   ADMIN_EMAILS?: string;
   /** Shown on the Terms, Privacy and Refund pages (optional until the address exists). */
   KEO_SUPPORT_EMAIL?: string;
+  /** Secret: a Resend API key (heykeo.com) for emailing alerts to the owner. */
+  RESEND_API_KEY?: string;
+  /** Secret: where alert emails go (the owner's address; comma-separated for several). */
+  ALERT_EMAIL?: string;
+  /** Who alert emails come from (default: Keo Cloud <alerts@heykeo.com>). */
+  ALERT_FROM?: string;
   /** Which OpenRouter models do web search, pictures and voice (wrangler.toml [vars]; change any time). */
   KEO_SEARCH_MODEL?: string;
   KEO_SEARCH_ENGINE?: string;
