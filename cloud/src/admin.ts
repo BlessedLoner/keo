@@ -97,7 +97,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
     // The numbers at a glance.
     if (req.method === 'GET' && route === '/v1/admin/overview') {
       const weekAgo = new Date(now - 7 * 86_400_000).toISOString();
-      const [profiles, usageToday, usageMonth, jobs, payments, reports, plans] = await Promise.all([
+      const [profiles, usageToday, usageMonth, jobs, payments, reports, plans, waitlist] = await Promise.all([
         rest<Array<{ plan: string; blocked: boolean; created_at: string }>>('profiles?select=plan,blocked,created_at&limit=100000'),
         rest<Array<{ user_id: string; requests: number; cost_usd: number }>>(`usage_daily?day=eq.${day(now)}&select=user_id,requests,cost_usd&limit=100000`),
         rest<Array<{ requests: number; cost_usd: number }>>(`usage_daily?day=gte.${month(now)}-01&select=requests,cost_usd&limit=100000`),
@@ -105,6 +105,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
         rest<Array<{ currency: string; amount: number; status: string }>>(`payments?created_at=gte.${month(now)}-01&select=currency,amount,status&limit=100000`),
         rest<Array<{ status: string }>>('problem_reports?status=eq.new&select=status&limit=10000').catch(() => []),
         rest<Array<{ id: string; name: string }>>('plans?select=id,name&order=sort'),
+        rest<Array<{ platform: string }>>('waitlist?select=platform&limit=100000').catch(() => []),
       ]);
       const byPlan: Record<string, number> = {};
       for (const p of profiles) byPlan[p.plan] = (byPlan[p.plan] ?? 0) + 1;
@@ -129,6 +130,7 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
           revenue,
         },
         reportsNew: reports.length,
+        waitlist: { total: waitlist.length, windows: waitlist.filter((w) => w.platform === 'windows').length, ios: waitlist.filter((w) => w.platform === 'ios').length },
       });
     }
 
@@ -218,6 +220,12 @@ export async function handleAdmin(req: Request, route: string, env: Env, deps: A
         })),
         alerts,
       });
+    }
+
+    // The early-access list (newest first), to email people when Keo opens.
+    if (req.method === 'GET' && route === '/v1/admin/waitlist') {
+      const rows = await rest<Array<{ email: string; platform: string; source: string; created_at: string }>>('waitlist?select=email,platform,source,created_at&order=created_at.desc&limit=10000');
+      return json(200, { people: rows });
     }
 
     // Users: newest first, or found by email.

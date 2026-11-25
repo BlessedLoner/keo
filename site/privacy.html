@@ -2,15 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Keo privacy note</title>
-<link rel="icon" href="icon.png" />
-<link rel="stylesheet" href="style.css" />
+<meta name="theme-color" content="#050506" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="preload" href="fonts/outfit.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="style.css?v=6" />
 </head>
-<body>
-<header class="top">
-  <a class="brand" href="./"><img src="icon.png" alt="" width="28" height="28" /> Keo</a>
-  <nav><a href="./">Home</a></nav>
+<body data-page="privacy">
+<header class="top" id="top">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Keo home">
+      <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="248" fill="#f4f4f2"/><rect x="317" y="372" width="140" height="232" rx="59" fill="#050506"/><rect x="566" y="372" width="140" height="232" rx="59" fill="#050506"/></svg>
+      keo
+    </a>
+    <nav aria-label="Main">
+      <a class="link" href="./#what">What it does</a>
+      <a class="link keep" href="why.html">Why Keo</a>
+      <a class="btn white sm" href="./#access">Join early access</a>
+    </nav>
+  </div>
 </header>
 <main class="doc">
   <h1>Privacy note</h1>
@@ -61,9 +72,32 @@
     <li>Uninstalling keeps your data folder so a reinstall can continue; delete it in the app first if you want it gone.</li>
   </ul>
 
+  <h2>This website and the early-access list</h2>
+  <ul>
+    <li>If you join the early-access list on heykeo.com, we keep your email address, the device you picked (Windows or iPhone), the page you signed up from, and a one-way scrambled form of your internet address (used only to stop spam sign-ups — it cannot be turned back into the address).</li>
+    <li>We use your email only to send your invite and important news about Keo’s launch. It is never sold or shared for advertising.</li>
+    <li>To be removed, email <a href="mailto:support@heykeo.com">support@heykeo.com</a> and we delete it.</li>
+    <li>This website uses no cookies, no trackers and no analytics.</li>
+  </ul>
+
   <h2>Contact</h2>
-  <p>Questions or problems: open an issue on <a href="https://github.com/BlessedLoner/keo/issues" rel="noopener">GitHub</a>.</p>
+  <p>Questions or problems: <a href="mailto:support@heykeo.com">support@heykeo.com</a>.</p>
 </main>
-<footer class="foot"><span>© 2026 Keo · Beta</span><a href="./">Home</a></footer>
+<footer>
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Keo home">
+      <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="248" fill="#f4f4f2"/><rect x="317" y="372" width="140" height="232" rx="59" fill="#050506"/><rect x="566" y="372" width="140" height="232" rx="59" fill="#050506"/></svg>
+      keo
+    </a>
+    <nav aria-label="Footer">
+      <a href="./">Home</a>
+      <a href="why.html">Why Keo</a>
+      <span class="copy-mail">support@heykeo.com</span>
+    </nav>
+    <span>© 2026 Keo · Know. Own. Execute.</span>
+  </div>
+</footer>
+
+<script src="app.js?v=6" defer></script>
 </body>
 </html>

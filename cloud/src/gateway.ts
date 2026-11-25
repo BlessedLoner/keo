@@ -14,6 +14,7 @@ import { legalPage } from './legal';
 import { upgradePage } from './upgradePage';
 import { handleStudio } from './studio';
 import { handleDna } from './dna';
+import { handleWaitlist } from './waitlist';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -657,6 +658,10 @@ export async function handle(req: Request, env: Env, deps: { fetch: Fetch; waitU
     if (dna) return dna;
 
     // Report a problem: what the user wrote and saw (their recent log with personal details out).
+    // The early-access list (from heykeo.com; no sign-in).
+    const waitlist = await handleWaitlist(req, route, db, now);
+    if (waitlist) return waitlist;
+
     if (req.method === 'POST' && route === '/v1/report') {
       const a = await account(req, db, now);
       if (a instanceof Response) return a;

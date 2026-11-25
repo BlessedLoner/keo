@@ -2,250 +2,235 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Keo — the AI agent that works on your PC</title>
-<meta name="description" content="Keo is an AI agent for Windows: it chats, researches, edits videos in its own Studio, builds apps and games, explains things in 3D, and — only with your permission — works in your apps." />
-<link rel="icon" href="icon.png" />
-<style>
-  :root { --bg: #0b0b10; --bg2: #12121a; --card: #16161f; --line: #26263a; --text: #ecebf4; --muted: #9a99b0; --a: #8b5cf6; --b: #ec4899; --grad: linear-gradient(120deg, var(--a), var(--b)); }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  a { color: inherit; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
-  .top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); background: rgba(11, 11, 16, 0.75); border-bottom: 1px solid var(--line); }
-  .top .wrap { display: flex; align-items: center; justify-content: space-between; height: 62px; }
-  .brand { display: flex; gap: 10px; align-items: center; font-weight: 800; font-size: 20px; text-decoration: none; }
-  .top nav { display: flex; gap: 22px; align-items: center; }
-  .top nav a { text-decoration: none; color: var(--muted); font-size: 15px; }
-  .top nav a:hover { color: var(--text); }
-  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 12px; font-weight: 700; text-decoration: none; border: 1px solid var(--line); background: var(--card); transition: transform 0.15s, box-shadow 0.15s; }
-  .btn:hover { transform: translateY(-1px); }
-  .btn.primary { background: var(--grad); border: 0; color: #fff; box-shadow: 0 10px 40px rgba(139, 92, 246, 0.35); }
-  .btn.sm { padding: 8px 14px; font-size: 14px; }
-  .hero { position: relative; padding: 96px 0 72px; text-align: center; overflow: hidden; }
-  .hero::before { content: ""; position: absolute; inset: -40% -10% auto; height: 640px; background: radial-gradient(closest-side, rgba(139, 92, 246, 0.28), transparent), radial-gradient(closest-side at 70% 40%, rgba(236, 72, 153, 0.2), transparent); pointer-events: none; }
-  .badge { display: inline-block; padding: 6px 14px; border: 1px solid var(--line); border-radius: 99px; font-size: 13px; color: var(--muted); background: var(--bg2); }
-  h1 { font-size: clamp(36px, 6vw, 64px); line-height: 1.08; margin: 22px auto 18px; max-width: 900px; letter-spacing: -0.02em; }
-  .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .lead { font-size: clamp(17px, 2vw, 20px); color: var(--muted); max-width: 720px; margin: 0 auto 30px; }
-  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; align-items: center; }
-  .muted { color: var(--muted); }
-  .small { font-size: 14px; }
-  .stats { display: flex; gap: 36px; justify-content: center; flex-wrap: wrap; margin-top: 44px; }
-  .stats b { display: block; font-size: 26px; }
-  section { padding: 72px 0; }
-  h2 { font-size: clamp(28px, 4vw, 40px); margin: 0 0 12px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); max-width: 680px; margin: 0 0 36px; }
-  .center { text-align: center; } .center .sub { margin-left: auto; margin-right: auto; }
-  .feature { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; padding: 40px 0; }
-  .feature.flip .art { order: -1; }
-  .feature h3 { font-size: 28px; margin: 8px 0 12px; }
-  .tag { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .feature ul { padding: 0; list-style: none; margin: 16px 0 0; }
-  .feature li { padding: 6px 0 6px 28px; position: relative; color: var(--muted); }
-  .feature li::before { content: "✓"; position: absolute; left: 0; color: var(--b); font-weight: 800; }
-  .art { aspect-ratio: 4 / 3; border-radius: 20px; border: 1px solid var(--line); background: var(--bg2); position: relative; overflow: hidden; }
-  .art .glow { position: absolute; inset: 0; background: radial-gradient(circle at 30% 20%, rgba(139, 92, 246, 0.35), transparent 60%), radial-gradient(circle at 80% 90%, rgba(236, 72, 153, 0.25), transparent 55%); }
-  .prompt { position: absolute; left: 22px; right: 22px; padding: 12px 16px; border-radius: 14px; background: rgba(22, 22, 31, 0.92); border: 1px solid var(--line); font-size: 15px; }
-  .prompt.u { top: 24px; } .prompt.k { bottom: 24px; color: var(--muted); }
-  .prompt.k b { color: var(--text); }
-  .timeline { position: absolute; left: 22px; right: 22px; top: 50%; transform: translateY(-50%); display: grid; gap: 8px; }
-  .timeline i { display: block; height: 22px; border-radius: 6px; background: var(--grad); opacity: 0.85; animation: grow 3s ease-in-out infinite alternate; }
-  .timeline i:nth-child(2) { width: 70%; opacity: 0.6; animation-delay: 0.4s; } .timeline i:nth-child(3) { width: 45%; opacity: 0.4; animation-delay: 0.8s; }
-  @keyframes grow { from { transform: scaleX(0.6); transform-origin: left; } to { transform: scaleX(1); transform-origin: left; } }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; transition: border-color 0.2s, transform 0.2s; }
-  .card:hover { border-color: rgba(139, 92, 246, 0.6); transform: translateY(-2px); }
-  .card h4 { margin: 10px 0 6px; font-size: 18px; }
-  .card p { margin: 0; color: var(--muted); font-size: 15px; }
-  .ico { font-size: 26px; }
-  .trust { background: var(--bg2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .steps { counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-  .steps .card::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--grad); color: #fff; font-weight: 800; }
-  details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; margin-bottom: 10px; }
-  summary { cursor: pointer; font-weight: 700; }
-  details p { color: var(--muted); margin: 10px 0 0; }
-  .final { text-align: center; padding: 88px 0; }
-  .foot { border-top: 1px solid var(--line); padding: 28px 0; color: var(--muted); font-size: 14px; }
-  .foot .wrap { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; }
-  @media (max-width: 860px) {
-    .feature { grid-template-columns: 1fr; gap: 24px; } .feature.flip .art { order: 0; }
-    .grid, .steps { grid-template-columns: 1fr; }
-    .top nav a:not(.btn) { display: none; }
-  }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Keo — Know. Own. Execute.</title>
+<meta name="description" content="Keo is an AI agent that lives on your computer. It edits your videos, builds your websites and games, explains anything in 3D and works in your apps — only when you allow it. Join early access." />
+<meta name="theme-color" content="#050506" />
+<meta property="og:title" content="Keo — Know. Own. Execute." />
+<meta property="og:description" content="The AI that doesn’t just answer. It does — on your computer, with your OK. Early access is open." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://heykeo.com/" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icon.png" />
+<link rel="preload" href="fonts/outfit.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body>
-<header class="top">
+<header class="top" id="top">
   <div class="wrap">
-    <a class="brand" href="./"><img src="icon.png" alt="" width="30" height="30" /> Keo</a>
-    <nav><a href="#features">Features</a><a href="#more">More</a><a href="#safety">Safety</a><a href="#faq">FAQ</a><a class="btn primary sm" href="https://github.com/BlessedLoner/keo/releases/latest" data-download>Download</a></nav>
+    <a class="brand" href="./" aria-label="Keo home">
+      <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="248" fill="#f4f4f2"/><rect x="317" y="372" width="140" height="232" rx="59" fill="#050506"/><rect x="566" y="372" width="140" height="232" rx="59" fill="#050506"/></svg>
+      keo
+    </a>
+    <nav aria-label="Main">
+      <a class="link" href="#what">What it does</a>
+      <a class="link" href="#trust">Trust</a>
+      <a class="link keep" href="why.html">Why Keo</a>
+      <a class="btn white sm" href="#access">Join early access</a>
+    </nav>
   </div>
 </header>
 
 <main>
-  <section class="hero">
+  <!-- ------------------------------------------------------------ hero -->
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="beam" aria-hidden="true"></div>
+    <div class="grid-bg" aria-hidden="true"></div>
+    <div class="spot" aria-hidden="true"></div>
     <div class="wrap">
-      <span class="badge">Free beta · Windows 10 &amp; 11</span>
-      <h1>The AI agent that <span class="grad">gets things done</span> on your PC.</h1>
-      <p class="lead">Talk to Keo like a person. It researches, edits your videos, builds apps and games, explains anything in 3D — and, only when you allow it, works in your apps for you.</p>
-      <div class="cta">
-        <a id="download" class="btn primary" href="https://github.com/BlessedLoner/keo/releases/latest" data-download>⬇ Download for Windows</a>
-        <a class="btn" href="#features">See what it can do</a>
+      <div class="face-stage reveal" aria-hidden="true">
+        <div class="ring r2"></div>
+        <div class="ring"></div>
+        <div class="chips" id="chips"></div>
+        <div class="face" id="face"><i class="eye l"></i><i class="eye r"></i></div>
       </div>
-      <p id="version" class="small muted" style="margin-top:14px">Latest version on GitHub</p>
-      <div class="stats">
-        <div><b>Studio</b><span class="muted small">video editor built in</span></div>
-        <div><b>3D</b><span class="muted small">visual explanations</span></div>
-        <div><b>Builder</b><span class="muted small">apps, sites &amp; games</span></div>
-        <div><b>You</b><span class="muted small">approve every action</span></div>
+      <span class="eyebrow reveal d1">Early access · Windows now, iPhone soon</span>
+      <h1 class="display split" id="hero-title">It doesn’t just answer. <span class="serif chrome">It does.</span></h1>
+      <p class="lead reveal d2">Keo is the AI that lives on your computer. It edits your videos, builds your websites and games, explains anything in 3D and works in your apps — always with your OK.</p>
+      <div class="actions reveal d3">
+        <a class="btn white" href="#access">Join early access <span class="arrow" aria-hidden="true">→</span></a>
+        <a class="btn" href="why.html">Why Keo</a>
       </div>
     </div>
   </section>
 
-  <section id="features">
+  <!-- ------------------------------------------------------------ the logo film -->
+  <section aria-label="Keo" style="padding-top: 0; padding-bottom: 24px">
     <div class="wrap">
-      <div class="feature">
-        <div>
-          <span class="tag">Keo Studio</span>
-          <h3>A video editor that edits with you.</h3>
-          <p class="muted">A full timeline editor — and Keo inside it. Ask for an edit and watch Keo make it, step by step, on your timeline.</p>
-          <ul>
-            <li>Edit DNA: show a reference video, Keo copies its style onto your clips</li>
-            <li>Captions with key words that pop, cut pauses, punch-ins, text cards</li>
-            <li>Magnetic timeline, keyframes, masks, crop, colour grading and LUTs</li>
-            <li>45 fonts, templates, transitions, effects, stickers and graphics</li>
-            <li>Export MP4, MOV, WebM, GIF — long exports can resume if stopped</li>
-          </ul>
+      <div class="film-frame reveal">
+        <canvas id="film" width="1600" height="800" role="img" aria-label="Keo’s face turns into the o of keo: Know, Own, Execute."></canvas>
+        <div class="film-ui" aria-hidden="true"><span class="rec">Keo</span><span id="film-time">00:00</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ what it does -->
+  <section id="what" aria-labelledby="what-title">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow reveal">What Keo does</span>
+        <h2 class="split" id="what-title">One agent. <span class="serif">Every kind of work.</span></h2>
+        <p class="lead reveal d1">Talk to Keo like you would to a brilliant friend at your desk. It knows how — and it gets it done.</p>
+      </div>
+
+      <div class="bento">
+        <article class="card wide reveal" data-glow>
+          <div class="art">
+            <div class="tl" id="tl">
+              <div class="caption" aria-hidden="true"><span>MAKE</span><span>THE</span><span class="pop-me">KEY</span><span>WORDS</span><span class="pop-me">POP</span></div>
+              <div class="track"><div class="clip" style="left:2%;width:30%"></div><div class="clip" style="left:34%;width:22%"></div><div class="clip alt" style="left:58%;width:38%"></div><i class="head"></i></div>
+              <div class="track"><div class="clip alt" style="left:10%;width:16%"></div><div class="clip" style="left:44%;width:12%"></div><div class="clip" style="left:70%;width:18%"></div><i class="head"></i></div>
+              <div class="track"><div class="wave"></div><i class="head"></i></div>
+            </div>
+          </div>
+          <div class="copy">
+            <span class="k">Keo Studio</span>
+            <h3>A video editor that edits with you.</h3>
+            <p>Say “cut the pauses, add captions, make the key words pop” and watch Keo do it on your timeline. Show it a video you love and it learns the style.</p>
+          </div>
+        </article>
+
+        <article class="card reveal d1" data-glow>
+          <div class="art">
+            <div class="code" id="code" aria-hidden="true">
+              <div class="ln"><span class="a">build</span> <span class="t">“bakery site”</span></div>
+              <div class="ln">  hero · real photos · icons</div>
+              <div class="ln">  menu → order → checkout</div>
+              <div class="ln"><span class="a">check</span> every page, phone too</div>
+              <div class="ln"><span class="a">critique</span> by the art director</div>
+              <span class="ok">✓ Works · looks right</span>
+            </div>
+          </div>
+          <div class="copy">
+            <span class="k">Builder</span>
+            <h3>From an idea to a site that works.</h3>
+            <p>Websites, apps and games — written, run, tested and polished by Keo before it says “done”.</p>
+          </div>
+        </article>
+
+        <article class="card reveal" data-glow>
+          <div class="art three" id="three">
+            <canvas aria-hidden="true"></canvas>
+            <span class="label" style="left:12%;top:18%">Lift</span>
+            <span class="label" style="right:12%;top:40%">Thrust</span>
+            <span class="label" style="left:22%;bottom:12%">Drag</span>
+          </div>
+          <div class="copy">
+            <span class="k">Explain in 3D</span>
+            <h3>Ask how anything works. See it.</h3>
+            <p>“How does a plane take off?” Keo builds a moving 3D scene, step by step, in time with the explanation.</p>
+          </div>
+        </article>
+
+        <article class="card reveal d1" data-glow>
+          <div class="art" id="apps">
+            <div class="win" aria-hidden="true">
+              <div class="bar">Messages · John</div>
+              <div class="msg">Are we still on for Friday?</div>
+              <div class="msg me">Yes — 7pm works. I’ll book the table.</div>
+              <span class="send">Send</span>
+            </div>
+            <svg class="cursor" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2l15 10-7 1.5L8.5 21z" fill="#fff" stroke="#050506" stroke-width="1"/></svg>
+            <div class="approve" aria-hidden="true"><span>Send to <b>John</b>?</span><span class="yes">Approve</span></div>
+          </div>
+          <div class="copy">
+            <span class="k">Works in your apps</span>
+            <h3>Like a helper at your computer.</h3>
+            <p>It clicks, types and reads in the apps you allow — and stops to ask before anything that matters.</p>
+          </div>
+        </article>
+
+        <article class="card reveal d2" data-glow>
+          <div class="art">
+            <div class="voice" aria-hidden="true">
+              <div class="bars" id="bars"></div>
+              <span class="said">“Hey Keo, sort my downloads.”</span>
+            </div>
+          </div>
+          <div class="copy">
+            <span class="k">Voice</span>
+            <h3>Just say it.</h3>
+            <p>“Hey Keo”, from any app. Hands-free when you want it, a quiet mini-chat when you don’t.</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ trust -->
+  <section id="trust" aria-labelledby="trust-title" style="padding-top: 0">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow reveal">Built to be trusted</span>
+        <h2 class="split" id="trust-title">Powerful on your computer. <span class="serif">Polite about it.</span></h2>
+      </div>
+      <div class="trust">
+        <div class="t reveal"><span class="n">01</span><h3>You approve what matters.</h3><p>Sending, buying, deleting and anything with a password always waits for your OK — even in Full control.</p></div>
+        <div class="t reveal d1"><span class="n">02</span><h3>Stop means stop.</h3><p>One button (or Esc) halts every reply, action and live chat at once. A banner shows whenever Keo is acting.</p></div>
+        <div class="t reveal d2"><span class="n">03</span><h3>Your things stay yours.</h3><p>Conversations, memory, files and keys stay on your computer. Keo never listens for connections from outside.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ real requests -->
+  <section aria-label="Things people ask Keo" style="padding-top: 0">
+    <div class="marquee" aria-hidden="true">
+      <div class="row" id="row1"></div>
+      <div class="row rev" id="row2"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ early access -->
+  <section id="access" aria-labelledby="access-title" style="padding-top: 0">
+    <div class="wrap">
+      <div class="access reveal">
+        <span class="eyebrow">Early access</span>
+        <h2 class="split" id="access-title">Be one of the first <span class="serif chrome">to meet Keo.</span></h2>
+        <p class="lead">Early access opens in waves. Leave your email and we’ll send your invite — nothing else.</p>
+        <div class="platforms">
+          <button class="platform" type="button" data-platform="windows">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#f4f4f2" d="M3 5.1l7.4-1v7.1H3zm8.3-1.2L21 2.5v8.7h-9.7zM3 12.8h7.4v7.1L3 18.9zm8.3 0H21v8.7l-9.7-1.4z"/></svg>
+            <span><small>For Windows 10 &amp; 11</small><b>Join early access</b></span>
+            <span class="tag">Open</span>
+          </button>
+          <div class="platform soon" aria-disabled="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#f4f4f2" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9s-2-.9-3.4-.9c-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.8 1.3 10.3.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8s2 .8 3.4.8 2.3-1.3 3.1-2.5c1-1.4 1.4-2.8 1.4-2.9 0 0-2.7-1-2.7-4.2zM13.9 5c.7-.9 1.2-2 1.1-3.2-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.1 1.1.1 2.3-.6 3-1.5z"/></svg>
+            <span><small>Keo for iPhone</small><b>Coming soon</b></span>
+            <span class="tag">Soon</span>
+          </div>
         </div>
-        <div class="art"><div class="glow"></div><div class="prompt u">“Cut the long pauses, add captions and make the key words pop.”</div><div class="timeline"><i></i><i></i><i></i></div><div class="prompt k"><b>Keo</b> · editing on your timeline…</div></div>
-      </div>
-
-      <div class="feature flip">
-        <div>
-          <span class="tag">Explain in 3D</span>
-          <h3>Ask how anything works. See it.</h3>
-          <p class="muted">“How does a plane take off?” Keo builds a 3D scene that moves step by step, with labels, in time with its explanation.</p>
-          <ul>
-            <li>Opens right in the chat; click for the big view</li>
-            <li>Works by voice, too — from any app you are in</li>
-            <li>Step-by-step guides for filling in forms on websites</li>
-          </ul>
+        <form class="form" id="wl" novalidate>
+          <label class="hp" aria-hidden="true">Company <input name="company" tabindex="-1" autocomplete="off" /></label>
+          <label for="wl-email" class="hp">Email address</label>
+          <input id="wl-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
+          <button class="btn white" type="submit">Join the list</button>
+        </form>
+        <div class="pick" role="radiogroup" aria-label="I want Keo on">
+          <label><input type="radio" name="platform" value="windows" form="wl" checked /><span>Windows</span></label>
+          <label><input type="radio" name="platform" value="ios" form="wl" /><span>iPhone</span></label>
+          <label><input type="radio" name="platform" value="both" form="wl" /><span>Both</span></label>
         </div>
-        <div class="art"><div class="glow"></div><div class="prompt u">“Explain how a plane takes off, with a 3D visual.”</div><div class="prompt k"><b>Keo</b> · Step 2 of 5 — air flows faster over the wing…</div></div>
+        <p class="form-note" id="wl-note" role="status" aria-live="polite">No spam. One email when your invite is ready.</p>
       </div>
-
-      <div class="feature">
-        <div>
-          <span class="tag">Builder</span>
-          <h3>From an idea to a working app or game.</h3>
-          <p class="muted">Describe it; Keo writes it, runs it in a safe preview and checks that it works — websites, apps and 3D driving games on real-world maps.</p>
-          <ul>
-            <li>Live preview inside Keo, isolated from your PC</li>
-            <li>Keo tests its own build and says honestly what is not done</li>
-            <li>Realistic AI-made 3D cars and models (optional, paid per model)</li>
-          </ul>
-        </div>
-        <div class="art"><div class="glow"></div><div class="prompt u">“Make a racing game on the streets of my city.”</div><div class="prompt k"><b>Keo</b> · Building · Checking it plays…</div></div>
-      </div>
-
-      <div class="feature flip">
-        <div>
-          <span class="tag">Works in your apps</span>
-          <h3>Like a helper at your computer.</h3>
-          <p class="muted">Allow the apps you choose and Keo clicks, types and reads in them — and checks the result. Turn on Full control when you want it to handle more by itself.</p>
-          <ul>
-            <li>Writes in your documents, reads the page you are on</li>
-            <li>Keeps a WhatsApp conversation going — and stops to ask about money or anything personal</li>
-            <li>A visible banner and a Stop button (or Esc) whenever it acts</li>
-          </ul>
-        </div>
-        <div class="art"><div class="glow"></div><div class="prompt u">“Reply to John on WhatsApp and keep it going.”</div><div class="prompt k"><b>Keo</b> · Needs your OK before sending ✓</div></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="more">
-    <div class="wrap center">
-      <h2>And everything a great assistant does</h2>
-      <p class="sub">One app for your questions, your work and your projects.</p>
-      <div class="grid" style="text-align:left">
-        <div class="card"><div class="ico">🔎</div><h4>Research with sources</h4><p>Web search with links, page summaries and “explain what I selected” in your browser.</p></div>
-        <div class="card"><div class="ico">🎙️</div><h4>Voice</h4><p>Say “Hey Keo” or press Ctrl+K and just talk. Ctrl+Shift+K opens the mini-chat anywhere.</p></div>
-        <div class="card"><div class="ico">🧠</div><h4>Memory &amp; projects</h4><p>Keo remembers what you confirm and keeps notes for each project, on your computer.</p></div>
-        <div class="card"><div class="ico">👁️</div><h4>Vision</h4><p>Ask about what is on your screen, a picture or a document.</p></div>
-        <div class="card"><div class="ico">✅</div><h4>Tasks you can follow</h4><p>Every step Keo takes is listed, with an honest result — done, partly done, or not.</p></div>
-        <div class="card"><div class="ico">🔑</div><h4>Your choice of AI</h4><p>Use your own key (OpenRouter, OpenAI, Anthropic), a free local model, or Keo’s plans.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="safety" class="trust">
-    <div class="wrap center">
-      <h2>You stay in control</h2>
-      <p class="sub">Keo is built to be trusted with your computer.</p>
-      <div class="grid" style="text-align:left">
-        <div class="card"><div class="ico">🛑</div><h4>Stop, any time</h4><p>One Stop button halts replies, actions and live chats at once.</p></div>
-        <div class="card"><div class="ico">🙋</div><h4>Asks before it matters</h4><p>Sending, buying, deleting and passwords always need your approval.</p></div>
-        <div class="card"><div class="ico">💻</div><h4>Runs on your PC</h4><p>Conversations, memory and keys stay on your computer. Nothing listens for connections from outside.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="start">
-    <div class="wrap">
-      <h2>Get started in 3 minutes</h2>
-      <p class="sub">No account needed to try it.</p>
-      <div class="steps">
-        <div class="card"><h4>Download and run</h4><p>Run <code>Keo-Setup.exe</code>. The beta is not code-signed yet, so Windows may say “Windows protected your PC”: click <em>More info</em> → <em>Run anyway</em>.</p></div>
-        <div class="card"><h4>Connect an AI</h4><p>Paste a key on the welcome screen — <a href="https://openrouter.ai/keys" rel="noopener">OpenRouter</a> is easiest — or sign in to Keo.</p></div>
-        <div class="card"><h4>Ask for anything</h4><p>Try “Explain how a plane takes off” or open Studio and say “Make this a 30-second TikTok”.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="faq">
-    <div class="wrap">
-      <h2>Questions</h2>
-      <details><summary>Is it free?</summary><p>Keo is free during the beta. With your own key you pay the AI provider for what you use; local models are free. Paid extras (like AI-made video or 3D models) show their price before they run.</p></details>
-      <details><summary>Does Keo send my data to you?</summary><p>With your own key, messages go only to the AI provider you connect. Your conversations, memory, settings and keys stay on your PC. <a href="privacy.html">Privacy note</a></p></details>
-      <details><summary>Can Keo do things on my computer without asking?</summary><p>Not by default. Using your apps is off until you allow specific apps. Payments, deleting, passwords and messaging people always ask, even in Full control.</p></details>
-      <details><summary>Why does Windows warn about the installer?</summary><p>The beta is not code-signed yet, so Windows does not recognise the publisher. Signed builds come with a later version.</p></details>
-      <details><summary>How do updates work?</summary><p>Keo updates itself: the new version downloads in the background and installs when you close Keo. Your data and settings are kept.</p></details>
-    </div>
-  </section>
-
-  <section class="final">
-    <div class="wrap">
-      <h2>Meet your new <span class="grad">AI agent</span>.</h2>
-      <p class="sub" style="margin:12px auto 28px">Free beta for Windows 10 and 11.</p>
-      <a class="btn primary" href="https://github.com/BlessedLoner/keo/releases/latest" data-download>⬇ Download Keo</a>
     </div>
   </section>
 </main>
 
-<footer class="foot">
+<footer>
   <div class="wrap">
-    <span>© 2026 Keo · Beta</span>
-    <span><a href="privacy.html">Privacy</a> · <a href="https://github.com/BlessedLoner/keo/releases" rel="noopener">All releases</a></span>
+    <a class="brand" href="./" aria-label="Keo home">
+      <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="248" fill="#f4f4f2"/><rect x="317" y="372" width="140" height="232" rx="59" fill="#050506"/><rect x="566" y="372" width="140" height="232" rx="59" fill="#050506"/></svg>
+      keo
+    </a>
+    <nav aria-label="Footer">
+      <a href="why.html">Why Keo</a>
+      <a href="privacy.html">Privacy</a>
+      <span class="copy-mail">support@heykeo.com</span>
+    </nav>
+    <span>© 2026 Keo · Know. Own. Execute.</span>
   </div>
 </footer>
 
-<script>
-  // Every download button goes straight to the newest installer (falls back to the releases page).
-  (async () => {
-    try {
-      const r = await fetch('https://api.github.com/repos/BlessedLoner/keo/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
-      if (!r.ok) return;
-      const rel = await r.json();
-      const exe = (rel.assets || []).find((a) => /^Keo-Setup-.*\.exe$/.test(a.name));
-      if (exe && /^https:\/\/github\.com\/BlessedLoner\/keo\//.test(exe.browser_download_url)) for (const a of document.querySelectorAll('[data-download]')) a.href = exe.browser_download_url;
-      if (rel.tag_name) document.getElementById('version').textContent = `Version ${String(rel.tag_name).replace(/^v/, '')}${exe ? ' · ' + Math.round(exe.size / 1048576) + ' MB' : ''}`;
-    } catch {
-      /* keep the releases-page link */
-    }
-  })();
-</script>
+<script src="app.js?v=6" defer></script>
 </body>
 </html>
