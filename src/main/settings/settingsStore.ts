@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defaultSettings, mergeSettings, SettingsSchema, type Settings } from '../../shared/settings';
 import type { Logger } from '../logging/logger';
+import { KEO_CLOUD, OLD_GATEWAY_URL } from '../../shared/cloud';
 
 /**
  * Validated settings persisted as JSON in Keo's profile. Invalid or corrupt
@@ -25,7 +26,12 @@ export class SettingsStore {
     if (!fs.existsSync(this.file)) return defaultSettings();
     try {
       const parsed = SettingsSchema.safeParse(JSON.parse(fs.readFileSync(this.file, 'utf8')));
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        // Keo Cloud moved to its own address (cloud.heykeo.com): saved settings follow it.
+        const keo = parsed.data.providers.keo;
+        if (keo.baseUrl.replace(/\/+$/, '') === OLD_GATEWAY_URL) keo.baseUrl = KEO_CLOUD.gatewayUrl;
+        return parsed.data;
+      }
       this.quarantine('schema_invalid');
     } catch {
       this.quarantine('unparseable');

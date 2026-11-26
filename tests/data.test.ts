@@ -126,6 +126,17 @@ describe('settings', () => {
     expect(new SettingsStore(dir, new Logger(null)).get().agent.memoryTopK).toBe(3);
   });
 
+  it("moves a saved Keo Cloud address to cloud.heykeo.com and keeps everything else", () => {
+    const dir = tempDir();
+    const old = new SettingsStore(dir, new Logger(null));
+    old.update({ providers: { keo: { baseUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1', model: 'keo-strong' } }, agent: { memoryTopK: 4 } });
+    const s = new SettingsStore(dir, new Logger(null)).get();
+    expect(s.providers.keo.baseUrl).toBe('https://cloud.heykeo.com/v1');
+    expect(s.providers.keo.model).toBe('keo-strong');
+    expect(s.agent.memoryTopK).toBe(4);
+    expect(defaultSettings().providers.keo.baseUrl).toBe('https://cloud.heykeo.com/v1');
+  });
+
   it('ignores prototype-pollution keys', () => {
     const st = new SettingsStore(tempDir(), new Logger(null));
     st.update(JSON.parse('{"__proto__": {"polluted": true}, "agent": {"memoryTopK": 4}}'));

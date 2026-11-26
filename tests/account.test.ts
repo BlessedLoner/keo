@@ -103,7 +103,7 @@ describe('Keo account', () => {
     expect(stored).toContain('refresh-1');
     expect(stored).not.toContain('longpassword1');
     // The confirmation email links to Keo's account page.
-    expect(cloud.calls).toContain(`POST /auth/v1/signup?redirect_to=${encodeURIComponent('https://keo-cloud.blessednoble90.workers.dev/account')}`);
+    expect(cloud.calls).toContain(`POST /auth/v1/signup?redirect_to=${encodeURIComponent('https://cloud.heykeo.com/account')}`);
   });
 
   it('says plainly what went wrong', async () => {
@@ -207,7 +207,7 @@ describe('Keo account', () => {
     const { createHandlers } = await import('../src/main/ipc/handlers');
     const handlers = createHandlers(h.services, { appInfo: () => ({ name: 'Keo', version: '0', electron: '', chrome: '', node: '', platform: '', packaged: false, testProviderEnabled: true }), openPath: async () => true, openExternal: async (u) => void opened.push(u), pickExecutable: async () => null, relaunch: () => undefined });
     expect(await handlers['account:upgrade']({})).toEqual({ opened: true });
-    expect(opened).toEqual(['https://keo-cloud.blessednoble90.workers.dev/upgrade#t=kt.payload.sig']);
+    expect(opened).toEqual(['https://cloud.heykeo.com/upgrade#t=kt.payload.sig']);
     expect(opened[0]).not.toContain(h.services.account.token()!);
     expect(cloud.calls).toContain('POST /v1/billing/ticket');
   });

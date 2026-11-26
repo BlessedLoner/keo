@@ -4,9 +4,9 @@
  */
 export const RELEASE = { owner: 'BlessedLoner', repo: 'keo' } as const;
 
-const PAGE = `https://${RELEASE.owner.toLowerCase()}.github.io/${RELEASE.repo}/`;
+const PAGE = 'https://heykeo.com/';
 /** Keo Cloud's own pages (plans, terms, privacy, refunds). */
-const CLOUD = 'https://keo-cloud.blessednoble90.workers.dev';
+const CLOUD = 'https://cloud.heykeo.com';
 
 /**
  * The only web pages Keo's windows may ask the main process to open (no

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Keo privacy note</title>
+<title>Keo Privacy Policy</title>
 <meta name="theme-color" content="#050506" />
 <link rel="icon" href="icon.svg" type="image/svg+xml" />
 <link rel="preload" href="fonts/outfit.woff2" as="font" type="font/woff2" crossorigin />
@@ -24,64 +24,108 @@
   </div>
 </header>
 <main class="doc">
-  <h1>Privacy note</h1>
-  <p class="muted">Applies to the Keo desktop app (beta). Last updated October 2026.</p>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Applies to the Keo desktop app, Keo Cloud (Keo’s online service) and this website. Last updated 26 November 2026.</p>
 
   <h2>The short version</h2>
-  <p>Keo runs on your computer. There is no Keo account and no Keo server that receives your conversations, files or keys. What you type and what Keo reads from your screen go only to the AI provider <em>you</em> connect.</p>
+  <p>Keo runs on your computer, and your conversations, memories, projects and files stay there. When you use Keo’s own AI with a Keo account, what Keo needs to answer you passes through Keo Cloud to the AI model and back — Keo Cloud does not keep it. Keo Cloud stores only your account, your plan, your usage counts and your payments. If you use your own AI key instead, your messages go straight from your computer to that provider. We never sell your information and never use your conversations to train AI.</p>
 
   <h2>What stays on your PC</h2>
   <ul>
-    <li>Conversations, memories, projects, tasks, the audit log and settings — in your Windows profile (<code>%APPDATA%\Keo</code>).</li>
-    <li>Your email app password and your Google sign-in — encrypted the same way. Keo has no server: they are only ever sent to your own mail server and to Google.</li>
-    <li>API keys — encrypted with Windows' own data protection; Keo never shows them again.</li>
-    <li>Finding files (only if you turn it on): Keo looks file names up in Windows’ own search index on your PC. The names and paths it finds — and the text of a file (including PDFs), only if you also allow reading — go to your AI provider to answer you.</li>
-    <li>Photo descriptions (only if you turn on “Let Keo look at my photos”): a one-sentence description of each picture Keo looked at, kept in Keo’s database on your PC so you can find photos by what is in them. You can delete them in Settings → Files.</li>
+    <li>Conversations, memories, projects, tasks, Studio projects, builds, the audit log and settings — in your Windows profile (<code>%APPDATA%\Keo</code>).</li>
+    <li>Passwords and keys you give Keo — email app passwords, your Google sign-in, your own AI provider keys, connected accounts — encrypted with Windows’ own data protection. Keo never shows them again.</li>
+    <li>Finding files (only if you turn it on): Keo looks file names up in Windows’ own search index on your PC. The names and paths it finds — and the text of a file (including PDFs), only if you also allow reading — go to your AI to answer you.</li>
+    <li>Photo descriptions (only if you turn on “Let Keo look at my photos”): a one-sentence description of each picture Keo looked at, kept on your PC so you can find photos by what is in them. You can delete them in Settings → Files.</li>
     <li>Screen captures you take in Keo — kept for 24 hours by default (adjustable), then deleted.</li>
     <li>Wake-word audio (“Hey Keo”) — processed by Windows speech recognition on your PC and discarded.</li>
   </ul>
 
-  <h2>What leaves your PC, and only when you use it</h2>
+  <h2>Your Keo account</h2>
+  <p>When you create a Keo account, Keo Cloud stores in its account database:</p>
   <ul>
-    <li><strong>Your AI provider</strong> (OpenRouter, OpenAI, Anthropic, or none for a local model): your messages, the relevant context Keo includes (recent conversation, confirmed memories), and content Keo read for a task you approved — for example the text of a web page or the visible messages of a WhatsApp chat during a live chat. Their own privacy policies apply.</li>
-    <li><strong>Your pictures, to your AI provider</strong> — only if you turn on “Let Keo look at my photos” and allow your provider to see pictures: each picture Keo describes is made smaller and sent to the provider once, after you click <em>Describe</em> in Settings → Files or approve “look at these pictures” in a conversation. Tiny pictures and ones whose names suggest passwords, banking or IDs are never sent.</li>
+    <li>your email address and a securely hashed password (we never see your password);</li>
+    <li>your plan, until when it is paid, and its renewal status;</li>
+    <li>usage counts — AI requests, tokens, web searches, pictures, voice seconds and Studio credits, and what the AI services charged us — so we can apply your plan’s allowance;</li>
+    <li>payment records: plan, amount, currency, date and Paystack’s references;</li>
+    <li>problem reports you choose to send from Keo (Diagnostics → Report a problem).</li>
+  </ul>
+  <p>Keo Cloud does <strong>not</strong> store the content of your conversations, searches, pictures, videos or recordings.</p>
+
+  <h2>What passes through Keo Cloud</h2>
+  <p>When you use Keo’s AI with your Keo account, these pass through Keo Cloud to the service that does the work, and back. Keo Cloud passes them on and does not keep them:</p>
+  <ul>
+    <li><strong>Messages</strong> — what you send, the conversation so far, and what you or Keo add to it (attached pictures or document text, results from Keo’s tools, web pages Keo read for you, things on your screen you asked about). These go through OpenRouter to the company that runs the AI model (for example OpenAI, Google or Anthropic).</li>
+    <li><strong>Web searches</strong> through Keo Search — through OpenRouter to its search partner.</li>
+    <li><strong>Pictures, video, music, sound and 3D models</strong> you ask Keo to make or change — your description and the pictures or clips being changed go to fal.ai and the model it runs.</li>
+    <li><strong>Voice</strong> — text Keo reads aloud with Keo’s voice, and recordings you choose to send for speech-to-text.</li>
+  </ul>
+  <p>Those companies handle what they receive under their own privacy terms and may keep it for a limited time, for example for safety and abuse monitoring.</p>
+
+  <h2>Other things that leave your PC, only when you use them</h2>
+  <ul>
+    <li><strong>Your own AI provider</strong> (OpenRouter, OpenAI, Anthropic, or none for a local model), if you use your own key instead of a Keo account: your messages and the context Keo includes go directly to them.</li>
     <li><strong>Brave Search</strong>, if you add a key: your search queries.</li>
-    <li><strong>OpenAI speech-to-text</strong>, only if you turn it on and consent: recorded voice commands.</li>
-    <li><strong>GitHub</strong>: once a day Keo asks GitHub for the latest version and, when there is one, downloads the new installer from GitHub in the background. No personal data is sent; you can turn this off in Settings → Privacy &amp; data.</li>
+    <li><strong>OpenAI speech-to-text</strong>, only if you turn it on with your own key: recorded voice commands.</li>
+    <li><strong>GitHub</strong>: once a day Keo checks GitHub for a new version and downloads it in the background. No personal data is sent; you can turn this off in Settings → Privacy &amp; data.</li>
     <li><strong>WhatsApp</strong>: messages you approve (or allow in a live chat) are sent from your own WhatsApp, as if you typed them.</li>
-    <li><strong>Files and pictures you attach in the chat</strong>: sent to your AI provider only with the message you send them with (pictures as images, documents as their text). Keo keeps a small preview with the message on your PC; the full picture stays in memory only, for a few messages.</li>
-    <li><strong>OpenAI pictures</strong>, only when you approve one: the description (and, to change a picture, that picture) goes to OpenAI. Picture edits and animations without AI stay on your PC.</li>
-    <li><strong>Your email provider</strong>, if you connect an account: Keo signs in to your own mail server (IMAP and SMTP over TLS) to read, search and draft mail when you ask, and sends only messages you approved. Mail Keo reads for you goes to your AI provider as part of that request.</li>
-    <li><strong>Google</strong>, if you choose Sign in with Google: see below.</li>
+    <li><strong>Your email provider</strong>, if you connect an account: Keo signs in to your own mail server to read, search and draft mail when you ask, and sends only messages you approved.</li>
+    <li><strong>YouTube, Telegram, Notion, Slack and Google Drive</strong>, only if you connect them: what you ask Keo to post or save there.</li>
+    <li><strong>Websites Keo opens for you</strong> — for example a site you asked Keo to study or a page it fills in with your OK.</li>
   </ul>
 
   <h2>Google Calendar (Google user data)</h2>
   <ul>
     <li><strong>What Keo asks for</strong>: only the Google Calendar events permission (<code>calendar.events</code>) — to see your events, find free time, and add, change or delete events. Not your Gmail, contacts, Drive or anything else.</li>
     <li><strong>How it is used</strong>: only to do what you ask Keo in the app — for example “what’s on my calendar tomorrow?” or “book a meeting on Friday at 3”. Adding, changing and deleting events always asks you first, and inviting people always asks.</li>
-    <li><strong>Where it goes</strong>: calendar data comes straight from Google to your PC. To answer you, the events relevant to your request are sent to the AI provider you connected (see above), as part of that one request. Keo has no server; no one else receives your Google data. It is not sold, not used for advertising, and not used to train AI models.</li>
+    <li><strong>Where it goes</strong>: calendar data comes straight from Google to your PC. To answer you, the events relevant to your request are sent to your AI (see above), as part of that one request. It is not stored on Keo Cloud, not sold, not used for advertising, and not used to train AI models.</li>
     <li><strong>Storage</strong>: Keo keeps only the sign-in (encrypted on your PC), not a copy of your calendar. Events you discussed stay in that conversation’s history on your PC until you delete it.</li>
     <li><strong>Removing access</strong>: Settings → Email &amp; calendar → Sign out (Keo also revokes the access at Google), or at any time in your Google Account → Security → Your connections to third-party apps.</li>
     <li>Keo’s use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</li>
   </ul>
 
-  <h2>Your control</h2>
-  <ul>
-    <li>Using your apps is off until you allow specific apps; actions ask for approval by default.</li>
-    <li>Delete any memory, conversation or capture — or everything — in the app (Settings → Privacy &amp; data → Delete all data).</li>
-    <li>Uninstalling keeps your data folder so a reinstall can continue; delete it in the app first if you want it gone.</li>
-  </ul>
+  <h2>Payments</h2>
+  <p>Payments are handled by Paystack. You type your card details into Paystack’s secure checkout; Keo never sees or stores your card number. Paystack tells us whether a payment succeeded, the amount and plan, and its references.</p>
 
   <h2>This website and the early-access list</h2>
   <ul>
-    <li>If you join the early-access list on heykeo.com, we keep your email address, the device you picked (Windows or iPhone), the page you signed up from, and a one-way scrambled form of your internet address (used only to stop spam sign-ups — it cannot be turned back into the address).</li>
-    <li>We use your email only to send your invite and important news about Keo’s launch. It is never sold or shared for advertising.</li>
-    <li>To be removed, email <a href="mailto:support@heykeo.com">support@heykeo.com</a> and we delete it.</li>
+    <li>If you join the early-access list, we keep your email address, the device you picked (Windows or iPhone), the page you signed up from, and a one-way scrambled form of your internet address (used only to stop spam sign-ups — it cannot be turned back into the address).</li>
+    <li>We use your email only to send your invite and important news about Keo’s launch.</li>
     <li>This website uses no cookies, no trackers and no analytics.</li>
   </ul>
 
+  <h2>Who we work with</h2>
+  <ul>
+    <li><strong>Supabase</strong> — Keo accounts and the account database.</li>
+    <li><strong>Cloudflare</strong> — hosts Keo Cloud and handles Keo’s email addresses.</li>
+    <li><strong>OpenRouter</strong> and the AI companies it connects to — AI answers, search and voice.</li>
+    <li><strong>fal.ai</strong> and the models it runs — pictures, video, music, sound and 3D.</li>
+    <li><strong>Paystack</strong> — payments.</li>
+    <li><strong>Resend</strong> — sends Keo’s account and invite emails.</li>
+    <li><strong>GitHub</strong> — hosts this website and Keo’s updates.</li>
+  </ul>
+  <p>We do not sell your personal information, and we do not use your conversations to train AI models.</p>
+
+  <h2>How long we keep it</h2>
+  <p>We keep your account details while you have an account, and your early-access email until you join Keo or ask us to remove it. Usage and payment records are kept as long as needed for billing, accounting and the law. When you ask us to delete your account, we delete your account details; payment records the law requires us to keep are kept for that time only.</p>
+
+  <h2>Your control and your rights</h2>
+  <ul>
+    <li>Using your apps is off until you allow specific apps; actions ask for approval by default.</li>
+    <li>Delete any memory, conversation or capture — or everything — in the app (Settings → Privacy &amp; data → Delete all data). Uninstalling keeps your data folder so a reinstall can continue; delete it in the app first if you want it gone.</li>
+    <li>You can ask to see, correct or delete the personal information we hold about you, or object to how we use it — including under Nigeria’s Data Protection Act 2023 and, where it applies, the GDPR.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>Keo is not meant for children under 13, and paid plans are for adults (or with a parent’s or guardian’s permission).</p>
+
+  <h2>Security</h2>
+  <p>Connections to Keo Cloud are encrypted. The keys that let Keo Cloud work stay in Cloudflare and are never sent to the app, and only Keo Cloud can change plans or usage in the account database.</p>
+
+  <h2>Changes</h2>
+  <p>If we change this policy, we update this page and its date; for important changes we tell you in Keo.</p>
+
   <h2>Contact</h2>
-  <p>Questions or problems: <a href="mailto:support@heykeo.com">support@heykeo.com</a>.</p>
+  <p>Questions, requests or problems: <a href="mailto:support@heykeo.com">support@heykeo.com</a>.</p>
 </main>
 <footer>
   <div class="wrap">

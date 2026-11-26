@@ -7,12 +7,15 @@ export const KEO_CLOUD = {
   supabaseUrl: 'https://snacuyukgzizjqdwxexn.supabase.co',
   anonKey:
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNuYWN1eXVrZ3ppempxZHd4ZXhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMTg5NzYsImV4cCI6MjEwODU5NDk3Nn0.b86L_GmzwJJ6O_JYoJKOw0RKtv6r8cMgOrNL69BOjtU',
-  gatewayUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',
+  gatewayUrl: 'https://cloud.heykeo.com/v1',
   /** Where the links in Keo's account emails land (must be in Supabase → URL Configuration → Redirect URLs). */
-  accountPageUrl: 'https://keo-cloud.blessednoble90.workers.dev/account',
+  accountPageUrl: 'https://cloud.heykeo.com/account',
   /** Keo's plans and payment page (opened in the browser with a short-lived ticket). */
-  upgradePageUrl: 'https://keo-cloud.blessednoble90.workers.dev/upgrade',
+  upgradePageUrl: 'https://cloud.heykeo.com/upgrade',
 } as const;
+
+/** Keo Cloud's first address (still served): saved settings that point at it move to the new one. */
+export const OLD_GATEWAY_URL = 'https://keo-cloud.blessednoble90.workers.dev/v1';
 
 /** One window of the AI allowance (a day, a week, the billing month). */
 export interface AllowanceWindow {

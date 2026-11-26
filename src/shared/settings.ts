@@ -85,7 +85,7 @@ export const SettingsSchema = z
         keoUseCredits: z.boolean().default(true),
         /** Keo's own AI through Keo Cloud (the user's Keo account; no key). */
         keo: OpenAICompatSettings.default({
-          baseUrl: 'https://keo-cloud.blessednoble90.workers.dev/v1',
+          baseUrl: 'https://cloud.heykeo.com/v1',
           model: 'keo-fast',
           supportsTools: true,
           supportsVision: true,

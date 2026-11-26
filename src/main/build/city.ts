@@ -9,7 +9,7 @@ export const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
 export const OSM_LICENSE_URL = 'https://www.openstreetmap.org/copyright';
 
 /** No e-mail or personal data: just what the app is (OpenStreetMap asks apps to name themselves). */
-const USER_AGENT = 'Keo-desktop-builder/1.0 (+https://keo-cloud.blessednoble90.workers.dev)';
+const USER_AGENT = 'Keo-desktop-builder/1.0 (+https://cloud.heykeo.com)';
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 /** Waits before each try: the free servers turn away apps that ask again too soon. */

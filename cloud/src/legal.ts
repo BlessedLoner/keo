@@ -4,7 +4,7 @@
  * Settings → Variables); until it is set the pages say it is coming soon.
  */
 
-const UPDATED = '27 October 2026';
+const UPDATED = '26 November 2026';
 
 type Kind = 'terms' | 'privacy' | 'refunds';
 
@@ -64,7 +64,7 @@ function body(kind: Kind, email: string | undefined): { title: string; html: str
 <ul>
   <li><strong>Messages</strong> you send, the conversation so far, and things you or Keo add to them (attached pictures or document text, results from Keo’s tools, web pages Keo read for you). These go through OpenRouter to the company that runs the chosen AI model (for example OpenAI, Google or Anthropic).</li>
   <li><strong>Web searches</strong> through Keo Search go through OpenRouter to its search partner (for example Exa).</li>
-  <li><strong>Pictures</strong> you ask Keo to make or change, with your description and the picture being changed.</li>
+  <li><strong>Pictures, video, music, sound and 3D models</strong> you ask Keo to make or change, with your description and the pictures or clips being changed. These go to fal.ai and the model it runs.</li>
   <li><strong>Voice</strong>: text Keo reads aloud with Keo’s voice, and recordings you choose to send for speech-to-text.</li>
 </ul>
 <p>Keo Cloud passes these on and does not keep them. OpenRouter and the AI companies handle them under their own privacy terms and may keep them for a limited time, for example for safety and abuse monitoring.</p>
@@ -76,7 +76,9 @@ function body(kind: Kind, email: string | undefined): { title: string; html: str
   <li><strong>Supabase</strong> — Keo accounts and the account database.</li>
   <li><strong>Cloudflare</strong> — hosts Keo Cloud.</li>
   <li><strong>OpenRouter</strong> and the AI model companies it connects to — AI answers, search, pictures and voice.</li>
+  <li><strong>fal.ai</strong> and the models it runs — pictures, video, music, sound and 3D.</li>
   <li><strong>Paystack</strong> — payments.</li>
+  <li><strong>Resend</strong> — sends Keo’s account emails.</li>
   <li><strong>Google, Microsoft and others</strong> — only if you connect your own email or calendar to Keo; those connections run from your computer.</li>
 </ul>
 <p>We do not sell your personal information, and we do not use your conversations to train AI models.</p>
