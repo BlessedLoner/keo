@@ -216,6 +216,8 @@ export const invokeSchemas = {
   'account:signIn': z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict(),
   'account:signOut': empty,
   'account:resetPassword': z.object({ email: z.string().trim().email().max(254) }).strict(),
+  'account:google': z.object({}).strict(),
+  'account:cancelGoogle': z.object({}).strict(),
   'account:refresh': empty,
   'account:upgrade': z.object({ go: z.enum(['topup']).optional() }).strict(),
   'account:useLocal': empty,
@@ -694,6 +696,8 @@ export interface InvokeOutputs {
   'account:signIn': AccountStatus;
   'account:signOut': AccountStatus;
   'account:resetPassword': { ok: true };
+  'account:google': AccountStatus;
+  'account:cancelGoogle': { ok: true };
   'account:refresh': AccountStatus;
   'account:upgrade': { opened: boolean };
   'account:useLocal': { ok: true };

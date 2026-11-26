@@ -3,7 +3,7 @@ import introVideo from '../assets/intro/keo-intro.mp4';
 import { invoke } from '../lib/api';
 import { useApp } from '../state/AppState';
 import '../styles/signin.css';
-import { useAccount, useAuthForm } from './AccountPanel';
+import { GoogleButton, useAccount, useAuthForm } from './AccountPanel';
 import { Icon } from './Icon';
 
 /** The intro plays once per run of Keo (signing out later goes straight to the form, even after the window reloads). */
@@ -123,6 +123,11 @@ export function SignInGate() {
           <button role="tab" aria-selected={!signup} className={!signup ? 'on' : ''} onClick={() => f.setMode('signin')}>
             Sign in
           </button>
+        </div>
+
+        <GoogleButton className="signin-google" waiting={!!account?.signingInWithGoogle} onStart={() => void f.google()} onCancel={f.cancelGoogle} />
+        <div className="signin-or">
+          <span>or with your email</span>
         </div>
 
         <form

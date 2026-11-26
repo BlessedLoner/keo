@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { KEO_CLOUD } from '../shared/cloud';
 import { pushChannels } from '../shared/ipc';
 import { Win32Backend } from './desktop/backend';
 import { APP_ID, resolveProfile, type ProfileInfo } from './env/profile';
@@ -836,9 +837,10 @@ app.whenReady().then(() => {
         },
         testProvider: TEST_PROVIDER ? new TestProvider() : null,
         logger: log,
-        // "Sign in with Google" opens Google's own page in the user's browser (https only).
+        // "Sign in with Google" opens Google's own page in the user's browser (https only); "Continue
+        // with Google" for the Keo account starts at Keo's sign-in service, which sends it on to Google.
         openBrowser: async (url) => {
-          if (!url.startsWith('https://accounts.google.com/')) throw new Error('Not a Google sign-in page.');
+          if (!url.startsWith('https://accounts.google.com/') && !url.startsWith(`${KEO_CLOUD.supabaseUrl}/auth/v1/authorize?`)) throw new Error('Not a Google sign-in page.');
           await shell.openExternal(url);
         },
       });

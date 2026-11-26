@@ -506,6 +506,19 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       s.settings.update({ ui: { ownKeys: false }, ...(s.settings.get().activeProvider === 'keo' ? { activeProvider: null } : {}) });
       return s.account.status();
     },
+    'account:google': async () => {
+      try {
+        await s.account.signInWithGoogle();
+      } catch (e) {
+        throw new KeoError('account', (e as Error).message);
+      }
+      useKeoIfNothingElse();
+      return s.account.status();
+    },
+    'account:cancelGoogle': () => {
+      s.account.cancelGoogle();
+      return { ok: true as const };
+    },
     'account:resetPassword': async ({ email }) => {
       try {
         await s.account.resetPassword(email);

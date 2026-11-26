@@ -263,7 +263,23 @@ const PAGE = (title: string, text: string) =>
  * one GET carrying the expected state. Anything else gets 404/400 and is
  * ignored; the listener closes after the first good callback.
  */
-export async function loopback(state: string, signal: AbortSignal): Promise<{ redirectUri: string; code: Promise<string>; close(): void }> {
+/** What the browser tab and Keo say after the redirect (defaults: Google Calendar's sign-in). */
+export interface LoopbackWords {
+  doneTitle: string;
+  doneText: string;
+  failedText: string;
+  denied: string;
+  failed: string;
+}
+const CALENDAR_WORDS: LoopbackWords = {
+  doneTitle: 'Keo is connected',
+  doneText: 'You can close this tab and go back to Keo.',
+  failedText: 'Google did not sign you in. You can close this tab and try again from Keo.',
+  denied: 'You did not allow Keo to use your calendar.',
+  failed: 'Google did not complete the sign-in.',
+};
+
+export async function loopback(state: string, signal: AbortSignal, words: LoopbackWords = CALENDAR_WORDS): Promise<{ redirectUri: string; code: Promise<string>; close(): void }> {
   let resolve!: (c: string) => void;
   let reject!: (e: Error) => void;
   const code = new Promise<string>((res, rej) => {
@@ -286,10 +302,11 @@ export async function loopback(state: string, signal: AbortSignal): Promise<{ re
     const err = url.searchParams.get('error');
     const c = url.searchParams.get('code');
     if (err || !c) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE('Not signed in', 'Google did not sign you in. You can close this tab and try again from Keo.'));
-      reject(new Error(err === 'access_denied' ? 'You did not allow Keo to use your calendar.' : 'Google did not complete the sign-in.'));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE('Not signed in', words.failedText));
+      const why = (url.searchParams.get('error_description') ?? '').replace(/[^\w .,'’:-]/g, '').slice(0, 160);
+      reject(new Error(err === 'access_denied' ? words.denied : why && words !== CALENDAR_WORDS ? `${words.failed} (${why})` : words.failed));
     } else {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE('Keo is connected', 'You can close this tab and go back to Keo.'));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE(words.doneTitle, words.doneText));
       resolve(c);
     }
   });

@@ -3,6 +3,8 @@ import type { AllowanceWindow, AccountStatus } from '../../shared/cloud';
 import { KEO_CLOUD } from '../../shared/cloud';
 import type { Logger } from '../logging/logger';
 import type { SecretStore } from '../secrets/secretStore';
+import { loopback, pkcePair, type LoopbackWords } from '../calendar/googleAuth';
+import crypto from 'node:crypto';
 
 /**
  * The user's Keo account: sign-up, sign-in, staying signed in, signing out — straight against
@@ -64,6 +66,8 @@ export class KeoAccount {
   private timer: NodeJS.Timeout | null = null;
 
   private waiting: { email: string; password: string; until: number; timer: NodeJS.Timeout } | null = null;
+  /** "Continue with Google" in progress (the browser is open). */
+  private google: AbortController | null = null;
 
   constructor(
     private readonly d: {
@@ -77,6 +81,10 @@ export class KeoAccount {
       accountChanged?: (userId: string | null) => void;
       /** How often to check whether a new account's email is confirmed (tests: faster). */
       confirmPollMs?: number;
+      /** Opens a page in the user's own browser ("Continue with Google"). */
+      openBrowser?: (url: string) => Promise<void>;
+      /** How long "Continue with Google" waits for the browser (default 5 minutes). */
+      googleTimeoutMs?: number;
     },
   ) {
     this.session = this.load();
@@ -249,6 +257,67 @@ export class KeoAccount {
     this.pendingEmail = null;
     this.d.log.info('account.signed_in', {});
     await this.refreshMe().catch(() => undefined);
+  }
+
+  /**
+   * "Continue with Google" — for new and returning users alike. Supabase's Google sign-in in the
+   * user's own browser (RFC 8252): PKCE (S256) and a one-shot listener on 127.0.0.1 that accepts
+   * one callback carrying Keo's state. The one-time code is exchanged for a session here; no
+   * password exists, and nothing is logged.
+   */
+  async signInWithGoogle(): Promise<void> {
+    const open = this.d.openBrowser;
+    if (!open) throw new AccountError('Signing in with Google works only in the Keo app.');
+    let on: boolean;
+    try {
+      const r = await this.f(`${this.cfg.supabaseUrl}/auth/v1/settings`, { headers: { apikey: this.cfg.anonKey } });
+      on = !!((await r.json().catch(() => ({}))) as { external?: { google?: boolean } }).external?.google;
+    } catch {
+      throw new AccountError('Keo could not reach its servers. Check your internet connection.');
+    }
+    if (!on) throw new AccountError('Signing in with Google is not switched on yet. Use your email for now.');
+
+    this.google?.abort();
+    const ac = new AbortController();
+    this.google = ac;
+    this.d.changed?.();
+    const timer = setTimeout(() => ac.abort(), this.d.googleTimeoutMs ?? 5 * 60_000);
+    const { verifier, challenge } = pkcePair();
+    const state = crypto.randomBytes(24).toString('base64url');
+    let listener: Awaited<ReturnType<typeof loopback>> | null = null;
+    try {
+      listener = await loopback(state, ac.signal, GOOGLE_WORDS);
+      const back = `${listener.redirectUri}/?state=${state}`;
+      const url = new URL(`${this.cfg.supabaseUrl}/auth/v1/authorize`);
+      url.search = new URLSearchParams({ provider: 'google', redirect_to: back, code_challenge: challenge, code_challenge_method: 's256', scopes: 'email profile' }).toString();
+      await open(url.toString());
+      let code: string;
+      try {
+        code = await listener.code;
+      } catch (e) {
+        if (ac.signal.aborted) throw new AccountError(this.google === ac ? 'Google sign-in took too long. Try again.' : 'Google sign-in was cancelled.');
+        throw new AccountError((e as Error).message);
+      }
+      const j = await this.auth('token?grant_type=pkce', { auth_code: code, code_verifier: verifier });
+      const email = String((j.user as { email?: unknown } | undefined)?.email ?? '').toLowerCase();
+      if (this.waiting) this.stopWaiting();
+      this.save(this.fromTokens(j, email));
+      this.pendingEmail = null;
+      this.d.log.info('account.signed_in', { with: 'google' });
+      await this.refreshMe().catch(() => undefined);
+    } finally {
+      clearTimeout(timer);
+      listener?.close();
+      if (this.google === ac) this.google = null;
+      this.d.changed?.();
+    }
+  }
+
+  /** Stops waiting for the browser ("Cancel" while signing in with Google). */
+  cancelGoogle(): void {
+    const ac = this.google;
+    this.google = null;
+    ac?.abort();
   }
 
   /** Emails a password-reset link. */
@@ -439,6 +508,7 @@ export class KeoAccount {
       email: this.session?.email ?? null,
       pendingEmail: this.pendingEmail,
       waitingForConfirmation: !!this.waiting && !this.session,
+      signingInWithGoogle: !!this.google,
       plan: this.me?.plan ?? null,
       usage: this.me?.usage ?? null,
       billing: this.me?.billing ?? null,
@@ -446,6 +516,15 @@ export class KeoAccount {
     };
   }
 }
+
+/** The browser tab after "Continue with Google", and what Keo says if it did not work. */
+const GOOGLE_WORDS: LoopbackWords = {
+  doneTitle: 'You’re signed in to Keo',
+  doneText: 'You can close this tab and go back to Keo.',
+  failedText: 'Google did not sign you in. You can close this tab and try again from Keo.',
+  denied: 'Google sign-in was cancelled.',
+  failed: 'Google did not complete the sign-in.',
+};
 
 /** Supabase's error, in plain words. */
 function friendly(j: Record<string, unknown>, status: number): string {

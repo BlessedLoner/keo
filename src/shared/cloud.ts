@@ -32,6 +32,8 @@ export interface AccountStatus {
   pendingEmail: string | null;
   /** Keo signs in by itself as soon as that email is confirmed. */
   waitingForConfirmation: boolean;
+  /** "Continue with Google" is waiting for the browser. */
+  signingInWithGoogle?: boolean;
   plan: { id: string; name: string; dailyRequests: number; dailyTokens: number; features: Record<string, unknown> } | null;
   usage: {
     day: string;

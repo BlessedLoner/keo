@@ -75,6 +75,8 @@ export const INVOKE_CHANNELS = [
   'account:signIn',
   'account:signOut',
   'account:resetPassword',
+  'account:google',
+  'account:cancelGoogle',
   'account:refresh',
   'account:upgrade',
   'account:useLocal',

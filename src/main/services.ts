@@ -456,6 +456,7 @@ export class Services {
       log: this.log,
       ...(d.cloudFetch ? { fetch: d.cloudFetch } : {}),
       ...(d.confirmPollMs ? { confirmPollMs: d.confirmPollMs } : {}),
+      ...(d.openBrowser ? { openBrowser: d.openBrowser } : {}),
       changed: () => this.push('account:changed', this.account.status()),
       accountChanged: (userId) => {
         if (userId) this.useKeoIfNothingElse();
