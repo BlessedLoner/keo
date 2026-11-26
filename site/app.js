@@ -262,7 +262,8 @@
         if (time) time.textContent = `00:0${Math.floor(Math.min(tt, D))}`;
       });
     };
-    document.fonts && document.fonts.load ? document.fonts.load(`700 40px Outfit`).then(start, start) : start();
+    if (document.fonts && document.fonts.load) document.fonts.load(`700 40px Outfit`).then(start, start);
+    else start();
   }
 
   // ---------------------------------------------------------------- Studio: the playhead and the words that pop

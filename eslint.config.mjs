@@ -22,6 +22,11 @@ export default tseslint.config(
     languageOptions: { sourceType: 'module', globals: { ...globals.browser } },
   },
   {
+    // The website (heykeo.com): a plain script in the browser.
+    files: ['site/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+  },
+  {
     files: ['src/renderer/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },
