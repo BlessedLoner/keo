@@ -22,7 +22,7 @@ function body(kind: Kind, email: string | undefined): { title: string; html: str
     return {
       title: 'Refund and Cancellation Policy',
       html: `
-<p>Keo’s paid plans (Pro and Max) are monthly subscriptions paid with Paystack.</p>
+<p>Keo’s paid plans (Pro, Creator and Max) are monthly subscriptions paid with Paystack. AI top-ups and Studio credit packs are one-off payments.</p>
 <h2>Cancelling</h2>
 <ul>
   <li>You can cancel any time: Keo → Settings → Providers → Keo account → <strong>Manage plan</strong> → <strong>Cancel renewal</strong>.</li>
@@ -30,7 +30,7 @@ function body(kind: Kind, email: string | undefined): { title: string; html: str
 </ul>
 <h2>Refunds</h2>
 <ul>
-  <li><strong>Payments are not refunded</strong>, including for unused time, unused allowances or the rest of a month after you cancel.</li>
+  <li><strong>Payments are not refunded</strong>, including for unused time, unused allowances, unused top-ups or credits, or the rest of a month after you cancel.</li>
   <li>If you were charged by mistake — for example charged twice for the same month, or charged after you cancelled — tell us at ${mail} with the payment date and amount, and we will correct it and return the wrong charge.</li>
   <li>This policy does not take away any rights you have under the consumer protection law that applies to you (for example Nigeria’s Federal Competition and Consumer Protection Act). Where the law requires a refund, we will give it.</li>
 </ul>
@@ -106,8 +106,12 @@ function body(kind: Kind, email: string | undefined): { title: string; html: str
 </ul>
 <h2>3. Plans and payment</h2>
 <ul>
-  <li>Keo has a Free plan and paid monthly plans (Pro and Max). Each plan has daily allowances (AI steps, tokens, web searches, pictures, voice minutes) and a set of AI models, shown on the plans page. Allowances reset every day at midnight UTC.</li>
-  <li>Paid plans renew automatically every month and are charged to your card through Paystack until you cancel. Prices are shown in your currency before you pay.</li>
+  <li>Keo has a Free plan and paid monthly plans (Pro, Creator and Max). Each plan has a monthly AI allowance, Studio credits and a set of AI models, shown on the plans page.</li>
+  <li>The AI allowance renews each month from the day you paid. So that it lasts the whole month, at most part of it can be used in one day or one week; those daily and weekly shares reset at 00:00 UTC (weeks start on Monday). A task that is already under way is allowed to finish within the month’s allowance even if today’s or this week’s share runs out on the way.</li>
+  <li>When an allowance is used up, Keo pauses and keeps your work; it continues when the allowance renews, or straight away with an AI top-up or a higher plan.</li>
+  <li>AI top-ups add more AI allowance without changing plan. A top-up is used only after your plan’s allowance, works with the models your plan includes, and never expires.</li>
+  <li>Studio credits pay for Keo Studio’s AI (for example AI clips and character voices) and never pay for chat. Your plan’s credits renew every month and unused ones do not carry over; credits you buy never expire and are used after your plan’s credits.</li>
+  <li>Paid plans renew automatically every month and are charged to your card through Paystack until you cancel. AI top-ups and credit packs are one-off payments. Prices are shown in your currency before you pay.</li>
   <li>You can cancel any time; you keep your plan until the end of the month you paid for. Payments are not refunded — see the <a href="/refunds">Refund Policy</a>.</li>
   <li>We may change plans, allowances or prices; changes to what you pay apply from your next renewal after we have told you.</li>
 </ul>
