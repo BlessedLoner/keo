@@ -202,8 +202,12 @@ export function VisualPlayer({ scene: given, speech, onClose, onStudio, inline =
   const body = (
     <div className={`visual-player${inline ? ' inline' : ''}`} onClick={(e) => e.stopPropagation()}>
       <header>
-        <strong>{scene.title}</strong>
+        <div className="vp-title">
+          <strong>{scene.title}</strong>
+          <span className="vp-sub">3D explanation · {scene.steps.length} steps</span>
+        </div>
         <span className="grow" />
+        <div className="vp-tools">
         <select className="select sm visual-look" value={look} onChange={(e) => setLook(e.target.value as SceneStyle)} title="How the scene is drawn" aria-label="Look">
           {(Object.keys(STYLE_NAMES) as SceneStyle[]).map((k) => (
             <option key={k} value={k}>
@@ -227,9 +231,10 @@ export function VisualPlayer({ scene: given, speech, onClose, onStudio, inline =
             {busy ? 'Opening…' : 'Open in Studio'}
           </button>
         )}
+        </div>
         {onClose && (
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close">
-            Close
+          <button className="vp-close" onClick={onClose} aria-label="Close" title="Close (Esc)">
+            <Icon name="x" size={16} />
           </button>
         )}
       </header>
@@ -288,14 +293,14 @@ export function VisualPlayer({ scene: given, speech, onClose, onStudio, inline =
 function Controls(p: { step: number; steps: string[]; playing: boolean; done: boolean; onPrev(): void; onNext(): void; onToggle(): void; onJump(i: number): void; hint: string }) {
   return (
     <div className="visual-controls">
-      <button className="btn sm" onClick={p.onPrev} disabled={p.step === 0} aria-label="Previous step">
-        ‹
+      <button className="vp-round" onClick={p.onPrev} disabled={p.step === 0} aria-label="Previous step">
+        <Icon name="chevronRight" size={16} className="flip" />
       </button>
       <button className="btn primary sm" onClick={p.onToggle}>
         {p.playing ? 'Pause' : p.done ? 'Play again' : 'Play'}
       </button>
-      <button className="btn sm" onClick={p.onNext} disabled={p.step >= p.steps.length - 1} aria-label="Next step">
-        ›
+      <button className="vp-round" onClick={p.onNext} disabled={p.step >= p.steps.length - 1} aria-label="Next step">
+        <Icon name="chevronRight" size={16} />
       </button>
       <div className="visual-dots">
         {p.steps.map((title, i) => (
@@ -412,8 +417,12 @@ export function GuidePlayer({ guide, speech, onClose, inline = false }: { guide:
   const body = (
     <div className={`visual-player${inline ? ' inline' : ''}`} onClick={(e) => e.stopPropagation()}>
       <header>
-        <strong>{guide.title}</strong>
+        <div className="vp-title">
+          <strong>{guide.title}</strong>
+          <span className="vp-sub">Guide · {guide.steps.length} steps</span>
+        </div>
         <span className="grow" />
+        <div className="vp-tools">
         {sp.can && (
           <button className="btn ghost sm" onClick={sp.toggle}>
             {sp.sound ? 'Voice on' : 'Voice off'}
@@ -424,9 +433,10 @@ export function GuidePlayer({ guide, speech, onClose, inline = false }: { guide:
             Open the site
           </button>
         )}
+        </div>
         {onClose && (
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close">
-            Close
+          <button className="vp-close" onClick={onClose} aria-label="Close" title="Close (Esc)">
+            <Icon name="x" size={16} />
           </button>
         )}
       </header>

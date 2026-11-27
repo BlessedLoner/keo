@@ -17,6 +17,8 @@ export interface BuildSummary {
   files: number;
   createdAt: string;
   updatedAt: string;
+  /** The conversation it was made in (or last changed from), when that conversation still exists. */
+  conversationId?: string;
 }
 
 export interface AiVideoStatus {
@@ -212,6 +214,7 @@ export const invokeSchemas = {
   'chat:attachBytes': z.object({ name: z.string().trim().min(1).max(200), dataBase64: z.string().max(36_000_000) }).strict(),
   'chat:attachScreenshot': empty,
   'account:status': empty,
+  'account:creativeAccess': z.object({ use: z.boolean().optional() }).strict(),
   'account:signUp': z.object({ email: z.string().trim().email().max(254), password: z.string().min(8).max(200) }).strict(),
   'account:signIn': z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict(),
   'account:signOut': empty,
@@ -289,6 +292,7 @@ export const invokeSchemas = {
   // Keo's builder: the websites, apps and games Keo built.
   'builds:list': empty,
   'builds:get': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
+  'builds:conversation': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/) }).strict(),
   'builds:open': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), page: z.string().max(300).optional() }).strict(),
   'builds:folder': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), file: z.string().max(300).optional() }).strict(),
   'builds:todo': z.object({ id: z.string().regex(/^bd_[a-z0-9]{6,24}$/), index: z.number().int().min(0).max(39), done: z.boolean() }).strict(),
@@ -372,6 +376,7 @@ export const invokeSchemas = {
   'picture:view': z.object({ path: z.string().trim().min(3).max(1000) }).strict(),
   'picture:open': z.object({ path: z.string().trim().min(3).max(1000), reveal: z.boolean().default(false) }).strict(),
   'chat:discardAttachment': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/) }).strict(),
+  'chat:attachmentImage': z.object({ id: z.string().regex(/^att_[A-Za-z0-9]{8,40}$/), messageId: id.optional() }).strict(),
   'chat:retry': z.object({ conversationId: id }).strict(),
   'chat:cancel': z.object({ conversationId: id }).strict(),
   'chat:active': empty,
@@ -690,8 +695,10 @@ export interface InvokeOutputs {
   'chat:attachBytes': AttachmentView;
   'chat:attachScreenshot': AttachmentView;
   'chat:discardAttachment': { ok: true };
+  'chat:attachmentImage': { mimeType: string; dataBase64: string };
   'picture:view': { mimeType: string; dataBase64: string };
   'account:status': AccountStatus;
+  'account:creativeAccess': { signedIn: boolean; startedAt: string | null; endsAt: string | null; locked: boolean };
   'account:signUp': { needsConfirmation: boolean; status: AccountStatus };
   'account:signIn': AccountStatus;
   'account:signOut': AccountStatus;
@@ -751,6 +758,7 @@ export interface InvokeOutputs {
   'studio:characters': Character[];
   'studio:characterVoice': { mimeType: string; base64: string };
   'builds:list': BuildSummary[];
+  'builds:conversation': { conversationId: string };
   'builds:get': { build: BuildSummary; folder: string; files: Array<{ path: string; bytes: number }>; pages: string[]; guide: string | null };
   'builds:open': { opened: boolean };
   'builds:folder': { opened: boolean };
@@ -884,7 +892,7 @@ export interface InvokeOutputs {
   'keomode:open': { ok: true };
   'marks:get': { marks: Array<{ shape: 'circle' | 'box' | 'arrow' | 'underline' | 'label'; x: number; y: number; w?: number; h?: number; fromX?: number; fromY?: number; label?: string }>; seconds: number } | null;
   'keomode:close': { ok: true };
-  'pencil:context': { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null } | null;
+  'pencil:context': { image: string; width: number; height: number; provider: string; consentNeeded: boolean; visionModel: boolean; listening: boolean; heard: string | null; bar: { dock: 'top' | 'bottom' | 'left' | 'right'; x: number; y: number; width: number; height: number } | null } | null;
   'pencil:submit': { ok: boolean; error: string | null };
   'pencil:cancel': { ok: true };
   'pencil:allowExport': { allowed: boolean };

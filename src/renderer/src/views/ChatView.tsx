@@ -4,6 +4,7 @@ import type { AttachmentView } from '@shared/ipc';
 import { Icon } from '../components/Icon';
 import { KeoEmblem, STATE_LABEL } from '../components/KeoEmblem';
 import { Markdown } from '../components/Markdown';
+import { Lightbox, toObjectUrl } from '../components/Lightbox';
 import { ApprovalCard } from '../components/TaskWidgets';
 import { GuideBox, VisualBox, type Speech } from '../components/VisualExplain';
 import { useUi } from '../components/ui';
@@ -238,6 +239,32 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
     }
   };
 
+  /**
+   * The project picker. "Open" goes to the project's latest conversation (a new one in the project
+   * when it has none); a chat with nothing in it yet simply joins the project. "Move" puts this chat
+   * into the project; "" takes it out.
+   */
+  const pickProject = async (value: string) => {
+    try {
+      if (!value) {
+        if (conversation.projectId) await invoke('conversations:setProject', { id: conversation.id, projectId: null });
+        return;
+      }
+      const [how, projectId] = value.split(':') as ['open' | 'move', string];
+      if (how === 'move' || messages.length === 0) {
+        await invoke('conversations:setProject', { id: conversation.id, projectId });
+        if (how === 'move') ui.toast(`Moved into “${projects.find((p) => p.id === projectId)?.name ?? 'the project'}”`, 'success');
+        return;
+      }
+      if (projectId === conversation.projectId) return;
+      const inProject = await invoke('conversations:list', { projectId });
+      const target = inProject[0] ?? (await invoke('conversations:create', { projectId }));
+      app.setConversationId(target.id);
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
   const canRetry = !turn && !!lastAssistant && ['error', 'cancelled', 'interrupted'].includes(lastAssistant.status);
   const emblemState = turn ? (turn.phase === 'tool' ? 'working' : turn.phase === 'waiting_approval' ? 'attention' : 'thinking') : app.emblem;
@@ -253,18 +280,34 @@ function Thread({ conversation, projects }: { conversation: Conversation; projec
           </div>
         </div>
         <select
-          className="select"
-          style={{ width: 180 }}
-          aria-label="Project for this conversation"
-          value={conversation.projectId ?? ''}
-          onChange={(e) => void invoke('conversations:setProject', { id: conversation.id, projectId: e.target.value || null }).catch((er) => ui.error(errText(er)))}
+          className="select project-pick"
+          style={{ width: 190 }}
+          aria-label="Project"
+          title="Open a project’s conversation, or move this chat into a project"
+          value={conversation.projectId ? `open:${conversation.projectId}` : ''}
+          onChange={(e) => void pickProject(e.target.value)}
         >
-          <option value="">No project</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
+          <option value="">{conversation.projectId ? 'Leave the project' : 'No project'}</option>
+          {projects.length > 0 && (
+            <optgroup label="Open a project">
+              {projects.map((p) => (
+                <option key={p.id} value={`open:${p.id}`}>
+                  {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {projects.length > 0 && messages.length > 0 && (
+            <optgroup label="Move this chat into">
+              {projects
+                .filter((p) => p.id !== conversation.projectId)
+                .map((p) => (
+                  <option key={p.id} value={`move:${p.id}`}>
+                    {p.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
         </select>
         <button className="btn ghost sm" title="Today’s calendar, new email, finished work and recent files" disabled={!!turn} onClick={() => void send(BRIEFING_PROMPT).catch(() => undefined)}>
           <Icon name="sparkle" size={14} /> Briefing
@@ -406,7 +449,7 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming, turn }: { m:
   if (m.role === 'user') {
     return (
       <div className="msg user">
-        {!!m.meta.attachments?.length && <SentAttachments list={m.meta.attachments} />}
+        {!!m.meta.attachments?.length && <SentAttachments list={m.meta.attachments} messageId={m.id} />}
         {m.content.trim() && <div className="bubble">{m.content}</div>}
         <div className="meta">
           <span className="acts">
@@ -437,8 +480,7 @@ function MessageView({ m, liveText, liveTools, livePlan, streaming, turn }: { m:
         <span>Keo</span>
         {m.meta.model && <span className="muted small">· {m.meta.providerId === 'test' ? 'test provider' : m.meta.model}{m.meta.route && ` (${m.meta.route})`}</span>}
       </div>
-      {plan && plan.steps.length > 0 && <PlanChecklist plan={plan} />}
-      {tools.length > 0 && <ToolList tools={tools} conversationId={m.conversationId} />}
+      {((plan && plan.steps.length > 0) || tools.length > 0) && <WorkSummary plan={plan} tools={tools} conversationId={m.conversationId} working={isStreaming} turn={turn} since={m.createdAt} />}
       <div className="bubble">
         {text ? <Markdown text={text} /> : isStreaming ? <span className="muted small">{turn ? <TurnStatus turn={turn} /> : '…'}</span> : null}
         {isStreaming && <span className="caret" aria-hidden="true" />}
@@ -519,6 +561,104 @@ function PlanChecklist({ plan }: { plan: WorkPlan }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * What Keo did in a reply, in one compact card instead of a long list: while it works, the step it
+ * is on, a progress bar and the time; when it is done, one line ("Worked through 4 steps · 27
+ * actions") with View steps for the full plan and every action. What the user must see or act on
+ * stays in the reply itself: approvals, choices, pictures, 3D explanations, product cards and the
+ * briefing. Anything that did not work is counted on the line, never hidden.
+ */
+function WorkSummary({ plan, tools, conversationId, working, turn, since }: { plan?: WorkPlan; tools: ToolActivity[]; conversationId: string; working: boolean; turn?: TurnInfo; since: string }) {
+  const app = useApp();
+  const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!working) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [working]);
+  const taskOf = (t: ToolActivity) => (t.taskId ? app.tasks.data?.find((x) => x.id === t.taskId) : undefined);
+  const shown = (t: ToolActivity) => {
+    const task = taskOf(t);
+    if (task?.steps[0]?.state === 'awaiting_authorization' || t.outcome === 'awaiting_authorization') return true;
+    if (t.cards || t.briefing || (t.choices && t.choices.length > 0)) return true;
+    if ((t.visual || t.guide) && t.outcome === 'executed') return true;
+    return t.capabilityId.startsWith('picture.') && task?.state === 'completed' && !!(task.steps[0]?.result as { path?: string } | undefined)?.path;
+  };
+  const inline = tools.filter(shown);
+  const routine = tools.filter((t) => !shown(t));
+  const bad = routine.filter((t) => (t.outcome === 'failed' || t.outcome === 'uncertain' || t.outcome === 'rejected') && !isLookup(t));
+  const steps = plan?.steps ?? [];
+  const done = steps.filter((s) => s.status === 'done').length;
+  const current = steps.find((s) => s.status === 'in_progress');
+  const running = [...routine].reverse().find((t) => taskOf(t)?.state === 'running');
+  const doing = current?.title ?? running?.summary ?? (turn ? phaseLabel(turn.phase, turn.detail) : routine.at(-1)?.summary ?? 'Working');
+  const pct = steps.length ? Math.round((done / steps.length) * 100) : null;
+  const secs = Math.max(0, Math.floor((now - Date.parse(since)) / 1000));
+  const time = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const counts = [steps.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : '', routine.length ? `${routine.length} action${routine.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  return (
+    <>
+      {(steps.length > 0 || routine.length > 0) && (
+        <div className={`work ${working ? 'working' : 'finished'}${open ? ' open' : ''}`}>
+          <div className="work-head">
+            <span className={`work-mark${working ? '' : bad.length ? ' warn' : ' ok'}`} aria-hidden="true">
+              {working ? (
+                <span className="turn-spark">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              ) : bad.length ? (
+                '!'
+              ) : (
+                '✓'
+              )}
+            </span>
+            <div className="work-text">
+              <div className="work-title">{working ? doing : `Worked through ${counts || 'the request'}`}</div>
+              <div className="work-sub">
+                {working ? (
+                  <>
+                    {steps.length > 0 && (
+                      <span>
+                        Step {Math.min(done + 1, steps.length)} of {steps.length}
+                      </span>
+                    )}
+                    {routine.length > 0 && <span>{routine.length} actions</span>}
+                    <span>{time}</span>
+                  </>
+                ) : (
+                  <>
+                    {steps.length > 0 && <span>{done === steps.length ? 'Every step done' : `${done} of ${steps.length} done`}</span>}
+                    {bad.length > 0 && <span className="work-bad">{bad.length} didn’t work</span>}
+                  </>
+                )}
+              </div>
+            </div>
+            <button className="work-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+              {open ? 'Hide steps' : 'View steps'}
+              <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
+            </button>
+          </div>
+          {working && pct !== null && (
+            <div className="work-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Progress">
+              <i style={{ width: `${Math.max(4, pct)}%` }} />
+            </div>
+          )}
+          {open && (
+            <div className="work-body">
+              {steps.length > 0 && <PlanChecklist plan={plan!} />}
+              {routine.length > 0 && <ToolList tools={routine} conversationId={conversationId} />}
+            </div>
+          )}
+        </div>
+      )}
+      {inline.length > 0 && <ToolList tools={inline} conversationId={conversationId} />}
+    </>
   );
 }
 
@@ -858,21 +998,33 @@ function PictureResult({ path: file, summary }: { path: string; summary: string 
         </button>
       </figcaption>
       {big && media && !media.video && (
-        <div className="pic-lightbox" role="dialog" aria-label={name} onClick={() => setBig(false)}>
-          <img src={media.url} alt={summary} />
-        </div>
+        <Lightbox
+          onClose={() => setBig(false)}
+          pictures={[{ name, src: media.url, actions: [{ label: 'Open', run: () => open(false) }, { label: 'Show in folder', run: () => open(true) }] }]}
+        />
       )}
     </figure>
   );
 }
 
-/** What the user attached to a sent message: picture thumbnails and file chips. */
-function SentAttachments({ list }: { list: MessageAttachment[] }) {
+/** What the user attached to a sent message: picture thumbnails (click to see them full size) and file chips. */
+function SentAttachments({ list, messageId }: { list: MessageAttachment[]; messageId: string }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const pics = list.filter((a) => a.kind === 'image' && a.thumb);
   return (
     <div className="sent-atts">
+      {open !== null && (
+        <Lightbox
+          start={open}
+          onClose={() => setOpen(null)}
+          pictures={pics.map((a) => ({ name: a.name, src: a.thumb!, load: () => invoke('chat:attachmentImage', { id: a.id, messageId }).then((r) => toObjectUrl(r.dataBase64, r.mimeType)) }))}
+        />
+      )}
       {list.map((a) =>
         a.kind === 'image' && a.thumb ? (
-          <img key={a.id} className="sent-thumb" src={a.thumb} alt={a.name} title={a.path ?? a.name} />
+          <button key={a.id} className="sent-thumb-btn" title={`${a.name} — click to see it full size`} onClick={() => setOpen(pics.indexOf(a))}>
+            <img className="sent-thumb" src={a.thumb} alt={a.name} />
+          </button>
         ) : (
           <span key={a.id} className="att-chip sent" title={a.note ?? a.path ?? a.name}>
             <Icon name="file" size={14} />
@@ -906,6 +1058,9 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [atts, setAtts] = useState<AttachmentView[]>([]);
+  // The picture open full size (index into the waiting pictures), or null.
+  const [viewing, setViewing] = useState<number | null>(null);
+  const pendingPics = atts.filter((x) => x.kind === 'image' && x.thumb);
   const [adding, setAdding] = useState(0);
   const [menu, setMenu] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -1059,25 +1214,6 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
           </div>
         </div>
       )}
-      {(atts.length > 0 || adding > 0) && (
-        <div className="att-tray" aria-label="Attachments">
-          {atts.map((a) => (
-            <span key={a.id} className={`att-chip ${a.kind}`} title={a.note ?? a.path ?? a.name}>
-              {a.kind === 'image' && a.thumb ? <img src={a.thumb} alt="" /> : <Icon name={a.kind === 'document' ? 'file' : 'attach'} size={14} />}
-              <span className="att-name">{a.name}</span>
-              <span className="att-size">{a.note && a.kind === 'file' ? 'name only' : fileSize(a.size)}</span>
-              <button className="att-x" aria-label={`Remove ${a.name}`} onClick={() => removeAtt(a.id)}>
-                <Icon name="x" size={11} />
-              </button>
-            </span>
-          ))}
-          {adding > 0 && (
-            <span className="att-chip loading">
-              <span className="spinner" /> Reading…
-            </span>
-          )}
-        </div>
-      )}
       {atts.length > 0 && !text.trim() && !busy && (
         <div className="quick-row" aria-label="Quick actions">
           {QUICK.filter((q) => q !== 'What do you see?' || atts.some((a) => a.kind === 'image')).map((q, i) => (
@@ -1087,7 +1223,44 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
           ))}
         </div>
       )}
-      <div className="composer">
+      {viewing !== null && (
+        <Lightbox
+          start={viewing}
+          onClose={() => setViewing(null)}
+          pictures={pendingPics.map((a) => ({ name: a.name, src: a.thumb!, load: () => invoke('chat:attachmentImage', { id: a.id }).then((r) => toObjectUrl(r.dataBase64, r.mimeType)) }))}
+        />
+      )}
+      <div className={`composer${atts.length || adding ? ' has-atts' : ''}`}>
+        {(atts.length > 0 || adding > 0) && (
+          <div className="att-tray" aria-label="Attachments">
+            {atts.map((a) =>
+              a.kind === 'image' && a.thumb ? (
+                <span key={a.id} className="att-tile" title={a.path ?? a.name}>
+                  <button className="att-tile-pic" aria-label={`See ${a.name} full size`} onClick={() => setViewing(pendingPics.indexOf(a))}>
+                    <img src={a.thumb} alt="" />
+                  </button>
+                  <button className="att-x" aria-label={`Remove ${a.name}`} onClick={() => removeAtt(a.id)}>
+                    <Icon name="x" size={11} />
+                  </button>
+                </span>
+              ) : (
+                <span key={a.id} className={`att-chip ${a.kind}`} title={a.note ?? a.path ?? a.name}>
+                  <Icon name={a.kind === 'document' ? 'file' : 'attach'} size={14} />
+                  <span className="att-name">{a.name}</span>
+                  <span className="att-size">{a.note && a.kind === 'file' ? 'name only' : fileSize(a.size)}</span>
+                  <button className="att-x" aria-label={`Remove ${a.name}`} onClick={() => removeAtt(a.id)}>
+                    <Icon name="x" size={11} />
+                  </button>
+                </span>
+              ),
+            )}
+            {adding > 0 && (
+              <span className="att-chip loading">
+                <span className="spinner" /> Reading…
+              </span>
+            )}
+          </div>
+        )}
         <div className="attach-wrap">
           <button className={`btn icon attach ${menu ? 'on' : ''}`} aria-label="Attach photos or files" aria-expanded={menu} title="Attach photos or files (or drop them here, or paste)" onClick={() => setMenu((m) => !m)}>
             <Icon name="plus" size={18} />
@@ -1176,17 +1349,7 @@ function Composer({ conversationId, busy, onSend }: { conversationId: string; bu
             </button>
           </span>
         ) : (
-          <span>
-            {app.activeProvider?.id === 'test' ? (
-              <>Replies come from the offline test provider (scripted, not an AI model).</>
-            ) : app.activeProvider ? (
-              <>
-                Replies from <strong>{app.activeProvider.selectedModel}</strong> via {app.activeProvider.destination}
-              </>
-            ) : (
-              'No provider selected'
-            )}
-          </span>
+          <span>{app.activeProvider?.id === 'test' ? 'Replies come from the offline test provider (scripted, not an AI model).' : !app.activeProvider ? 'No provider selected' : ''}</span>
         )}
         <span className="grow" />
         <span>Actions on your computer always ask first.</span>

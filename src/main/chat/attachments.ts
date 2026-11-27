@@ -71,6 +71,12 @@ export class AttachmentStaging {
     return out;
   }
 
+  /** A picture waiting to be sent, at full size, for the preview (null when it is not a picture). */
+  stagedImage(id: string): { mediaType: string; dataBase64: string } | null {
+    const a = this.staged.get(id)?.a;
+    return a?.image ? { mediaType: a.image.mediaType, dataBase64: a.image.dataBase64 } : null;
+  }
+
   discard(id: string): void {
     this.staged.delete(id);
   }

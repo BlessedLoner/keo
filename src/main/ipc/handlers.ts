@@ -1,4 +1,5 @@
 import { describeActivity } from '../agent/activity';
+import { isCreativeChannel } from '../cloud/creativeTrial';
 import { issueKey, StudioError } from '../studio/studioService';
 import type { ReviewIssue } from '../../shared/studioReview';
 import { learnStyle } from '../../shared/studioStyleLearn';
@@ -136,7 +137,8 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     } catch {
       files = 0;
     }
-    return { id: m.id, title: m.title, kind: m.kind, brief: m.brief, libraries: m.libraries, backend: m.backend, todo: m.todo, files, createdAt: m.createdAt, updatedAt: m.updatedAt };
+    const conversationId = m.conversationId && s.conversations.get(m.conversationId) ? m.conversationId : undefined;
+    return { id: m.id, title: m.title, kind: m.kind, brief: m.brief, libraries: m.libraries, backend: m.backend, todo: m.todo, files, createdAt: m.createdAt, updatedAt: m.updatedAt, ...(conversationId ? { conversationId } : {}) };
   };
   const buildErr = <T>(f: () => T): T => {
     try {
@@ -175,7 +177,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     return { hasKey: s.secrets.has('brave'), searchEnabled: st.permissions.webSearchEnabled, fetchEnabled: st.permissions.webFetchEnabled, secretStorage: s.secrets.available() };
   };
 
-  return {
+  const map: HandlerMap = {
     'app:info': () => ({
       ...host.appInfo(),
       profile: s.profile.profile,
@@ -482,6 +484,7 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return view(await s.attachments.fromPicture(`Screenshot ${new Date().toLocaleTimeString()}.png`, png));
     },
     'account:status': () => s.account.status(),
+    'account:creativeAccess': ({ use }) => (use ? s.creativeTrial.use() : s.creativeTrial.state()),
     'account:signUp': async ({ email, password }) => {
       try {
         const r = await s.account.signUp(email, password);
@@ -671,6 +674,18 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
     },
     // Clone a video: the user's click after the page showed the price.
     'builds:list': () => s.builds.list().map((m) => buildSummary(m)),
+    // "Ask Keo to change it": the change goes on in the chat where the build was made. A build whose
+    // chat was deleted (or that was made before builds remembered it) gets one chat of its own.
+    'builds:conversation': ({ id }) => {
+      const m = buildErr(() => s.builds.manifest(id));
+      let conversationId = m.conversationId && s.conversations.get(m.conversationId) ? m.conversationId : null;
+      if (!conversationId) {
+        conversationId = s.conversations.create(`Build · ${m.title}`.slice(0, 200)).id;
+        changed('conversations:changed', { conversationId });
+      }
+      s.builds.link(id, conversationId);
+      return { conversationId };
+    },
     'builds:get': ({ id }) => {
       const m = buildErr(() => s.builds.manifest(id));
       const folder = s.builds.dir(id);
@@ -930,6 +945,23 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
         return { opened: true };
       }
       return { opened: await host.openPath(p) };
+    },
+    // A picture the user attached, at full size for the preview: one waiting to be sent, or one in a
+    // sent message (from Keo's own copy, or the user's file where it still is).
+    'chat:attachmentImage': ({ id, messageId }) => {
+      if (!messageId) {
+        const img = s.attachments.stagedImage(id);
+        if (!img) throw new KeoError('not_found', 'That picture is no longer here.');
+        return { mimeType: img.mediaType, dataBase64: img.dataBase64 };
+      }
+      const a = s.conversations.getMessage(messageId)?.meta.attachments?.find((x) => x.id === id);
+      if (!a || a.kind !== 'image') throw new KeoError('not_found', 'That picture is no longer here.');
+      const file = [a.copy, a.path].find((f): f is string => !!f && fs.existsSync(f));
+      if (!file) throw new KeoError('not_found', 'The picture file was moved or deleted; only the small preview is left.');
+      if (fs.statSync(file).size > 40 * 1024 * 1024) throw new KeoError('too_large', 'That picture is too large to show here.');
+      const ext = path.extname(file).toLowerCase();
+      const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
+      return { mimeType, dataBase64: fs.readFileSync(file).toString('base64') };
     },
     'chat:discardAttachment': ({ id }) => {
       s.attachments.discard(id);
@@ -1470,4 +1502,15 @@ export function createHandlers(s: Services, host: HostHooks): HandlerMap {
       return { deleted: true };
     },
   };
+  // Studio and Builds without a Keo account: after the free day, what changes or makes something
+  // is refused until the user signs in (the pages show a lock; reading the lists stays open).
+  for (const ch of Object.keys(map) as Array<keyof HandlerMap>) {
+    if (!isCreativeChannel(ch)) continue;
+    const inner = map[ch] as (...a: unknown[]) => unknown;
+    (map as Record<string, unknown>)[ch] = (...a: unknown[]) => {
+      if (s.creativeTrial.check()) throw new KeoError('locked', 'Keo Studio and Builds need a free Keo account after the first day. Sign in to keep using them: your work is kept.');
+      return inner(...a);
+    };
+  }
+  return map;
 }

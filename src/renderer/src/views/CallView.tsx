@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { STATE_LABEL, type EmblemState } from '../components/KeoEmblem';
+import type { EmblemState } from '../components/KeoEmblem';
 import { invoke } from '../lib/api';
 import { levelBus } from '../lib/levelBus';
 import { startSphere } from '../presence/voiceSphere';
@@ -93,46 +93,75 @@ export function CallView() {
 
   const secs = since ? Math.max(0, Math.floor((now - since) / 1000)) : 0;
   const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-  const caption = inCall ? (vm!.state === 'speaking' && vm!.said ? vm!.said : vm!.heard ? `“${vm!.heard}”` : null) : null;
-  const line = !inCall
-    ? 'Start a call and just talk — Keo listens, answers out loud and works while you speak.'
-    : vm!.state === 'listening'
-      ? 'Listening…'
-      : vm!.state === 'speaking'
-        ? 'Keo is speaking — talk any time to interrupt'
-        : vm!.state === 'confirming'
-          ? 'Say yes or no'
-          : 'Thinking…';
+  const mode = inCall ? vm!.state : 'off';
+  const word = !inCall ? 'Call Keo' : mode === 'listening' ? 'Listening' : mode === 'speaking' ? 'Speaking' : mode === 'confirming' ? 'Yes or no?' : 'Thinking';
+  // One line at most: what Keo just said (or what it heard), never a wall of text.
+  const last = inCall ? (mode === 'speaking' && vm!.said ? vm!.said : vm!.heard ? `“${vm!.heard}”` : null) : null;
 
   return (
-    <div className={`callview ${inCall ? 'on' : 'off'} state-${state}`}>
+    <div className={`callview ${inCall ? 'on' : 'off'} state-${state} mode-${mode}`}>
       <div className="cv-bg" aria-hidden="true" />
+      <div className="cv-halo" aria-hidden="true" />
       <canvas ref={canvas} className="cv-sphere" aria-hidden="true" />
       <header className="cv-top">
-        <div className="cv-title">
-          <span className={`cv-dot ${inCall ? 'live' : ''}`} aria-hidden="true" />
-          {inCall ? (
-            <>
-              On a call with Keo <span className="cv-clock">{clock}</span>
-            </>
-          ) : (
-            'Call Keo'
-          )}
-        </div>
+        {inCall ? (
+          <div className="cv-pill">
+            <span className="cv-dot live" aria-hidden="true" />
+            <span className="cv-clock">{clock}</span>
+          </div>
+        ) : (
+          <span />
+        )}
         <button className="cv-ghost" title="Full screen" aria-label="Full screen" onClick={() => void invoke('call:fullscreen', {})}>
           <Icon name="expand" size={15} />
         </button>
       </header>
-      <footer className="cv-bottom" role="status" aria-live="polite">
-        <div className="cv-state">{inCall ? STATE_LABEL[state] : 'Ready when you are'}</div>
-        <div className={`cv-caption ${caption ? 'on' : ''}`}>{caption ?? ' '}</div>
-        <div className="cv-line">{line}</div>
-        <button className={`cv-call ${inCall ? 'end' : 'start'}`} disabled={busy} onClick={() => void toggle()} aria-label={inCall ? 'End the call' : 'Start a call'}>
+      <div className="cv-center" role="status" aria-live="polite">
+        <div className="cv-big" key={word}>
+          {word}
+        </div>
+        <Wave active={inCall && (mode === 'listening' || mode === 'speaking')} />
+        <div className={`cv-last ${last ? 'on' : ''}`} key={last ?? 'none'} title={last ?? undefined}>
+          {last ?? ' '}
+        </div>
+      </div>
+      <footer className="cv-dock">
+        <button className={`cv-call ${inCall ? 'end' : 'start'}`} disabled={busy} onClick={() => void toggle()} aria-label={inCall ? 'End the call' : 'Start a call'} title={inCall ? 'End the call (or say “hang up”)' : 'Start a call (or say “call Keo”)'}>
           <span className="cv-ring" aria-hidden="true" />
-          <Icon name="phone" size={22} />
+          <Icon name={inCall ? 'phone' : 'mic'} size={24} />
         </button>
-        <div className="cv-hint">{inCall ? 'Say “hang up” or press the button to end' : 'Or say “call Keo” any time'}</div>
       </footer>
+    </div>
+  );
+}
+
+/** The voice as bars: they follow the real audio level while Keo listens or speaks, and rest otherwise. */
+function Wave({ active }: { active: boolean }) {
+  const holder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = holder.current;
+    if (!el) return;
+    const bars = [...el.children] as HTMLElement[];
+    let raf = 0;
+    const tick = () => {
+      const t = performance.now() / 1000;
+      const lv = active ? Math.min(1, levelBus.get() * 1.8) : 0;
+      bars.forEach((b, i) => {
+        const shape = 0.55 + 0.45 * Math.sin(i * 0.9 + t * 6);
+        const mid = 1 - Math.abs(i - (bars.length - 1) / 2) / (bars.length / 2);
+        const h = 0.08 + (active ? 0.12 + lv * 0.9 * shape * (0.4 + mid * 0.6) : 0.04 * shape);
+        b.style.transform = `scaleY(${Math.min(1, h)})`;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [active]);
+  return (
+    <div className={`cv-wave ${active ? 'on' : ''}`} ref={holder} aria-hidden="true">
+      {Array.from({ length: 28 }, (_, i) => (
+        <i key={i} />
+      ))}
     </div>
   );
 }

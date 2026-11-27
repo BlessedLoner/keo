@@ -19,10 +19,10 @@ import { makeMaterial, worldUV } from './materials.js';
 
 /** The setting: where the sun is, how strong the light is, what the ground and the air look like. */
 const SETTINGS = {
-  sky: { sky: true, sun: [0.5, 0.55, 0.42], sunColor: '#fff1dc', sunPower: 3.8, ambient: 0.85, env: 0.3, exposure: 0.5, fog: '#c4d8ec', ground: '#6f7f5c', label: '#ffffff', labelBg: 'rgba(14,18,28,.84)', turbidity: 2.2, rayleigh: 0.9 },
-  sunset: { sky: true, sun: [0.8, 0.14, 0.3], sunColor: '#ffa860', sunPower: 3.4, ambient: 0.6, env: 0.26, exposure: 0.5, fog: '#d9a98c', ground: '#6b6552', label: '#ffffff', labelBg: 'rgba(14,18,28,.84)', turbidity: 7, rayleigh: 2.4 },
-  night: { sky: false, back: '#070b14', sun: [0.3, 0.7, 0.5], sunColor: '#9db8ff', sunPower: 0.7, ambient: 0.22, env: 0.25, exposure: 0.9, fog: '#070b14', ground: '#1b212b', label: '#ffffff', labelBg: 'rgba(14,18,28,.86)' },
-  dark: { sky: false, back: '#10141c', sun: [0.4, 0.75, 0.4], sunColor: '#ffffff', sunPower: 2.2, ambient: 0.4, env: 0.75, exposure: 0.85, fog: '#10141c', ground: '#1a202b', label: '#ffffff', labelBg: 'rgba(14,18,28,.86)' },
+  sky: { sky: true, sun: [0.5, 0.55, 0.42], sunColor: '#fff1dc', sunPower: 3.8, ambient: 0.85, env: 0.3, exposure: 0.5, fog: '#c4d8ec', ground: '#6f7f5c', label: '#ffffff', labelBg: 'rgba(8,8,10,.72)', turbidity: 2.2, rayleigh: 0.9 },
+  sunset: { sky: true, sun: [0.8, 0.14, 0.3], sunColor: '#ffa860', sunPower: 3.4, ambient: 0.6, env: 0.26, exposure: 0.5, fog: '#d9a98c', ground: '#6b6552', label: '#ffffff', labelBg: 'rgba(8,8,10,.72)', turbidity: 7, rayleigh: 2.4 },
+  night: { sky: false, back: '#070b14', sun: [0.3, 0.7, 0.5], sunColor: '#9db8ff', sunPower: 0.7, ambient: 0.22, env: 0.25, exposure: 0.9, fog: '#070b14', ground: '#1b212b', label: '#ffffff', labelBg: 'rgba(8,8,10,.74)' },
+  dark: { sky: false, back: '#10141c', sun: [0.4, 0.75, 0.4], sunColor: '#ffffff', sunPower: 2.2, ambient: 0.4, env: 0.75, exposure: 0.85, fog: '#10141c', ground: '#1a202b', label: '#ffffff', labelBg: 'rgba(8,8,10,.74)' },
   light: { sky: false, back: '#eef1f5', sun: [0.4, 0.75, 0.4], sunColor: '#ffffff', sunPower: 2.4, ambient: 0.7, env: 1, exposure: 0.8, fog: '#eef1f5', ground: '#e3e7ec', label: '#10141c', labelBg: 'rgba(255,255,255,.94)' },
 };
 
@@ -941,10 +941,10 @@ export class SceneViewer {
         el.dataset.key = key;
         el.innerHTML = '';
         const head = document.createElement('div');
-        head.style.cssText = 'display:flex;align-items:center;gap:7px;font:700 12.5px "Plus Jakarta Sans","Inter",system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase';
+        head.style.cssText = 'display:flex;align-items:center;gap:8px;font:600 13px/1.2 "Outfit","Segoe UI",system-ui,sans-serif;letter-spacing:-.01em';
         const badge = document.createElement('span');
         badge.textContent = String(num);
-        badge.style.cssText = 'flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;background:#3ab8ff;color:#04111c';
+        badge.style.cssText = `flex:none;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;font:700 10.5px/1 "Outfit","Segoe UI",system-ui,sans-serif;background:${this.look.label};color:${this.look.label === '#ffffff' ? '#050506' : '#ffffff'}`;
         const title = document.createElement('span');
         title.textContent = p.o.label;
         head.append(badge, title);
@@ -952,10 +952,10 @@ export class SceneViewer {
         if (p.o.note && !narrow) {
           const note = document.createElement('div');
           note.textContent = p.o.note;
-          note.style.cssText = 'margin-top:3px;font:500 11.5px/1.35 "Plus Jakarta Sans","Inter",system-ui,sans-serif;opacity:.82';
+          note.style.cssText = 'margin-top:4px;font:400 11.5px/1.4 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;opacity:.72';
           el.appendChild(note);
         }
-        el.style.cssText = `position:absolute;width:${cardW}px;box-sizing:border-box;padding:7px 10px;border-radius:10px;color:${this.look.label};background:${this.look.labelBg};border:1px solid rgba(58,184,255,.55);box-shadow:0 8px 22px rgba(0,0,0,.35);backdrop-filter:blur(6px)`;
+        el.style.cssText = `position:absolute;width:${cardW}px;box-sizing:border-box;padding:9px 12px;border-radius:14px;color:${this.look.label};background:${this.look.labelBg};border:1px solid ${this.look.label === '#ffffff' ? 'rgba(255,255,255,.16)' : 'rgba(16,20,28,.14)'};box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 12px 32px rgba(0,0,0,.35);backdrop-filter:blur(14px) saturate(140%);transition:top .35s cubic-bezier(.2,.7,.1,1),opacity .3s`;
       }
       items.push({ id, el, at, left: at.x < w / 2, hgt: Math.max(30, el.offsetHeight || 40) });
     });
@@ -1004,7 +1004,8 @@ export class SceneViewer {
         const ex = left ? x + cardW : x;
         const ey = it.y + it.hgt / 2;
         const bend = left ? ex + 18 : ex - 18;
-        lines.push(`<polyline points="${ex},${ey} ${bend},${ey} ${it.at.x},${it.at.y}" fill="none" stroke="#3ab8ff" stroke-width="1.4" stroke-opacity=".85"/><circle cx="${it.at.x}" cy="${it.at.y}" r="3.6" fill="#3ab8ff"/><circle cx="${it.at.x}" cy="${it.at.y}" r="7" fill="none" stroke="#3ab8ff" stroke-opacity=".45"/>`);
+        const ink = this.look.label;
+        lines.push(`<polyline points="${ex},${ey} ${bend},${ey} ${it.at.x},${it.at.y}" fill="none" stroke="${ink}" stroke-width="1.1" stroke-opacity=".55"/><circle cx="${it.at.x}" cy="${it.at.y}" r="3.4" fill="${ink}"/><circle cx="${it.at.x}" cy="${it.at.y}" r="7.5" fill="none" stroke="${ink}" stroke-opacity=".35"/>`);
       }
     }
     this.lineLayer.innerHTML = lines.join('');

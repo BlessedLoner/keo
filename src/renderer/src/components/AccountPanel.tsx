@@ -115,18 +115,37 @@ function billingLine(b: NonNullable<AccountStatus['billing']>): string {
 }
 
 
-/** Today's web searches, pictures and voice minutes against the plan ("not in plan" when it has none). */
-function extras(features: Record<string, unknown>, u: NonNullable<AccountStatus['usage']>): string {
-  const n = (k: string) => (typeof features[k] === 'number' ? (features[k] as number) : 0);
-  const part = (label: string, used: number, max: number) => (max > 0 ? `${label} ${used} of ${max}` : `${label}: upgrade to use`);
-  return [part('Web searches', u.webSearches, n('web_search')), part('Pictures', u.images, n('images')), part('Voice minutes', Math.ceil(u.voiceSeconds / 60), n('voice_minutes'))].join(' · ');
-}
 
 /**
  * Sign up / sign in to Keo, or (signed in) the plan and today's allowance. Keo's own AI needs no
  * API key: requests go through Keo Cloud with this sign-in.
  */
 const WINDOW_NAME = { day: 'Today', week: 'This week', month: 'This month' } as const;
+
+/** One window of the AI allowance as a ring: how much is used, and when it resets. */
+function AllowanceRing({ label, used, note }: { label: string; used: number; note: string }) {
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, used));
+  const tone = pct >= 100 ? 'full' : pct >= 80 ? 'high' : '';
+  return (
+    <div className={`acct-ring ${tone}`} role="progressbar" aria-label={`${label}: AI allowance used`} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+      <div className="acct-ring-dial">
+        <svg viewBox="0 0 84 84" width="84" height="84" aria-hidden="true">
+          <circle cx="42" cy="42" r={r} className="track" />
+          <circle cx="42" cy="42" r={r} className="fill" strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} />
+        </svg>
+        <div className="acct-ring-num">
+          {pct}
+          <span>%</span>
+        </div>
+      </div>
+      <div className="acct-ring-label">{label}</div>
+      {note && <div className="acct-ring-note">{note}</div>}
+    </div>
+  );
+}
+
 
 /** When an allowance window resets, in the user's own time ("today at 01:00", "Monday at 01:00", "on 28 December"). */
 function resetWords(iso: string): string {
@@ -182,57 +201,105 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
     const used = Math.max(0, ...windows.map((w) => w.used));
     const full = windows.find((w) => w.used >= 100);
     const strongLeft = u?.buildsLeft?.['keo-strong'] ?? u?.buildsLeft?.['keo-fast'];
+    const n = (k: string) => (plan && typeof plan.features[k] === 'number' ? (plan.features[k] as number) : 0);
+    const daily = u
+      ? [
+          { label: 'Web searches', icon: 'search', used: u.webSearches, max: n('web_search') },
+          { label: 'Pictures', icon: 'image', used: u.images, max: n('images') },
+          { label: 'Voice minutes', icon: 'mic', used: Math.ceil(u.voiceSeconds / 60), max: n('voice_minutes') },
+        ]
+      : [];
     return (
-      <div className="account-panel">
-        <div className="row">
-          <Icon name="check" size={15} />
-          <span className="grow">
-            Signed in as <strong>{a.email}</strong>
+      <div className="account-panel signed-in">
+        <div className="acct-head">
+          <span className="acct-avatar" aria-hidden="true">
+            {(a.email ?? '?').slice(0, 1).toUpperCase()}
           </span>
-          {plan && <span className={`chip ${plan.id === 'free' ? '' : 'accent'}`}>{plan.name} plan</span>}
-        </div>
-        {plan && u && (
-          <div className="account-usage">
-            <div className="small muted">
-              <strong>AI allowance</strong> (chat, building and operating your computer)
-            </div>
-            {windows.map((w) => (
-              <div key={w.window} className="allowance-window">
-                <div className="small muted">
-                  {WINDOW_NAME[w.window]}: <strong>{w.used}% used</strong>
-                  {w.resetsAt ? ` · ${w.window === 'month' ? 'renews' : 'resets'} ${resetWords(w.resetsAt)}` : ''}
-                </div>
-                <div className="usage-bar" role="progressbar" aria-label={`${WINDOW_NAME[w.window]} AI allowance used`} aria-valuenow={w.used} aria-valuemin={0} aria-valuemax={100}>
-                  <span style={{ width: `${w.used}%` }} />
-                </div>
-              </div>
-            ))}
-            {strongLeft && used < 100 && (
-              <div className="small muted">
-                About {strongLeft.month.toLocaleString()} more {strongLeft.month === 1 ? 'build' : 'builds'} this month on {u.buildsLeft?.['keo-strong'] ? 'Keo Strong' : 'Keo Fast'}
-                {strongLeft.now < strongLeft.month ? ` (${strongLeft.now.toLocaleString()} today)` : ''}. Keo Best uses it about twice as fast.
-              </div>
-            )}
-            {u.topup && (
-              <div className="small muted">
-                <strong>AI top-up:</strong> about {(u.topup.buildsLeft['keo-strong'] ?? 0).toLocaleString()} builds on Keo Strong or {u.topup.tasksLeft.toLocaleString()} tasks on Keo Fast left. It is used only after your plan’s allowance and never expires.
-              </div>
-            )}
-            {full && (
-              <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>
-                {full.window === 'month' ? 'This month’s AI allowance is used up.' : full.window === 'week' ? 'This week’s share of your AI allowance is used up.' : 'Today’s share of your AI allowance is used up.'} Keo pauses tasks and keeps their work; they can carry on when it {full.window === 'month' ? 'renews' : 'resets'}
-                {full.resetsAt ? ` (${resetWords(full.resetsAt)})` : ''}.{u.topup ? ' Your AI top-up is being used now.' : ' An AI top-up lets you carry on now.'}
-              </div>
-            )}
-            <div className="small muted">{extras(plan.features, u)}</div>
-            <div className="small muted">The day and week are shares of the month, so the allowance lasts the whole month. Studio credits are separate and never pay for chat.</div>
+          <div className="acct-who">
+            <div className="acct-email">{a.email}</div>
+            <div className="acct-sub">{a.billing ? billingLine(a.billing) : plan ? `${plan.name} plan` : 'Keo account'}</div>
           </div>
+          {plan && <span className={`acct-plan ${plan.id === 'free' ? 'free' : ''}`}>{plan.name}</span>}
+        </div>
+
+        {plan && u && (
+          <>
+            <div className="acct-section-title">
+              AI allowance <span>chat, building and operating your computer</span>
+            </div>
+            <div className="acct-rings">
+              {windows.map((w) => (
+                <AllowanceRing key={w.window} label={WINDOW_NAME[w.window]} used={w.used} note={w.resetsAt ? `${w.window === 'month' ? 'Renews' : 'Resets'} ${resetWords(w.resetsAt)}` : ''} />
+              ))}
+              <div className="acct-left">
+                {strongLeft && used < 100 ? (
+                  <>
+                    <div className="acct-big">{strongLeft.month.toLocaleString()}</div>
+                    <div className="acct-left-label">
+                      {strongLeft.month === 1 ? 'build' : 'builds'} left this month on {u.buildsLeft?.['keo-strong'] ? 'Keo Strong' : 'Keo Fast'}
+                      {strongLeft.now < strongLeft.month ? ` · ${strongLeft.now.toLocaleString()} today` : ''}
+                    </div>
+                    <div className="acct-hint">Keo Best uses it about twice as fast.</div>
+                  </>
+                ) : (
+                  <div className="acct-left-label">{full ? 'Paused until it resets — your tasks keep their work.' : 'Your allowance for this month.'}</div>
+                )}
+              </div>
+            </div>
+            {full && (
+              <div className="acct-alert" role="status">
+                <Icon name="warn" size={15} />
+                <span>
+                  {full.window === 'month' ? 'This month’s AI allowance is used up.' : full.window === 'week' ? 'This week’s share of your AI allowance is used up.' : 'Today’s share of your AI allowance is used up.'} Keo pauses tasks and keeps their work; they carry on when it {full.window === 'month' ? 'renews' : 'resets'}
+                  {full.resetsAt ? ` (${resetWords(full.resetsAt)})` : ''}.{u.topup ? ' Your AI top-up is being used now.' : ' An AI top-up lets you carry on now.'}
+                </span>
+              </div>
+            )}
+            <div className="acct-tiles">
+              {daily.map((d) => (
+                <div key={d.label} className="acct-tile">
+                  <div className="acct-tile-top">
+                    <Icon name={d.icon} size={14} />
+                    <span>{d.label}</span>
+                  </div>
+                  {d.max > 0 ? (
+                    <>
+                      <div className="acct-tile-num">
+                        {d.used.toLocaleString()} <span>/ {d.max.toLocaleString()} today</span>
+                      </div>
+                      <div className="acct-mini" role="progressbar" aria-label={`${d.label} used today`} aria-valuenow={d.used} aria-valuemin={0} aria-valuemax={d.max}>
+                        <i style={{ width: `${Math.min(100, (d.used / d.max) * 100)}%` }} />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="acct-tile-num muted">Not in your plan</div>
+                  )}
+                </div>
+              ))}
+              <div className={`acct-tile topup${u.topup ? ' on' : ''}`}>
+                <div className="acct-tile-top">
+                  <Icon name="sparkle" size={14} />
+                  <span>AI top-up</span>
+                </div>
+                {u.topup ? (
+                  <>
+                    <div className="acct-tile-num">
+                      ~{(u.topup.buildsLeft['keo-strong'] ?? 0).toLocaleString()} <span>builds left</span>
+                    </div>
+                    <div className="acct-hint">or {u.topup.tasksLeft.toLocaleString()} tasks on Keo Fast · never expires</div>
+                  </>
+                ) : (
+                  <div className="acct-hint">Extra AI for when the allowance runs out. Never expires.</div>
+                )}
+              </div>
+            </div>
+            <div className="acct-hint">The day and week are shares of the month, so the allowance lasts the whole month. Studio credits are separate and never pay for chat.</div>
+          </>
         )}
-        {a.billing && <div className="small muted">{billingLine(a.billing)}</div>}
         {a.error && <div className="small" style={{ color: 'var(--warn, #ffb547)' }}>{a.error}</div>}
         {note && <div className="small" style={{ color: 'var(--danger, #ff5d6c)' }}>{note.text}</div>}
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className={`btn sm ${plan?.id === 'free' ? 'primary' : ''}`} onClick={() => void upgrade()} disabled={busy} title="Opens Keo’s plans page in your browser">
+        <div className="acct-actions">
+          <button className={`btn sm ${plan?.id === 'free' || !plan ? 'primary' : ''}`} onClick={() => void upgrade()} disabled={busy} title="Opens Keo’s plans page in your browser">
             {plan?.id === 'free' || !plan ? 'Upgrade' : 'Manage plan'}
           </button>
           {plan && (
@@ -245,6 +312,7 @@ export function AccountPanel({ onSignedIn, activeProvider, onUseKeo }: { onSigne
               Use Keo’s AI
             </button>
           )}
+          <span className="grow" />
           <button className="btn ghost sm" onClick={() => void invoke('account:refresh', {}).catch(() => undefined)}>
             <Icon name="retry" size={13} /> Refresh
           </button>

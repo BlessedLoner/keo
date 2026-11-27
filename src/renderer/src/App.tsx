@@ -19,6 +19,7 @@ import { TasksView } from './views/TasksView';
 import { VisionView } from './views/VisionView';
 import { StudioView } from './views/StudioView';
 import { BuildsView } from './views/BuildsView';
+import { CreativeGate, useCreativeAccess } from './components/CreativeLock';
 
 const NAV: Array<{ id: ViewId; label: string; icon: string; key: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', key: '1' },
@@ -51,6 +52,8 @@ export function App() {
   }, [app]);
 
   const provider = app.activeProvider;
+  // Studio and Builds after the free day without a Keo account: a lock on their rail buttons.
+  const creative = useCreativeAccess(false);
   // Keo opens on the sign-in screen until the user signs in to their Keo account, unless they
   // chose their own API key (Settings → Providers → Advanced) or this is the dev test provider.
   const account = useAccount();
@@ -99,7 +102,7 @@ export function App() {
       <div className="titlebar">
         <div className="brand">
           <KeoEmblem state={app.emblem} size={24} />
-          KEO <small>{STATE_LABEL[app.emblem]}</small>
+          Keo <small>{STATE_LABEL[app.emblem]}</small>
         </div>
         <div className="spacer" />
         <TitleControls />
@@ -108,7 +111,7 @@ export function App() {
       <nav className="rail" aria-label="Main">
         <div className="rail-group" role="group" aria-label="Views">
           {NAV.map((n) => (
-            <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={n.key ? `Ctrl+${n.key}` : undefined} badge={badgeFor(n.id, app)} live={n.id === 'call' && !!app.presence?.voiceMode.active} />
+            <RailButton key={n.id} id={n.id} label={n.label} icon={n.icon} shortcut={n.key ? `Ctrl+${n.key}` : undefined} badge={badgeFor(n.id, app)} live={n.id === 'call' && !!app.presence?.voiceMode.active} locked={!!creative?.locked && (n.id === 'studio' || n.id === 'builds')} />
           ))}
         </div>
         <div className="rail-group rail-foot" role="group" aria-label="Diagnose and settings">
@@ -122,10 +125,18 @@ export function App() {
         {app.view === 'tasks' && <TasksView />}
         {app.view === 'memory' && <MemoryView />}
         {app.view === 'projects' && <ProjectsView />}
-        {app.view === 'builds' && <BuildsView />}
+        {app.view === 'builds' && (
+          <CreativeGate area="Builds">
+            <BuildsView />
+          </CreativeGate>
+        )}
         {app.view === 'vision' && <VisionView />}
         {app.view === 'capabilities' && <CapabilitiesView />}
-        {app.view === 'studio' && <StudioView />}
+        {app.view === 'studio' && (
+          <CreativeGate area="Studio">
+            <StudioView />
+          </CreativeGate>
+        )}
         {app.view === 'settings' && <SettingsView />}
         {app.view === 'diagnostics' && <DiagnosticsView />}
       </main>
@@ -241,7 +252,7 @@ function badgeFor(id: ViewId, app: ReturnType<typeof useApp>): { n: number; tone
   return null;
 }
 
-function RailButton({ id, label, icon, shortcut, badge, live }: { id: ViewId; label: string; icon: string; shortcut?: string; badge?: { n: number; tone: 'warn' | 'info' } | null; live?: boolean }) {
+function RailButton({ id, label, icon, shortcut, badge, live, locked }: { id: ViewId; label: string; icon: string; shortcut?: string; badge?: { n: number; tone: 'warn' | 'info' } | null; live?: boolean; locked?: boolean }) {
   const app = useApp();
   return (
     <button aria-current={app.view === id ? 'page' : undefined} className={live ? 'live' : undefined} onClick={() => app.setView(id)} title={shortcut ? `${label} (${shortcut})` : label}>
@@ -249,6 +260,11 @@ function RailButton({ id, label, icon, shortcut, badge, live }: { id: ViewId; la
         <Icon name={icon} size={19} />
       </span>
       <span className="rail-label">{label}</span>
+      {locked && (
+        <span className="rail-lock" aria-label="Locked: sign in to use">
+          <Icon name="lock" size={10} />
+        </span>
+      )}
       {badge && (
         <span className={`badge ${badge.tone === 'info' ? 'info' : ''}`} aria-label={`${badge.n} pending`}>
           {badge.n > 99 ? '99+' : badge.n}

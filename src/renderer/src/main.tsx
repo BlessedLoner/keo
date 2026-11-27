@@ -18,6 +18,7 @@ import './styles/fonts-more.css';
 import './styles/app.css';
 import './styles/emblem.css';
 import './styles/presence.css';
+import './styles/look.css';
 
 // One renderer bundle, four windows: the main app, the floating companion, the command bar and research results.
 const route = window.location.hash;

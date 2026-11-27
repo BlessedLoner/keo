@@ -510,3 +510,64 @@ html.control-root, html.control-root body { background: transparent !important; 
 .control-stop { flex: none; height: 30px; padding: 0 16px; border-radius: 999px; border: 0; background: #ff4d4d; color: #fff; font: 600 13px system-ui, 'Segoe UI', sans-serif; cursor: pointer; }
 .control-stop:hover { background: #ff6b6b; }
 @media (prefers-reduced-motion: reduce) { .control-dot { animation: none; } }
+
+/* ---------------------------------------------------------------- the pencil as the Keo bar, grown into its tools */
+.kb-pencil { position: absolute; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: default; }
+.kb-pencil.dock-bottom { flex-direction: column-reverse; }
+.kb-pencil .pencil-bar {
+  position: relative; top: auto; left: auto; transform: none; width: 100%; height: 52px; gap: 6px; padding: 0 8px 0 8px; border-radius: 26px;
+  background: linear-gradient(180deg, rgba(42, 44, 51, 0.94) 0%, rgba(21, 22, 26, 0.96) 42%, rgba(8, 8, 10, 0.97) 100%);
+  backdrop-filter: blur(22px) saturate(150%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 22px 60px rgba(0, 0, 0, 0.6);
+  animation: kb-grow 560ms cubic-bezier(0.2, 0.85, 0.15, 1) both;
+}
+/* It opens from the Keo bar's own width, out to both sides. */
+@keyframes kb-grow {
+  from { clip-path: inset(3px calc(50% - var(--from, 140px) / 2) 3px calc(50% - var(--from, 140px) / 2) round 22px); }
+  to { clip-path: inset(0 0 0 0 round 26px); }
+}
+.kb-pencil .pencil-bar > * { animation: kb-item 420ms cubic-bezier(0.2, 0.85, 0.15, 1) both; animation-delay: 180ms; }
+.kb-pencil .pencil-bar > .pd-progress { animation: none; }
+@keyframes kb-item { from { opacity: 0; transform: scale(0.85); filter: blur(3px); } }
+.kb-mark { width: 30px; height: 30px; flex: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; gap: 4px; background: #121219; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.kb-mark i { width: 4px; height: 9px; border-radius: 3px; background: #fff; animation: kb-blink 4.5s ease-in-out infinite; }
+@keyframes kb-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.15); } }
+.kb-pencil .pd-group { padding: 3px; border-radius: 14px; background: rgba(255, 255, 255, 0.04); }
+.kb-pencil .pd-group button { width: 30px; height: 30px; border-radius: 11px; }
+.kb-pencil .pd-group .swatch { width: 18px; height: 18px; margin: 0 3px; }
+.kb-pencil .pd-group .swatch[style*='#ffffff'] { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.pd-size i { display: block; width: 14px; border-radius: 3px; background: currentColor; }
+.kb-pencil .pencil-input { height: 36px; border-radius: 18px; background: rgba(0, 0, 0, 0.45); }
+.kb-pencil .pencil-send { height: 36px; border-radius: 18px; padding: 0 16px; }
+.kb-pencil .pencil-x { width: 32px; height: 32px; border-radius: 50%; border: 1px solid transparent; background: transparent; color: #b9bcc6; display: grid; place-items: center; cursor: pointer; }
+.kb-pencil .pd-progress { bottom: -8px; }
+.kb-pencil .pencil-heard { position: static; transform: none; max-width: min(620px, 100%); }
+@media (prefers-reduced-motion: reduce) {
+  html:not(.motion-full) .kb-pencil .pencil-bar, html:not(.motion-full) .kb-pencil .pencil-bar > *, html:not(.motion-full) .kb-mark i { animation: none !important; }
+}
+
+/* The pencil as a compact panel (about 440 px): name and hint, tools, colours, then the ask. */
+.kb-pencil .pencil-bar { height: auto; flex-direction: column; align-items: stretch; gap: 10px; padding: 12px; border-radius: 22px; animation-name: kb-open; animation-duration: 520ms; }
+.kb-pencil.dock-bottom .pencil-bar { animation-name: kb-open-up; }
+/* It opens out of the Keo bar: the bar's own pill first, then the panel unfolds from it. */
+@keyframes kb-open { from { clip-path: inset(0 calc(50% - var(--from, 140px) / 2) calc(100% - 46px) calc(50% - var(--from, 140px) / 2) round 23px); } to { clip-path: inset(0 0 0 0 round 22px); } }
+@keyframes kb-open-up { from { clip-path: inset(calc(100% - 46px) calc(50% - var(--from, 140px) / 2) 0 calc(50% - var(--from, 140px) / 2) round 23px); } to { clip-path: inset(0 0 0 0 round 22px); } }
+.kb-pencil .pencil-bar > * { animation-delay: 200ms; }
+.kp-head { display: flex; align-items: center; gap: 10px; }
+.kp-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.kp-what strong { font: 600 13.5px/1.2 'Outfit', 'Segoe UI', system-ui, sans-serif; letter-spacing: -0.01em; color: #fff; }
+.kp-hint { font-size: 11.5px; color: #9a9da7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: cmd-msg 240ms ease-out both; }
+.kp-hint.said { color: #9ff0c4; }
+.kb-pencil .pd-progress { position: static; transform: none; }
+.kp-tools { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.kp-tools .pd-group { padding: 3px; }
+.kp-colors { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 14px; background: rgba(255, 255, 255, 0.04); }
+.kp-colors .swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4); transition: transform 150ms, box-shadow 150ms; }
+.kp-colors .swatch[style*='#ffffff'] { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.kp-colors .swatch:hover { transform: scale(1.1); }
+.kp-colors .swatch.on { border-color: #fff; transform: scale(1.15); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.15), 0 0 12px rgba(255, 255, 255, 0.3); }
+.kp-ask { display: flex; align-items: center; gap: 8px; }
+.kp-ask .pencil-input { flex: 1; height: 40px; border-radius: 14px; }
+.kp-ask .pencil-mic { width: 40px; height: 40px; border-radius: 14px; }
+.kp-ask .pencil-send { width: 40px; height: 40px; padding: 0; justify-content: center; border-radius: 14px; }
+.kp-ask .pencil-send .spinner { border-top-color: #0a0a0c; }

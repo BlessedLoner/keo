@@ -968,6 +968,7 @@ app.whenReady().then(() => {
         showResults: () => presenceWindows?.showResults(),
         showVideo: () => presenceWindows?.showVideo(),
         showPencil: (bounds) => presenceWindows?.showPencil(bounds),
+        pencilBar: (bounds) => presenceWindows?.pencilBar(bounds) ?? null,
         hidePencil: () => presenceWindows?.hidePencil(),
         showKeoMode: () => presenceWindows?.showKeoMode(),
         showMarks: (bounds, marks, seconds) => presenceWindows?.showMarks(bounds, marks, seconds),

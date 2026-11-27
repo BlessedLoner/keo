@@ -36,13 +36,16 @@ export function BuildsView() {
     if (builds.data?.length && (!selected || !builds.data.some((b) => b.id === selected))) setSelected(builds.data[0]!.id);
   }, [builds.data, selected]);
 
-  /** A request to Keo in a new chat (where the user watches Keo build). */
-  const askKeo = async (text: string) => {
+  /**
+   * A request to Keo, in the chat where the user watches Keo build: a new build starts a new chat;
+   * a change to a build goes on in the chat where that build was made (so Keo knows its history).
+   */
+  const askKeo = async (text: string, buildId?: string) => {
     try {
-      const c = await invoke('conversations:create', { projectId: null });
-      app.setConversationId(c.id);
+      const conversationId = buildId ? (await invoke('builds:conversation', { id: buildId })).conversationId : (await invoke('conversations:create', { projectId: null })).id;
+      app.setConversationId(conversationId);
       app.setView('chat');
-      await invoke('chat:send', { conversationId: c.id, text });
+      await invoke('chat:send', { conversationId, text });
     } catch (e) {
       ui.error(errText(e));
     }
@@ -110,7 +113,7 @@ export function BuildsView() {
           onCancel={() => setRequest(null)}
           onSend={(text) => {
             setRequest(null);
-            void askKeo(request.change ? `In my build “${request.change.title}” (${request.change.id}): ${text}` : /^build\b/i.test(text) ? text : `Build ${text}`);
+            void askKeo(request.change ? `In my build “${request.change.title}” (${request.change.id}): ${text}` : /^build\b/i.test(text) ? text : `Build ${text}`, request.change?.id);
           }}
         />
       )}
@@ -189,6 +192,7 @@ function Ideas({ onPick }: { onPick: (ask: string) => void }) {
 
 function BuildDetail({ id, onChange, onDeleted }: { id: string; onChange: (b: { id: string; title: string }) => void; onDeleted: () => void }) {
   const ui = useUi();
+  const app = useApp();
   const detail = useInvoke('builds:get', { id }, { refreshOn: ['builds:changed'] });
   const [opening, setOpening] = useState(false);
   const d = detail.data;
@@ -251,6 +255,18 @@ function BuildDetail({ id, onChange, onDeleted }: { id: string; onChange: (b: { 
         <button className="btn" onClick={change}>
           <Icon name="magic" size={14} /> Ask Keo to change it
         </button>
+        {b.conversationId && (
+          <button
+            className="btn"
+            title="The chat where Keo made this build"
+            onClick={() => {
+              app.setConversationId(b.conversationId!);
+              app.setView('chat');
+            }}
+          >
+            <Icon name="chat" size={14} /> Open its chat
+          </button>
+        )}
         <button className="btn" onClick={() => void invoke('builds:folder', { id }).catch((e: unknown) => ui.error(errText(e)))}>
           <Icon name="folder" size={14} /> Open folder
         </button>

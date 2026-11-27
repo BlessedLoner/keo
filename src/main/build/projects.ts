@@ -226,6 +226,15 @@ export class BuildProjects {
     return o.libraries?.length ? this.update(id, { libraries: o.libraries }) : m;
   }
 
+  /** The conversation this build belongs to (where it was made, or where the user now changes it). */
+  link(id: string, conversationId: string): BuildManifest {
+    const m = this.manifest(id);
+    const next = BuildManifest.parse({ ...m, conversationId, updatedAt: new Date().toISOString() });
+    this.saveManifest(next);
+    this.d.changed?.(id);
+    return next;
+  }
+
   /** Changes the project's settings; libraries newly listed are copied in. */
   update(id: string, patch: Partial<Pick<BuildManifest, 'title' | 'brief' | 'libraries' | 'backend' | 'vars' | 'todo' | 'direction' | 'reference'>>): BuildManifest {
     const m = this.manifest(id);

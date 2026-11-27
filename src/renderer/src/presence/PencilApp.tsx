@@ -8,9 +8,30 @@ import { invoke, subscribe } from '../lib/api';
  * them. The screen picture was taken by Keo just before this layer opened.
  */
 type Pt = { x: number; y: number; p: number };
-type Stroke = { pts: Pt[]; tool: 'pen' | 'marker'; color: string };
+type Tool = 'pen' | 'marker' | 'arrow' | 'rect' | 'ellipse';
+type Stroke = { pts: Pt[]; tool: Tool; color: string; bold?: boolean };
 
-const COLORS = ['#ff3b5c', '#ffb020', '#3dd6ff', '#7cff6b'];
+const COLORS = ['#ff3b5c', '#ffb020', '#3dd6ff', '#7cff6b', '#ffffff'];
+const TOOLS: Array<{ id: Tool; label: string }> = [
+  { id: 'pen', label: 'Pen' },
+  { id: 'marker', label: 'Highlighter' },
+  { id: 'arrow', label: 'Arrow' },
+  { id: 'rect', label: 'Box' },
+  { id: 'ellipse', label: 'Circle' },
+];
+
+/** The tool's little picture (drawn, so every tool reads at a glance). */
+function ToolIcon({ tool }: { tool: Tool }) {
+  if (tool === 'pen') return <Icon name="edit" size={14} />;
+  if (tool === 'marker') return <span className="pencil-hl" />;
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {tool === 'arrow' && <path d="M5 19L19 5M10 5h9v9" />}
+      {tool === 'rect' && <rect x="4" y="6" width="16" height="12" rx="2.5" />}
+      {tool === 'ellipse' && <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />}
+    </svg>
+  );
+}
 
 interface Ctx {
   image: string;
@@ -21,6 +42,8 @@ interface Ctx {
   visionModel: boolean;
   listening: boolean;
   heard: string | null;
+  /** Where the Keo bar is (the pencil opens out of it), or null. */
+  bar: { dock: 'top' | 'bottom' | 'left' | 'right'; x: number; y: number; width: number; height: number } | null;
 }
 
 export function PencilApp() {
@@ -28,7 +51,8 @@ export function PencilApp() {
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const drawing = useRef<Stroke | null>(null);
-  const [tool, setTool] = useState<'pen' | 'marker'>('pen');
+  const [tool, setTool] = useState<Tool>('pen');
+  const [bold, setBold] = useState(false);
   const [color, setColor] = useState(COLORS[0]!);
   const [listening, setListening] = useState(false);
   const [heard, setHeard] = useState<string | null>(null);
@@ -90,13 +114,13 @@ export function PencilApp() {
   const redraw = useCallback(() => setStrokes((s) => [...s]), []);
 
   const onDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('.pencil-bar, .pencil-consent')) return;
+    if ((e.target as HTMLElement).closest('.kb-pencil, .pencil-consent')) return;
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
       /* some pens/touch screens do not allow capture; drawing still works */
     }
-    drawing.current = { pts: [{ x: e.clientX, y: e.clientY, p: e.pressure || 0.5 }], tool, color };
+    drawing.current = { pts: [{ x: e.clientX, y: e.clientY, p: e.pressure || 0.5 }], tool, color, bold };
     redraw();
   };
   const onMove = (e: React.PointerEvent) => {
@@ -107,7 +131,10 @@ export function PencilApp() {
   const onUp = () => {
     const s = drawing.current;
     drawing.current = null;
-    if (s && s.pts.length > 1) {
+    const a = s?.pts[0];
+    const z = s?.pts[s.pts.length - 1];
+    const dragged = !!a && !!z && Math.hypot(z.x - a.x, z.y - a.y) > 6;
+    if (s && s.pts.length > 1 && (s.tool === 'pen' || s.tool === 'marker' || dragged)) {
       setStrokes((all) => [...all, s]);
       lastStrokeAt.current = Date.now();
     } else redraw();
@@ -138,6 +165,20 @@ export function PencilApp() {
     return () => clearTimeout(t);
   }, [heard, strokes, typed, busy, send]);
 
+  // The bar opens where the Keo bar is, grown out of it (the Keo bar itself is hidden meanwhile).
+  const BAR_W = Math.min(440, window.innerWidth - 24);
+  const bar = ctx?.bar ?? null;
+  const dock = bar?.dock ?? 'top';
+  const fromW = Math.max(120, Math.min(BAR_W, bar && (dock === 'top' || dock === 'bottom') ? bar.width - 24 : 140));
+  const clampX = (x: number) => Math.max(12, Math.min(window.innerWidth - BAR_W - 12, x));
+  const place: React.CSSProperties = !bar
+    ? { left: clampX((window.innerWidth - BAR_W) / 2), top: 14, width: BAR_W }
+    : dock === 'top'
+      ? { left: clampX(bar.x + bar.width / 2 - BAR_W / 2), top: Math.max(8, bar.y + 4), width: BAR_W }
+      : dock === 'bottom'
+        ? { left: clampX(bar.x + bar.width / 2 - BAR_W / 2), bottom: Math.max(8, window.innerHeight - (bar.y + bar.height) + 4), width: BAR_W }
+        : { left: dock === 'left' ? 12 : window.innerWidth - BAR_W - 12, top: Math.max(8, Math.min(window.innerHeight - 120, bar.y + bar.height / 2 - 26)), width: BAR_W };
+
   const hint = !strokes.length ? 'Circle or mark what you mean' : heard ? 'Sending…' : listening ? 'Now tell Keo what you want' : 'Type or tap the mic, then Send';
 
   return (
@@ -163,61 +204,79 @@ export function PencilApp() {
           </div>
         </div>
       )}
-      <div className="pencil-bar" role="toolbar" aria-label="Keo pencil" onPointerDown={(e) => e.stopPropagation()}>
-        <button className={`pencil-mic ${listening ? 'live' : ''}`} title={listening ? 'Listening…' : 'Speak'} aria-label={listening ? 'Listening' : 'Speak'} onClick={() => !listening && void invoke('pencil:listen', {})}>
-          <Icon name="mic" size={15} />
-        </button>
-        <span className="pd-sep" aria-hidden="true" />
-        <div className="pd-group" aria-label="Tool">
-          <button className={tool === 'pen' ? 'on' : ''} title="Pen" aria-label="Pen" onClick={() => setTool('pen')}>
-            <Icon name="edit" size={14} />
-          </button>
-          <button className={tool === 'marker' ? 'on' : ''} title="Highlighter" aria-label="Highlighter" onClick={() => setTool('marker')}>
-            <span className="pencil-hl" />
-          </button>
+      <div className={`kb-pencil dock-${dock}`} style={place} onPointerDown={(e) => e.stopPropagation()}>
+        <div className="pencil-bar" role="toolbar" aria-label="Keo pencil" style={{ ['--from' as string]: `${fromW}px` }}>
+          <div className="kp-head">
+            <span className="kb-mark" aria-hidden="true">
+              <i />
+              <i />
+            </span>
+            <div className="kp-what">
+              <strong>Keo pencil</strong>
+              <span className={`kp-hint ${heard ? 'said' : ''}`} key={heard ?? listenNote ?? hint}>
+                {heard ? `“${heard}”` : listenNote ?? hint}
+              </span>
+            </div>
+            <span className="pd-progress" aria-hidden="true">
+              <i className={strokes.length ? 'done' : 'now'} />
+              <i className={heard || typed ? 'done' : strokes.length ? 'now' : ''} />
+              <i className={busy ? 'now' : ''} />
+            </span>
+            <button className="pencil-x" title="Close (Esc)" aria-label="Close" onClick={() => void invoke('pencil:cancel', {})}>
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          <div className="kp-tools">
+            <div className="pd-group" aria-label="Tool">
+              {TOOLS.map((t) => (
+                <button key={t.id} className={tool === t.id ? 'on' : ''} title={t.label} aria-label={t.label} onClick={() => setTool(t.id)}>
+                  <ToolIcon tool={t.id} />
+                </button>
+              ))}
+            </div>
+            <div className="pd-group" aria-label="Thickness">
+              <button className={`pd-size ${bold ? '' : 'on'}`} title="Fine line" aria-label="Fine line" onClick={() => setBold(false)}>
+                <i style={{ height: 2 }} />
+              </button>
+              <button className={`pd-size ${bold ? 'on' : ''}`} title="Bold line" aria-label="Bold line" onClick={() => setBold(true)}>
+                <i style={{ height: 5 }} />
+              </button>
+            </div>
+            <div className="pd-group" aria-label="Edit">
+              <button title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!strokes.length} onClick={() => setStrokes((st) => st.slice(0, -1))}>
+                <Icon name="undo" size={14} />
+              </button>
+              <button title="Clear" aria-label="Clear" disabled={!strokes.length} onClick={() => setStrokes([])}>
+                <Icon name="trash" size={13} />
+              </button>
+            </div>
+          </div>
+          <div className="kp-colors" aria-label="Colour">
+            {COLORS.map((c) => (
+              <button key={c} className={`swatch ${color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => setColor(c)} />
+            ))}
+          </div>
+          <div className="kp-ask">
+            <button className={`pencil-mic ${listening ? 'live' : ''}`} title={listening ? 'Listening…' : 'Speak'} aria-label={listening ? 'Listening' : 'Speak'} onClick={() => !listening && void invoke('pencil:listen', {})}>
+              <Icon name="mic" size={15} />
+            </button>
+            <input
+              className="pencil-input"
+              placeholder={listening ? 'Listening… say what you want' : strokes.length ? 'Say or type what you want' : 'Circle what you mean…'}
+              aria-label="What do you want?"
+              value={typed}
+              maxLength={2000}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void send();
+              }}
+            />
+            <button className="pencil-send" disabled={busy || !ready || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()} title={!strokes.length ? 'Mark something first' : 'Send to Keo'} aria-label={busy ? 'Sending' : 'Send'}>
+              {busy || !ready ? <span className="spinner" /> : <Icon name="send" size={14} />}
+            </button>
+          </div>
         </div>
-        <div className="pd-group" aria-label="Colour">
-          {COLORS.map((c) => (
-            <button key={c} className={`swatch ${color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => setColor(c)} />
-          ))}
-        </div>
-        <div className="pd-group">
-          <button title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!strokes.length} onClick={() => setStrokes((st) => st.slice(0, -1))}>
-            <Icon name="retry" size={13} />
-          </button>
-          <button title="Clear" aria-label="Clear" disabled={!strokes.length} onClick={() => setStrokes([])}>
-            <Icon name="trash" size={13} />
-          </button>
-        </div>
-        <span className="pd-sep" aria-hidden="true" />
-        <input
-          className="pencil-input"
-          placeholder={listening ? 'Listening… say what you want' : strokes.length ? 'Say or type what you want' : 'Circle what you mean…'}
-          aria-label="What do you want?"
-          value={typed}
-          maxLength={2000}
-          onChange={(e) => setTyped(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void send();
-          }}
-        />
-        <button className="pencil-send" disabled={busy || !ready || !strokes.length || !!ctx?.consentNeeded} onClick={() => void send()} title={!strokes.length ? 'Mark something first' : 'Send to Keo'}>
-          <Icon name="send" size={13} /> {busy ? 'Sending…' : !ready ? 'Preparing…' : 'Send'}
-        </button>
-        <button className="pencil-x" title="Close (Esc)" aria-label="Close" onClick={() => void invoke('pencil:cancel', {})}>
-          <Icon name="x" size={14} />
-        </button>
-        <span className="pd-progress" aria-hidden="true">
-          <i className={strokes.length ? 'done' : 'now'} />
-          <i className={heard || typed ? 'done' : strokes.length ? 'now' : ''} />
-          <i className={busy ? 'now' : ''} />
-        </span>
       </div>
-      {(heard || listenNote || strokes.length > 0) && (
-        <div className={`pencil-heard ${heard ? 'said' : ''}`} key={heard ?? listenNote ?? hint}>
-          {heard ? `“${heard}”` : listenNote ?? hint}
-        </div>
-      )}
       {(error || (ctx && !ctx.visionModel)) && <div className="pencil-error">{error ?? 'The current AI model cannot see pictures. Choose a model with vision in Settings → Providers.'}</div>}
     </div>
   );
@@ -231,11 +290,35 @@ function paint(g: CanvasRenderingContext2D, s: Stroke, scale: number): void {
   g.strokeStyle = s.color;
   if (s.tool === 'marker') {
     g.globalAlpha = 0.32;
-    g.lineWidth = 20 * scale;
+    g.lineWidth = (s.bold ? 30 : 20) * scale;
   } else {
-    g.lineWidth = 4 * scale;
+    g.lineWidth = (s.bold ? 7 : 4) * scale;
     g.shadowColor = 'rgba(0,0,0,0.35)';
     g.shadowBlur = 2 * scale;
+  }
+  if (s.tool === 'arrow' || s.tool === 'rect' || s.tool === 'ellipse') {
+    const a = s.pts[0]!;
+    const b = s.pts[s.pts.length - 1]!;
+    const [ax, ay, bx, by] = [a.x * scale, a.y * scale, b.x * scale, b.y * scale];
+    g.beginPath();
+    if (s.tool === 'rect') {
+      const r = Math.min(14 * scale, Math.abs(bx - ax) / 2, Math.abs(by - ay) / 2);
+      g.roundRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay), Math.max(0, r));
+    } else if (s.tool === 'ellipse') {
+      g.ellipse((ax + bx) / 2, (ay + by) / 2, Math.abs(bx - ax) / 2, Math.abs(by - ay) / 2, 0, 0, Math.PI * 2);
+    } else {
+      // The arrow: a line and a head at the end the user dragged to.
+      const ang = Math.atan2(by - ay, bx - ax);
+      const head = (s.bold ? 22 : 16) * scale;
+      g.moveTo(ax, ay);
+      g.lineTo(bx, by);
+      g.moveTo(bx - head * Math.cos(ang - 0.45), by - head * Math.sin(ang - 0.45));
+      g.lineTo(bx, by);
+      g.lineTo(bx - head * Math.cos(ang + 0.45), by - head * Math.sin(ang + 0.45));
+    }
+    g.stroke();
+    g.restore();
+    return;
   }
   g.beginPath();
   g.moveTo(s.pts[0]!.x * scale, s.pts[0]!.y * scale);

@@ -952,7 +952,9 @@ export class AgentService {
         for (const call of result.toolCalls) {
           if (call.name === LOAD_TOOLS) {
             // Groups this conversation leaves out (the old video pipeline inside Studio) stay out.
-            const excluded = new Set(this.excludeGroups?.(conversationId) ?? []);
+            // Only the old video pipeline stays out when asked for by name: everything else a chat leaves
+            // out by default (the desktop inside Studio) comes when the work needs it.
+            const excluded = new Set<ToolGroup>((this.excludeGroups?.(conversationId) ?? []).filter((g) => g === 'video'));
             const asked = parseLoad(call.input);
             const want = asked.filter((g) => !excluded.has(g));
             if (asked.length && !want.length) {

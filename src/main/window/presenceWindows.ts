@@ -554,9 +554,32 @@ export class PresenceWindows {
   // ---------------------------------------------------------------- Keo's pencil
   pencil: BrowserWindow | null = null;
 
+  /**
+   * Where the Keo bar sits, inside the pencil layer (DIPs from its top-left), and its edge: the pencil
+   * opens as the bar itself, grown into its tools, in the same place. Null when the bar is off or on
+   * another display (the pencil then uses the top of the screen).
+   */
+  pencilBar(bounds: { x: number; y: number; width: number; height: number }): { dock: Dock; x: number; y: number; width: number; height: number } | null {
+    const win = this.companion;
+    if (!win || win.isDestroyed()) return null;
+    const b = win.getBounds();
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
+    if (cx < bounds.x || cy < bounds.y || cx > bounds.x + bounds.width || cy > bounds.y + bounds.height) return null;
+    return { dock: this.services.settings.get().companion.dock, x: b.x - bounds.x, y: b.y - bounds.y, width: b.width, height: b.height };
+  }
+
+  /** The Keo bar was hidden for the pencil (it comes back when the pencil closes). */
+  private barHiddenForPencil = false;
+
   /** The drawing layer over one display (it takes focus, so Esc and typing work). */
   showPencil(bounds: { x: number; y: number; width: number; height: number }): void {
     this.hidePencil();
+    // The pencil grows out of the Keo bar: the bar itself steps aside until the pencil closes.
+    if (this.companion && !this.companion.isDestroyed() && this.companion.isVisible()) {
+      this.companion.hide();
+      this.barHiddenForPencil = true;
+    }
     const win = new BrowserWindow({
       ...bounds,
       frame: false,
@@ -578,6 +601,7 @@ export class PresenceWindows {
     win.setBounds(bounds);
     win.on('closed', () => {
       if (this.pencil === win) this.pencil = null;
+      this.restoreBar();
     });
     void win.loadURL(this.url('#pencil'));
     win.webContents.once('did-finish-load', () => {
@@ -592,6 +616,13 @@ export class PresenceWindows {
     const w = this.pencil;
     this.pencil = null;
     if (w && !w.isDestroyed()) w.destroy();
+    this.restoreBar();
+  }
+
+  private restoreBar(): void {
+    if (!this.barHiddenForPencil) return;
+    this.barHiddenForPencil = false;
+    if (this.companion && !this.companion.isDestroyed()) this.companion.showInactive();
   }
 
   // ---------------------------------------------------------------- research results

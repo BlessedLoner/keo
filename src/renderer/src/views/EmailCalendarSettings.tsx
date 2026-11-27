@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAccount } from '../components/AccountPanel';
 import type { CalendarStatus, EmailStatus } from '@shared/ipc';
 import type { LinkId } from '@shared/release';
 import type { Settings } from '@shared/settings';
@@ -349,7 +350,10 @@ function GoogleCalendarCard({ s, patch }: { s: Settings; patch: Patch }) {
   const [st, setSt] = useState<CalendarStatus | null>(null);
   useEffect(() => void invoke('calendar:status').then(setSt, () => undefined), [s.calendar.googleClientId]);
   const own = !!s.calendar.googleClientId && s.calendar.googleClientId !== st?.builtInId;
+  // With a Keo account there is nothing to set up: Keo's own Google connection is used.
+  const signedIn = !!useAccount()?.signedIn;
   if (!st?.builtIn || own) return <GoogleCalendarSetup s={s} patch={patch} />;
+  if (signedIn) return null;
   return (
     <details style={{ margin: '0 0 14px' }}>
       <summary className="small muted">Advanced: use your own Google Cloud client instead of Keo’s</summary>

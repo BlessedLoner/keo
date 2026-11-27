@@ -34,7 +34,8 @@ export type AdmissionRejection =
   | 'not_model_visible'
   | 'invalid_input'
   | 'permission_disabled'
-  | 'precondition_failed';
+  | 'precondition_failed'
+  | 'locked';
 
 const PERMISSION_LABEL: Record<PermissionKey, string> = {
   'desktop.observe': 'Window observation',
@@ -77,6 +78,12 @@ export const toolNameFor = (id: string): string => id.replace(/\./g, '__');
 export class CapabilityRegistry {
   private readonly caps = new Map<string, AnyCapability>();
   private readonly byToolName = new Map<string, AnyCapability>();
+
+  /**
+   * A lock on whole areas (Studio and Builds after the free day without a Keo account): the reason
+   * it is locked, or null. Checked for every start, by Keo or the user.
+   */
+  lock: ((capabilityId: string) => string | null) | null = null;
 
   constructor(
     private readonly getSettings: () => Settings,
@@ -178,6 +185,8 @@ export class CapabilityRegistry {
     if (typeof p.capabilityId !== 'string') return { ok: false, code: 'unknown_capability', reason: 'Capability id must be a string.' };
     const cap = this.caps.get(p.capabilityId);
     if (!cap) return { ok: false, code: 'unknown_capability', reason: `No registered capability "${p.capabilityId.slice(0, 80)}".` };
+    const locked = this.lock?.(cap.id) ?? null;
+    if (locked) return { ok: false, code: 'locked', reason: locked };
     if (p.origin !== 'user' && !cap.modelVisible) {
       return { ok: false, code: 'not_model_visible', reason: `${cap.id} can only be started by the user.` };
     }

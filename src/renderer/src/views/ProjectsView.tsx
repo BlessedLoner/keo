@@ -33,7 +33,7 @@ export function ProjectsView() {
       <header className="view-header">
         <div>
           <h1>Projects</h1>
-          <p>Goals Keo keeps track of: objectives, decisions, blockers, open questions and progress — each marked with who stated it.</p>
+          <p>One place for one piece of work: its chats, what Keo built or edited for it, and the goals and decisions Keo keeps. Every chat in a project knows what was said in the others.</p>
         </div>
         <div className="actions">
           <button className="btn primary" onClick={() => void create()}>
@@ -160,6 +160,18 @@ function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: ()
   const [newText, setNewText] = useState('');
   const run = (p: Promise<unknown>) => p.catch((e) => ui.error(errText(e)));
 
+  /** Opens the project's latest chat, or a new chat in the project. */
+  const openChat = async (fresh: boolean) => {
+    try {
+      const latest = fresh ? undefined : convs.data?.[0];
+      const id = latest?.id ?? (await invoke('conversations:create', { projectId: project.id })).id;
+      app.setConversationId(id);
+      app.setView('chat');
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+
   const add = async () => {
     if (!newText.trim()) return;
     await run(invoke('projects:addItem', { projectId: project.id, type: newType, content: newText }));
@@ -177,6 +189,14 @@ function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: ()
           <option value="archived">Archived</option>
         </select>
         <div style={{ flex: 1 }} />
+        <button className="btn primary sm" onClick={() => void openChat(false)} title="Carry on in this project's latest conversation">
+          <Icon name="chat" size={13} /> {(convs.data ?? []).length ? 'Continue in chat' : 'Start a chat'}
+        </button>
+        {(convs.data ?? []).length > 0 && (
+          <button className="btn sm" onClick={() => void openChat(true)} title="A new conversation in this project (it still knows what was said in the others)">
+            <Icon name="plus" size={13} /> New chat
+          </button>
+        )}
         <button
           className="btn ghost sm"
           onClick={async () => {
@@ -234,9 +254,9 @@ function ProjectDetail({ project, onDeleted }: { project: Project; onDeleted: ()
       })}
       {items.data && items.data.length === 0 && <p className="muted">No items yet.</p>}
       <section>
-        <div className="section-title">Linked conversations</div>
+        <div className="section-title">Conversations</div>
         {(convs.data ?? []).length === 0 ? (
-          <p className="muted small">None. Link a conversation from its header in Chat.</p>
+          <p className="muted small">None yet. Start a chat here, or move a chat in from the project menu at the top of any conversation.</p>
         ) : (
           (convs.data ?? []).map((c) => (
             <button

@@ -20,6 +20,7 @@ export function SettingsView() {
   const ui = useUi();
   const [section, setSection] = useState<Section>('providers');
   const s = app.settings.data;
+  const signedIn = !!useAccount()?.signedIn;
   const patch = async (p: Record<string, unknown>) => {
     try {
       await invoke('settings:update', { patch: p });
@@ -29,31 +30,22 @@ export function SettingsView() {
   };
   return (
     <div className="view">
-      <ViewHeader title="Settings">
-        <div className="tabs" role="tablist" aria-label="Settings sections">
-          {(
-            [
-              ['providers', 'Providers'],
-              ['web', 'Web'],
-              ['email', 'Email & calendar'],
-              ['apps', 'Connected apps'],
-              ['files', 'Files'],
-              ['voice', 'Voice & shortcuts'],
-              ['autonomy', 'Approvals & live chat'],
-              ['agent', 'Agent'],
-              ['video', 'Video & pictures'],
-              ['appearance', 'Appearance'],
-              ['data', 'Privacy & data'],
-              ['help', 'Check & help'],
-            ] as Array<[Section, string]>
-          ).map(([k, l]) => (
-            <button key={k} role="tab" aria-selected={section === k} onClick={() => setSection(k)}>
-              {l}
-            </button>
-          ))}
-        </div>
-      </ViewHeader>
-      <div className="view-body narrow">
+      <ViewHeader title="Settings" subtitle="Your account, how Keo works for you, and what it may use." />
+      <div className="settings-layout">
+      <nav className="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+        {SETTINGS_GROUPS.map((g) => (
+          <div key={g.title} className="settings-group">
+            <div className="settings-group-title">{g.title}</div>
+            {g.items.map(([k, l, icon]) => (
+              <button key={k} role="tab" aria-selected={section === k} onClick={() => setSection(k)}>
+                <Icon name={icon} size={15} />
+                <span>{k === 'providers' && signedIn ? 'Keo account' : l}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div className="view-body narrow settings-body">
         {!s ? (
           <div className="row muted">
             <span className="spinner" /> Loading…
@@ -93,9 +85,41 @@ export function SettingsView() {
           <Data s={s} patch={patch} />
         )}
       </div>
+      </div>
     </div>
   );
 }
+
+/** The Settings menu, grouped the way people look for things. */
+const SETTINGS_GROUPS: Array<{ title: string; items: Array<[Section, string, string]> }> = [
+  { title: 'Account', items: [['providers', 'Account & AI', 'user']] },
+  {
+    title: 'Keo',
+    items: [
+      ['agent', 'How Keo works', 'sparkle'],
+      ['autonomy', 'Approvals & live chat', 'shield'],
+      ['voice', 'Voice & shortcuts', 'mic'],
+      ['appearance', 'Appearance', 'eye'],
+    ],
+  },
+  {
+    title: 'Connections',
+    items: [
+      ['web', 'Web', 'globe'],
+      ['email', 'Email & calendar', 'mail'],
+      ['apps', 'Connected apps', 'link'],
+      ['files', 'Files', 'folder'],
+      ['video', 'Video & pictures', 'film'],
+    ],
+  },
+  {
+    title: 'Privacy & help',
+    items: [
+      ['data', 'Privacy & data', 'lock'],
+      ['help', 'Check & help', 'pulse'],
+    ],
+  },
+];
 
 type Patch = (p: Record<string, unknown>) => Promise<void>;
 
@@ -239,6 +263,8 @@ function Files({ s, patch }: { s: Settings; patch: Patch }) {
 /** Pictures: local edits need nothing; AI pictures use Keo Cloud or the user's OpenAI key and ask before each one. */
 function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
   const [model, setModel] = useState(s.pictures.aiModel);
+  // With a Keo account, AI pictures come from Keo Cloud: the OpenAI choices are for Keo without an account.
+  const signedIn = !!useAccount()?.signedIn;
   return (
     <section className="card" aria-label="Pictures">
       <h2>Pictures</h2>
@@ -246,8 +272,11 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
         Keo edits pictures on this PC for free with the video tools (ffmpeg): text in any Windows font, crop, colours, a logo on a photo, rounded corners — and short animations (zoom, float, pulse, spin, text that slides in) as MP4 or GIF. Results are new files in Documents\Keo; your originals are never changed.
       </p>
       <p className="muted small">
-        Making a new picture from a description, an AI redesign or removing a background uses your Keo account (it counts toward your plan’s daily pictures) or your own OpenAI key. Keo asks you first each time, showing what is sent.
+        {signedIn
+          ? 'Making a new picture from a description, an AI redesign or removing a background uses your Keo account and counts toward your plan’s daily pictures. Keo asks you first each time, showing what is sent.'
+          : 'Making a new picture from a description, an AI redesign or removing a background uses your Keo account (it counts toward your plan’s daily pictures) or your own OpenAI key. Keo asks you first each time, showing what is sent.'}
       </p>
+      {!signedIn && (
       <div className="grid-2">
         <div className="field">
           <label htmlFor="pic-source">Pictures made with</label>
@@ -285,6 +314,7 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
           </select>
         </div>
       </div>
+      )}
     </section>
   );
 }
@@ -292,6 +322,8 @@ function Pictures({ s, patch }: { s: Settings; patch: Patch }) {
 /** Video editing: which ffmpeg, where finished videos go, and whether clip sound may go to OpenAI. */
 function Video({ s, patch }: { s: Settings; patch: Patch }) {
   const ui = useUi();
+  // Keo Studio's captions use Keo Cloud with a Keo account; the OpenAI captions are for Keo without one.
+  const signedIn = !!useAccount()?.signedIn;
   const [st, setSt] = useState<{ found: boolean; encoder: string | null; captions: boolean; message: string } | null>(null);
   const check = useCallback(() => {
     setSt(null);
@@ -410,11 +442,13 @@ function Video({ s, patch }: { s: Settings; patch: Patch }) {
         <div style={{ height: 8 }} />
         <Toggle checked={s.video.showWindow} onChange={(v) => void patch({ video: { showWindow: v } })} label="Open the preview window when a new preview is ready" />
       </section>
+      {!signedIn && (
       <section className="card">
         <h2>Captions</h2>
         <p className="muted small">Captions need the words spoken in your clips. Keo sends the clips’ sound (not the picture) to OpenAI’s speech-to-text and keeps the words only in memory. Without this, videos are made without captions. Music and stock footage are never downloaded: use your own files or ones you have a licence for.</p>
         <Toggle checked={s.video.transcribeAudio} onChange={(v) => void patch({ video: { transcribeAudio: v } })} label="I allow Keo to send my clips’ sound to OpenAI for captions" />
       </section>
+      )}
     </>
   );
 }
@@ -422,18 +456,31 @@ function Video({ s, patch }: { s: Settings; patch: Patch }) {
 function Providers({ s, patch }: { s: Settings; patch: Patch }) {
   const app = useApp();
   const list = app.providers.data ?? [];
+  // Own API keys are for people who use Keo without an account: once signed in, the Keo account
+  // is all there is (signing out goes back to the sign-in screen, where Advanced is offered).
+  const account = useAccount();
+  const signedIn = !!account?.signedIn;
   return (
     <>
-      <section className="card" aria-label="Keo account">
-        <div className="row">
-          <h2 style={{ margin: 0 }}>Keo account</h2>
-          {s.activeProvider === 'keo' && <span className="chip ok">In use</span>}
-        </div>
-        <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the monthly AI allowance.</p>
-        <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
-        <StudioCreditsLine />
-      </section>
-      <details className="card">
+      {signedIn ? (
+        <>
+          <section className="card acct-card" aria-label="Keo account">
+            <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
+          </section>
+          <StudioCreditsLine />
+        </>
+      ) : (
+        <section className="card" aria-label="Keo account">
+          <div className="row">
+            <h2 style={{ margin: 0 }}>Keo account</h2>
+            {s.activeProvider === 'keo' && <span className="chip ok">In use</span>}
+          </div>
+          <p className="muted small">Keo’s own AI with your Keo account — no API keys. Your plan sets the models and the monthly AI allowance.</p>
+          <AccountPanel activeProvider={s.activeProvider} onUseKeo={() => void patch({ activeProvider: 'keo' })} />
+        </section>
+      )}
+      {!signedIn && (
+      <details className="card" open={s.ui.ownKeys}>
         <summary>
           <strong>Advanced: use your own API key</strong>
         </summary>
@@ -450,6 +497,7 @@ function Providers({ s, patch }: { s: Settings; patch: Patch }) {
         <SmartRouting s={s} patch={patch} list={list} />
         <AiVideoKey />
       </details>
+      )}
     </>
   );
 }
@@ -459,12 +507,13 @@ function StudioCreditsLine() {
   const { status } = useStudioAi();
   if (!status || status.via !== 'keo') return null;
   return (
-    <div style={{ marginTop: 12 }}>
+    <section className="card" aria-label="Studio credits">
+      <h2>Studio credits</h2>
       <p className="muted small" style={{ margin: '0 0 6px' }}>
         Keo Studio’s AI (AI clips, Clone a video, character pictures and voices) uses Studio credits: your plan adds some every month, and you can buy more any time.
       </p>
       <StudioCredits status={status} />
-    </div>
+    </section>
   );
 }
 
@@ -1274,7 +1323,7 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
             <select id="stt" className="select" value={v.sttProvider} onChange={(e) => void patch({ voice: { sttProvider: e.target.value } })}>
               <option value="none">Off</option>
               <option value="keo">Keo’s listening (Keo account) {keoNote}</option>
-              <option value="openai">OpenAI transcription {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>
+              {!keo?.signedIn && <option value="openai">OpenAI transcription {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>}
             </select>
           </div>
           {v.sttProvider === 'openai' ? (
@@ -1299,7 +1348,7 @@ function Voice({ s, patch }: { s: Settings; patch: Patch }) {
               <option value="none">Off</option>
               <option value="system">Windows voices (local, offline)</option>
               <option value="keo">Keo’s voice (Keo account) {keoNote}</option>
-              <option value="openai">OpenAI voices (cloud) {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>
+              {!keo?.signedIn && <option value="openai">OpenAI voices (cloud) {openai?.hasApiKey ? '' : '(needs OpenAI key)'}</option>}
             </select>
             <span className="hint">
               {v.ttsEngine === 'system'
@@ -1429,7 +1478,7 @@ function WebSearch({ s, patch }: { s: Settings; patch: Patch }) {
             </button>
           </div>
         )}
-        <details className="small" open={!keo} style={{ marginBottom: 10 }}>
+        <details className="small" open={!keo} hidden={keo} style={{ marginBottom: 10 }}>
           <summary>{keo ? 'Advanced: use your own Brave Search key or another engine' : 'Search engine and your own Brave Search key'}</summary>
           <p className="muted small">Brave Search queries go to api.search.brave.com using your key and plan quota. The key is encrypted with Windows (DPAPI) and never shown again.</p>
         <div className="field">
