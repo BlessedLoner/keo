@@ -1013,3 +1013,26 @@ kbd { font: 11.5px/1 ui-monospace, Consolas, monospace; background: var(--bg-ins
 /* Export: a stopped export that can carry on */
 .export-resume { margin: 8px 12px 0; display: grid; gap: 6px; }
 .export-resume p { margin: 0; color: var(--text); }
+
+/* ---------------------------------------------------------------- marking on the preview (P) */
+.mark-layer { position: absolute; inset: 0; z-index: 6; cursor: crosshair; }
+.mark-layer::before { content: ''; position: absolute; inset: 0; border: 2px solid rgba(255, 59, 92, 0.55); border-radius: 4px; box-shadow: inset 0 0 40px rgba(255, 59, 92, 0.12); pointer-events: none; animation: mark-pulse 2.4s ease-in-out infinite alternate; }
+@keyframes mark-pulse { from { border-color: rgba(255, 59, 92, 0.3); } to { border-color: rgba(255, 59, 92, 0.7); } }
+.mark-ink { position: absolute; inset: 0; touch-action: none; }
+.mark-area { position: absolute; border: 1px dashed rgba(255, 255, 255, 0.7); border-radius: 10px; pointer-events: none; animation: ib-in 200ms ease-out both; }
+.mark-bar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(420px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 18px; cursor: default; color: #f4f4f2; background: linear-gradient(180deg, rgba(36, 37, 43, 0.94), rgba(10, 10, 12, 0.96)); backdrop-filter: blur(18px) saturate(140%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 18px 50px rgba(0, 0, 0, 0.55); animation: mark-in 320ms cubic-bezier(0.2, 0.85, 0.15, 1) both; }
+@keyframes mark-in { from { opacity: 0; transform: translate(-50%, 10px) scale(0.97); } }
+.mark-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #c9ccd6; }
+.mark-head .grow { flex: 1; }
+.mark-head > svg { color: #ff5a76; }
+.mark-icon { width: 26px; height: 26px; border-radius: 8px; border: 0; background: transparent; color: #b9bcc6; display: grid; place-items: center; cursor: pointer; }
+.mark-icon:hover:not(:disabled) { background: rgba(255, 255, 255, 0.09); color: #fff; }
+.mark-icon:disabled { opacity: 0.3; cursor: default; }
+.mark-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mark-chip { padding: 4px 10px; border-radius: 999px; font-size: 11.5px; background: rgba(255, 59, 92, 0.12); border: 1px solid rgba(255, 59, 92, 0.35); color: #ffd3db; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: ib-in 220ms ease-out both; }
+.mark-ask { display: flex; gap: 8px; }
+.mark-input { flex: 1; min-width: 0; height: 38px; padding: 0 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.45); color: #fff; font: inherit; font-size: 13px; outline: none; }
+.mark-input:focus { border-color: rgba(255, 255, 255, 0.4); }
+.mark-send { width: 38px; height: 38px; border-radius: 12px; border: 0; display: grid; place-items: center; cursor: pointer; background: linear-gradient(180deg, #ffffff, #d9dbe4); color: #0a0a0c; }
+.mark-send:disabled { opacity: 0.35; cursor: default; }
+.mark-btn.on { background: rgba(255, 59, 92, 0.16); color: #ffd3db; }

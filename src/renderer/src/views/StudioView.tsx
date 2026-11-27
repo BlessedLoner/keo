@@ -1,4 +1,5 @@
 import { ProColor } from '../studio/ColorPanel';
+import type { MarkResult } from '../studio/MarkLayer';
 import { playhead } from '../studio/playhead';
 import { allOnMain } from '@shared/studioTimeline';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -69,6 +70,10 @@ export function StudioView() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [full, setFull] = useState(false);
+  // Marking on the preview: the user circles what should change and tells Keo (P).
+  const [marking, setMarking] = useState(false);
+  const markingRef = useRef(false);
+  markingRef.current = marking;
   const [reversing, setReversing] = useState(false);
   // The export being posted (its file), while the Post dialog is open.
   const [posting, setPosting] = useState<string | null>(null);
@@ -347,6 +352,28 @@ export function StudioView() {
       }),
     [show, refreshList, ui],
   );
+  /**
+   * What the user marked on the preview goes to Keo in this project's chat: their words, the time,
+   * where on the frame, the layers under the marks (with their ids) and the frame with the marks.
+   */
+  const sendMark = async (r: MarkResult) => {
+    const conversationId = keoConversation.current;
+    if (!conversationId || !project) return ui.error('Keo’s chat for this project is not ready yet. Try again in a moment.');
+    setMarking(false);
+    try {
+      const pic = await invoke('chat:attachBytes', { name: `Marked frame at ${fmtTime(r.time, project.fps)}.jpg`, dataBase64: r.picture });
+      const pct = (n: number) => `${Math.round(n * 100)}%`;
+      const under = r.clips.length ? `Under the marks: ${r.clips.map((c) => `${c.label} (${c.id})`).join('; ')}.` : 'Nothing is under the marks but the video itself.';
+      const note = `
+
+[Marked on the Studio preview at ${r.time.toFixed(2)} s, around x ${pct(r.box.x)}–${pct(r.box.x + r.box.w)}, y ${pct(r.box.y)}–${pct(r.box.y + r.box.h)} of the frame. ${under} The attached picture is that frame with the user’s marks. Change what they mean on exactly those layers (studio__edit with their ids), then look at the frame again (studio__look).]`;
+      if (!keoDock) setSideTab('keo');
+      await invoke('chat:send', { conversationId, text: r.text + note, attachments: [pic.id] });
+    } catch (e) {
+      ui.error(errText(e));
+    }
+  };
+
   // When Keo's turn in this project's conversation ends, steps it did not finish stop spinning.
   const keoConversation = useRef<string | null>(null);
   useEffect(() => {
@@ -538,6 +565,13 @@ export function StudioView() {
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       const p = projectRef.current;
       if (!p) return;
+      // While marking, the marks have the keyboard (Esc closes, Ctrl+Z takes back a mark).
+      if (markingRef.current) return;
+      if (!e.ctrlKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+        setPlaying(false);
+        setMarking(true);
+        return;
+      }
       const frame = 1 / p.fps;
       if (e.key === ' ') {
         e.preventDefault();
@@ -908,7 +942,7 @@ export function StudioView() {
         />
         <div className="col-resize" title="Drag to make the library wider or narrower" onPointerDown={(e) => resizeCol('left', e)} />
         <section className={`studio-stage ${full ? 'fullscreen' : ''}`}>
-          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} flagged={check.open ? checkRows.map((r) => r.clip).filter(Boolean) : []} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} />
+          <Preview project={project} time={Math.min(time, Math.max(duration, 0))} playing={playing} onTime={setTime} onEnd={() => setPlaying(false)} selected={selected} onSelect={setSelected} onEdit={(ops) => void edit(ops)} quality={quality} guides={guideMode} flagged={check.open ? checkRows.map((r) => r.clip).filter(Boolean) : []} {...(follow ? { pickBox: (b: { x: number; y: number; w: number; h: number } | null) => void onPickBox(b) } : {})} {...(marking ? { mark: { onSend: (r: MarkResult) => void sendMark(r), onCancel: () => setMarking(false) } } : {})} />
           {check.open && (
             <CheckPanel
               rows={checkRows}
@@ -954,6 +988,17 @@ export function StudioView() {
             </button>
             </div>
             <div className="tp-right">
+            <button
+              className={`btn sm ghost mark-btn ${marking ? 'on' : ''}`}
+              onClick={() => {
+                setPlaying(false);
+                setMarking((v) => !v);
+              }}
+              title="Mark what should change: circle it on the frame and tell Keo (P)"
+              disabled={duration === 0}
+            >
+              <Icon name="edit" size={14} /> Mark
+            </button>
             <select className="select preview-opt" value={quality} onChange={(e) => setQuality(Number(e.target.value))} title="Preview quality: lower is smoother on slower PCs (the export is always full quality)">
               <option value={1}>Full</option>
               <option value={0.5}>Half</option>

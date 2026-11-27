@@ -1,4 +1,5 @@
 import { LUT_NAME, lutNameOf, parseCube } from '../../shared/studioLut';
+import { cutawayOps, type CutawayMoment, type CutawayPerson } from '../../shared/studioCutaways';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1874,6 +1875,29 @@ export class StudioService {
     } catch {
       return none;
     }
+  }
+
+  /**
+   * The user's screenshots and clips as glass cards at the moments they talk about them: where the
+   * speaker is at each moment is measured on this PC, so every card lands in the free space beside
+   * (or above and below) them, clear of the captions. Made again each time, one undo.
+   */
+  async cutaways(id: string, moments: CutawayMoment[], o: { whoosh?: boolean } = {}): Promise<{ project: Project; placed: ReturnType<typeof cutawayOps>['placed']; measured: boolean }> {
+    if (!moments.length) throw new StudioError('No moments to place.');
+    let people: CutawayPerson[] = [];
+    try {
+      const times = moments.map((m) => Math.round((m.at + 0.8) * 100) / 100);
+      const samples = await this.runJob<ReviewSample[]>({ kind: 'review', projectId: id, times }, 3 * 60_000);
+      people = samples.map((x) => ({ t: x.t, box: x.person }));
+    } catch (e) {
+      this.d.log.warn('studio.cutaways_people', { error: e instanceof Error ? e.message : String(e) });
+    }
+    const whoosh = o.whoosh === false ? null : this.soundEffect(id, 'whoosh').asset.id;
+    const plan = cutawayOps(this.get(id), moments, { whoosh, people });
+    if (!plan.placed.length) throw new StudioError('None of those are pictures or videos of this project.');
+    const r = this.edit(id, plan.ops);
+    this.d.log.info('studio.cutaways', { placed: plan.placed.length, measured: people.filter((x) => x.box).length });
+    return { project: r.project, placed: plan.placed, measured: people.some((x) => x.box) };
   }
 
   /**

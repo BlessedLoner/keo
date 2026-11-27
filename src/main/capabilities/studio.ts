@@ -14,7 +14,7 @@ import { pickVideoDirections, VIDEO_DIRECTIONS, videoDirectionBrief, videoDirect
 import { CHARACTER_VOICES, CharacterPatch } from '../../shared/studioCharacters';
 import { VIRAL_TEMPLATES, type ViralId } from '../../shared/studioViral';
 import { ShowcaseScene } from '../../shared/studioShowcase';
-import { cutawayOps, CutawayMoment, CutawayStyle, matchCutaways } from '../../shared/studioCutaways';
+import { CutawayMoment, CutawayStyle, matchCutaways } from '../../shared/studioCutaways';
 import { CharacterPictureJob } from '../../shared/studioCharacterPictures';
 import { AI_VIDEO_MODELS, estimateCost, modelSeconds, swapCost, type AiVideoModelId, type SwapResolution } from '../studio/aiVideo';
 import { Storyboard } from '../../shared/studioFaceless';
@@ -1909,7 +1909,7 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
       id: 'studio.cutaways',
       title: 'Show the screenshots and clips as the user talks about them',
       description:
-        'For a talking video or podcast where the user also added screenshots, pictures or clips (of their app, their work, an AI video…): each one comes in as a glass card at the moment their words are about it — it pops, slides or rises in (or turns in 3D), floats while it is spoken about, and leaves the way it came; the talking video stays underneath, whole. Transcribe first (studio__transcript) and look at the pictures (studio__understand_media) so Keo knows what each shows. Either give moments yourself — asset, at (the timeline second the words about it start, from the transcript), seconds, style (pop|slide|rise|tilt|corner|full: full takes the stage for a big reveal, corner is a small picture-in-picture), side (left|right|center: beside the speaker, never over the face), glass (default on), sound (a clip’s own sound, default off) — or give only assets (or nothing: every picture and clip except the talking one) and Keo places each where the words best match what it shows. Vary the styles; never two at once. All on a "Cutaways" track (made again each time, one undo). Afterwards look at a few frames (studio__look).',
+        'For a talking video or podcast where the user also added screenshots, pictures or clips (of their app, their work, an AI video…): each one comes in as a glass card at the moment their words are about it — it pops, slides or rises in (or turns in 3D), floats while it is spoken about, and leaves the way it came; the talking video stays underneath, whole. Transcribe first (studio__transcript) and look at the pictures (studio__understand_media) so Keo knows what each shows. Either give moments yourself — asset, at (the timeline second the words about it start, from the transcript), seconds, style (pop|slide|rise|tilt|wipe|iris|corner|full: wipe and iris reveal it through a moving edge or a growing circle, full takes the stage for a big reveal, corner is a small picture-in-picture), side (left|right|center: a preference; Keo measures where the speaker is and puts each card in the free space beside, above or below them, clear of the captions), glass (default on), sound (a clip’s own sound, default off) — or give only assets (or nothing: every picture and clip except the talking one) and Keo places each where the words best match what it shows. Vary the styles; never two at once. All on a "Cutaways" track (made again each time, one undo). Afterwards look at a few frames (studio__look).',
       summary: 'Show the screenshots and clips as you talk about them',
     }),
     input: z
@@ -1921,11 +1921,11 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         whoosh: z.boolean().optional(),
       })
       .strict(),
-    output: State.extend({ placed: z.array(z.object({ asset: z.string(), at: z.number(), seconds: z.number(), style: z.string(), side: z.string(), why: z.string().optional() })), note: z.string().nullable() }),
+    output: State.extend({ placed: z.array(z.object({ asset: z.string(), at: z.number(), seconds: z.number(), style: z.string(), side: z.string(), x: z.number(), y: z.number(), scale: z.number(), why: z.string().optional() })), note: z.string().nullable() }),
     timeoutMs: 60_000,
     auditView: (i) => ({ moments: i.moments?.length ?? null, assets: i.assets?.length ?? null }),
     async execute(i) {
-      let p = run(() => s.resolve(i.projectId));
+      const p = run(() => s.resolve(i.projectId));
       let moments = i.moments ?? null;
       const why = new Map<string, string>();
       let note: string | null = null;
@@ -1941,12 +1941,11 @@ export function studioCapabilities(d: StudioToolDeps): AnyCapability[] {
         const unmatched = found.filter((f) => f.why.startsWith('no matching')).length;
         if (unmatched) note = `${unmatched} of them did not match any words (${p.assets.some((a) => pool.includes(a.id) && !a.about) ? 'run studio__understand_media so Keo knows what they show, or ' : ''}give their moments yourself); they are spread over the talk.`;
       }
-      const whoosh = i.whoosh === false ? null : run(() => s.soundEffect(p.id, 'whoosh').asset.id);
-      p = run(() => s.get(p.id));
-      const plan = cutawayOps(p, moments, { whoosh });
-      if (!plan.placed.length) throw fail('no_media', 'None of those are pictures or videos of this project.');
-      const r = run(() => s.edit(p.id, plan.ops));
-      return { ...state(s, r.project), placed: plan.placed.map((x) => ({ ...x, ...(why.has(x.asset) ? { why: why.get(x.asset)! } : {}) })), note };
+      const r = await s.cutaways(p.id, moments, { ...(i.whoosh === false ? { whoosh: false } : {}) }).catch((e: unknown) => {
+        throw e instanceof StudioError ? fail('studio', e.message) : e;
+      });
+      if (!r.measured) note = `${note ? `${note} ` : ''}Where the speaker is could not be measured, so the cards use the usual free side: look at a frame or two (studio__look) to check none covers the face.`;
+      return { ...state(s, r.project), placed: r.placed.map((x) => ({ ...x, ...(why.has(x.asset) ? { why: why.get(x.asset)! } : {}) })), note };
     },
   });
 

@@ -5,6 +5,7 @@ import { dragCrop, featherCut, moveCut, newCut, sizeCut, toLayer, turnCut } from
 import { baseOf, placeOps, type Base } from '@shared/studioPlacing';
 import { drawFrame, fontsReady, layerBoxes, type LayerBox } from './engine';
 import { PreviewSources } from './media';
+import { MarkLayer, type MarkResult } from './MarkLayer';
 import { useInvoke } from '../lib/hooks';
 
 /**
@@ -135,7 +136,10 @@ export function Preview({
   guides = 'none',
   pickBox,
   flagged = [],
+  mark,
 }: {
+  /** While set, the user marks what should change on the frame (circling it) and tells Keo. */
+  mark?: { onSend: (r: MarkResult) => void; onCancel: () => void };
   /** Clips Keo's edit check flagged: outlined in red while they are on screen. */
   flagged?: string[];
   /** While set, dragging on the preview draws a box (fractions of the frame), handed over when let go (null: cancelled). */
@@ -342,7 +346,7 @@ export function Preview({
   // Where the layers are on screen (canvas pixels), for picking and handles.
   const boxes = (() => {
     const c = canvas.current;
-    if (!c || playing || (!onSelect && !flagged.length)) return [];
+    if (!c || playing || (!onSelect && !flagged.length && !mark)) return [];
     const ctx = c.getContext('2d');
     return ctx ? layerBoxes(ctx, shown, time, c.width, c.height) : [];
   })();
@@ -504,11 +508,12 @@ export function Preview({
         )}
         {guideMode !== 'none' && <SafeZones kind={guideMode} vertical={project.height > project.width} />}
         {pickBox && <BoxPicker onDone={pickBox} />}
+        {mark && !playing && <MarkLayer project={shown} time={time} preview={canvas.current} boxes={boxes} k={k} width={size.w} height={size.h} onSend={mark.onSend} onCancel={mark.onCancel} />}
         {!playing &&
           boxes
             .filter((b) => flagged.includes(b.id) && b.id !== selected)
             .map((b) => <div key={`flag-${b.id}`} className="flag-box" aria-hidden style={{ left: b.cx / k, top: b.cy / k, width: b.w / k, height: b.h / k, transform: `translate(-50%, -50%) rotate(${b.rotation}deg)` }} />)}
-        {onSelect && !playing && (
+        {onSelect && !playing && !mark && (
           <div
             className="preview-overlay"
             onPointerDown={(e) => {

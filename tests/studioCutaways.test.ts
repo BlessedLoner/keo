@@ -68,4 +68,40 @@ describe('Talk-matched cutaways', () => {
     expect(again.tracks.filter((t) => t.name === CUTAWAY_TRACK)).toHaveLength(1);
     expect(again.tracks.find((t) => t.name === CUTAWAY_TRACK)!.clips).toHaveLength(1);
   });
+  it('keeps every card off the speaker and the captions, sized to the free space', () => {
+    const p0 = applyEdits(project(), [{ op: 'add_text', text: 'caption line', start: 0, duration: 20, trackName: 'Captions', transform: { x: 0.5, y: 0.85 } }], { rand }).project;
+    // The speaker sits a little left of centre in this wide video.
+    const person = { x0: 0.3, y0: 0.15, x1: 0.62, y1: 1 };
+    const people = [0, 5, 10, 15, 20].map((t) => ({ t, box: person }));
+    const plan = cutawayOps(p0, [
+      { asset: 'as_studio01', at: 2, style: 'pop' },
+      { asset: 'as_builds01', at: 7, style: 'wipe', side: 'left' },
+      { asset: 'as_aivideo1', at: 12, style: 'iris' },
+    ], { people });
+    const p = applyEdits(p0, plan.ops, { rand }).project;
+    const cards = p.tracks.find((t) => t.name === CUTAWAY_TRACK)!.clips as MediaClip[];
+    const W = p.width, H = p.height;
+    for (const c of cards) {
+      const a = p.assets.find((x) => x.id === c.assetId)!;
+      const ar = a.width / a.height;
+      const w = (c.transform.scale * Math.min(W, H * ar)) / W;
+      const h = (c.transform.scale * Math.min(W / ar, H)) / H;
+      const box = { x0: c.transform.x - w / 2, x1: c.transform.x + w / 2, y0: c.transform.y - h / 2, y1: c.transform.y + h / 2 };
+      // Not over the speaker…
+      expect(box.x1 <= person.x0 || box.x0 >= person.x1).toBe(true);
+      // …inside the frame, and above the captions.
+      expect(box.x0).toBeGreaterThanOrEqual(0);
+      expect(box.x1).toBeLessThanOrEqual(1);
+      expect(box.y1).toBeLessThanOrEqual(0.85 - 0.07);
+      // Big enough to read.
+      expect(Math.max(w, h)).toBeGreaterThan(0.25);
+    }
+    // The free right side is wider, so the cards go there — even the one asked for on the left, which would be too cramped there.
+    expect(cards[0]!.transform.x).toBeGreaterThan(0.62);
+    expect(cards[1]!.transform.x).toBeGreaterThan(0.62);
+    // Wipe and iris are revealed through a moving edge and a growing circle.
+    expect(cards[1]!.enter?.kind).toMatch(/^wipe-/);
+    expect(cards[2]!.enter?.kind).toBe('iris');
+    expect(cards[2]!.exit?.kind).toBe('iris');
+  });
 });
